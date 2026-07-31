@@ -34,6 +34,8 @@ DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
 DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: int = 3
 DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: int = 200
 
+NO_SIGNAL_MARKER: str = "no-signal"
+
 
 class KeywordTierRule(BaseModel):
     """A deterministic override: if any keyword matches, route to this tier."""
@@ -269,6 +271,17 @@ class ComplexityRouterConfig(BaseModel):
         description="Score boundaries between tiers",
     )
 
+    default_tier: ComplexityTier = Field(
+        default=ComplexityTier.MEDIUM,
+        description=(
+            "Tier used when no scoring dimension fires, i.e. the prompt matched no keyword, "
+            "pattern or token-count threshold and the scorer has no evidence either way. "
+            "When set explicitly it must have a model behind it: a non-empty entry in `tiers`, "
+            "or `default_model`. "
+            "Set to SIMPLE to restore the previous behavior of treating unmatched traffic as simple"
+        ),
+    )
+
     # Token count thresholds
     token_thresholds: dict[str, int] = Field(
         default_factory=lambda: DEFAULT_TOKEN_THRESHOLDS.copy(),
@@ -458,6 +471,20 @@ class ComplexityRouterConfig(BaseModel):
         if self.classifier_type == "llm" and self.classifier_llm_config is None:
             raise ValueError("classifier_llm_config is required when classifier_type is 'llm'")
         return self
+
+    @model_validator(mode="after")
+    def _validate_default_tier_is_servable(self) -> "ComplexityRouterConfig":
+        if "default_tier" not in self.model_fields_set:
+            return self
+        if self.tiers.get(self.default_tier.value) or self.default_model:
+            return self
+        raise ValueError(
+            f"default_tier {self.default_tier.value} is not a non-empty entry in tiers "
+            f"({sorted(self.tiers)}). Add it to tiers, name a tier that is configured, or set "
+            f"default_model in complexity_router_config; the deployment-level "
+            f"complexity_router_default_model does not count here, because falling through to it "
+            f"would serve every no-signal request from a model this tier never names"
+        )
 
     @model_validator(mode="after")
     def _validate_adaptive_pools(self) -> "ComplexityRouterConfig":

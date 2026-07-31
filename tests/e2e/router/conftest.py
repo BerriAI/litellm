@@ -33,6 +33,7 @@ ROUTER_PARAMS = LiteLLMParamsBody(
     complexity_router_config={
         "classifier_type": "llm",
         "classifier_llm_config": {"model": "gpt-5.5"},
+        "default_tier": "SIMPLE",
         "tiers": {
             "SIMPLE": "gpt-5.5",
             "MEDIUM": "claude-haiku-4-5",
