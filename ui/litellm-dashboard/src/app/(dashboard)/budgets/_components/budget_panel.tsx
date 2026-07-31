@@ -3,13 +3,13 @@
  *
  */
 
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { useBudgets, useDeleteBudget, budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
+import { useBudgetList, useDeleteBudget, budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import BudgetModal from "./budget_modal";
 import BudgetTable from "./BudgetTable";
 import EditBudgetModal from "./edit_budget_modal";
@@ -31,21 +31,25 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   // Admin Viewer follows the read-parity rule: see budgets, no writes.
   const canModify = isProxyAdminRole(userRole ?? "");
 
-  const { data: budgetList = [], isLoading } = useBudgets();
+  const budgetList = useBudgetList();
   const deleteBudget = useDeleteBudget();
 
-  const handleEditCall = async (budget: budgetItem) => {
-    if (accessToken == null) {
-      return;
-    }
-    setSelectedBudget(budget);
-    setIsEditModalVisible(true);
-  };
+  // Stable identities keep the memoized column defs stable; new ones remount every header and cell.
+  const handleEditCall = useCallback(
+    (budget: budgetItem) => {
+      if (accessToken == null) {
+        return;
+      }
+      setSelectedBudget(budget);
+      setIsEditModalVisible(true);
+    },
+    [accessToken],
+  );
 
-  const handleDeleteClick = (budget: budgetItem) => {
+  const handleDeleteClick = useCallback((budget: budgetItem) => {
     setSelectedBudget(budget);
     setIsDeleteModalVisible(true);
-  };
+  }, []);
 
   const handleDeleteConfirm = async () => {
     if (!selectedBudget || accessToken == null) {
@@ -99,8 +103,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             )}
             <p className="mb-4 text-sm text-muted-foreground">Create a budget to assign to customers.</p>
             <BudgetTable
-              budgets={budgetList}
-              isLoading={isLoading}
+              list={budgetList}
               canModify={canModify}
               onEditClick={handleEditCall}
               onDeleteClick={handleDeleteClick}

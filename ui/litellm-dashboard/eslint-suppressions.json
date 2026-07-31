@@ -126,11 +126,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/budgets/_components/budget_panel.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/budgets/_components/budget_panel.tsx": {
     "local/filename-pascal-case": {
       "count": 1
