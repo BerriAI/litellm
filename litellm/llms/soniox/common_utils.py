@@ -2,6 +2,7 @@
 Shared utilities for the Soniox provider (https://soniox.com).
 """
 
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -115,11 +116,41 @@ def render_soniox_tokens(tokens: List[Dict[str, Any]]) -> str:
 # SRT / VTT subtitle rendering
 # ---------------------------------------------------------------------------
 
-# Maximum number of tokens to group into a single subtitle cue.
-_CUE_MAX_TOKENS: int = 15
+_CUE_MAX_CHARS: int = 84
 
-# Maximum duration (in ms) for a single cue before forcing a break.
-_CUE_MAX_DURATION_MS: int = 5000
+_CUE_MAX_DURATION_MS: int = 7000
+
+_CUE_GAP_MS: int = 700
+
+_SENTENCE_END_CHARS = (".", "!", "?", "。", "！", "？", "؟", "۔", "।", "॥", "։", "።")
+
+_CJK_RANGES = (
+    (0x3400, 0x4DBF),
+    (0x4E00, 0x9FFF),
+    (0xF900, 0xFAFF),
+    (0x3040, 0x309F),
+    (0x30A0, 0x30FF),
+    (0x31F0, 0x31FF),
+)
+
+_CJK_NO_BREAK_BEFORE = "、。，．！？：；・ー…」』）〉》】〕"
+
+_CJK_NO_BREAK_AFTER = "「『（〈《【〔"
+
+
+def _is_cjk(ch: str) -> bool:
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in _CJK_RANGES)
+
+
+def _is_cjk_word_boundary(prev_ch: str, next_ch: str) -> bool:
+    if not (_is_cjk(prev_ch) or _is_cjk(next_ch)):
+        return False
+    return next_ch not in _CJK_NO_BREAK_BEFORE and prev_ch not in _CJK_NO_BREAK_AFTER
+
+
+def _text_width(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
 
 
 def _format_timestamp_srt(ms: int) -> str:
@@ -148,86 +179,123 @@ def _format_timestamp_vtt(ms: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{millis:03d}"
 
 
-def _group_tokens_into_cues(
-    tokens: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+def _merge_tokens_into_words(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    Group Soniox tokens into subtitle cues.
+    Merge Soniox subword tokens (e.g. ``"Hel"``, ``"lo"``) into whole words.
+
+    A token starts a new word when its text begins with whitespace, when the
+    previous token's text ends with whitespace, when the speaker changes, or
+    at a CJK character boundary (CJK scripts carry no spaces, so without this
+    an entire utterance would fuse into a single unbreakable "word"; CJK
+    punctuation stays attached to the preceding character per kinsoku rules).
+    Each word carries the first/last available timestamps of its tokens.
+
+    Translation tokens (``translation_status == "translation"``) are excluded:
+    Soniox does not timestamp them, so they cannot be aligned to the audio and
+    would otherwise mix translated text into original-language cues.
+    """
+    words: list[dict[str, Any]] = []
+    for token in tokens:
+        text = token.get("text", "")
+        if not isinstance(text, str) or text == "":
+            continue
+        if token.get("translation_status") == "translation":
+            continue
+        is_continuation = (
+            bool(words)
+            and not text[0].isspace()
+            and not words[-1]["text"][-1:].isspace()
+            and token.get("speaker") == words[-1]["speaker"]
+            and not _is_cjk_word_boundary(words[-1]["text"][-1:], text[0])
+        )
+        if is_continuation:
+            last = words[-1]
+            last["text"] += text
+            if last["start_ms"] is None:
+                last["start_ms"] = token.get("start_ms")
+            if token.get("end_ms") is not None:
+                last["end_ms"] = token.get("end_ms")
+        else:
+            words.append(
+                {
+                    "text": text,
+                    "start_ms": token.get("start_ms"),
+                    "end_ms": token.get("end_ms"),
+                    "speaker": token.get("speaker"),
+                }
+            )
+    return words
+
+
+def _group_tokens_into_cues(
+    tokens: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Group Soniox tokens into subtitle cues aligned to the actual speech.
 
     Each cue has:
       - start_ms: int
       - end_ms: int
       - text: str
 
-    Grouping heuristics:
-      - A new cue starts when token count exceeds _CUE_MAX_TOKENS.
-      - A new cue starts when duration exceeds _CUE_MAX_DURATION_MS.
-      - A new cue starts when the speaker changes (if diarization is on).
-      - Tokens without timestamps are appended to the current cue.
+    Cues only ever break at word boundaries (Soniox tokens are subwords, so
+    tokens are first merged into words). A new cue starts when:
+      - the speaker changes (if diarization is on),
+      - a silence gap of at least _CUE_GAP_MS separates two words, so
+        subtitles never bridge pauses in speech,
+      - adding the next word would exceed _CUE_MAX_CHARS of display width
+        (~two subtitle lines; East-Asian wide characters count double), or
+      - adding the next word would make the cue span more than
+        _CUE_MAX_DURATION_MS.
+    A cue also ends after sentence-final punctuation, which keeps cue breaks
+    at natural seams. Cue timestamps come straight from token timestamps;
+    words without timestamps stay attached to the surrounding cue.
     """
-    cues: List[Dict[str, Any]] = []
-    current_tokens: List[str] = []
-    current_start: Optional[int] = None
-    current_end: Optional[int] = None
-    current_speaker: Optional[Any] = None
+    words = _merge_tokens_into_words(tokens)
+    cues: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+
+    def _cue_start(ws: list[dict[str, Any]]) -> Optional[int]:
+        return next((w["start_ms"] for w in ws if w["start_ms"] is not None), None)
+
+    def _cue_end(ws: list[dict[str, Any]]) -> Optional[int]:
+        return next((w["end_ms"] for w in reversed(ws) if w["end_ms"] is not None), _cue_start(ws))
+
+    def _cue_text(ws: list[dict[str, Any]]) -> str:
+        return "".join(w["text"] for w in ws).strip()
 
     def _flush() -> None:
-        if current_tokens and current_start is not None:
-            text = "".join(current_tokens).strip()
-            if text:
-                cues.append(
-                    {
-                        "start_ms": current_start,
-                        "end_ms": (current_end if current_end is not None else current_start),
-                        "text": text,
-                    }
-                )
+        text = _cue_text(current)
+        start = _cue_start(current)
+        if text and start is not None:
+            cues.append({"start_ms": start, "end_ms": _cue_end(current), "text": text})
+        current.clear()
 
-    for token in tokens:
-        start_ms = token.get("start_ms")
-        end_ms = token.get("end_ms")
-        text = token.get("text", "")
-        speaker = token.get("speaker")
-
-        # Skip tokens with no timestamp data entirely if we have no cue started
-        if start_ms is None and current_start is None:
-            continue
-
-        # Speaker change forces a new cue
-        if speaker is not None and speaker != current_speaker:
+    for word in words:
+        if current:
+            start_ms = word["start_ms"]
+            cue_start = _cue_start(current)
+            cue_end = _cue_end(current)
+            speaker_changed = word["speaker"] is not None and any(
+                w["speaker"] is not None and w["speaker"] != word["speaker"] for w in current
+            )
+            gap_exceeded = start_ms is not None and cue_end is not None and (start_ms - cue_end) >= _CUE_GAP_MS
+            chars_exceeded = _text_width(_cue_text(current)) + _text_width(word["text"]) > _CUE_MAX_CHARS
+            word_end = word["end_ms"] if word["end_ms"] is not None else start_ms
+            duration_exceeded = (
+                word_end is not None and cue_start is not None and (word_end - cue_start) > _CUE_MAX_DURATION_MS
+            )
+            if speaker_changed or gap_exceeded or chars_exceeded or duration_exceeded:
+                _flush()
+        current.append(word)
+        if word["text"].rstrip().endswith(_SENTENCE_END_CHARS):
             _flush()
-            current_tokens = []
-            current_start = start_ms
-            current_end = end_ms
-            current_speaker = speaker
-            current_tokens.append(text)
-            continue
-
-        # Duration or token count exceeded -> flush
-        should_break = False
-        if len(current_tokens) >= _CUE_MAX_TOKENS:
-            should_break = True
-        elif current_start is not None and start_ms is not None and (start_ms - current_start) >= _CUE_MAX_DURATION_MS:
-            should_break = True
-
-        if should_break:
-            _flush()
-            current_tokens = []
-            current_start = start_ms
-            current_end = end_ms
-            current_tokens.append(text)
-        else:
-            if current_start is None:
-                current_start = start_ms
-            if end_ms is not None:
-                current_end = end_ms
-            current_tokens.append(text)
 
     _flush()
     return cues
 
 
-def render_soniox_tokens_as_srt(tokens: List[Dict[str, Any]]) -> str:
+def render_soniox_tokens_as_srt(tokens: list[dict[str, Any]]) -> str:
     """
     Render Soniox tokens as SRT (SubRip) subtitle format.
 
@@ -249,7 +317,7 @@ def render_soniox_tokens_as_srt(tokens: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def render_soniox_tokens_as_vtt(tokens: List[Dict[str, Any]]) -> str:
+def render_soniox_tokens_as_vtt(tokens: list[dict[str, Any]]) -> str:
     """
     Render Soniox tokens as WebVTT subtitle format.
 
