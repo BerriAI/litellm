@@ -1,5 +1,6 @@
 #### Analytics Endpoints #####
 import os
+from collections.abc import Mapping
 from functools import lru_cache
 
 from fastapi import APIRouter
@@ -39,7 +40,7 @@ def _warn_native_oidc_invalid_once() -> None:
     verbose_proxy_logger.warning(NATIVE_OIDC_INVALID_MESSAGE)
 
 
-def _build_native_oidc_config(general_settings: dict[str, object]) -> NativeOIDCConfig | None:
+def _build_native_oidc_config(general_settings: Mapping[str, object]) -> NativeOIDCConfig | None:
     """Build the public native OIDC object, or return None and fail closed.
 
     Published only when JWT auth is exactly enabled and every required field
@@ -62,7 +63,7 @@ def _build_native_oidc_config(general_settings: dict[str, object]) -> NativeOIDC
         # the model is the single place that decides what a publishable issuer,
         # client_id and scope list look like.
         return NativeOIDCConfig.model_validate(
-            {
+            {  # mutable-ok: literal handed straight to model_validate
                 "issuer": jwt_auth_settings.get("native_oidc_issuer"),
                 "client_id": jwt_auth_settings.get("native_oidc_client_id"),
                 "scopes": jwt_auth_settings.get("native_oidc_scopes"),
@@ -106,6 +107,6 @@ async def get_ui_config():
         sso_configured=sso_configured,
         hide_default_credentials_hint=hide_default_credentials_hint,
         is_control_plane=is_control_plane,
-        workers=proxy_config.worker_registry if is_control_plane else [],
+        workers=proxy_config.worker_registry if is_control_plane else (),
         native_oidc=native_oidc,
     )

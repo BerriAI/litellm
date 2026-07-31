@@ -10,6 +10,7 @@ import base64
 import binascii
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from litellm.litellm_core_utils.native_oidc_validation import is_valid_scope_token
@@ -58,7 +59,7 @@ def _decode_unverified_jwt_exp(access_token: str) -> float | None:
         payload = json.loads(base64.urlsafe_b64decode(payload_segment + padding))
     except (ValueError, binascii.Error):
         return None
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         return None
     exp = payload.get("exp")
     if isinstance(exp, bool) or not isinstance(exp, (int, float)):
@@ -104,12 +105,15 @@ def compute_expires_at(access_token: str, expires_in: int | None, *, now: float 
     refreshing sooner rather than sending a dead token.
     """
     current_time = time.time() if now is None else now
-    candidates = []
-    if expires_in is not None:
-        candidates.append(current_time + expires_in)
     jwt_exp = _decode_unverified_jwt_exp(access_token)
-    if jwt_exp is not None and jwt_exp > current_time:
-        candidates.append(jwt_exp)
+    candidates = tuple(
+        value
+        for value in (
+            current_time + expires_in if expires_in is not None else None,
+            jwt_exp if jwt_exp is not None and jwt_exp > current_time else None,
+        )
+        if value is not None
+    )
     if not candidates:
         return current_time + FALLBACK_LIFETIME_SECONDS
     return min(candidates)
@@ -145,15 +149,15 @@ def parse_token_response(payload: object, *, now: float | None = None) -> TokenR
     )
 
 
-def extract_oauth_error(payload: dict[str, object] | None) -> str | None:
+def extract_oauth_error(payload: Mapping[str, object] | None) -> str | None:
     """Return the OAuth `error` code from an error response, if present."""
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         return None
     error = payload.get("error")
     return error if isinstance(error, str) and error else None
 
 
-def describe_token_error(status_code: int, payload: dict[str, object] | None) -> str:
+def describe_token_error(status_code: int, payload: Mapping[str, object] | None) -> str:
     """Build a safe message for a failed token request.
 
     Only the stable OAuth error code is surfaced -- never the raw body, which

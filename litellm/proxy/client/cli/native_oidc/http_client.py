@@ -42,7 +42,7 @@ class JsonResponse:
     """
 
     status_code: int
-    payload: dict[str, object] | None
+    payload: Mapping[str, object] | None
     retry_after: int | None
 
 
@@ -65,19 +65,17 @@ def _parse_retry_after(value: str | None) -> int | None:
 
 
 def _read_bounded_body(response: requests.Response) -> bytes:
-    chunks = []
-    total = 0
+    body = b""
     for chunk in response.iter_content(chunk_size=8192):
         if not chunk:
             continue
-        total += len(chunk)
-        if total > MAX_RESPONSE_BYTES:
+        body += chunk
+        if len(body) > MAX_RESPONSE_BYTES:
             raise NativeOIDCError(f"response exceeded the {MAX_RESPONSE_BYTES} byte limit")
-        chunks.append(chunk)
-    return b"".join(chunks)
+    return body
 
 
-def _decode_json_object(body: bytes, content_type: str) -> dict[str, object] | None:
+def _decode_json_object(body: bytes, content_type: str) -> Mapping[str, object] | None:
     """Strictly decode a JSON object, or return None.
 
     `json.loads` rejects trailing data after the top-level value, so a response
@@ -100,9 +98,7 @@ def _request(
     headers: Mapping[str, str] | None = None,
     timeout: tuple[float, float] = DEFAULT_TIMEOUT,
 ) -> JsonResponse:
-    request_headers = {"Accept": "application/json"}
-    if headers:
-        request_headers.update(headers)
+    request_headers = {"Accept": "application/json", **(headers or {})}  # mutable-ok: header dict for requests
 
     try:
         with requests.request(
@@ -137,7 +133,7 @@ def get_json_response(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOU
     return _request("GET", url, timeout=timeout)
 
 
-def get_json(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOUT) -> dict[str, object]:
+def get_json(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOUT) -> Mapping[str, object]:
     """GET a JSON object, raising unless the response is 200 with a JSON object."""
     response = _request("GET", url, timeout=timeout)
     if response.status_code != 200:
@@ -158,6 +154,6 @@ def post_form(
         "POST",
         url,
         data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},  # mutable-ok: request headers
         timeout=timeout,
     )

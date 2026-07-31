@@ -17,6 +17,10 @@ SCOPE_TOKEN_ALLOWED_CHARACTERS = frozenset(chr(code) for code in range(0x21, 0x7
 
 PROVIDER_CONFIGURATION_PATH = "/.well-known/openid-configuration"
 
+# The only schemes an issuer or endpoint may use. Plaintext http is accepted here
+# and narrowed to numeric loopback by the caller.
+URL_SCHEMES = frozenset(("http", "https"))
+
 
 def has_control_characters(value: str) -> bool:
     """True when ``value`` contains a C0 or C1 control character, or DEL."""
@@ -45,18 +49,15 @@ def validate_scope_tokens(scopes: Iterable[str]) -> tuple[str, ...]:
 
     Raises ValueError with a message that never echoes the offending value.
     """
-    validated: list[str] = []
-    seen: set[str] = set()
-    for scope in scopes:
+    validated = tuple(scopes)
+    for scope in validated:
         if not isinstance(scope, str) or not is_valid_scope_token(scope):
             raise ValueError("must contain only RFC 6749 scope-tokens")
-        if scope in seen:
-            raise ValueError("must not contain duplicate scopes")
-        seen.add(scope)
-        validated.append(scope)
+    if len(frozenset(validated)) != len(validated):
+        raise ValueError("must not contain duplicate scopes")
     if not validated:
         raise ValueError("must contain at least one scope")
-    return tuple(validated)
+    return validated
 
 
 def _validate_url_shape(value: str, *, allow_query: bool) -> None:
@@ -74,7 +75,7 @@ def _validate_url_shape(value: str, *, allow_query: bool) -> None:
     except ValueError as error:
         raise ValueError("must contain a valid port") from error
 
-    if parsed.scheme not in {"http", "https"}:
+    if parsed.scheme not in URL_SCHEMES:
         raise ValueError("must be an absolute http(s) URL")
     if not parsed.hostname:
         raise ValueError("must contain a host")

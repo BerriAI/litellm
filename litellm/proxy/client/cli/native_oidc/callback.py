@@ -14,7 +14,9 @@ Hard requirements enforced here:
 import socket
 import socketserver
 import time
+from collections.abc import Mapping, Sequence
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
 from litellm.litellm_core_utils.native_oidc_validation import is_numeric_loopback_host
@@ -52,7 +54,7 @@ def sanitize_provider_error(error: str, description: str | None) -> str:
     return message
 
 
-def _single_value(params: dict, name: str) -> str | None:
+def _single_value(params: Mapping[str, Sequence[str]], name: str) -> str | None:
     """Return the sole value for `name`, or raise if it appears more than once."""
     values = params.get(name)
     if not values:
@@ -81,7 +83,8 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        server: _CallbackServer = self.server  # type: ignore[assignment]
+        # The listener only ever constructs this handler with a _CallbackServer.
+        server = cast("_CallbackServer", self.server)  # cast-ok: BaseHTTPRequestHandler types it as BaseServer
 
         peer_host = self.client_address[0]
         if not is_numeric_loopback_host(peer_host):

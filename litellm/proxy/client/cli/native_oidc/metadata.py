@@ -9,7 +9,7 @@ Two different trust levels are handled here:
   actually needs are decoded.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from litellm.litellm_core_utils.native_oidc_validation import (
@@ -25,7 +25,7 @@ from .http_client import get_json, get_json_response
 
 LITELLM_DISCOVERY_PATH = "/.well-known/litellm-ui-config"
 
-NATIVE_OIDC_ALLOWED_KEYS = frozenset({"issuer", "client_id", "scopes"})
+NATIVE_OIDC_ALLOWED_KEYS = frozenset(("issuer", "client_id", "scopes"))
 
 DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 
@@ -53,7 +53,7 @@ def parse_native_oidc_metadata(raw: object) -> NativeOIDCMetadata:
     if not isinstance(raw, dict):
         raise NativeOIDCError("advertised native_oidc metadata is not an object")
 
-    unknown = set(raw) - NATIVE_OIDC_ALLOWED_KEYS
+    unknown = frozenset(raw) - NATIVE_OIDC_ALLOWED_KEYS
     if unknown:
         raise NativeOIDCError(
             "advertised native_oidc metadata contains unsupported field(s): " + ", ".join(sorted(unknown))
@@ -115,7 +115,7 @@ def fetch_native_oidc_metadata(base_url: str) -> NativeOIDCMetadata:
     return parse_native_oidc_metadata(response.payload["native_oidc"])
 
 
-def _optional_string_tuple(raw: dict[str, object], key: str) -> tuple[str, ...] | None:
+def _optional_string_tuple(raw: Mapping[str, object], key: str) -> tuple[str, ...] | None:
     value = raw.get(key)
     if value is None:
         return None
@@ -124,7 +124,7 @@ def _optional_string_tuple(raw: dict[str, object], key: str) -> tuple[str, ...] 
     return tuple(value)
 
 
-def _optional_endpoint(raw: dict[str, object], key: str) -> str | None:
+def _optional_endpoint(raw: Mapping[str, object], key: str) -> str | None:
     value = raw.get(key)
     if value is None:
         return None

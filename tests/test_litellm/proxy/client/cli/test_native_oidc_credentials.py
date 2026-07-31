@@ -107,7 +107,8 @@ def test_build_native_credential_stores_bearer_under_key():
     assert credential["base_url"] == BASE_URL
     assert credential["issuer"] == ISSUER
     assert credential["client_id"] == CLIENT_ID
-    assert credential["scopes"] == ["openid", "profile"]
+    # Stored as a JSON array; the in-memory value is the frozen scope tuple.
+    assert list(credential["scopes"]) == ["openid", "profile"]
     assert credential["timestamp"] == 1000.0
 
 

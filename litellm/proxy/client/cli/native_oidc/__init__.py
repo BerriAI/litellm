@@ -23,7 +23,7 @@ from .metadata import (
 )
 from .tokens import TokenResponse
 
-__all__ = [
+__all__ = [  # mutable-ok: __all__ must be a list of names
     "AUTH_TYPE_NATIVE_OIDC",
     "NativeOIDCAuthRejected",
     "NativeOIDCError",

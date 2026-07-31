@@ -11,6 +11,7 @@ PKCE verifiers/challenges, client secrets, raw provider responses, or ID tokens.
 import errno
 import os
 import time
+from collections.abc import Mapping
 from contextlib import contextmanager
 
 import requests
@@ -44,7 +45,7 @@ LOCK_STALE_AFTER_SECONDS = 60.0
 VERIFY_TIMEOUT_SECONDS = 10
 
 
-def is_native_credential(token_data: dict[str, object] | None) -> bool:
+def is_native_credential(token_data: Mapping[str, object] | None) -> bool:
     """True for a native OIDC credential.
 
     A missing `auth_type` means a legacy proxy-minted credential, which stays
@@ -62,21 +63,21 @@ def build_native_credential(
     token: TokenResponse,
     previous_refresh_token: str | None = None,
     now: float | None = None,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """Build the token-file payload for a native OIDC credential.
 
     Refresh-token rotation: a newly issued refresh token replaces the stored
     one; when the response validly omits one, the previous token is retained.
     """
     current_time = time.time() if now is None else now
-    credential: dict[str, object] = {
+    credential: dict[str, object] = {  # mutable-ok: the JSON object written verbatim to the token file
         "schema_version": TOKEN_SCHEMA_VERSION,
         "auth_type": AUTH_TYPE_NATIVE_OIDC,
         "base_url": base_url.rstrip("/"),
         "key": token.access_token,
         "issuer": metadata.issuer,
         "client_id": metadata.client_id,
-        "scopes": list(metadata.scopes),
+        "scopes": metadata.scopes,
         "token_type": token.token_type,
         "timestamp": current_time,
         "expires_at": token.expires_at,
@@ -87,7 +88,7 @@ def build_native_credential(
     return credential
 
 
-def save_credential(credential: dict[str, object]) -> None:
+def save_credential(credential: Mapping[str, object]) -> None:
     """Atomically write the credential with owner-only permissions."""
     write_private_json(get_cli_token_file_path(), credential)
 
@@ -108,7 +109,7 @@ def verify_token_with_litellm(
     try:
         response = get(
             url,
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Authorization": f"Bearer {access_token}"},  # mutable-ok: request headers for requests
             timeout=VERIFY_TIMEOUT_SECONDS,
         )
     except requests.RequestException as error:
@@ -181,14 +182,14 @@ def _reclaim_if_stale(path: str) -> None:
         pass
 
 
-def native_credential_expires_at(token_data: dict[str, object]) -> float | None:
+def native_credential_expires_at(token_data: Mapping[str, object]) -> float | None:
     expires_at = token_data.get("expires_at")
     if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
         return None
     return float(expires_at)
 
 
-def needs_refresh(token_data: dict[str, object], *, now: float | None = None) -> bool:
+def needs_refresh(token_data: Mapping[str, object], *, now: float | None = None) -> bool:
     """True when a native credential is expired or close enough to warrant refresh."""
     expires_at = native_credential_expires_at(token_data)
     if expires_at is None:
@@ -201,7 +202,7 @@ def needs_refresh(token_data: dict[str, object], *, now: float | None = None) ->
 def _request_refreshed_token(token_endpoint: str, *, refresh_token: str, client_id: str) -> TokenResponse:
     response = post_form(
         token_endpoint,
-        {
+        {  # mutable-ok: form body for the token request
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": client_id,
@@ -213,12 +214,12 @@ def _request_refreshed_token(token_endpoint: str, *, refresh_token: str, client_
 
 
 def refresh_native_credential(
-    token_data: dict[str, object],
+    token_data: Mapping[str, object],
     *,
     verify=verify_token_with_litellm,
     fetch_metadata=fetch_native_oidc_metadata,
     fetch_provider=fetch_provider_metadata,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """Refresh a native credential, re-validating the whole trust chain.
 
     Everything is re-derived from the stored, origin-bound `base_url`: the

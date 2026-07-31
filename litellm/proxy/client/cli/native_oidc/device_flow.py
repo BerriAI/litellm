@@ -7,6 +7,7 @@ are shown.
 
 import time
 import webbrowser
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import click
@@ -48,14 +49,14 @@ class DeviceAuthorization:
     interval: int
 
 
-def _require_non_empty_string(raw: dict[str, object], key: str) -> str:
+def _require_non_empty_string(raw: Mapping[str, object], key: str) -> str:
     value = raw.get(key)
     if not isinstance(value, str) or not value:
         raise NativeOIDCError(f"device authorization response is missing {key}")
     return value
 
 
-def _optional_safe_uri(raw: dict[str, object], key: str) -> str | None:
+def _optional_safe_uri(raw: Mapping[str, object], key: str) -> str | None:
     value = raw.get(key)
     if value is None:
         return None
@@ -67,7 +68,7 @@ def _optional_safe_uri(raw: dict[str, object], key: str) -> str | None:
         raise NativeOIDCError(f"device authorization response {key} {error}") from error
 
 
-def _bounded_positive_int(raw: dict[str, object], key: str, maximum: int) -> int | None:
+def _bounded_positive_int(raw: Mapping[str, object], key: str, maximum: int) -> int | None:
     value = raw.get(key)
     if value is None:
         return None
@@ -108,7 +109,7 @@ def request_device_authorization(
     """Start a device authorization as a public client (no client secret)."""
     response = post_form(
         device_authorization_endpoint,
-        {"client_id": metadata.client_id, "scope": format_scopes(metadata.scopes)},
+        {"client_id": metadata.client_id, "scope": format_scopes(metadata.scopes)},  # mutable-ok: form body
     )
     if response.status_code not in (200, 201) or response.payload is None:
         raise NativeOIDCError(
@@ -140,7 +141,7 @@ def poll_for_device_token(
         try:
             response = post_form(
                 token_endpoint,
-                {
+                {  # mutable-ok: form body for the device token poll
                     "grant_type": DEVICE_CODE_GRANT_TYPE,
                     "device_code": authorization.device_code,
                     "client_id": metadata.client_id,

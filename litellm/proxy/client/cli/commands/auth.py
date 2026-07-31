@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
+from collections.abc import Mapping
+
 import click
 import requests
 from rich.console import Console
@@ -587,7 +589,7 @@ def _render_and_prompt_for_team_selection(teams: list[dict[str, Any]]) -> str | 
             return None
 
 
-def _report_native_login(credential: dict[str, Any]) -> None:
+def _report_native_login(credential: Mapping[str, Any]) -> None:
     """Summarise a native login without echoing any part of the token."""
     from litellm.proxy.client.cli.interface import show_commands
 

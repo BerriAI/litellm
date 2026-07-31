@@ -285,7 +285,7 @@ class TestBrowserLoginEndToEnd:
         assert credential["schema_version"] == TOKEN_SCHEMA_VERSION
         assert credential["issuer"] == idp.base_url
         assert credential["client_id"] == CLIENT_ID
-        assert credential["scopes"] == SCOPES
+        assert list(credential["scopes"]) == SCOPES
         assert credential["key"] in idp.issued_access_tokens
         assert credential["refresh_token"] in idp.refresh_tokens
         assert is_native_credential(credential)

@@ -31,8 +31,8 @@ def build_authorization_url(
     providers legitimately publish endpoints carrying parameters.
     """
     parsed = urlsplit(authorization_endpoint)
-    params = parse_qsl(parsed.query, keep_blank_values=True)
-    params += [
+    params = (
+        *parse_qsl(parsed.query, keep_blank_values=True),
         ("response_type", "code"),
         ("client_id", client_id),
         ("redirect_uri", redirect_uri),
@@ -40,7 +40,7 @@ def build_authorization_url(
         ("state", challenge.state),
         ("code_challenge", challenge.code_challenge),
         ("code_challenge_method", challenge.code_challenge_method),
-    ]
+    )
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(params), ""))
 
 
@@ -55,7 +55,7 @@ def exchange_code_for_token(
     """Redeem an authorization code at the token endpoint as a public client."""
     response = post_form(
         token_endpoint,
-        {
+        {  # mutable-ok: form body for the token request
             "grant_type": "authorization_code",
             "code": code,
             "redirect_uri": redirect_uri,

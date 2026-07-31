@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic import (
@@ -63,7 +64,7 @@ class UiDiscoveryEndpoints(BaseModel):
     sso_configured: bool
     hide_default_credentials_hint: bool = False
     is_control_plane: bool = False
-    workers: list[WorkerRegistryEntry] = []
+    workers: Sequence[WorkerRegistryEntry] = ()
     native_oidc: NativeOIDCConfig | None = None
 
     @model_serializer(mode="wrap")
