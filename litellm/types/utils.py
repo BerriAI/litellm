@@ -2703,6 +2703,13 @@ RoutingDecisionCause = Literal[
 ]
 
 
+InternalCallOrigin = Literal["autorouter_classifier"]
+"""Which internal litellm feature originated a billed sub-call, so a spend log row
+records that it is not traffic the caller sent."""
+
+AUTOROUTER_CLASSIFIER_CALL_ORIGIN: InternalCallOrigin = "autorouter_classifier"
+
+
 class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
@@ -3280,7 +3287,6 @@ all_litellm_params = (
         "mock_response",
         "mock_timeout",
         "disable_add_transform_inline_image_block",
-        "litellm_proxy_rate_limit_response",
         "api_key",
         "api_version",
         "prompt_id",
@@ -3296,6 +3302,7 @@ all_litellm_params = (
         "model_file_id_mapping",
         "litellm_logging_obj",
         "litellm_call_id",
+        "_litellm_strip_stream_usage",
         "use_client",
         "id",
         "fallbacks",
@@ -3374,11 +3381,6 @@ all_litellm_params = (
         "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
-        "_litellm_rate_limit_descriptors",
-        "_litellm_tpm_reserved_tokens",
-        "_litellm_tpm_reserved_model",
-        "_litellm_tpm_reserved_scopes",
-        "_litellm_tpm_reservation_released",
         "auto_router_config_path",
         "auto_router_config",
         "auto_router_default_model",
