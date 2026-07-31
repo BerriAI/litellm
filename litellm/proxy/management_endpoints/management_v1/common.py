@@ -7,6 +7,7 @@ from fastapi.dependencies.utils import get_flat_dependant
 from fastapi.responses import JSONResponse
 
 from litellm.types.proxy.management_endpoints.management_v1 import (
+    ListLinks,
     PageLinks,
     ProblemDetail,
 )
@@ -43,6 +44,21 @@ def _declared_query_params(request: Request) -> frozenset[str]:
     return frozenset(field.alias for field in get_flat_dependant(dependant, skip_repeats=True).query_params)
 
 
+def escape_like(value: str) -> str:
+    """Escape LIKE/ILIKE metacharacters. Ids routinely contain `_`, which is a wildcard unescaped."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def unknown_query_param_problem(unknown: tuple[str, ...], allowed: tuple[str, ...]) -> ProblemDetail:
+    return ProblemDetail(
+        type=f"{PROBLEM_TYPE_BASE}unknown-query-parameter",
+        title="Unknown query parameter",
+        status=400,
+        detail=f"Unrecognized query parameter(s): {', '.join(unknown)}.",
+        allowed=sorted(allowed),
+    )
+
+
 async def reject_unknown_query_params(request: Request) -> None:
     """Reject any query param the route did not declare.
 
@@ -53,15 +69,7 @@ async def reject_unknown_query_params(request: Request) -> None:
     unknown: tuple[str, ...] = tuple(sorted(name for name in request.query_params if name not in declared))
     if not unknown:
         return
-    raise ManagementProblem(
-        ProblemDetail(
-            type=f"{PROBLEM_TYPE_BASE}unknown-query-parameter",
-            title="Unknown query parameter",
-            status=400,
-            detail=f"Unrecognized query parameter(s): {', '.join(unknown)}.",
-            allowed=sorted(declared),
-        )
-    )
+    raise ManagementProblem(unknown_query_param_problem(unknown=unknown, allowed=tuple(sorted(declared))))
 
 
 def _page_url(request: Request, page: int) -> str:
@@ -74,4 +82,16 @@ def build_page_links(request: Request, page: int, has_more: bool) -> PageLinks:
         self_link=_page_url(request, page),
         prev=_page_url(request, page - 1) if page > 1 else None,
         next=_page_url(request, page + 1) if has_more else None,
+    )
+
+
+def build_list_links(request: Request, page: int, total_pages: int) -> ListLinks:
+    """Page-mode links. `last` clamps to page 1 on an empty result set so every link still resolves."""
+    last = max(total_pages, 1)
+    return ListLinks(
+        self_link=_page_url(request, page),
+        first=_page_url(request, 1),
+        prev=_page_url(request, page - 1) if page > 1 else None,
+        next=_page_url(request, page + 1) if page < last else None,
+        last=_page_url(request, last),
     )

@@ -102,6 +102,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     has_user_credential: Optional[bool] = None
+    connected_app_reachable: bool | None = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
     max_concurrent_requests: Optional[int] = None

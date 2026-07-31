@@ -1,8 +1,10 @@
 """Shared response shapes for the `/management/v1` control-plane surface."""
 
-from collections.abc import Mapping
+from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field
+
+TOut = TypeVar("TOut")
 
 
 class ProblemDetail(BaseModel):
@@ -42,16 +44,16 @@ class FacetListResponse(BaseModel):
 
 
 class ListMeta(BaseModel):
-    """An entity list can afford the COUNT(*) a facet cannot, so it reports a real total."""
+    """Page-mode counterpart to `PageMeta`: an entity list pays for the COUNT(*) so the table can show a page count."""
 
+    total_count: int
     page: int
     page_size: int
-    total_count: int
     total_pages: int
 
 
 class ListLinks(BaseModel):
-    """Hypermedia for an entity list. `first`/`last` exist here because `total_pages` is known."""
+    """Page-mode counterpart to `PageLinks`. `first`/`last` are knowable here because the total count is."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -62,9 +64,10 @@ class ListLinks(BaseModel):
     last: str
 
 
-class ListResponse(BaseModel):
-    """One page of an entity collection. Rows are flat: no `{type, id, attributes}` wrapper."""
+class ListResponse(BaseModel, Generic[TOut]):
+    """Rows stay flat: JSON:API's `{type, id, attributes}` wrapper is a deliberate deviation, so every
+    dashboard column accessor would otherwise have to go through `.attributes`."""
 
-    data: tuple[Mapping[str, JsonValue], ...]
+    data: list[TOut]
     meta: ListMeta
     links: ListLinks

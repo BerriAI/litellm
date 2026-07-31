@@ -3,6 +3,7 @@ Main compress() function — normalizes input messages, orchestrates BM25/embedd
 scoring, message stubbing, and retrieval tool injection.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 
 from litellm.caching.dual_cache import DualCache
@@ -204,33 +205,21 @@ def _extract_anthropic_tool_exchange_spans(
     return spans, None
 
 
-def _get_protected_indices(messages: List[dict]) -> List[int]:
+def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
     """
     Return indices of messages that must never be compressed:
     - All system messages
     - The last user message
     - The last assistant message
+
+    The last user message is what the model is being asked to act on right now,
+    so compressing it replaces the live instruction with a marker. Compression
+    guardrails share this policy; see the Headroom guardrail.
     """
-    protected: List[int] = []
-
-    last_user_idx = None
-    last_assistant_idx = None
-
-    for i, msg in enumerate(messages):
-        role = msg.get("role", "")
-        if role == "system":
-            protected.append(i)
-        elif role == "user":
-            last_user_idx = i
-        elif role == "assistant":
-            last_assistant_idx = i
-
-    if last_user_idx is not None:
-        protected.append(last_user_idx)
-    if last_assistant_idx is not None:
-        protected.append(last_assistant_idx)
-
-    return protected
+    system_indices = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
+    last_user = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
+    last_assistant = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")[-1:]
+    return system_indices + last_user + last_assistant
 
 
 def _combine_scores(
@@ -432,7 +421,7 @@ def compress(
         combined_scores = bm25_scores
 
     # Protected messages are never compressed
-    protected_indices = _get_protected_indices(normalized_messages)
+    protected_indices = get_protected_indices(normalized_messages)
     kept_indices: Set[int] = set(protected_indices)
 
     tool_exchange_spans: List[Set[int]] = []
