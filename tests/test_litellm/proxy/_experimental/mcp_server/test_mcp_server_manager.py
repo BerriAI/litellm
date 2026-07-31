@@ -2011,6 +2011,57 @@ class TestMCPServerManager:
         assert subjects == [("u-1", None)]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_fields",
+        [
+            {"auth_type": MCPAuth.none},
+            {"auth_type": MCPAuth.api_key, "authentication_token": "static-upstream-key"},
+            {"auth_type": MCPAuth.bearer_token, "authentication_token": "static-upstream-key"},
+            {
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "client_credentials",
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_url": "https://idp.example.com/token",
+            },
+            {"auth_type": MCPAuth.true_passthrough},
+        ],
+    )
+    async def test_preflight_resolves_nothing_for_a_mode_that_does_not_pre_flight(self, server_fields):
+        """The manager is the only thing deciding which modes pre-flight, so it has to reject every
+        other mode itself. The single-server call site no longer tests the mode before calling, so a
+        mode that falls through here would start resolving its credential a second time, at connect,
+        for flows that never had a connect-time resolution at all."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        calls = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                calls.append(server.server_id)
+                return Error(CredError.of_misconfigured("the preflight must never get here"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = MCPServer(
+            server_id="not-pre-flighted",
+            name="not-pre-flighted-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            **server_fields,
+        )
+
+        assert (
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+            is None
+        )
+        assert calls == []
+
+    @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,
     ):

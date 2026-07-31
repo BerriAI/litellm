@@ -8000,6 +8000,57 @@ class TestSingleServerPreflightReachesIdJag:
         assert preflight.await_args.kwargs["server"] is server
 
     @pytest.mark.asyncio
+    async def test_token_exchange_without_a_bearer_still_challenges_and_never_pre_flights(self):
+        """The already-shipped OBO path must be untouched by the call site dropping its mode test.
+        A token_exchange server with no inbound bearer has nothing to exchange, so it still gets the
+        RFC 9728 discovery challenge from the block above and the preflight is never reached; pushing
+        a subject-less exchange through the resolver would turn that challenge into some other status
+        and strand a client that only had to SSO and retry."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        token_exchange = MCPServer(
+            server_id="id-obo",
+            name="obo",
+            alias="obo",
+            server_name="obo",
+            url="https://obo.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.test/oauth2/token",
+            client_id="cid",
+            client_secret="csec",
+            mcp_info={"server_name": "obo"},
+        )
+        preflight = AsyncMock()
+
+        with (
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "get_mcp_server_by_name",
+                return_value=token_exchange,
+            ),
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "preflight_token_exchange",
+                preflight,
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/obo", "headers": []},
+                mcp_servers=["obo"],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                client_ip=None,
+            )
+
+        assert exc.value.status_code == 401
+        headers = exc.value.headers or {}
+        assert "resource_metadata" in (headers.get("WWW-Authenticate") or headers.get("www-authenticate") or "")
+        preflight.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_id_jag_multi_server_route_still_absorbs_the_failure(self):
         """The aggregate contract is unchanged: with more than one target the preflight does not run,
         so one server with no stored assertion cannot fail the whole connect."""
