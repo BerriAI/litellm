@@ -1154,21 +1154,27 @@ class TestMCPOAuth2AuthFlow:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 500
 
-    async def test_proxy_exception_non_delegate_oauth2_propagates(self):
+    async def test_proxy_exception_non_delegate_oauth2_challenges_with_per_server_metadata(self):
         """
         Production raises ProxyException (not HTTPException) on auth failure. For
-        a non-delegate oauth2 server the bearer is treated as a LiteLLM credential
-        and a 401 must propagate as a real auth error, not be exchanged for an
-        anonymous upstream-passthrough session.
+        a gateway-managed oauth2 server the bearer is treated as a LiteLLM
+        credential and its failure stays a 401, never an anonymous
+        upstream-passthrough session. The 401 now carries the RFC 9728
+        invalid_token challenge with the per-server resource metadata (LIT-4864):
+        a keyless client holding a stale upstream token (the relayed gho_ shape)
+        re-discovers the gateway as this resource's authorization server instead
+        of dead-ending on a bare 401.
         """
         from litellm.proxy._types import ProxyException
         from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
         scope = {
             "type": "http",
             "method": "POST",
             "path": "/mcp/atlassian_mcp",
             "headers": [
+                (b"host", b"testserver"),
                 (b"authorization", b"Bearer atlassian-oauth2-access-token-xyz"),
             ],
         }
@@ -1181,10 +1187,14 @@ class TestMCPOAuth2AuthFlow:
                 code=401,
             )
 
-        oauth2_server = MagicMock()
-        oauth2_server.auth_type = MCPAuth.oauth2
-        oauth2_server.delegate_auth_to_upstream = False
-        oauth2_server.is_oauth_passthrough = False
+        oauth2_server = MCPServer(
+            server_id="atlassian-id",
+            name="atlassian_mcp",
+            server_name="atlassian_mcp",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+        )
 
         with (
             patch(
@@ -1194,9 +1204,14 @@ class TestMCPOAuth2AuthFlow:
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
-            with pytest.raises(ProxyException) as exc_info:
+            with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
-            assert str(exc_info.value.code) == "401"
+            assert exc_info.value.status_code == 401
+            www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+            assert www_authenticate == (
+                'Bearer error="invalid_token", '
+                'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/atlassian_mcp"'
+            )
 
     async def test_proxy_exception_non_auth_still_raises(self):
         """
@@ -6250,14 +6265,133 @@ class TestAggregateGatewayDcrChallenge:
                     self._scope(extra_headers=((b"x-litellm-api-key", b"sk-typo"),))
                 )
 
-    async def test_no_challenge_for_named_servers_header(self):
-        """x-mcp-servers names explicit targets; the per-server challenge paths
-        own those, so the aggregate challenge must not fire."""
+    async def test_challenge_for_named_servers_header(self):
+        """x-mcp-servers scopes the fan-out but the resource the client configured is still
+        the aggregate /mcp URL, so an unauthenticated request gets the aggregate challenge
+        and completes the same keyless flow; the header names then narrow (never broaden)
+        the admitted subject's servers downstream (LIT-4864)."""
         with (
             patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
         ):
-            with pytest.raises(ProxyException):
+            with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(self._scope(extra_headers=((b"x-mcp-servers", b"github"),)))
+        assert exc_info.value.status_code == 401
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert www_authenticate == f"Bearer {self._EXPECTED_RESOURCE_METADATA}"
+
+    async def test_per_server_challenge_for_gateway_managed_oauth2(self):
+        """Anonymous request to a per-server path whose single target is a gateway-managed
+        oauth2 server: 401 plus the RFC 9728 challenge advertising the PER-SERVER
+        protected-resource metadata in the same URL spelling the request used, so a keyless
+        DCR client configured with either per-server spelling discovers the gateway as the
+        authorization server (LIT-4864). Covers interactive and M2M, which the gateway can
+        both serve end to end."""
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        server = MCPServer(
+            server_id="gh-id",
+            name="github",
+            server_name="github",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+        )
+        for path, expected_metadata_path in (
+            ("/mcp/github", "/.well-known/oauth-protected-resource/mcp/github"),
+            ("/github/mcp", "/.well-known/oauth-protected-resource/github/mcp"),
+        ):
+            with (
+                patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+                ) as mock_mgr,
+            ):
+                mock_mgr.get_mcp_server_by_name.return_value = server
+                with pytest.raises(HTTPException) as exc_info:
+                    await MCPRequestHandler.process_mcp_request(self._scope(path=path))
+            assert exc_info.value.status_code == 401
+            www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+            assert www_authenticate == f'Bearer resource_metadata="http://testserver{expected_metadata_path}"'
+
+    async def test_no_per_server_challenge_for_non_gateway_managed_targets(self):
+        """The per-server challenge fires only for the server set the gateway's keyless flow
+        serves: an OBO server and a multi-server CSV path keep the original admission error
+        through the full pipeline, so no client-forwarded mode is redirected into the gateway
+        sign-in flow and no cell broadens (LIT-4864)."""
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        obo_server = MCPServer(
+            server_id="o-id",
+            name="obo",
+            server_name="obo",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth.oauth2_token_exchange,
+        )
+        for path, resolved in (
+            ("/mcp/obo", obo_server),
+            ("/mcp/github,linear", None),
+        ):
+            with (
+                patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+                ) as mock_mgr,
+            ):
+                mock_mgr.get_mcp_server_by_name.return_value = resolved
+                with pytest.raises(ProxyException):
+                    await MCPRequestHandler.process_mcp_request(
+                        self._scope(path=path, extra_headers=((b"authorization", b"Bearer not-a-key"),))
+                    )
+
+    def test_challenge_target_excludes_every_non_gateway_managed_mode(self):
+        """Unit pin of the challenge-target owner: only a resolved gateway-managed oauth2
+        target (interactive or M2M) yields a per-server challenge; delegate-auth oauth2
+        (whose keyless flow is upstream PKCE via the relay), every client-forwarded auth
+        type, OBO, api_key, unknown names, and CSV paths yield None (LIT-4864)."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            _gateway_dcr_challenge_target,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        def _server(auth_type, **kw):
+            return MCPServer(
+                server_id="s-id",
+                name="srv",
+                server_name="srv",
+                url="https://upstream.example/mcp",
+                transport="http",
+                auth_type=auth_type,
+                **kw,
+            )
+
+        cases = [
+            (_server(MCPAuth.oauth2), "srv"),
+            (_server(MCPAuth.oauth2, oauth2_flow="client_credentials"), "srv"),
+            (_server(MCPAuth.oauth2, delegate_auth_to_upstream=True), None),
+            (_server(MCPAuth.oauth2_token_exchange), None),
+            (_server(MCPAuth.true_passthrough), None),
+            (_server(MCPAuth.oauth_delegate), None),
+            (_server(MCPAuth.oauth_delegate, dcr_bridge=True), None),
+            (_server(MCPAuth.api_key), None),
+            (None, None),
+        ]
+        for resolved, expected in cases:
+            with patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr:
+                mock_mgr.get_mcp_server_by_name.return_value = resolved
+                assert _gateway_dcr_challenge_target("/mcp/srv", None, None) == expected, resolved
+        assert _gateway_dcr_challenge_target("/mcp/a,b", None, None) is None
+        assert _gateway_dcr_challenge_target("/mcp", None, None) is None
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+        ) as mock_mgr:
+            mock_mgr.get_mcp_server_by_name.return_value = _server(MCPAuth.oauth2)
+            assert _gateway_dcr_challenge_target("/mcp/srv", ["other"], None) is None
 
     async def test_no_challenge_for_path_named_server(self):
         """/mcp/{server} targets one server; the aggregate challenge must not
@@ -6295,10 +6429,11 @@ class TestAggregateGatewayDcrChallenge:
 
 @pytest.mark.asyncio
 class TestGatewaySessionAdmission:
-    """The aggregate /mcp session-bearer admission arm (mcp_gateway_dcr). A valid session
-    token admits under the LIVE litellm user it references; an invalid/expired/refresh/foreign
-    token fails closed with the aggregate invalid_token challenge; the arm fires ONLY at the
-    aggregate scope, never for named servers or per-server flows."""
+    """The session-bearer admission arm (mcp_gateway_dcr). A valid session token admits under
+    the LIVE litellm user it references at any MCP scope (aggregate, per-server path, or
+    x-mcp-servers scoped; LIT-4864) with downstream grant resolution narrowing to the
+    requested servers; an invalid/expired/refresh/foreign token fails closed with the
+    requested scope's invalid_token challenge."""
 
     _MASTER_KEY = "sk-gateway-session-admission-master-key"
 
@@ -6471,21 +6606,89 @@ class TestGatewaySessionAdmission:
         assert oauth2_headers is None
         assert not any(k.lower() == "authorization" for k in (raw_headers or {}))
 
-    async def test_arm_does_not_fire_for_named_server(self):
-        """A session-shaped bearer aimed at a named server (path scope) does not enter the
-        aggregate arm; it is treated as an ordinary bearer on that server."""
-        token = self._access_token()
+    @pytest.mark.parametrize(
+        "path, original_path, extra_headers",
+        [
+            ("/mcp/github", None, ()),
+            ("/mcp/github", "/github/mcp", ()),
+            ("/mcp", None, ((b"x-mcp-servers", b"github"),)),
+        ],
+    )
+    async def test_arm_admits_session_bearer_on_per_server_scopes(self, path, original_path, extra_headers):
+        """A valid session bearer admits the live user on per-server paths (the standard
+        spelling and the legacy /{server}/mcp spelling as dynamic_mcp_route rewrites it) and
+        x-mcp-servers scoped requests, never touching user_api_key_auth; downstream grant
+        resolution then intersects the named servers against the admitted subject's grants,
+        so the narrower scope can never broaden access (LIT-4864)."""
+        token = self._access_token(user_id="sso-user-42")
+        scope = self._scope(token, path=path, extra_headers=extra_headers)
+        if original_path is not None:
+            scope["_original_path"] = original_path
         with (
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
-                side_effect=ProxyException(message="bad key", type="auth_error", param="api_key", code=401),
             ) as mock_auth,
+            self._patch_user_reload(user_id="sso-user-42"),
         ):
-            with pytest.raises((HTTPException, ProxyException)):
-                await MCPRequestHandler.process_mcp_request(self._scope(token, path="/mcp/github"))
-        mock_auth.assert_called_once()
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+        assert auth_result.user_id == "sso-user-42"
+        assert auth_result.mcp_admitted_user_subject is True
+        mock_auth.assert_not_called()
+
+    async def test_expired_session_bearer_on_per_server_path_gets_per_server_challenge(self):
+        """An expired session bearer on a per-server path targeting a gateway-managed oauth2
+        server re-challenges with the PER-SERVER resource metadata (matching the resource the
+        client configured), so a spec client re-authorizes against the right document instead
+        of a bare 401 or the aggregate metadata (LIT-4864)."""
+        from datetime import datetime, timezone
+
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        mint, _refresh, principal, keys = self._session_bearer()
+        bearer = mint(principal, keys, datetime(2020, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+        server = MCPServer(
+            server_id="gh-id",
+            name="github",
+            server_name="github",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+        )
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = server
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(bearer, path="/mcp/github"))
+        assert exc_info.value.status_code == 401
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert www_authenticate == (
+            'Bearer error="invalid_token", '
+            'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/github"'
+        )
+
+    async def test_session_bearer_scrubbed_from_egress_on_per_server_path(self):
+        """After a per-server keyless admission the session bearer must be scrubbed from every
+        egress header context exactly as at the aggregate scope, so no per-server passthrough
+        egress can forward it upstream for replay (LIT-4864)."""
+        token = self._access_token(user_id="sso-user-42")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            self._patch_user_reload(user_id="sso-user-42"),
+        ):
+            _auth, _h, _servers, _msah, oauth2_headers, raw_headers = await MCPRequestHandler.process_mcp_request(
+                self._scope(token, path="/mcp/github")
+            )
+        assert oauth2_headers is None
+        assert not any(k.lower() == "authorization" for k in (raw_headers or {}))
 
 
 def _make_team(team_id, mcp_servers, *, org_id=None, tool_perms=None, members=("sso-user",)):
