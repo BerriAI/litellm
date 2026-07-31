@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
+    _team_callback_metadata_from_metadata,
     add_team_callbacks,
     disable_team_logging,
     get_team_callbacks,
@@ -569,3 +570,34 @@ async def test_get_team_callbacks_falls_back_to_legacy_callback_settings():
     data = response["data"]
     assert data["success_callbacks"] == ["langfuse"]
     assert data["callback_vars"]["langfuse_public_key"] == "pk-legacy"
+
+
+def test_team_callback_metadata_defaults_to_empty_for_non_dict_metadata():
+    result = _team_callback_metadata_from_metadata(None)
+    assert result.success_callback == []
+    assert result.failure_callback == []
+    assert result.callback_vars == {}
+
+
+def test_team_callback_metadata_empty_when_no_callbacks_stored():
+    result = _team_callback_metadata_from_metadata({"callback_settings": None})
+    assert result.success_callback == []
+    assert result.failure_callback == []
+    assert result.callback_vars == {}
+
+
+def test_team_callback_metadata_skips_invalid_logging_entries():
+    result = _team_callback_metadata_from_metadata(
+        {
+            "logging": [
+                {"callback_type": "success"},
+                {
+                    "callback_name": "langsmith",
+                    "callback_type": "success",
+                    "callback_vars": {"langsmith_project": "proj"},
+                },
+            ]
+        }
+    )
+    assert result.success_callback == ["langsmith"]
+    assert result.callback_vars["langsmith_project"] == "proj"
