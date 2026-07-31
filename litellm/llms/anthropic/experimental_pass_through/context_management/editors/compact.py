@@ -13,7 +13,7 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 """
 
 import re
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +22,7 @@ from litellm.types.llms.anthropic import (
     CompactionBlock,
     UsageIteration,
 )
+from litellm.types.llms.openai import ChatCompletionToolParam
 
 from ..constants import (
     COMPACT_DEFAULT_INSTRUCTIONS,
@@ -37,6 +38,10 @@ from ..constants import (
 )
 from ..errors import AnthropicContextManagementError
 from ..result import PolyfillResult
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.router import Router
 
 # Auth metadata fields propagated from the parent request to the summary call
 # so the summary's spend is attributed to the same scopes. The list mirrors the
@@ -98,9 +103,9 @@ def _read_summary_max_tokens_setting() -> int:
 
 
 async def _check_summary_model_access(
-    user_api_key_auth: Any,
+    user_api_key_auth: Optional["UserAPIKeyAuth"],
     summary_model: str,
-    llm_router: Any,
+    llm_router: Optional["Router"],
 ) -> bool:
     """Return True when every model-allowlist scope on the parent request is
     satisfied for ``summary_model``.
@@ -294,7 +299,7 @@ async def _check_summary_model_access(
 
 
 async def _check_summary_model_budget(
-    user_api_key_auth: Any,
+    user_api_key_auth: Optional["UserAPIKeyAuth"],
     summary_model: str,
 ) -> bool:
     """Return True when the caller is within their per-model budget for
@@ -357,7 +362,7 @@ async def _check_summary_model_budget(
 
 
 async def _check_summary_model_rate_limit(
-    user_api_key_auth: Any,
+    user_api_key_auth: Optional["UserAPIKeyAuth"],
     summary_model: str,
 ) -> bool:
     """Return True when the caller is within their configured RPM/TPM limits
@@ -616,18 +621,18 @@ def _count_effective_tokens(
             "count, falling back to raw messages: %s",
             e,
         )
-        openai_shape = cast(Any, messages_without_compaction)
+        openai_shape = messages_without_compaction
 
     # Translate Anthropic-shaped tools (``input_schema``) to OpenAI-shaped
     # tools (``{"type": "function", "function": {...}}``) so ``token_counter``
     # gets a consistent format regardless of which counting path it uses.
     # An inaccurate tool token count here could cause the polyfill to skip
     # needed compaction or trigger unnecessary summarization.
-    openai_tools: Optional[List[Dict[str, Any]]] = None
+    openai_tools: Optional[Union[List[ChatCompletionToolParam], List[Dict[str, Any]]]] = None
     if tools:
         try:
             translated_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=cast(Any, tools))
-            openai_tools = cast(List[Dict[str, Any]], translated_tools)
+            openai_tools = translated_tools
         except Exception as e:
             verbose_logger.debug(
                 "compact_20260112: anthropic→openai tools translation failed "
@@ -638,7 +643,7 @@ def _count_effective_tokens(
 
     total = litellm.token_counter(
         model=model,
-        messages=cast(Any, openai_shape),
+        messages=openai_shape,
         tools=cast(Any, openai_tools),
     )
     if compaction_block is not None:
@@ -761,7 +766,7 @@ def _build_summary_messages(
             "building summary call; falling back to raw shape: %s",
             e,
         )
-        openai_messages = cast(Any, stripped)
+        openai_messages = stripped
 
     summary_messages: List[Dict[str, Any]] = []
     system_message = _system_to_openai_message(system)
@@ -802,6 +807,11 @@ def _append_text_to_content(content: Any, extra_text: str) -> Any:
     return [content, {"type": "text", "text": extra_text}]
 
 
+class _OptionalSummaryCallKwargs(TypedDict, total=False):
+    user: str
+    allowed_model_region: str
+
+
 async def _call_summary_model(
     *,
     summary_model: str,
@@ -838,25 +848,33 @@ async def _call_summary_model(
     # the parent ``/v1/messages`` request. On timeout the caller catches the
     # exception and surfaces ``applied_edits[0].error = "summary_call_failed"``,
     # forwarding the request without compaction rather than hanging.
-    call_kwargs: Dict[str, Any] = {
-        "model": summary_model,
-        "messages": summary_messages,
-        "max_tokens": max_tokens,
-        "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
-        "litellm_metadata": metadata,
-    }
     # The end-user id must also travel as the top-level ``user`` kwarg: legacy
     # limiter hooks and prometheus end-user tracking read it from there rather
     # than from ``litellm_metadata``, so without it the summary tokens would not
     # debit the caller's end-user counters.
-    end_user_id = metadata.get("user_api_key_end_user_id")
-    if end_user_id:
-        call_kwargs["user"] = end_user_id
+    raw_end_user_id = metadata.get("user_api_key_end_user_id")
+    optional_kwargs: _OptionalSummaryCallKwargs = {}
+    if isinstance(raw_end_user_id, str) and raw_end_user_id:
+        optional_kwargs["user"] = raw_end_user_id
     if allowed_model_region is not None:
-        call_kwargs["allowed_model_region"] = allowed_model_region
+        optional_kwargs["allowed_model_region"] = allowed_model_region
     if llm_router is not None and hasattr(llm_router, "acompletion"):
-        return await llm_router.acompletion(**call_kwargs)
-    return await litellm.acompletion(**call_kwargs)
+        return await llm_router.acompletion(
+            model=summary_model,
+            messages=summary_messages,
+            max_tokens=max_tokens,
+            timeout=COMPACT_SUMMARY_TIMEOUT_SECONDS,
+            litellm_metadata=metadata,
+            **optional_kwargs,
+        )
+    return await litellm.acompletion(
+        model=summary_model,
+        messages=summary_messages,
+        max_tokens=max_tokens,
+        timeout=COMPACT_SUMMARY_TIMEOUT_SECONDS,
+        litellm_metadata=metadata,
+        **optional_kwargs,
+    )
 
 
 def _extract_response_text(response: Any) -> Optional[str]:
@@ -941,8 +959,8 @@ async def apply_compact_20260112(
     system: Optional[Union[str, List[Dict[str, Any]]]],
     edit_spec: Dict[str, Any],
     litellm_metadata: Optional[Dict[str, Any]] = None,
-    llm_router: Any = None,
-    user_api_key_auth: Any = None,
+    llm_router: Optional["Router"] = None,
+    user_api_key_auth: Optional["UserAPIKeyAuth"] = None,
 ) -> PolyfillResult:
     """Apply ``compact_20260112``; return a ``PolyfillResult``.
 
