@@ -959,6 +959,12 @@ class TestToolChoiceTransformation:
         )
         assert result == {"type": "function", "function": {"name": "get_weather"}}
 
+    def test_transform_tool_choice_responses_custom_name(self) -> None:
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "custom", "name": "exec"}
+        )
+        assert result == {"type": "function", "function": {"name": "exec"}}
+
     def test_transform_tool_choice_function_without_name_falls_back_to_required(self):
         """A function-type dict with no name still falls back to required"""
         result = LiteLLMCompletionResponsesConfig._transform_tool_choice(

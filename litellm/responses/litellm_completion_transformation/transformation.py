@@ -157,7 +157,7 @@ class LiteLLMCompletionResponsesConfig:
                 # "tool" without a specific function name means "use any tool"
                 # which is equivalent to "required" in OpenAI format
                 return "required"
-            elif tool_choice_type == "function":
+            elif tool_choice_type in ("function", "custom"):
                 function_name = tool_choice.get("name")
                 if function_name:
                     return {"type": "function", "function": {"name": function_name}}
@@ -1530,7 +1530,11 @@ class LiteLLMCompletionResponsesConfig:
 
         function_dict: dict[str, Any] = {
             "name": tool_call_item.name,
-            "arguments": tool_call_item.arguments,
+            "arguments": (
+                json.dumps({"content": tool_call_item.input})
+                if getattr(tool_call_item, "type", None) == "custom_tool_call"
+                else tool_call_item.arguments
+            ),
         }
 
         if provider_specific_fields:
@@ -1543,7 +1547,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "function": function_dict,
             "type": "function",
-            "index": 0,
+            "index": index,
         }
 
         if provider_specific_fields:
