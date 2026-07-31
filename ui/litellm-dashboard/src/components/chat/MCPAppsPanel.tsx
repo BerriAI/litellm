@@ -110,9 +110,10 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   const [oauthChecking, setOauthChecking] = useState<Set<string>>(new Set());
 
   const serversRef = useRef<MCPServer[]>([]);
-  useEffect(() => {
-    serversRef.current = servers;
-  }, [servers]);
+  const commitServers = useCallback((next: MCPServer[]) => {
+    serversRef.current = next;
+    setServers(next);
+  }, []);
   const selectedServersRef = useRef<string[]>(selectedServers);
   useEffect(() => {
     selectedServersRef.current = selectedServers;
@@ -190,7 +191,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         const list: MCPServer[] = Array.isArray(serverData) ? serverData : serverData?.data ?? [];
         const reachable = connectMode ? list.filter((s) => s.connected_app_reachable !== false) : list;
         const oauthServers = reachable.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
-        setServers(reachable);
+        commitServers(reachable);
         setOauthChecking(new Set(oauthServers.map((s) => s.server_id)));
         setLoading(false);
 
@@ -208,14 +209,14 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
       })
       .catch(() => {
         if (isCurrentLoad()) {
-          setServers([]);
+          commitServers([]);
           setLoading(false);
         }
       });
     return () => {
       current = false;
     };
-  }, [accessToken, connectMode, fetchToolCount, checkOauthCredential]);
+  }, [accessToken, connectMode, commitServers, fetchToolCount, checkOauthCredential]);
 
   useEffect(() => {
     if (oauthConnected.size === 0) return;

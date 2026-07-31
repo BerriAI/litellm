@@ -242,6 +242,35 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     expect(screen.getByText("Connected", { exact: false }).textContent).toBe("Connected");
   });
 
+  it("does not select a server when Connect resolves in the same tick the refetch drops it", async () => {
+    let finishRefetch: (servers: MCPServer[]) => void = () => {};
+    vi.mocked(fetchMCPServers)
+      .mockResolvedValueOnce(revocable(true))
+      .mockImplementationOnce(() => new Promise((resolve) => (finishRefetch = resolve)));
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
+
+    const onChange = vi.fn();
+    const client = newClient();
+    const { rerender } = render(<ConnectPanel token="tok" onChange={onChange} client={client} />);
+
+    fireEvent.click(await screen.findByText("revoked_srv"));
+    expect(await screen.findByRole("heading", { name: "revoked_srv" })).toBeInTheDocument();
+
+    let finishConnect: (result: { tools: never[] }) => void = () => {};
+    vi.mocked(listMCPTools).mockImplementationOnce(() => new Promise((resolve) => (finishConnect = resolve)));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    rerender(<ConnectPanel token="tok-refreshed" onChange={onChange} client={client} />);
+
+    await act(async () => {
+      finishRefetch(revocable(false));
+      finishConnect({ tools: [] });
+    });
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByText("revoked_srv")).not.toBeInTheDocument();
+  });
+
   it("does not let a superseded list load overwrite the current reachable set", async () => {
     let finishStaleLoad: (servers: MCPServer[]) => void = () => {};
     vi.mocked(fetchMCPServers)
