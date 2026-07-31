@@ -5165,6 +5165,7 @@ async def test_get_project_object_db_fetch_returns_cached_obj():
 
     assert isinstance(result, LiteLLM_ProjectTableCachedObj)
     assert result.project_id == "p-1"
+    assert result.project_alias == "proj"
 
 
 UNPRICED_UNDERLYING_MODEL = "openai/unpriced-model-lit4984-xyz"
@@ -5210,6 +5211,50 @@ def test_model_has_no_cost_mapping_no_model_or_router_is_false():
 
     assert model_has_no_cost_mapping(model=None, llm_router=router) is False
     assert model_has_no_cost_mapping(model="unpriced-group", llm_router=None) is False
+
+
+@pytest.mark.parametrize(
+    "underlying_model",
+    [
+        "azure/speech/azure-tts",
+        "mistral/mistral-ocr-latest",
+        "vertex_ai/imagen-3.0-generate-001",
+    ],
+)
+def test_model_has_no_cost_mapping_non_token_priced_model_is_false(underlying_model):
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "non-token-priced-group",
+                "litellm_params": {"model": underlying_model, "api_key": "sk-test"},
+            }
+        ]
+    )
+
+    assert model_has_no_cost_mapping(model="non-token-priced-group", llm_router=router) is False
+
+
+def test_model_has_no_cost_mapping_non_token_price_from_litellm_params_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "custom-tts",
+                "litellm_params": {
+                    "model": UNPRICED_UNDERLYING_MODEL,
+                    "api_key": "sk-test",
+                    "input_cost_per_second": 0.0001,
+                },
+            }
+        ]
+    )
+
+    assert model_has_no_cost_mapping(model="custom-tts", llm_router=router) is False
 
 
 async def _run_common_checks(
