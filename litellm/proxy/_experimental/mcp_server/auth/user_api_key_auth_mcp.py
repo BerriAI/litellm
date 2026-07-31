@@ -1964,6 +1964,18 @@ class MCPRequestHandler:
         return allowed_tools
 
     @staticmethod
+    def tool_is_granted(bare_tool_name: str, allowed_tool_names: list[str] | None) -> bool:
+        """Whether key/team tool permissions reach ``bare_tool_name`` on one server.
+
+        ``None`` means no tool-level restriction; an empty list grants nothing. Entries
+        name a tool on a single server and every writer stores them bare, so the
+        comparison is exact against the bare name rather than against the spellings
+        routing accepts. Both the listing path and the call path answer through here, so
+        discovery cannot advertise a tool that ``tools/call`` then refuses.
+        """
+        return allowed_tool_names is None or bare_tool_name in allowed_tool_names
+
+    @staticmethod
     async def is_tool_allowed_for_server(
         tool_name: str,
         server_id: str,
@@ -1973,7 +1985,7 @@ class MCPRequestHandler:
         Check if a specific tool is allowed for a server based on key/team permissions.
 
         Args:
-            tool_name: Name of the tool to check
+            tool_name: Bare tool name, already resolved against the server's prefixes
             server_id: Server ID
             user_api_key_auth: User auth
 
@@ -1984,17 +1996,7 @@ class MCPRequestHandler:
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
-
-        # None means no restrictions (allow all)
-        if allowed_tools is None:
-            return True
-
-        # Empty list means no tools allowed
-        if not allowed_tools:
-            return False
-
-        # Check if tool is in allowed list
-        return tool_name in allowed_tools
+        return MCPRequestHandler.tool_is_granted(tool_name, allowed_tools)
 
     @staticmethod
     def is_tool_allowed(

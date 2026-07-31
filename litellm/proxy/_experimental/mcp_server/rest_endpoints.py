@@ -26,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     list_fault_http_status,
 )
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+    acting_user_auth,
     build_effective_auth_contexts,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -99,9 +100,9 @@ if MCP_AVAILABLE:
         MCPServer,
         _apply_toolset_scope,
         _fire_mcp_tool_call_logging,
-        _tool_name_matches,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
+        filter_tools_by_key_team_permissions,
     )
 
     ########################################################
@@ -530,19 +531,17 @@ if MCP_AVAILABLE:
         tools = filter_tools_by_allowed_tools(tools, server)
 
         # Filter by the key's effective tool permissions through the same
-        # primitive the MCP protocol path uses (direct grants, toolset grants,
-        # and team/agent/org ceilings), so REST listing cannot drift from it
+        # function the MCP protocol path uses (direct grants, toolset grants,
+        # and team/agent/org ceilings), so REST listing cannot drift from it.
+        # Entries here are tool names on one server, written bare by every
+        # writer, and dispatch compares them bare; matching a wider set of
+        # spellings would advertise a tool that tools/call then refuses
         if user_api_key_auth:
-            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-                MCPRequestHandler,
-            )
-
-            allowed_tools_for_server = await MCPRequestHandler.get_allowed_tools_for_server(
+            tools = await filter_tools_by_key_team_permissions(
+                tools=tools,
                 server_id=server.server_id,
                 user_api_key_auth=user_api_key_auth,
             )
-            if allowed_tools_for_server is not None:
-                tools = [tool for tool in tools if _tool_name_matches(tool.name, allowed_tools_for_server)]
 
         return _create_tool_response_objects(tools, server)
 
@@ -667,13 +666,19 @@ if MCP_AVAILABLE:
         """Coerce an Optional[str] Query param to str|None, dropping unresolved FastAPI defaults."""
         return value if isinstance(value, str) else None
 
-    async def _resolve_toolset_scope(
+    async def _resolve_acting_auth(
         toolset_name: str | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> UserAPIKeyAuth:
-        """Resolve ``toolset_name`` to its scoped ``UserAPIKeyAuth``, or return unchanged."""
+        """The one credential this tools request acts as.
+
+        A toolset name narrows the caller's own credential to that toolset; otherwise a dashboard
+        session is swapped for its admitted subject. The two are mutually exclusive by construction,
+        which is why they share an owner: the admitted subject resolves per grant source and a team
+        source deliberately carries none of the caller's ``object_permission``, so a toolset
+        narrowing layered on top would evaporate on every team-granted server."""
         if not toolset_name:
-            return user_api_key_dict
+            return await acting_user_auth(user_api_key_dict)
 
         from litellm.proxy.utils import get_prisma_client_or_throw
 
@@ -731,14 +736,13 @@ if MCP_AVAILABLE:
         try:
             mcp_server_name = _as_query_str(mcp_server_name)
             toolset_name = _as_query_str(toolset_name)
+            user_api_key_dict = await _resolve_acting_auth(toolset_name, user_api_key_dict)
 
             # The full catalog (allowlist filter skipped) is admin-only so the
             # REST endpoint can't be used to enumerate deliberately-disabled tools.
             apply_tool_filters = not (
                 include_disabled_tools and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
-
-            user_api_key_dict = await _resolve_toolset_scope(toolset_name, user_api_key_dict)
 
             if server_id is None:
                 server_id = mcp_server_name
@@ -928,6 +932,7 @@ if MCP_AVAILABLE:
         )
 
         try:
+            user_api_key_dict = await acting_user_auth(user_api_key_dict)
             data = await request.json()
 
             tool_name = data.get("name")
