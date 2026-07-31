@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_caller_scope,
     get_request_metadata_field,
     iter_request_metadata_dicts,
+    proxy_identity_fields,
 )
 from litellm.router_strategy.complexity_router.cache_warming.eligibility import (
     min_prompt_cache_tokens_for_warm_set,
@@ -27,15 +28,11 @@ if TYPE_CHECKING:
     from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 
 _MAX_UNCOMPRESSED_RATIO = 8
-_ATTRIBUTION_KEYS = (
-    "user_api_key",
-    "user_api_key_hash",
-    "user_api_key_user_id",
-    "user_api_key_team_id",
-    "user_api_key_org_id",
-    "user_api_key_project_id",
-    "user_api_key_end_user_id",
-)
+# The partition a record is stored under and the identity it is attributed to must cover the same
+# dimensions, or two principals differing only in an omitted one share a record. Both are derived from
+# proxy_identity_fields() for that reason; user_api_key is the key-state lookup handle rather than a
+# tenant dimension, so it rides along here and not in the partition.
+_ATTRIBUTION_KEYS = ("user_api_key", *proxy_identity_fields())
 
 
 @lru_cache(maxsize=64)

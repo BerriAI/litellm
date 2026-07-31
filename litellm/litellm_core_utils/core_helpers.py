@@ -1,7 +1,10 @@
 # What is this?
 ## Helper utilities
 import copy
+import hashlib
+import json
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 
 import httpx
@@ -229,25 +232,43 @@ def iter_request_metadata_dicts(request_kwargs: Mapping[str, object]) -> tuple[M
     )
 
 
+@lru_cache(maxsize=1)
+def proxy_identity_fields() -> "tuple[str, ...]":
+    """Every tenant dimension the proxy stamps, read off the type that defines them rather than listed here,
+    so a dimension litellm adds is picked up instead of silently omitted."""
+    from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
+
+    return ("user_api_key_hash",) + tuple(
+        sorted(
+            field
+            for field in StandardLoggingUserAPIKeyMetadata.__annotations__
+            if field.startswith("user_api_key_") and field.endswith("_id")
+        )
+    )
+
+
 def get_caller_scope(request_kwargs: Mapping[str, object]) -> str:
-    """A cache/affinity partition key for the authenticated caller, scoped by the strongest identity the
-    request actually carries. Virtual keys carry a key hash; JWT and other keyless proxy principals do not,
-    so they scope by the tenancy the proxy stamped instead, mirroring how the v3 rate limiter builds an
-    api_key descriptor only when api_key is present and separate descriptors per user, team and organization
-    (parallel_request_limiter_v3.py:1988). Collapsing keyless callers onto one shared literal would merge
-    distinct tenants that reuse a session id into a single partition. "unscoped" is returned only when the
-    request carries no proxy identity at all, which is direct SDK use where there is one tenant by
+    """A cache/affinity partition for the authenticated caller, derived from the caller's COMPLETE identity.
+
+    Anything stored under this partition is also attributed to the caller, so the partition has to cover
+    every dimension the attribution does. A partition built from a subset is a collision channel: two
+    principals that differ only in an omitted dimension share one entry, and whoever writes last owns the
+    payload and the attribution while any accumulated state stays. End users are the reachable case, since
+    they share a virtual key by design and the key hash alone cannot tell them apart, but the rule is what
+    matters rather than that instance. Composing every dimension also means a tenancy change (a key removed
+    from a team, say) lands on a new partition instead of inheriting the old one's state.
+
+    The dimensions come from the type that declares them, so this cannot drift from what the proxy stamps.
+    Values are hashed rather than concatenated: end-user and project identifiers are customer-chosen strings
+    that would otherwise appear in Redis key names and in every log line quoting one, and hashing identifiers
+    before they become cache keys is what DeploymentAffinityCheck already does. "unscoped" is returned only
+    when the request carries no proxy identity at all, which is direct SDK use with one tenant by
     construction."""
-    for prefix, field in (
-        ("key", "user_api_key_hash"),
-        ("user", "user_api_key_user_id"),
-        ("team", "user_api_key_team_id"),
-        ("org", "user_api_key_org_id"),
-    ):
-        value = get_request_metadata_field(request_kwargs, field)
-        if value is not None:
-            return f"{prefix}:{value}"
-    return "unscoped"
+    identity = tuple((field, get_request_metadata_field(request_kwargs, field)) for field in proxy_identity_fields())
+    if all(value is None for _, value in identity):
+        return "unscoped"
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return f"id:{digest[:32]}"
 
 
 def get_request_metadata_field(request_kwargs: Mapping[str, object], field: str) -> str | None:
