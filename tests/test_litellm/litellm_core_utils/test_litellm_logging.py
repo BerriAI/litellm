@@ -3978,9 +3978,9 @@ async def test_streaming_anthropic_messages_openai_bridge_fires_success_logging(
     await _drain_until_logged(logger)
 
     assert chunks, "stream yielded no chunks"
-    assert any(
-        "content_block_delta" in _chunk_text(c) for c in chunks
-    ), "no delta chunks surfaced; the streaming text deltas were not forwarded"
+    assert any("content_block_delta" in _chunk_text(c) for c in chunks), (
+        "no delta chunks surfaced; the streaming text deltas were not forwarded"
+    )
     assert logger.success_payload is not None, (
         "async_log_success_event never fired for streaming /v1/messages -> openai "
         "Responses bridge; the no-op stream path dropped the spend row"

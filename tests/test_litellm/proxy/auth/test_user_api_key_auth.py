@@ -4613,9 +4613,7 @@ async def test_non_admin_cli_session_token_reaches_production_auth_path(monkeypa
     assert call_kwargs["valid_token_dict"]["user_id"] == "internal-user-1"
     assert call_kwargs["valid_token_dict"]["team_id"] == "team-abc"
     assert call_kwargs["valid_token_dict"]["is_session_token"] is True
-    assert (
-        call_kwargs["valid_token_dict"]["user_role"] == LitellmUserRoles.INTERNAL_USER
-    )
+    assert call_kwargs["valid_token_dict"]["user_role"] == LitellmUserRoles.INTERNAL_USER
     assert result.is_session_token is True
 
 

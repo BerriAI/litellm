@@ -60,7 +60,7 @@
     "limit": 15861
   },
   "reportMissingTypeStubs": {
-    "limit": 82
+    "limit": 41
   },
   "reportOperatorIssue": {
     "limit": 0

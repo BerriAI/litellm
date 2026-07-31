@@ -48,11 +48,10 @@ async def test_migrate_encryption_check_requires_admin(proxy_client, scratch):
 
 
 async def test_migrate_encryption_requires_admin(proxy_client, scratch):
-    """A non-admin key cannot trigger the migration; it is rejected before any write.
+    """A non-admin key cannot trigger the migration (auth layer rejects, 401).
 
-    No ``/credentials`` route is self-managed: credentials are proxy-admin only, so
-    a non-admin POST to ``/credentials/migrate-encryption`` is rejected at the
-    route-level gate (401) before the handler or any DB read/write runs.
+    Rejection happens before any write: the admin-only route check fires in
+    ``user_api_key_auth``, ahead of the endpoint body.
     """
     gen = await proxy_client.post(
         "/key/generate",
