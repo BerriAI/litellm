@@ -3016,9 +3016,10 @@ async def test_oauth_protected_resource_uses_request_path_prefix_when_opt_in(mon
     # authorization_servers stays on the un-prefixed base — the AS handlers
     # (authorize / token / register / JWKS) are mounted only at root-relative
     # paths, so a prefixed advertisement would 404 in the default deployment.
-    # Guarding against a regression that broadens the opt-in scope beyond
-    # what RFC 9728 §3 requires.
-    assert response["authorization_servers"] == ["https://mcp.example.com/server_a"]
+    # For an explicitly named gateway-managed OAuth2 server this is the
+    # aggregate ``/mcp`` authorization server (LIT-4864); guards against the
+    # opt-in scope broadening beyond what RFC 9728 §3 requires.
+    assert response["authorization_servers"] == ["https://mcp.example.com/mcp"]
 
 
 @pytest.mark.asyncio
@@ -3059,7 +3060,9 @@ async def test_oauth_protected_resource_default_ignores_request_path(monkeypatch
         global_mcp_server_manager.registry.clear()
 
     assert response["resource"] == "https://mcp.example.com/mcp/server_a"
-    assert response["authorization_servers"] == ["https://mcp.example.com/server_a"]
+    # An explicitly named gateway-managed OAuth2 server now advertises the
+    # aggregate ``/mcp`` authorization server (LIT-4864).
+    assert response["authorization_servers"] == ["https://mcp.example.com/mcp"]
 
 
 @pytest.mark.asyncio
@@ -3218,6 +3221,164 @@ def test_aggregate_protected_resource_prefixes_resource_only(monkeypatch):
 
     assert response["resource"] == "https://mcp.example.com/tenant-a/mcp"
     assert response["authorization_servers"] == ["https://mcp.example.com/mcp"]
+
+
+def _passthrough_scope(*, original_path: str, rewritten_path: str = "") -> dict:
+    """Minimal ASGI HTTP scope for the passthrough challenge helpers.
+
+    Mirrors the shape ``dynamic_mcp_route`` produces: ``_original_path`` is
+    the URL the client called (including any reverse-proxy prefix), while
+    ``path`` is the rewritten in-app route.
+    """
+    return {
+        "type": "http",
+        "method": "POST",
+        "path": rewritten_path or original_path,
+        "_original_path": original_path,
+        "scheme": "https",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("mcp.example.com", 443),
+        "headers": [(b"host", b"mcp.example.com")],
+    }
+
+
+def test_passthrough_challenge_uses_request_path_prefix_when_opt_in(monkeypatch):
+    """Greptile P1 regression: with ``MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST``
+    enabled and a path-prefixed request (``/tenant-a/mcp/server_a``), the
+    ``WWW-Authenticate`` challenge must advertise a well-known URL that
+    retains the prefix. Otherwise the client fetches an un-prefixed
+    ``.well-known`` route, the discovery builder derives no prefix, and the
+    returned ``resource`` fails the RFC 9728 §3 exact-match against the
+    original prefixed MCP URL — aborting discovery.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_passthrough_resource_metadata_url,
+            get_passthrough_www_authenticate,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    scope = _passthrough_scope(
+        original_path="/tenant-a/mcp/server_a",
+        rewritten_path="/mcp/server_a",
+    )
+
+    assert get_passthrough_resource_metadata_url(scope, "server_a") == (
+        "https://mcp.example.com/tenant-a/.well-known/oauth-protected-resource/mcp/server_a"
+    )
+    assert get_passthrough_www_authenticate(scope, "server_a") == (
+        'Bearer resource_metadata="'
+        "https://mcp.example.com/tenant-a/.well-known/oauth-protected-resource/mcp/server_a"
+        '"'
+    )
+
+
+def test_passthrough_challenge_default_ignores_request_path(monkeypatch):
+    """Backward-compat guard: without the opt-in env var the passthrough
+    challenge is derived from ``PROXY_BASE_URL`` alone. A request prefix
+    must NOT leak into the challenge URL even when it is present in the
+    scope's ``_original_path``.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_passthrough_resource_metadata_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.delenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", raising=False)
+
+    scope = _passthrough_scope(
+        original_path="/tenant-a/mcp/server_a",
+        rewritten_path="/mcp/server_a",
+    )
+
+    assert get_passthrough_resource_metadata_url(scope, "server_a") == (
+        "https://mcp.example.com/.well-known/oauth-protected-resource/mcp/server_a"
+    )
+
+
+def test_passthrough_challenge_opt_in_with_root_mounted_request_is_noop(monkeypatch):
+    """When the client called the un-prefixed MCP route (``/mcp/{server}``),
+    the opt-in must not fabricate a prefix. Guards against an empty-prefix
+    regression that would otherwise emit ``resource`` values with a
+    duplicated origin.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_passthrough_resource_metadata_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    scope = _passthrough_scope(original_path="/mcp/server_a")
+
+    assert get_passthrough_resource_metadata_url(scope, "server_a") == (
+        "https://mcp.example.com/.well-known/oauth-protected-resource/mcp/server_a"
+    )
+
+
+def test_passthrough_challenge_legacy_shape_with_prefix_when_opt_in(monkeypatch):
+    """The legacy ``/{server}/mcp`` URL shape (served by ``dynamic_mcp_route``)
+    must also carry its prefix into the challenge URL when opt-in is on.
+    The route-shape detection has to work on the ``_original_path`` even
+    when a reverse proxy pushed the shape past position 0.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_passthrough_resource_metadata_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    scope = _passthrough_scope(
+        original_path="/tenant-a/server_a/mcp",
+        rewritten_path="/mcp/server_a",
+    )
+
+    assert get_passthrough_resource_metadata_url(scope, "server_a") == (
+        "https://mcp.example.com/tenant-a/.well-known/oauth-protected-resource/server_a/mcp"
+    )
+
+
+def test_passthrough_challenge_invalid_token_flag_survives_prefix(monkeypatch):
+    """The ``invalid_token`` bit set on a failed-bearer challenge must be
+    preserved together with the prefixed resource_metadata URL — a client
+    that gets ``resource_metadata="..."`` without ``error="invalid_token"``
+    would treat the refresh loop as a fresh un-authenticated flow.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_passthrough_www_authenticate,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST", "true")
+
+    scope = _passthrough_scope(
+        original_path="/tenant-a/mcp/server_a",
+        rewritten_path="/mcp/server_a",
+    )
+
+    assert get_passthrough_www_authenticate(scope, "server_a", invalid_token=True) == (
+        'Bearer error="invalid_token", resource_metadata="'
+        "https://mcp.example.com/tenant-a/.well-known/oauth-protected-resource/mcp/server_a"
+        '"'
+    )
 
 
 # -------------------------------------------------------------------

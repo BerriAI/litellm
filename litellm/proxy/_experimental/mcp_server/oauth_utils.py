@@ -246,14 +246,38 @@ def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str
     arrived on, so a strict RFC 9728 client resolves the same route the proxy registered.
     ``_original_path`` preserves the ``/{server}/mcp`` spelling through the
     ``dynamic_mcp_route`` rewrite; the ``SERVER_ROOT_PATH`` segment is inserted exactly as
-    the route decorators insert it (see :func:`well_known_root_suffix`)."""
+    the route decorators insert it (see :func:`well_known_root_suffix`).
+
+    When ``MCP_OAUTH_DISCOVERY_PATH_FROM_REQUEST`` is enabled (see
+    :func:`get_oauth_discovery_base_url`), the reverse-proxy-injected path prefix
+    the client used (segments before the ``/{server}/mcp`` or ``/mcp/{server}``
+    route) is included in the emitted URL. Otherwise an anonymous client
+    would follow the challenge to an un-prefixed well-known URL, and the
+    discovery builder — reading a request that has no prefix — would return
+    an un-prefixed ``resource`` that a strict RFC 9728 §3 client rejects
+    against the original prefixed MCP URL. Route-shape detection uses
+    ``endswith`` because a request-prefixed path (``/tenant-a/{server}/mcp``)
+    is not covered by the original ``startswith`` check.
+    """
     request = Request(scope)
     base_url = get_request_base_url(request)
     _path = scope.get("_original_path") or scope.get("path", "") or ""
 
-    if _path.startswith(f"/{server_name}/mcp"):
-        return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/{server_name}/mcp"
-    return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{server_name}"
+    legacy_suffix = f"/{server_name}/mcp"
+    route_suffix = legacy_suffix if _path.endswith(legacy_suffix) else f"/mcp/{server_name}"
+
+    request_prefix = ""
+    if (
+        _oauth_discovery_path_from_request_enabled()
+        and _path.endswith(route_suffix)
+        and len(_path) > len(route_suffix)
+    ):
+        request_prefix = _path[: -len(route_suffix)]
+
+    return (
+        f"{base_url}{request_prefix}/.well-known/oauth-protected-resource"
+        f"{well_known_root_suffix()}{route_suffix}"
+    )
 
 
 def get_passthrough_www_authenticate(
