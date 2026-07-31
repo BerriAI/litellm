@@ -1200,6 +1200,7 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 data=json.dumps(request_data),
                 timeout=timeout,
+                logging_obj=logging_obj,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
