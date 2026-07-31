@@ -71,7 +71,7 @@ else:
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
 
 _NON_ENUM_METRIC_LABELS: frozenset[str] = frozenset(
-    {
+    (
         "guardrail_name",
         "status",
         "error_type",
@@ -79,7 +79,7 @@ _NON_ENUM_METRIC_LABELS: frozenset[str] = frozenset(
         "purpose",
         "file_type",
         "result",
-    }
+    )
 )
 
 
@@ -99,15 +99,11 @@ class _ExcludedLabelMetric:
         self._excluded_labels = excluded_labels
 
     def labels(self, *labelvalues: str, **labelkwargs: str) -> MetricWrapperBase:
-        if labelvalues:
-            kept_values = tuple(
-                value
-                for name, value in zip(self._original_labelnames, labelvalues)
-                if name not in self._excluded_labels
-            )
-            return self._metric.labels(*kept_values) if kept_values else self._metric
-        kept_kwargs = {name: value for name, value in labelkwargs.items() if name not in self._excluded_labels}
-        return self._metric.labels(**kept_kwargs) if kept_kwargs else self._metric
+        values = labelvalues or tuple(labelkwargs[name] for name in self._original_labelnames)
+        kept_values = tuple(
+            value for name, value in zip(self._original_labelnames, values) if name not in self._excluded_labels
+        )
+        return self._metric.labels(*kept_values) if kept_values else self._metric
 
 
 # Tiers a caller may name in a request, across the providers that accept the
@@ -745,8 +741,8 @@ class PrometheusLogger(CustomLogger):
 
         import litellm
 
-        exclude_metrics = frozenset(litellm.prometheus_exclude_metrics or [])
-        exclude_labels = frozenset(litellm.prometheus_exclude_labels or [])
+        exclude_metrics = frozenset(litellm.prometheus_exclude_metrics or ())
+        exclude_labels = frozenset(litellm.prometheus_exclude_labels or ())
 
         valid_metrics = frozenset(get_args(DEFINED_PROMETHEUS_METRICS))
         invalid_metrics = sorted(exclude_metrics - valid_metrics)
@@ -754,10 +750,10 @@ class PrometheusLogger(CustomLogger):
         valid_labels = self._all_defined_labels()
         invalid_labels = sorted(exclude_labels - valid_labels)
 
-        errors = [
+        errors = (
             *(f"Invalid metric name in prometheus_exclude_metrics: {metric}" for metric in invalid_metrics),
             *(f"Invalid label name in prometheus_exclude_labels: {label}" for label in invalid_labels),
-        ]
+        )
         if errors:
             raise ValueError("Prometheus exclude configuration validation failed:\n" + "\n".join(errors))
 
@@ -1123,8 +1119,9 @@ class PrometheusLogger(CustomLogger):
             if not (frozenset(original_labelnames) & self.exclude_labels):
                 return metric_class(*args, **kwargs)
 
-            kept = [name for name in original_labelnames if name not in self.exclude_labels]
-            real_metric = metric_class(*args, **{**kwargs, "labelnames": kept})
+            kept = tuple(name for name in original_labelnames if name not in self.exclude_labels)
+            kept_kwargs = {**kwargs, "labelnames": kept}  # mutable-ok: ** needs a mapping to override labelnames
+            real_metric = metric_class(*args, **kept_kwargs)
             return _ExcludedLabelMetric(real_metric, original_labelnames, self.exclude_labels)
 
         return factory
@@ -1149,11 +1146,12 @@ class PrometheusLogger(CustomLogger):
         # Get default labels for this metric from PrometheusMetricLabels
         default_labels = PrometheusMetricLabels.get_labels(metric_name)
 
-        if metric_name in self.label_filters:
-            configured_labels = self.label_filters[metric_name]
-            default_labels = [label for label in default_labels if label in configured_labels]
-
-        resolved_labels = [label for label in default_labels if label not in self.exclude_labels]
+        resolved_labels = [
+            label
+            for label in default_labels
+            if label not in self.exclude_labels
+            and (metric_name not in self.label_filters or label in self.label_filters[metric_name])
+        ]
 
         self._cached_metric_labels[metric_name] = resolved_labels
         return resolved_labels
