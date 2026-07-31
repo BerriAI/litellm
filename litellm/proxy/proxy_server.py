@@ -13500,6 +13500,7 @@ async def async_queue_request(
     data = {}
     try:
         data = await request.json()  # type: ignore
+        data.pop("_litellm_strip_stream_usage", None)
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
