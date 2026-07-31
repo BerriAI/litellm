@@ -5,16 +5,13 @@ import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { useCallback, useMemo, useState } from "react";
 
+import type { components } from "@/lib/http/schema";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 
 export type ResourceListQuery = Readonly<Record<string, string | number>>;
 
-export interface ResourceListMeta {
-  total_count: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
-}
+/** The management list envelope. The generated response models are monomorphic, so only `data` is generic here. */
+export type ResourceListMeta = components["schemas"]["ListMeta"];
 
 export interface ResourceListPage<TRow> {
   data: TRow[];
