@@ -710,6 +710,49 @@ def test_generic_cost_per_token_gpt56_flex_above_272k(
 
 
 @pytest.mark.parametrize(
+    "service_tier,prompt_tokens,input_rate,cache_write_rate,cache_read_rate",
+    [
+        (None, 100000, 2e-6, 2.5e-6, 2e-7),
+        ("flex", 100000, 1e-6, 1.25e-6, 1e-7),
+        ("priority", 100000, 4e-6, 5e-6, 4e-7),
+        (None, 300000, 4e-6, 5e-6, 4e-7),
+        ("flex", 300000, 2e-6, 2.5e-6, 2e-7),
+    ],
+)
+def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
+    service_tier, prompt_tokens, input_rate, cache_write_rate, cache_read_rate
+):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    cached_tokens = 50000
+    cache_write_tokens = 40000
+    text_tokens = prompt_tokens - cached_tokens - cache_write_tokens
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=100,
+        total_tokens=prompt_tokens + 100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-5.6-terra",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=service_tier,
+    )
+
+    expected_prompt_cost = (
+        text_tokens * input_rate
+        + cached_tokens * cache_read_rate
+        + cache_write_tokens * cache_write_rate
+    )
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+@pytest.mark.parametrize(
     "model,input_cost,output_cost,cache_read_cost",
     [
         ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
