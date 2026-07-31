@@ -3627,9 +3627,9 @@ async def test_list_team_v2_with_invalid_status():
 @pytest.mark.asyncio
 async def test_list_team_v2_search_builds_or_clause():
     """
-    `search` should be passed as a Prisma OR across team_id and team_alias,
-    both case-insensitive contains, so the UI can hit a single backend filter
-    with either a (partial) team id or a name fragment.
+    `search` should be passed as a Prisma OR across a team_id prefix match
+    (index-friendly, so a pasted id or its first characters hit) and a
+    case-insensitive team_alias contains, so the UI needs one backend filter.
     """
     from unittest.mock import AsyncMock, Mock, patch
 
@@ -3665,7 +3665,7 @@ async def test_list_team_v2_search_builds_or_clause():
         find_many_kwargs = mock_db.litellm_teamtable.find_many.call_args.kwargs
         assert find_many_kwargs["where"] == {
             "OR": [
-                {"team_id": {"contains": "platform", "mode": "insensitive"}},
+                {"team_id": {"startsWith": "platform"}},
                 {"team_alias": {"contains": "platform", "mode": "insensitive"}},
             ]
         }
@@ -3733,7 +3733,7 @@ async def test_list_team_v2_search_composes_with_user_id_filter():
         find_many_kwargs = mock_db.litellm_teamtable.find_many.call_args.kwargs
         where = find_many_kwargs["where"]
         assert where["OR"] == [
-            {"team_id": {"contains": "team_a", "mode": "insensitive"}},
+            {"team_id": {"startsWith": "team_a"}},
             {"team_alias": {"contains": "team_a", "mode": "insensitive"}},
         ]
         assert where["team_id"] == {"in": ["team_a", "team_b"]}
