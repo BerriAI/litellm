@@ -73,6 +73,7 @@ def _get_guardrails_list_response(
         )
         guardrail_configs.append(
             GuardrailInfoResponse(
+                guardrail_id=guardrail.get("guardrail_id"),
                 guardrail_name=guardrail.get("guardrail_name"),
                 litellm_params=masked_params,
                 guardrail_info=guardrail.get("guardrail_info"),
@@ -178,13 +179,14 @@ async def list_guardrails_v2(
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Prisma client not initialized")
-
     is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     try:
-        guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(prisma_client=prisma_client)
+        guardrails = (
+            await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(prisma_client=prisma_client)
+            if prisma_client is not None
+            else []
+        )
 
         excluded_guardrail_ids: set = set()
         if not is_admin:
@@ -1228,13 +1230,12 @@ async def get_guardrail_info(guardrail_id: str):
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Prisma client not initialized")
-
     try:
         guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
-        result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
-            guardrail_id=guardrail_id, prisma_client=prisma_client
+        result = (
+            await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(guardrail_id=guardrail_id, prisma_client=prisma_client)
+            if prisma_client is not None
+            else None
         )
         if result is None:
             in_memory = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(guardrail_id=guardrail_id)

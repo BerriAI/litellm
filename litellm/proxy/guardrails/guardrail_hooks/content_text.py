@@ -14,6 +14,8 @@ non-text part, which is what ``is_all_text_parts`` gates.
 
 from collections.abc import Sequence
 
+from litellm.litellm_core_utils.prompt_templates.factory import get_attribute_or_key
+
 
 def content_to_text(content: object) -> str:
     """Collapse a message ``content`` (str or list-of-parts) to plain text.
@@ -53,3 +55,41 @@ def merge_rewritten_text_parts(parts: Sequence[object], new_text: str) -> list[o
     breakpoints = tuple(part["cache_control"] for part in dict_parts if part.get("cache_control") is not None)
     base = {**dict_parts[0], "text": new_text} if dict_parts else {"type": "text", "text": new_text}
     return [{**base, "cache_control": breakpoints[-1]} if breakpoints else base]
+
+
+def assistant_text_from_response(response: object) -> str | None:
+    """The assistant's natural-language text from a model response, across chat,
+    Anthropic, and Responses shapes. Preserved when the turn is rebuilt for the
+    retrieval follow-up so the model's reasoning is not lost."""
+    choices = get_attribute_or_key(response, "choices", None)
+    if isinstance(choices, list) and choices:
+        message = get_attribute_or_key(choices[0], "message", None)
+        if message is not None:
+            text = content_to_text(get_attribute_or_key(message, "content", None))
+            if text:
+                return text
+    content = get_attribute_or_key(response, "content", None)
+    if isinstance(content, list):
+        parts = [
+            text
+            for block in content
+            if get_attribute_or_key(block, "type", None) == "text"
+            for text in (get_attribute_or_key(block, "text", None),)
+            if isinstance(text, str) and text
+        ]
+        if parts:
+            return "".join(parts)
+    output = get_attribute_or_key(response, "output", None)
+    if isinstance(output, list):
+        output_parts = [
+            text
+            for item in output
+            if get_attribute_or_key(item, "type", None) == "message"
+            for chunk in (get_attribute_or_key(item, "content", None) or ())
+            if get_attribute_or_key(chunk, "type", None) == "output_text"
+            for text in (get_attribute_or_key(chunk, "text", None),)
+            if isinstance(text, str) and text
+        ]
+        if output_parts:
+            return "".join(output_parts)
+    return None

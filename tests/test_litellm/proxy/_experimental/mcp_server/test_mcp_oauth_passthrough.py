@@ -442,7 +442,10 @@ async def test_fetch_upstream_metadata_returns_none_when_not_all_candidates_netw
 
 @pytest.mark.asyncio
 async def test_oauth_protected_resource_gateway_managed_unchanged():
-    """Regression guard: OAuth2 servers still advertise the gateway as AS."""
+    """Regression guard: gateway-managed OAuth2 servers advertise the gateway as AS and
+    never fetch upstream metadata. Since LIT-4864 the advertised document is the gateway's
+    own aggregate authorization server ({base}/mcp), which serves the keyless DCR flow for
+    per-server URLs; the per-server relay endpoints remain for the keyed flow."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -477,7 +480,7 @@ async def test_oauth_protected_resource_gateway_managed_unchanged():
         )
 
     mock_client.get.assert_not_awaited()
-    assert result["authorization_servers"] == ["https://gateway.example.com/keycloak_whoami"]
+    assert result["authorization_servers"] == ["https://gateway.example.com/mcp"]
     assert result["scopes_supported"] == ["read"]
 
 
