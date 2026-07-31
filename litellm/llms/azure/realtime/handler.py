@@ -119,11 +119,17 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         try:
             ssl_context = get_shared_realtime_ssl_context()
+            # Auth precedence mirrors BaseAzureLLM._base_validate_azure_environment:
+            # prefer api-key, fall back to Azure AD (Entra ID) bearer token, never both.
+            if api_key:
+                _auth_headers = {"api-key": api_key}
+            elif azure_ad_token:
+                _auth_headers = {"Authorization": f"Bearer {azure_ad_token}"}
+            else:
+                _auth_headers = {}
             async with websockets.connect(  # type: ignore
                 url,
-                additional_headers={
-                    "api-key": api_key,  # type: ignore
-                },
+                additional_headers=_auth_headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_context,
             ) as backend_ws:
