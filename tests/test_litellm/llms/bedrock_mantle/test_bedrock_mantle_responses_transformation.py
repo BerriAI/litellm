@@ -1519,8 +1519,8 @@ class TestBedrockMantleResponsesPricing:
         "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
         [
             ("openai.gpt-5.6-sol", 5.5e-06, 6.875e-06, 5.5e-07, 3.3e-05),
-            ("openai.gpt-5.6-terra", 2.75e-06, 3.4375e-06, 2.75e-07, 1.65e-05),
-            ("openai.gpt-5.6-luna", 1.1e-06, 1.375e-06, 1.1e-07, 6.6e-06),
+            ("openai.gpt-5.6-terra", 2.2e-06, 2.75e-06, 2.2e-07, 1.32e-05),
+            ("openai.gpt-5.6-luna", 2.2e-07, 2.75e-07, 2.2e-08, 1.32e-06),
         ],
     )
     def test_gpt_5_6_pricing_and_mode(

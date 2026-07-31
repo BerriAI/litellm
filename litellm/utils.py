@@ -5410,6 +5410,19 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_creation_input_token_cost_above_200k_tokens", None
                 ),
+                cache_creation_input_token_cost_above_272k_tokens=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens", None
+                ),
+                cache_creation_input_token_cost_above_272k_tokens_priority=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens_priority", None
+                ),
+                cache_creation_input_token_cost_above_272k_tokens_flex=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens_flex", None
+                ),
+                cache_creation_input_token_cost_flex=_model_info.get("cache_creation_input_token_cost_flex", None),
+                cache_creation_input_token_cost_priority=_model_info.get(
+                    "cache_creation_input_token_cost_priority", None
+                ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
@@ -5423,6 +5436,9 @@ def _get_model_info_helper(
                 ),
                 cache_read_input_token_cost_above_272k_tokens_priority=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens_priority", None
+                ),
+                cache_read_input_token_cost_above_272k_tokens_flex=_model_info.get(
+                    "cache_read_input_token_cost_above_272k_tokens_flex", None
                 ),
                 cache_read_input_token_cost_above_512k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_512k_tokens", None
@@ -5441,6 +5457,9 @@ def _get_model_info_helper(
                 input_cost_per_token_above_272k_tokens=_model_info.get("input_cost_per_token_above_272k_tokens", None),
                 input_cost_per_token_above_272k_tokens_priority=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_priority", None
+                ),
+                input_cost_per_token_above_272k_tokens_flex=_model_info.get(
+                    "input_cost_per_token_above_272k_tokens_flex", None
                 ),
                 input_cost_per_token_above_512k_tokens=_model_info.get("input_cost_per_token_above_512k_tokens", None),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
@@ -5482,6 +5501,9 @@ def _get_model_info_helper(
                 ),
                 output_cost_per_token_above_272k_tokens_priority=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_priority", None
+                ),
+                output_cost_per_token_above_272k_tokens_flex=_model_info.get(
+                    "output_cost_per_token_above_272k_tokens_flex", None
                 ),
                 output_cost_per_token_above_512k_tokens=_model_info.get(
                     "output_cost_per_token_above_512k_tokens", None
