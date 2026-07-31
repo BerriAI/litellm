@@ -75,6 +75,37 @@ describe("Cost column", () => {
   });
 });
 
+describe("Duration column", () => {
+  it("shows the summed session duration, not the representative call's duration, for a multi-round session", () => {
+    renderRows([
+      logEntry({
+        request_id: "req-session-duration",
+        request_duration_ms: 1200,
+        session_id: "sess-1",
+        session_total_count: 3,
+        session_total_duration_ms: 5400,
+      }),
+    ]);
+
+    expect(screen.getByText("5.40")).toBeInTheDocument();
+    expect(screen.queryByText("1.20")).not.toBeInTheDocument();
+  });
+
+  it("shows the call's own duration for a single-call session", () => {
+    renderRows([
+      logEntry({
+        request_id: "req-single-duration",
+        request_duration_ms: 1200,
+        session_id: "sess-2",
+        session_total_count: 1,
+        session_total_duration_ms: 1200,
+      }),
+    ]);
+
+    expect(screen.getByText("1.20")).toBeInTheDocument();
+  });
+});
+
 describe("row action cells", () => {
   it("reports the key hash through the injected dependency rather than a row field", async () => {
     const user = userEvent.setup();
