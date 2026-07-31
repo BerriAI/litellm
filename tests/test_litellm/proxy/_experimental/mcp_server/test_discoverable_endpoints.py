@@ -3272,9 +3272,7 @@ def test_passthrough_challenge_uses_request_path_prefix_when_opt_in(monkeypatch)
         "https://mcp.example.com/tenant-a/.well-known/oauth-protected-resource/mcp/server_a"
     )
     assert get_passthrough_www_authenticate(scope, "server_a") == (
-        'Bearer resource_metadata="'
-        "https://mcp.example.com/tenant-a/.well-known/oauth-protected-resource/mcp/server_a"
-        '"'
+        'Bearer resource_metadata="https://mcp.example.com/tenant-a/.well-known/oauth-protected-resource/mcp/server_a"'
     )
 
 

@@ -267,17 +267,10 @@ def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str
     route_suffix = legacy_suffix if _path.endswith(legacy_suffix) else f"/mcp/{server_name}"
 
     request_prefix = ""
-    if (
-        _oauth_discovery_path_from_request_enabled()
-        and _path.endswith(route_suffix)
-        and len(_path) > len(route_suffix)
-    ):
+    if _oauth_discovery_path_from_request_enabled() and _path.endswith(route_suffix) and len(_path) > len(route_suffix):
         request_prefix = _path[: -len(route_suffix)]
 
-    return (
-        f"{base_url}{request_prefix}/.well-known/oauth-protected-resource"
-        f"{well_known_root_suffix()}{route_suffix}"
-    )
+    return f"{base_url}{request_prefix}/.well-known/oauth-protected-resource{well_known_root_suffix()}{route_suffix}"
 
 
 def get_passthrough_www_authenticate(
