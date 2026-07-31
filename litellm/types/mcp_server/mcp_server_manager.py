@@ -75,6 +75,11 @@ class MCPServer(BaseModel):
     # "client_secret_basic" the credentials go in an HTTP Basic Authorization
     # header (omitted from the body); None defaults to "client_secret_post".
     token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod] = None
+    # RFC 8707 resource indicator sent on this server's upstream oauth2 legs (authorize, both
+    # token grants, and the client_credentials fetch). None omits it, which is the default and
+    # today's behavior; "auto" derives the canonical URI from ``url``; any other value is sent
+    # verbatim. Resolved by ``oauth_utils.resolve_upstream_resource``.
+    upstream_resource: str | None = None
     # AWS SigV4 fields
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None

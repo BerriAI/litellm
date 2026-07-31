@@ -11,12 +11,13 @@ here because only this suite uses them.
 
 from __future__ import annotations
 
+import time
 import warnings
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from e2e_http import NoBody, Result, get_external, is_ok
+from e2e_http import NoBody, Result, Success, get_external, is_ok
 from proxy_client import ProxyClient
 
 
@@ -290,12 +291,46 @@ class A2AClient:
     proxy: ProxyClient
 
     def register_agent(self, body: AgentRegisterBody) -> Result[AgentResponse]:
-        return self.proxy.transport.post(
+        """Register an agent and, on success, wait until the data plane serves it.
+
+        /v1/agents is a control-plane route; the /a2a/{agent_id} routes that serve
+        the card and run message/send are data plane, and only see the agent after
+        the next DB reload. A card read or message/send issued the instant this
+        returns can therefore 404 on the agent it just created. Waiting here keeps
+        every caller from having to poll, the same way ProxyClient.create_model
+        waits for a new model to become servable.
+        """
+        result = self.proxy.transport.post(
             "/v1/agents",
             headers=self.proxy.transport.master,
             json=body,
             response_type=AgentResponse,
         )
+        if isinstance(result, Success):
+            self._await_agent_servable(result.data.agent_id)
+        return result
+
+    def _await_agent_servable(self, agent_id: str) -> None:
+        """Block until the data plane serves `agent_id`'s card, or fail loudly at
+        poll_timeout (a real propagation problem, surfaced here rather than as a
+        downstream 404 on whichever /a2a call the test happened to make first)."""
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            result = self.proxy.transport.get(
+                f"/a2a/{agent_id}/.well-known/agent-card.json",
+                headers=self.proxy.transport.master,
+                params=NoBody(),
+                response_type=ServedAgentCard,
+            )
+            if isinstance(result, Success):
+                return
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"agent {agent_id!r} was registered but never became servable on the "
+                    f"data plane within {self.proxy.poll_timeout}s of POST /v1/agents "
+                    f"(control/data-plane propagation issue); last card read: {result}"
+                )
+            time.sleep(self.proxy.poll_interval)
 
     def get_agent(self, agent_id: str) -> Result[AgentResponse]:
         return self.proxy.transport.get(
