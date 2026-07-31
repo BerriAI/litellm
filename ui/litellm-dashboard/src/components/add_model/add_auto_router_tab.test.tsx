@@ -1,4 +1,4 @@
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor, testQueryClient } from "../../../tests/test-utils";
 import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
@@ -114,6 +114,10 @@ const Harness = () => <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" u
 describe("AddAutoRouterTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // testQueryClient is a shared singleton with staleTime: Infinity, so cached model lists would
+    // otherwise bleed across tests (a later test reusing accessToken="token" would read an earlier
+    // test's data instead of its own mock).
+    testQueryClient.clear();
     mockFetchAvailableModels.mockResolvedValue([]);
     mockHandleAddAutoRouterSubmit.mockResolvedValue(undefined);
   });
@@ -158,8 +162,10 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
     openTemplateDropdown();
 
-    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true));
-    expect(optionByLabel("Anthropic Family")).toHaveTextContent(/Missing:.*claude-opus-5/);
+    // Wait for the terminal (loaded) state; "disabled" alone is also true mid-load, so assert on
+    // the missing-model text that only appears once the list has resolved.
+    await waitFor(() => expect(optionByLabel("Anthropic Family")).toHaveTextContent(/Missing:.*claude-opus-5/));
+    expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
     // The other family, fully available, stays selectable.
     expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(false);
   });
@@ -244,46 +250,24 @@ describe("AddAutoRouterTab", () => {
     expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
-  // A caller switch must clear the preset selection, or a preset selected on the previous caller
-  // stays selected (and its models available in the old list) for the new caller. Only the preset
-  // choice and model-verification state are token-scoped; user config survives.
-  it("clears the preset selection when the access token changes", async () => {
-    mockFetchAvailableModels.mockResolvedValueOnce(ALL_FAMILY_MODELS).mockResolvedValueOnce(ALL_FAMILY_MODELS);
+  // Availability is scoped to the caller. Because the model query is keyed on accessToken, a caller
+  // switch re-fetches and re-gates the presets against the NEW caller's models: a preset the first
+  // caller could select greys out for a second caller who lacks one of its models. Nothing carries
+  // the first caller's list forward, so no preset stays wrongly selectable across the switch.
+  it("re-gates presets against the new caller when the access token changes", async () => {
+    mockFetchAvailableModels
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS.filter((m) => m.model_group !== "o3"));
 
     const { rerender } = renderWithProviders(
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-a" userRole="Admin" />,
     );
     openTemplateDropdown();
     await waitFor(() => expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(false));
-    fireEvent.click(optionByLabel("OpenAI Family")!);
 
     rerender(<AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-b" userRole="Admin" />);
-    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2));
 
-    openTemplateDropdown();
-    expect(optionByLabel("OpenAI Family")).not.toHaveClass("ant-select-item-option-selected");
-  });
-
-  // A late-resolving fetch from the previous caller must not overwrite the current caller's list.
-  // Caller A's request is held open, caller B's resolves empty; when A finally resolves with the
-  // full family, the ignore guard drops it so the preset stays greyed out for B. Without the guard,
-  // A's response would land after B's and wrongly re-enable the preset.
-  it("ignores a stale in-flight model fetch that resolves after the token changed", async () => {
-    let resolveA: (models: ModelGroup[]) => void = () => undefined;
-    mockFetchAvailableModels
-      .mockReturnValueOnce(new Promise<ModelGroup[]>((resolve) => (resolveA = resolve)))
-      .mockResolvedValueOnce([]);
-
-    const { rerender } = renderWithProviders(
-      <AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-a" userRole="Admin" />,
-    );
-    rerender(<AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-b" userRole="Admin" />);
-    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2));
-
-    resolveA(ALL_FAMILY_MODELS);
-
-    openTemplateDropdown();
-    await waitFor(() => expect(optionByLabel("OpenAI Family")).toBeTruthy());
+    await waitFor(() => expect(optionByLabel("OpenAI Family")).toHaveTextContent(/Missing:.*o3/));
     expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
   });
 

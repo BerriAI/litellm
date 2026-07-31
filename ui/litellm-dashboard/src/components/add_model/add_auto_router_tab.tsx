@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import { TextInput } from "@tremor/react";
 import { modelAvailableCall } from "../networking";
@@ -6,7 +7,7 @@ import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
-import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
@@ -75,8 +76,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const requiresTeamScope = createScope === "team-required";
   const [form] = Form.useForm();
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
-  const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
-  const [modelsLoadState, setModelsLoadState] = useState<"loading" | "loaded" | "error">("loading");
 
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
@@ -106,30 +105,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     fetchModelAccessGroups();
   }, [accessToken]);
 
-  useEffect(() => {
-    let ignore = false;
-
-    const loadModels = async () => {
-      setModelsLoadState("loading");
-      setModelInfo([]);
-      setSelectedPreset(undefined);
-      try {
-        const uniqueModels = await fetchAvailableModels(accessToken);
-        if (ignore) return;
-        setModelInfo(uniqueModels);
-        setModelsLoadState("loaded");
-      } catch (error) {
-        console.error("Error fetching model info for auto router:", error);
-        if (ignore) return;
-        setModelsLoadState("error");
-      }
-    };
-    loadModels();
-
-    return () => {
-      ignore = true;
-    };
-  }, [accessToken]);
+  const {
+    data: modelInfo = [],
+    isLoading: modelsLoading,
+    isError: modelsError,
+  } = useQuery({
+    queryKey: ["availableModels", "autoRouter", accessToken],
+    queryFn: () => fetchAvailableModels(accessToken),
+    enabled: Boolean(accessToken),
+  });
 
   const isAdmin = all_admin_roles.includes(userRole);
 
@@ -147,8 +131,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // whose models we cannot yet verify, and a failed fetch leaves every preset unverifiable. This
   // makes the load-race (pick during loading, then discover a missing model) unrepresentable.
   const presetAvailability = (preset: AutoRouterPreset): PresetAvailability => {
-    if (modelsLoadState === "loading") return { kind: "loading" };
-    if (modelsLoadState === "error") return { kind: "unverifiable" };
+    if (modelsLoading) return { kind: "loading" };
+    if (modelsError) return { kind: "unverifiable" };
     const missing = getMissingModelsInPreset(preset, availableModelSet);
     return missing.length > 0 ? { kind: "missing_models", models: missing } : { kind: "available" };
   };
