@@ -8,6 +8,7 @@ Self-service password reset endpoints for internal (non-SSO) users.
 
 import asyncio
 import secrets
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
@@ -45,7 +46,7 @@ async def _send_reset_email_safely(receiver_email: str, subject: str, html: str)
         verbose_proxy_logger.warning("Password reset email not sent, SMTP misconfigured: %s", e)
 
 
-async def _revoke_ui_sessions_for_user(tx, user_id: str) -> list:
+async def _revoke_ui_sessions_for_user(tx, user_id: str) -> Sequence:
     """Delete the user's dashboard UI-session keys inside the reset transaction.
 
     Stops an already-issued session cookie from continuing to authenticate after
