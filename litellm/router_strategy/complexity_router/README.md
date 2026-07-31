@@ -126,6 +126,25 @@ response = litellm.completion(
 
 ## Special Behaviors
 
+### Tier Fallback Ladder
+
+Classifying a request is only half the job; the tier still has to have something that can answer. Resolution runs in this order:
+
+1. A live model in the classified tier. A pool member counts as live when the router knows that model group and it has at least one deployment out of cooldown, so a dead model in a pool is passed over for its peers.
+2. The next tier up, then the one above that. Resolution never falls to a cheaper tier, because that is the model the classifier already ruled out; a request classified COMPLEX is not answered by the SIMPLE model just because SIMPLE is healthy.
+3. `default_model`, if you set one.
+4. The classified tier anyway, as a best effort. Cooldowns expire and the health view is a snapshot, so a request that might succeed is sent rather than failed.
+
+When the ladder climbs, the decision records `tier_fallback_from` with the tier the request was classified into, and the log line carries the same fact:
+
+```
+ComplexityRouter: routing decision cause=heuristic_scorer, tier=MEDIUM, score=-0.150, signals=[...], routed_model=gpt-4o, tier_fallback_from=SIMPLE
+```
+
+Two things are deliberately not routed around. A tier configured as an empty pool (`SIMPLE: []`) raises, because it is a config error rather than a gap. And a routing plugin that narrows a tier to zero candidates raises, because refusing every candidate is a policy decision; climbing past it would serve exactly what the plugin just denied. Plugins run against whichever tier the ladder settles on, so they still vet what is served.
+
+If the health view itself cannot be read, the whole pool is treated as live and resolution behaves as it did before, instead of declaring every tier dead and pushing traffic to the top.
+
 ### Reasoning Override
 
 If 2+ reasoning markers are detected in the user message, the request is automatically routed to the REASONING tier regardless of the weighted score. This ensures complex reasoning tasks get the appropriate model.

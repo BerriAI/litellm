@@ -2733,6 +2733,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     escalated: bool
+    tier_fallback_from: str
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
 
 
@@ -2752,6 +2753,7 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "score",
         "classifier_model",
         "escalated",
+        "tier_fallback_from",
         "tier_boundaries",
     }
 )
