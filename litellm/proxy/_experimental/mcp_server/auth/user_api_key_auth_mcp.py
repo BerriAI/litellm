@@ -67,6 +67,18 @@ def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: r
     return None if values is None else list(values)
 
 
+class UnloadableEntitlementError(Exception):
+    """A principal's row NAMES an ``object_permission_id`` whose contents could not be read.
+
+    Raised only where there is POSITIVE evidence an entitlement exists, so every caller must DENY
+    rather than fall back to "this level places no restriction": a ceiling we know exists but cannot
+    read would otherwise silently widen the caller for as long as the fault lasts.
+
+    Deliberately distinct from a lookup that fails before the principal's entitlement is known at
+    all. Not knowing whether someone is entitled is the state that existed before the level did, so
+    it places no ceiling; denying there would refuse MCP to every caller during a cold-cache fault."""
+
+
 def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: Optional[List[str]] = None) -> Optional[List[str]]:
     """Resolve the single MCP server name a cold-start passthrough bypass may
     target. Delegates parsing to
@@ -292,6 +304,22 @@ class MCPRequestHandler:
     3. Header extraction and validation
 
     Utilizes the main `user_api_key_auth` function to validate authentication
+
+    Entitlement-fault contract (``get_allowed_mcp_servers`` / ``get_allowed_tools_for_server``)
+    ------------------------------------------------------------------------------------------
+    Every level (key, team, end user, agent, org) answers "which servers/tools does this level
+    permit", and a level that answers nothing places no restriction. A lookup FAULT is not that
+    answer, and the two callers resolve it differently on purpose:
+
+    - A keyless gateway-admitted subject fails CLOSED on any fault at any level. Each of its grant
+      sources is resolved independently and unioned, so a fault that returned "no restriction" would
+      win the union as allow-all, and its per-source org ceiling is the ONLY org bound it has.
+    - Key auth fails closed only where there is POSITIVE evidence an entitlement exists: a principal
+      row that NAMES an ``object_permission_id`` we cannot load is a known entitlement with unknown
+      contents (``UnloadableEntitlementError`` -> deny). A fault so early we cannot tell whether the
+      principal is entitled at all leaves no ceiling, because that is the state that existed before
+      the level did; denying there would refuse MCP to every caller, most of whom have no entitlement
+      configured, for the duration of a cold-cache or DB fault.
     """
 
     LITELLM_API_KEY_HEADER_NAME_PRIMARY = SpecialHeaders.custom_litellm_api_key.value
@@ -1348,6 +1376,9 @@ class MCPRequestHandler:
            has an explicit MCP server list, the combined key/team/end_user/agent result is
            capped to that list.  If the org has no list, no extra restriction is applied.
 
+        A level that cannot answer is NOT a level that permits everything; see the class docstring
+        for how each caller shape resolves an entitlement fault.
+
         Returns:
             List[str]: List of allowed MCP servers by server id
         """
@@ -1478,7 +1509,12 @@ class MCPRequestHandler:
 
             return list(set(allowed_mcp_servers))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}")
+            if isinstance(e, UnloadableEntitlementError):
+                # A ceiling we KNOW exists and cannot read. Denying is the only answer that does not
+                # widen this caller past what an operator configured, for both caller shapes.
+                verbose_logger.warning(f"Denying MCP access, entitlement unreadable: {str(e)}")
+            else:
+                verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}")
             return []
 
     @staticmethod
@@ -1491,11 +1527,15 @@ class MCPRequestHandler:
         """Cap the resolved server list by this caller's org ceiling: an explicit org list intersects
         lower-level restrictions (else becomes the ceiling); no org or an empty list leaves it unchanged.
 
-        ``keyless_source`` governs both divergences for a keyless admitted source. An UNRESOLVABLE ceiling
-        fails CLOSED for it (its only org bound is this ceiling, so dropping it on a fault would escalate a
-        cross-org user) while a key stays fail-open. And an org list may only ever INTERSECT a source (the
-        admitted model unions grants, so a ceiling must not become one), whereas for a key it may
-        substitute, that being the key ceiling model."""
+        ``keyless_source`` governs both divergences for a keyless admitted source. An INDETERMINATE ceiling
+        (we cannot tell whether the org restricts at all) fails CLOSED for it (its only org bound is this
+        ceiling, so dropping it on a fault would escalate a cross-org user) while a key stays fail-open. And
+        an org list may only ever INTERSECT a source (the admitted model unions grants, so a ceiling must not
+        become one), whereas for a key it may substitute, that being the key ceiling model.
+
+        The fail-open arm is reached only for an INDETERMINATE fault: a ceiling the org NAMES but that
+        cannot be read raises out of ``_get_allowed_mcp_servers_for_org`` and never arrives here as
+        ``None``, so key auth cannot silently shed a ceiling an operator did configure."""
         if not (user_api_key_auth and user_api_key_auth.org_id):
             return allowed_mcp_servers
         allowed_mcp_servers_for_org = await MCPRequestHandler._get_allowed_mcp_servers_for_org(user_api_key_auth)
@@ -1900,12 +1940,19 @@ class MCPRequestHandler:
             )
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed tools for server: {str(e)}")
+            # An entitlement known to exist but unreadable denies for BOTH caller shapes, so [] rather
+            # than the None (allow-all) key auth gets for an indeterminate fault.
+            unreadable_entitlement = isinstance(e, UnloadableEntitlementError)
+            if unreadable_entitlement:
+                verbose_logger.warning(f"Denying MCP tools, entitlement unreadable: {str(e)}")
+            else:
+                verbose_logger.warning(f"Failed to get allowed tools for server: {str(e)}")
             # Fail CLOSED for a keyless admitted subject: ANY error must deny the server's tools ([]),
             # not collapse to allow-all (None); key/JWT auth keeps its prior allow-all-on-error. Both
             # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
             # without keyless_source a fault under a source returns None and wins the union as allow-all.
-            return [] if (keyless_source or _is_mcp_admitted_user_subject(user_api_key_auth)) else None
+            deny_all = unreadable_entitlement or keyless_source or _is_mcp_admitted_user_subject(user_api_key_auth)
+            return [] if deny_all else None
 
     @staticmethod
     async def _apply_agent_and_org_tool_ceilings(
@@ -1944,7 +1991,9 @@ class MCPRequestHandler:
             try:
                 org_obj_perm = await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
             except Exception as e:  # noqa: BLE001  # unresolvable org ceiling, decided per caller shape
-                if keyless_source:
+                # A ceiling the org NAMES but that cannot be read denies at every caller shape; only an
+                # INDETERMINATE fault (we cannot tell whether a ceiling exists) keeps key auth open.
+                if keyless_source or isinstance(e, UnloadableEntitlementError):
                     raise
                 verbose_logger.warning(
                     f"MCP org tool ceiling unresolvable for org_id={user_api_key_auth.org_id!r}; "
@@ -2276,17 +2325,53 @@ class MCPRequestHandler:
             return []
 
     @staticmethod
+    async def _load_named_object_permission(
+        principal: str,
+        object_permission_id: str,
+        prisma_client: "PrismaClient",
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> LiteLLM_ObjectPermissionTable:
+        """Load the object permission a principal's row NAMES, or raise ``UnloadableEntitlementError``.
+
+        The single place that fault is minted, so end user, agent and org cannot drift on what counts
+        as "known entitlement, unknown contents". ``get_object_permission`` answers None for both an
+        absent row and a failed read, and neither is evidence the principal is unrestricted: the link
+        proves an entitlement was configured, so both must deny."""
+        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+        unloadable = UnloadableEntitlementError(
+            f"{principal} names object_permission_id {object_permission_id!r} which could not be loaded"
+        )
+        try:
+            object_permission = await get_object_permission(
+                object_permission_id=object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:  # noqa: BLE001  # a named entitlement we cannot read denies, whatever the read failed with
+            raise unloadable from e
+        if object_permission is None:
+            raise unloadable
+        return object_permission
+
+    @staticmethod
     async def _get_org_object_permission(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ):
+    ) -> LiteLLM_ObjectPermissionTable | None:
         """
         Get org object_permission via the established ``get_org_object`` /
         ``get_object_permission`` helpers so MCP requests share the same
         ``user_api_key_cache`` entries as the rest of the proxy.
+
+        ``None`` means the org places NO ceiling: no ``org_id``, no DB, or an org row naming no
+        permission. A row that NAMES one it cannot load raises ``UnloadableEntitlementError``;
+        every other lookup failure propagates as itself, leaving the ceiling merely unresolved.
         """
         from litellm.proxy.auth.auth_checks import (
             OrganizationNotFoundError,
-            get_object_permission,
             get_org_object,
         )
         from litellm.proxy.proxy_server import (
@@ -2322,31 +2407,29 @@ class MCPRequestHandler:
         if org_obj is None or not org_obj.object_permission_id:
             return None
 
-        # The org NAMES a permission; failing to read it is INDETERMINATE and must not collapse into the
-        # None that means "no ceiling". Raise and let each caller pick fail-open or fail-closed.
-        object_permission = await get_object_permission(
+        # The org NAMES a permission; failing to read it is a KNOWN ceiling with unknown contents and
+        # must not collapse into the None that means "no ceiling". Raising denies at every caller shape.
+        return await MCPRequestHandler._load_named_object_permission(
+            principal=f"org {user_api_key_auth.org_id!r}",
             object_permission_id=org_obj.object_permission_id,
             prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=user_api_key_auth.parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_auth=user_api_key_auth,
         )
-        if object_permission is None:
-            raise ValueError(
-                f"org {user_api_key_auth.org_id!r} names object_permission_id "
-                f"{org_obj.object_permission_id!r} which could not be loaded"
-            )
-        return object_permission
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_org(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
+    ) -> list[str] | None:
         """
         Get allowed MCP servers for an organization.
 
         Returns the MCP servers from the org's object_permission.
-        An empty result means the org places no restriction (allow-all from this level).
+        An empty result means the org places no restriction (allow-all from this level), ``None``
+        that the ceiling could not be resolved, which the caller decides per shape.
+
+        A ceiling the org NAMES but we cannot read is neither: it raises out of here so both caller
+        shapes deny, because dropping a ceiling known to exist is exactly the silent widening the
+        level is there to prevent.
         """
         try:
             object_permissions = await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
@@ -2374,34 +2457,28 @@ class MCPRequestHandler:
         except Exception as e:
             # None = ceiling UNRESOLVED, distinct from [] = org places no restriction. Collapsing them
             # let a DB fault silently drop a ceiling; the caller picks fail-open/closed from this signal.
+            # A NAMED-but-unreadable ceiling is a stronger fact than "unresolved" and denies everywhere.
+            if isinstance(e, UnloadableEntitlementError):
+                raise
             verbose_logger.warning(f"Failed to get allowed MCP servers for org: {str(e)}")
             return None
 
     @staticmethod
-    async def _get_allowed_mcp_servers_for_end_user(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
-        """
-        Get allowed MCP servers for an end user.
+    async def _get_end_user_object_permission(
+        user_api_key_auth: UserAPIKeyAuth,
+        prisma_client: "PrismaClient",
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        """The end user's own object_permission, or ``None`` when this level places no restriction.
 
-        Returns the MCP servers from the end_user's object_permission.
-        """
+        ``None`` covers an end user row that is absent or names no permission, and an end user we
+        could not resolve at all (``get_end_user_object`` answers None for an absent row AND for a
+        failed read, so this level genuinely cannot tell those apart). A row that DOES name a
+        permission we cannot load raises ``UnloadableEntitlementError``: the link is positive
+        evidence of an entitlement, so its contents may not be assumed empty."""
         from litellm.proxy.auth.auth_checks import get_end_user_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
-
-        if not user_api_key_auth or not user_api_key_auth.end_user_id:
-            return []
-
-        if prisma_client is None:
-            verbose_logger.debug("prisma_client is None")
-            return []
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
         try:
-            # Use optimized get_end_user_object function with caching
             end_user_obj = await get_end_user_object(
                 end_user_id=user_api_key_auth.end_user_id,
                 prisma_client=prisma_client,
@@ -2410,29 +2487,65 @@ class MCPRequestHandler:
                 proxy_logging_obj=proxy_logging_obj,
                 route="/mcp",
             )
+        except Exception as e:  # noqa: BLE001  # entitlement unknown, not known-absent: no ceiling, as before this level
+            verbose_logger.warning(f"Failed to resolve end_user for MCP permissions: {str(e)}")
+            return None
 
-            if end_user_obj is None or end_user_obj.object_permission is None:
-                return []
+        if end_user_obj is None:
+            return None
+        if end_user_obj.object_permission is not None:
+            return end_user_obj.object_permission
+        if not end_user_obj.object_permission_id:
+            return None
+        # The row NAMES a permission the relation did not carry. One shared (cached) lookup decides
+        # whether it is readable; an unreadable one denies rather than reading as "no restriction".
+        return await MCPRequestHandler._load_named_object_permission(
+            principal=f"end user {user_api_key_auth.end_user_id!r}",
+            object_permission_id=end_user_obj.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_auth=user_api_key_auth,
+        )
 
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_end_user(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get allowed MCP servers for an end user.
+
+        Returns the MCP servers from the end_user's object_permission; an empty result means this
+        level places no restriction. An entitlement the end user row NAMES but that cannot be read
+        raises ``UnloadableEntitlementError`` out of here so the resolver denies.
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not user_api_key_auth or not user_api_key_auth.end_user_id:
+            return []
+
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
+            return []
+
+        object_permission = await MCPRequestHandler._get_end_user_object_permission(user_api_key_auth, prisma_client)
+        if object_permission is None:
+            return []
+
+        try:
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
-            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
-                end_user_obj.object_permission.mcp_servers or []
-            )
+            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permission.mcp_servers or [])
 
             # Get MCP servers from access groups
             access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                end_user_obj.object_permission.mcp_access_groups or []
+                object_permission.mcp_access_groups or []
             )
 
             # servers referenced in tool permissions should also be accessible
             tool_perm_servers = list(
-                global_mcp_server_manager.expand_tool_permissions(
-                    end_user_obj.object_permission.mcp_tool_permissions
-                ).keys()
+                global_mcp_server_manager.expand_tool_permissions(object_permission.mcp_tool_permissions).keys()
             )
 
             # Combine all lists
@@ -2644,21 +2757,50 @@ class MCPRequestHandler:
     _AGENT_NO_PERMISSION_SENTINEL = "__agent_no_mcp_permission__"
 
     @staticmethod
+    async def _agent_object_permission_id(agent_id: str, prisma_client: "PrismaClient") -> str | None:
+        """The permission row this agent's row links to, or ``None`` when it links none.
+
+        Caches the link (with a sentinel for "links none") so an agent without an entitlement costs
+        no DB read per MCP request. A read that fails also answers ``None``: not knowing whether the
+        agent is entitled is the state that existed before this level, so it places no ceiling. Only
+        a link we DID resolve can make the caller deny."""
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        cache_key = f"agent_object_permission_id:{agent_id}"
+        try:
+            cached: object = await user_api_key_cache.async_get_cache(key=cache_key)
+            if cached == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
+                return None
+            if isinstance(cached, str) and cached:
+                return cached
+            agent_row = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
+            linked: object = getattr(agent_row, "object_permission_id", None) if agent_row is not None else None
+            object_permission_id = linked if isinstance(linked, str) and linked else None
+            await user_api_key_cache.async_set_cache(
+                key=cache_key,
+                value=object_permission_id or MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL,
+                ttl=get_management_object_ttl(user_api_key_cache),
+            )
+            return object_permission_id
+        except Exception as e:  # noqa: BLE001  # entitlement unknown, not known-absent: no ceiling, as before this level
+            verbose_logger.warning(f"Failed to resolve object_permission_id for agent {agent_id!r}: {str(e)}")
+            return None
+
+    @staticmethod
     async def _get_agent_object_permission(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ):
+    ) -> LiteLLM_ObjectPermissionTable | None:
         """
         Get agent object_permission via the established ``get_object_permission``
         helper. Caches the ``agent_id -> object_permission_id`` mapping so we
         avoid re-reading the agent row on every request, and reuses the shared
         ``object_permission_id`` cache populated by the org / team / key paths.
+
+        ``None`` means the agent places NO restriction: no ``agent_id``, no DB, or an agent linking
+        no permission. An agent that LINKS one we cannot load raises ``UnloadableEntitlementError``,
+        since a known entitlement with unknown contents must deny rather than read as unrestricted.
         """
-        from litellm.proxy.auth.auth_checks import get_object_permission
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import prisma_client
 
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return None
@@ -2668,39 +2810,16 @@ class MCPRequestHandler:
             return None
 
         agent_id = user_api_key_auth.agent_id
-        cache_key = f"agent_object_permission_id:{agent_id}"
-
-        try:
-            object_permission_id: Optional[str] = await user_api_key_cache.async_get_cache(key=cache_key)
-
-            if object_permission_id == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
-                return None
-
-            if object_permission_id is None:
-                agent_row = await AgentsRepository(prisma_client).table.find_unique(
-                    where={"agent_id": agent_id},
-                )
-                object_permission_id = (
-                    getattr(agent_row, "object_permission_id", None) if agent_row is not None else None
-                )
-                await user_api_key_cache.async_set_cache(
-                    key=cache_key,
-                    value=object_permission_id or MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL,
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                )
-                if not object_permission_id:
-                    return None
-
-            return await get_object_permission(
-                object_permission_id=object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_auth.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception as e:
-            verbose_logger.warning(f"Failed to get agent object permission: {str(e)}")
+        object_permission_id = await MCPRequestHandler._agent_object_permission_id(agent_id, prisma_client)
+        if object_permission_id is None:
             return None
+
+        return await MCPRequestHandler._load_named_object_permission(
+            principal=f"agent {agent_id!r}",
+            object_permission_id=object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_auth=user_api_key_auth,
+        )
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_agent(
@@ -2711,7 +2830,9 @@ class MCPRequestHandler:
         Get allowed MCP servers for an agent (from the agent's object_permission).
 
         Returns the MCP servers from the agent's object_permission.
-        If agent has no object_permission, returns [] (no extra restriction).
+        If agent has no object_permission, returns [] (no extra restriction). An entitlement the
+        agent LINKS but that cannot be read raises ``UnloadableEntitlementError`` out of here so the
+        resolver denies.
 
         Args:
             user_api_key_auth: User auth with agent_id
@@ -2721,13 +2842,13 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return []
 
-        try:
-            obj_perm = agent_object_permission
-            if obj_perm is None:
-                obj_perm = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
-            if obj_perm is None:
-                return []
+        obj_perm = agent_object_permission
+        if obj_perm is None:
+            obj_perm = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        if obj_perm is None:
+            return []
 
+        try:
             direct_mcp_servers = getattr(obj_perm, "mcp_servers", None) or []
             if isinstance(direct_mcp_servers, str):
                 direct_mcp_servers = []
@@ -2757,7 +2878,9 @@ class MCPRequestHandler:
     ) -> Optional[List[str]]:
         """
         Get allowed tool names for a server from the agent's object_permission.
-        Returns None if agent has no tool restrictions for this server.
+        Returns None if agent has no tool restrictions for this server. An entitlement the agent
+        LINKS but that cannot be read raises ``UnloadableEntitlementError`` out of here, which the
+        tool resolver turns into deny-all for the server rather than an unrestricted tool list.
 
         Args:
             server_id: Server ID to check permissions for
@@ -2768,13 +2891,13 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return None
 
-        try:
-            obj_perm = agent_object_permission
-            if obj_perm is None:
-                obj_perm = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
-            if obj_perm is None:
-                return None
+        obj_perm = agent_object_permission
+        if obj_perm is None:
+            obj_perm = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        if obj_perm is None:
+            return None
 
+        try:
             mcp_tool_permissions = getattr(obj_perm, "mcp_tool_permissions", None)
             if not mcp_tool_permissions or not isinstance(mcp_tool_permissions, dict):
                 return None
