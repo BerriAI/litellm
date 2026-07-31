@@ -54,6 +54,7 @@
 - {id: mgmt.access_group.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "model_access_group_management_endpoints.py:600", rationale: "Access group membership query"}
 - {id: mgmt.mcp_server.register.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "mcp_management_endpoints.py:880", rationale: "MCP server registration"}
 - {id: mgmt.mcp_server.approve.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "mcp_management_endpoints.py:1200", rationale: "Admin approval persists"}
+- {id: mgmt.budget.update.accepts_model_max_budget, module: mgmt, tier: P1, surface: api, assertions: [accepts_model_max_budget], source: "budget_management_endpoints.py:173", fail_before_fix: proven, rationale: "Per-model caps must be settable on an existing budget; model ids routinely carry dots and hyphens and the route must accept both"}
 - {id: mgmt.budget.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "budget_management_endpoints.py:155", rationale: "Limit changes apply"}
 - {id: mgmt.budget.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "budget_management_endpoints.py:280", rationale: "Clears limits"}
 - {id: mgmt.budget.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "budget_management_endpoints.py:215", rationale: "Budget enumeration"}
