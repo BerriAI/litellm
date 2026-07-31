@@ -12,9 +12,15 @@ one-element scope built with ``identity_scope``.
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from typing import TYPE_CHECKING
+
 import litellm
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.models.credentials import CredentialAccess, CredentialInfo
+from litellm.integrations.otel.presets.destinations import build_destination
+from litellm.models.credentials import CredentialAccess, CredentialInfo, CredentialItem
+
+if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
 
 
 class _LoggingDestinationTag(BaseModel):
@@ -74,9 +80,10 @@ def resolved_logging_exporter_names(
     """Destination names that will receive this identity's traces, for disclosure on
     the team/org info pages.
 
-    Mirrors the request-time resolver's selection: a logging destination is included
-    when its ``access`` grants the identity. Names only; endpoints, headers, and the
-    access map itself stay proxy-admin information.
+    Mirrors the request-time resolver's selection so it never advertises an exporter that
+    receives no traces: a destination is disclosed only when its ``access`` grants the
+    identity AND it actually builds (see ``_builds``). Names only; endpoints, headers, and
+    the access map itself stay proxy-admin information.
 
     Gated on ``is_otel_v2_enabled`` for parity with the resolver, which returns nothing
     when the flag is off: disclosing a destination the request path would never fire
@@ -91,8 +98,29 @@ def resolved_logging_exporter_names(
         if (info := parse_credential_info(credential.credential_info)) is not None
         and info.credential_type == "logging"
         and access_grants(info.access, team_ids, org_ids)
+        and destination_for_credential(credential) is not None
     )
     return tuple(dict.fromkeys(selected))
+
+
+def destination_for_credential(credential: CredentialItem) -> 'tuple[str, "OtelDestination"] | None':
+    """The ``(backend, destination)`` this logging credential resolves to, or ``None`` when it
+    resolves to nothing.
+
+    A credential builds only when it names a backend (``credential_info.description``) and
+    ``build_destination`` accepts its values. Shared by the request-time resolver (which fans
+    out to the built destinations) and the team/org disclosure (which must not advertise a
+    destination that resolves to nothing), so the two cannot drift apart.
+    """
+    backend = (credential.credential_info or {}).get("description")
+    if not backend:
+        return None
+    # Drop unset (``None``) values rather than stringifying them: ``str(None)`` is the
+    # literal ``"None"``, which would land in the exporter endpoint/headers and break
+    # the export (e.g. an empty ``otel_endpoint`` becoming the URL ``"None"``).
+    values = {str(key): str(value) for key, value in (credential.credential_values or {}).items() if value is not None}
+    destination = build_destination(backend, values)
+    return None if destination is None else (backend, destination)
 
 
 def access_grants(

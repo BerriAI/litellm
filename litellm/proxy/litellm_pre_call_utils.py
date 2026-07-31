@@ -637,14 +637,14 @@ async def _resolve_logging_exporters(
     ``credential_info.access`` is the sole routing determinant: a destination is
     selected when its ``access`` grants the caller's team/org. Empty access grants no
     one, so an empty-access destination never fires (proxy-wide requires
-    ``access.global``). Each survivor is built via ``build_destination`` and deduped on
+    ``access.global``). Each survivor is built via ``destination_for_credential`` and deduped on
     (endpoint, headers, resource attributes). Returns ([], []) when nothing is selected
     (default-deny).
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
-    from litellm.integrations.otel.presets.destinations import build_destination
     from litellm.proxy.management_endpoints.logging_exporter_access import (
         access_grants,
+        destination_for_credential,
         identity_scope,
         parse_credential_info,
     )
@@ -671,26 +671,11 @@ async def _resolve_logging_exporters(
             return False
         return access_grants(info.access, team_ids, org_ids)
 
-    def _build(
-        credential: "CredentialItem",
-    ) -> "tuple[str, OtelDestination] | None":
-        backend = (credential.credential_info or {}).get("description")
-        if not backend:
-            return None
-        # Drop unset (``None``) values rather than stringifying them: ``str(None)`` is the
-        # literal ``"None"``, which would land in the exporter endpoint/headers and break
-        # the export (e.g. an empty ``otel_endpoint`` becoming the URL ``"None"``).
-        values = {
-            str(key): str(value) for key, value in (credential.credential_values or {}).items() if value is not None
-        }
-        destination = build_destination(backend, values)
-        return None if destination is None else (backend, destination)
-
     built = tuple(
         result
         for credential in litellm.credential_list
         if _selected(credential)
-        if (result := _build(credential)) is not None
+        if (result := destination_for_credential(credential)) is not None
     )
     deduped = {
         (

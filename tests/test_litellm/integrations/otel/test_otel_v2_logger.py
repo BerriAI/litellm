@@ -466,8 +466,10 @@ def test_mcp_tool_call_routes_to_admin_destination():
         service_name="litellm-proxy",
         exporters=[ExporterSpec(kind="in_memory")],
     )
-    logger = OpenTelemetryV2(config=cfg, callback_name="generic", tracer_provider=build_tracer_provider(cfg))
-    dest = OtelDestination(callback_name="generic", endpoint="http://collector/v1/traces", headers={"x": "1"})
+    base_provider = build_tracer_provider(cfg)
+    logger = OpenTelemetryV2(config=cfg, callback_name="generic", tracer_provider=base_provider)
+    endpoint = "http://127.0.0.1:1/v1/traces"
+    dest = OtelDestination(callback_name="generic", endpoint=endpoint, headers={"x": "1"})
 
     token = _request_destinations.set((dest,))
     try:
@@ -476,18 +478,27 @@ def test_mcp_tool_call_routes_to_admin_destination():
     finally:
         _request_destinations.reset(token)
 
-    # The destination's clone provider (base in_memory exporter + the destination) must
-    # have exported the tool-call span.
+    # Routing: a destination provider was built and points at the destination's endpoint. If the
+    # tool-call span took the global-only path (no fan-out), no destination provider would exist.
     assert logger._tenant_tracers._providers, "no destination provider was built for the tool-call"
-    captured = []
-    for provider in logger._tenant_tracers._providers.values():
-        provider.force_flush()
-        for proc in provider._active_span_processor._span_processors:
-            exporter = getattr(proc, "span_exporter", None)
-            if isinstance(exporter, InMemorySpanExporter):
-                captured += exporter.get_finished_spans()
+    destination_endpoints = " ".join(
+        str(getattr(getattr(proc, "span_exporter", None), "_endpoint", ""))
+        for provider in logger._tenant_tracers._providers.values()
+        for proc in provider._active_span_processor._span_processors
+    )
+    assert endpoint in destination_endpoints, "no exporter pointed at the admin destination"
+
+    # Emission: the tool-call span was really emitted (the configured/global exporter rides its own
+    # clean provider, so it is captured there rather than on a destination group).
+    base_provider.force_flush()
+    captured = [
+        span
+        for proc in base_provider._active_span_processor._span_processors
+        if isinstance(getattr(proc, "span_exporter", None), InMemorySpanExporter)
+        for span in proc.span_exporter.get_finished_spans()
+    ]
     assert any(s.attributes.get("mcp.method.name") == "tools/call" for s in captured), (
-        "tool-call span did not reach the admin destination's provider"
+        "tool-call span was not emitted"
     )
 
 

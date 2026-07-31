@@ -185,11 +185,17 @@ def test_identity_scope_empty_for_none():
 # --- resolved_logging_exporter_names: the /team/info + /organization/info disclosure --
 
 
-def _cred(name, access=None, ctype="logging"):
+def _cred(name, access=None, ctype="logging", buildable=True):
     info = {"credential_type": ctype}
     if access is not None:
         info["access"] = access
-    return CredentialItem(credential_name=name, credential_values={}, credential_info=info)
+    values = {}
+    if buildable:
+        # a generic OTLP backend with an endpoint builds a destination, so disclosure
+        # (which now mirrors the resolver's buildability) includes it.
+        info["description"] = "generic"
+        values = {"otel_endpoint": "http://collector.example/v1/traces"}
+    return CredentialItem(credential_name=name, credential_values=values, credential_info=info)
 
 
 def test_resolved_names_are_access_only(monkeypatch):
@@ -245,3 +251,28 @@ def test_resolved_names_gated_off_when_v2_disabled(monkeypatch):
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     is_otel_v2_enabled.cache_clear()
     assert resolved_logging_exporter_names("t1", None) == ("team-granted",)
+
+
+def test_resolved_names_excludes_unbuildable(monkeypatch):
+    """Disclosure mirrors the resolver's buildability, not access alone: a granted
+    destination that names no backend, or a backend with incomplete values, resolves to
+    nothing at request time and must not be advertised on /team/info."""
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            _cred("buildable-generic", access={"teams": ["t1"]}),
+            _cred("no-backend", access={"teams": ["t1"]}, buildable=False),
+            CredentialItem(
+                credential_name="langfuse-missing-secret",
+                credential_values={"langfuse_public_key": "pk-only"},
+                credential_info={
+                    "credential_type": "logging",
+                    "access": {"teams": ["t1"]},
+                    "description": "langfuse_otel",
+                },
+            ),
+        ],
+    )
+    assert resolved_logging_exporter_names("t1", None) == ("buildable-generic",)

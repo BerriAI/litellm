@@ -474,11 +474,13 @@ def test_tracers_for_empty_returns_default_only():
 
 
 def test_tracers_for_single_destination_one_group():
-    """No regression: a single Arize destination yields one tracer/provider carrying
-    its project (same as the old single-merged path)."""
+    """A single Arize destination yields the clean base tracer (``default``) plus one
+    destination provider carrying its project; base is never folded into the project group."""
+    default = NoOpTracer()
     cache = _cache("arize")
-    tracers = cache.tracers_for(NoOpTracer(), (_arize_dest("solo"),))
-    assert len(tracers) == 1
+    tracers = cache.tracers_for(default, (_arize_dest("solo"),))
+    assert tracers[0] is default  # base rides its own clean tracer, returned first
+    assert len(tracers) == 2  # default + the one project group
     assert {_provider_project(p) for p in cache._providers.values()} == {"solo"}
 
 
@@ -490,7 +492,7 @@ def test_tracers_for_two_arize_projects_split_into_separate_groups():
     tracers = cache.tracers_for(
         NoOpTracer(), (_arize_dest("projA"), _arize_dest("projB"))
     )
-    assert len(tracers) == 2  # one tracer per project group
+    assert len(tracers) == 3  # default (clean base) + one tracer per project group
     assert {_provider_project(p) for p in cache._providers.values()} == {
         "projA",
         "projB",
@@ -523,36 +525,39 @@ def test_header_routed_destinations_stay_one_group_with_two_exporters():
         NoOpTracer(),
         (_dest("https://a/v1", "Basic A"), _dest("https://b/v1", "Basic B")),
     )
-    assert len(tracers) == 1  # single empty-Resource group
+    assert len(tracers) == 2  # default (clean base) + the single empty-Resource group
     assert len(cache._providers) == 1
     (provider,) = cache._providers.values()
     endpoints = " ".join(
         str(getattr(getattr(sp, "span_exporter", None), "_endpoint", ""))
         for sp in provider._active_span_processor._span_processors
     )
-    # global + both destinations all live on the one provider (OTLP normalizes the
-    # endpoint by appending /v1/traces, so match on the host+path prefix)
+    # both destinations live on the one group provider (the global exporter rides ``default``,
+    # not this group); OTLP normalizes the endpoint by appending /v1/traces, so match on prefix
     assert "https://a/v1" in endpoints and "https://b/v1" in endpoints
 
 
-def test_base_exporters_attach_to_first_group_only():
-    """When a backend splits into multiple Resource groups, the configured/global
-    exporters must ride exactly ONE group, so the global receives the gen-AI span once
-    rather than once per project."""
+def test_base_exporters_never_ride_a_destination_group():
+    """The configured/global exporters must ride their own clean-Resource tracer
+    (``default``), never a destination group: folding them into a group made the global
+    export inherit that destination's Resource (e.g. Arize's project), so an operator's
+    own collector saw spans stamped with a tenant's project. The global still receives the
+    gen-AI span exactly once (via ``default``), not once per project."""
     cache = _cache(
         "arize",
         exporters=[ExporterSpec(kind="in_memory", endpoint=None, owner=None)],
     )
-    cache.tracers_for(NoOpTracer(), (_arize_dest("projA"), _arize_dest("projB")))
-    base_counts = {}
+    default = NoOpTracer()
+    tracers = cache.tracers_for(default, (_arize_dest("projA"), _arize_dest("projB")))
+    assert tracers[0] is default  # global rides its own clean tracer, exactly once
     for provider in cache._providers.values():
-        project = _provider_project(provider)
-        base_counts[project] = sum(
+        base_count = sum(
             type(getattr(sp, "span_exporter", sp)).__name__ == "InMemorySpanExporter"
             for sp in provider._active_span_processor._span_processors
         )
-    # exactly one group carries the global in_memory exporter; the other carries none
-    assert sorted(base_counts.values()) == [0, 1]
+        assert base_count == 0, "no destination group may carry the configured/global exporters"
+        # and each group's Resource stays its own project only
+        assert _provider_project(provider) in {"projA", "projB"}
 
 
 def test_generic_backend_resolves_generic_destination():

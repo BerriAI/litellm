@@ -88,15 +88,19 @@ class TenantTracerCache:
         """The tracers for this request's gen-AI span, one per distinct Resource group.
 
         Destinations are grouped by ``destination_resource_attrs`` (a backend like Arize selects its
-        project from the Resource); the configured/global exporters ride the first group only, and
-        ``include_base_on_first=False`` drops them when a credential-scoped tracer already carries them.
+        project from the Resource). The configured/global exporters ride their own clean-Resource
+        provider (``default``), never folded into a destination group, so a Resource-routed
+        destination cannot stamp its own attributes (e.g. Arize's project) onto the global export.
+        ``include_base_on_first=False`` drops ``default`` when a credential-scoped tracer already
+        carries the configured exporters.
         """
         if not destinations:
             return (default,)
-        return tuple(
-            self._tracer_for_group(resource_key, group, include_base=include_base_on_first and index == 0)
-            for index, (resource_key, group) in enumerate(self._group_by_resource(destinations))
+        groups = tuple(
+            self._tracer_for_group(resource_key, group, include_base=False)
+            for resource_key, group in self._group_by_resource(destinations)
         )
+        return (default, *groups) if include_base_on_first else groups
 
     def genai_tracers_for(
         self,
