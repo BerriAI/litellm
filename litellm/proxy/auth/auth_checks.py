@@ -285,18 +285,19 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     return False
 
 
-def _has_positive_cost(value: object) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, (int, float)):
-        return value > 0
-    if isinstance(value, dict):
-        return any(_has_positive_cost(nested) for nested in value.values())
-    return False
+def _is_positive_cost(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
 def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
-    return any("cost_per" in key and _has_positive_cost(value) for key, value in entry.items())
+    for key, value in entry.items():
+        if "cost_per" not in key:
+            continue
+        if _is_positive_cost(value):
+            return True
+        if isinstance(value, dict) and any(_is_positive_cost(nested) for nested in value.values()):
+            return True
+    return False
 
 
 def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
