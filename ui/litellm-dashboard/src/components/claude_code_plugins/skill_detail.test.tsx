@@ -36,7 +36,7 @@ describe("SkillDetail source", () => {
         onBack={vi.fn()}
       />,
     );
-    expect(screen.getByText("git@ghe.example.com:org/repo.git")).toBeInTheDocument();
+    expect(screen.getByText("git@ghe.example.com:org/repo.git @ plugins/x")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /ghe.example.com/ })).not.toBeInTheDocument();
   });
 });
