@@ -1031,12 +1031,20 @@ class PolicyRegistry:
             prisma_client: The Prisma client instance
 
         Returns:
-            Dict with success message
+            Dict with "message" and optional "warning" if a config-defined policy took over.
         """
         try:
             await _policy_table(prisma_client).delete_many(where={"policy_name": policy_name})
             self.remove_policy(policy_name)
-            return {"message": f"All versions of policy '{policy_name}' deleted successfully"}
+            message = f"All versions of policy '{policy_name}' deleted successfully"
+            if self.get_source(policy_name) == "config":
+                return {
+                    "message": message,
+                    "warning": (
+                        "All DB versions were deleted. The config-defined policy with the same name is active again."
+                    ),
+                }
+            return {"message": message}
         except Exception as e:
             verbose_proxy_logger.exception(f"Error deleting all versions: {e}")
             raise Exception(f"Error deleting all versions: {str(e)}")

@@ -613,9 +613,21 @@ class TestRemovePolicyRestoresConfigFallback:
         prisma = MagicMock()
         prisma.db.litellm_policytable.delete_many = AsyncMock()
 
-        await registry.delete_all_versions(policy_name="shared-name", prisma_client=prisma)
+        result = await registry.delete_all_versions(policy_name="shared-name", prisma_client=prisma)
 
         assert registry.get_source("shared-name") == "config"
         policy = registry.get_policy("shared-name")
         assert policy is not None
         assert policy.guardrails.add == ["config-guard"]
+        assert "config" in result["warning"]
+
+    async def test_delete_all_versions_without_config_twin_has_no_warning(self):
+        registry = PolicyRegistry()
+        registry.add_policy("db-only", Policy(guardrails=PolicyGuardrails(add=["db-guard"])), source="db")
+        prisma = MagicMock()
+        prisma.db.litellm_policytable.delete_many = AsyncMock()
+
+        result = await registry.delete_all_versions(policy_name="db-only", prisma_client=prisma)
+
+        assert registry.get_policy("db-only") is None
+        assert "warning" not in result
