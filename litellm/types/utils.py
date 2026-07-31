@@ -3847,6 +3847,7 @@ class ServiceTier(Enum):
     AUTO = "auto"
     FLEX = "flex"
     PRIORITY = "priority"
+    FAST = "fast"
 
 
 class DataResidency(Enum):

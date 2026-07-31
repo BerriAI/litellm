@@ -2447,3 +2447,66 @@ def test_generic_cost_per_token_gemini_35_flash_lite():
     )
     assert prompt_cost == pytest.approx(0.0003)
     assert completion_cost == pytest.approx(0.00125)
+
+
+def test_fast_service_tier_bills_at_the_priority_rate(_local_model_cost_map):
+    """Regression: OpenAI's Fast mode replaced Priority Processing and costs 2x standard.
+
+    Before the fix "fast" fell through to standard pricing, so a Fast mode request
+    was billed at half of what it actually costs."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200),
+    )
+
+    standard = generic_cost_per_token(
+        model="gpt-5.6-sol", usage=usage, custom_llm_provider="openai", service_tier=None
+    )
+    priority = generic_cost_per_token(
+        model="gpt-5.6-sol", usage=usage, custom_llm_provider="openai", service_tier="priority"
+    )
+    fast = generic_cost_per_token(
+        model="gpt-5.6-sol", usage=usage, custom_llm_provider="openai", service_tier="fast"
+    )
+
+    expected_prompt = 800 * 1e-05 + 200 * 1e-06
+    expected_completion = 500 * 6e-05
+
+    assert fast == priority
+    assert fast[0] == pytest.approx(expected_prompt, rel=1e-9)
+    assert fast[1] == pytest.approx(expected_completion, rel=1e-9)
+    assert fast[0] == pytest.approx(standard[0] * 2, rel=1e-9)
+    assert fast[1] == pytest.approx(standard[1] * 2, rel=1e-9)
+
+
+def test_fast_service_tier_is_case_insensitive(_local_model_cost_map):
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1_000, completion_tokens=500)
+
+    assert generic_cost_per_token(
+        model="gpt-5.6-sol", usage=usage, custom_llm_provider="openai", service_tier="FAST"
+    ) == generic_cost_per_token(
+        model="gpt-5.6-sol", usage=usage, custom_llm_provider="openai", service_tier="fast"
+    )
+
+
+def test_fast_service_tier_matches_priority_above_the_context_threshold(_local_model_cost_map):
+    """The above-threshold branch resolves its own cost keys, so the alias has to hold there too."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=300_000, completion_tokens=1_000)
+
+    fast = generic_cost_per_token(
+        model="gpt-5.6-sol", usage=usage, custom_llm_provider="openai", service_tier="fast"
+    )
+    priority = generic_cost_per_token(
+        model="gpt-5.6-sol", usage=usage, custom_llm_provider="openai", service_tier="priority"
+    )
+
+    assert fast == priority
+    assert fast[0] == pytest.approx(300_000 * 1e-05, rel=1e-9)
+    assert fast[1] == pytest.approx(1_000 * 4.5e-05, rel=1e-9)
