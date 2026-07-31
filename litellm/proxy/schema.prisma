@@ -30,7 +30,7 @@ model LiteLLM_BudgetTable {
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   tags LiteLLM_TagTable[] // multiple tags can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
-  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
+  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
 }
 
 // Models on proxy
@@ -893,6 +893,7 @@ model LiteLLM_DailyTeamSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  ptu_flat_cost       Float    @default(0.0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 

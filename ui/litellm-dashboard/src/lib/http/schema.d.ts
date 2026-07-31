@@ -35298,6 +35298,8 @@ export interface components {
             cache_creation_input_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /** Cost Per Ptu Per Hour */
+            cost_per_ptu_per_hour?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -35317,6 +35319,12 @@ export interface components {
             output_cost_per_character?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Ptu Count */
+            ptu_count?: number | null;
+            /** Ptu Effective From */
+            ptu_effective_from?: string | null;
+            /** Ptu Effective To */
+            ptu_effective_to?: string | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */

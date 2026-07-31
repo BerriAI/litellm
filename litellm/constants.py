@@ -1718,3 +1718,9 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
 )
 
 UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
+
+# PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
+# sentinel api_key so PTU flat cost stays distinguishable from real per-request
+# spend under the table's composite unique constraint.
+PTU_SENTINEL_API_KEY: Final[str] = "__ptu_flat_cost__"
+PTU_ROLLUP_JOB_ID: Final[str] = "ptu_flat_cost_rollup_job"
