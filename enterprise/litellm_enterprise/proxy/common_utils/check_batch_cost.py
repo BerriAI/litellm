@@ -107,7 +107,12 @@ class CheckBatchCost:
         prom_logger: Optional["PrometheusLogger"], error_type: str
     ) -> None:
         if prom_logger is not None:
-            prom_logger.record_check_batch_cost_error(error_type)
+            try:
+                prom_logger.record_check_batch_cost_error(error_type)
+            except Exception as prom_err:
+                verbose_proxy_logger.warning(
+                    f"CheckBatchCost: failed to record {error_type} metric: {prom_err}"
+                )
 
     def _resolve_job_routing(
         self,
@@ -558,94 +563,101 @@ class CheckBatchCost:
         else:
             jobs = await self._fallback_find_jobs()
         for job in jobs:
-            routing = self._resolve_job_routing(job, prom_logger)
-            if routing is None:
-                continue
-            model_id, batch_id = routing
-
-            verbose_proxy_logger.info(
-                f"Querying model ID: {model_id} for cost and usage of batch ID: {batch_id}"
-            )
-
             try:
-                response = await self.llm_router.aretrieve_batch(
-                    model=model_id,
-                    batch_id=batch_id,
-                    litellm_metadata={
-                        "user_api_key_user_id": job.created_by or "default-user-id",
-                        "batch_ignore_default_logging": True,
-                    },
-                )
-            except Exception as e:
+                routing = self._resolve_job_routing(job, prom_logger)
+                if routing is None:
+                    continue
+                model_id, batch_id = routing
+
                 verbose_proxy_logger.info(
-                    f"Skipping job {job.unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
+                    f"Querying model ID: {model_id} for cost and usage of batch ID: {batch_id}"
                 )
-                if prom_logger:
-                    prom_logger.record_check_batch_cost_error("provider_retrieval_error")
-                continue
 
-            ## RETRIEVE THE BATCH JOB OUTPUT FILE
-            if (
-                response.status == "completed"
-                and response.output_file_id is not None
-            ):
                 try:
-                    tracked = await self._track_completed_batch_cost(
-                        job=job,
-                        response=response,
-                        model_id=model_id,
+                    response = await self.llm_router.aretrieve_batch(
+                        model=model_id,
                         batch_id=batch_id,
-                        prom_logger=prom_logger,
+                        litellm_metadata={
+                            "user_api_key_user_id": job.created_by or "default-user-id",
+                            "batch_ignore_default_logging": True,
+                        },
                     )
-                except Exception as tracking_err:
-                    verbose_proxy_logger.error(
-                        f"CheckBatchCost: failed to track cost for batch {batch_id} "
-                        f"(job {job.id}); leaving it unprocessed so the next poll retries: {tracking_err}"
-                    )
-                    self._record_error(prom_logger, "cost_tracking_error")
-                    continue
-                if tracked is None:
-                    continue
-
-                # Track this job for the final metrics summary
-                processed_models.append(tracked)
-
-                # mark the job as complete
-                try:
-                    update_data: dict = {
-                        "status": "complete",
-                        "file_object": response.model_dump_json(),
-                    }
-                    if self._has_batch_processed_column:
-                        update_data["batch_processed"] = True
-                    await self.prisma_client.db.litellm_managedobjecttable.update(
-                        where={"id": job.id},
-                        data=update_data,
-                    )
-                except Exception as db_err:
-                    verbose_proxy_logger.error(
-                        f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
-                    )
-
-            elif response.status in ("failed", "expired", "cancelled"):
-                try:
-                    update_data = {
-                        "status": response.status,
-                        "file_object": response.model_dump_json(),
-                    }
-                    if self._has_batch_processed_column:
-                        update_data["batch_processed"] = True
-                    await self.prisma_client.db.litellm_managedobjecttable.update(
-                        where={"id": job.id},
-                        data=update_data,
-                    )
+                except Exception as e:
                     verbose_proxy_logger.info(
-                        f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
+                        f"Skipping job {job.unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
                     )
-                except Exception as db_err:
-                    verbose_proxy_logger.error(
-                        f"CheckBatchCost: failed to mark job {job.id} as {response.status} in DB: {db_err}"
-                    )
+                    self._record_error(prom_logger, "provider_retrieval_error")
+                    continue
+
+                ## RETRIEVE THE BATCH JOB OUTPUT FILE
+                if (
+                    response.status == "completed"
+                    and response.output_file_id is not None
+                ):
+                    try:
+                        tracked = await self._track_completed_batch_cost(
+                            job=job,
+                            response=response,
+                            model_id=model_id,
+                            batch_id=batch_id,
+                            prom_logger=prom_logger,
+                        )
+                    except Exception as tracking_err:
+                        verbose_proxy_logger.error(
+                            f"CheckBatchCost: failed to track cost for batch {batch_id} "
+                            f"(job {job.id}); leaving it unprocessed so the next poll retries: {tracking_err}"
+                        )
+                        self._record_error(prom_logger, "cost_tracking_error")
+                        continue
+                    if tracked is None:
+                        continue
+
+                    # Track this job for the final metrics summary
+                    processed_models.append(tracked)
+
+                    # mark the job as complete
+                    try:
+                        update_data: dict = {
+                            "status": "complete",
+                            "file_object": response.model_dump_json(),
+                        }
+                        if self._has_batch_processed_column:
+                            update_data["batch_processed"] = True
+                        await self.prisma_client.db.litellm_managedobjecttable.update(
+                            where={"id": job.id},
+                            data=update_data,
+                        )
+                    except Exception as db_err:
+                        verbose_proxy_logger.error(
+                            f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
+                        )
+
+                elif response.status in ("failed", "expired", "cancelled"):
+                    try:
+                        update_data = {
+                            "status": response.status,
+                            "file_object": response.model_dump_json(),
+                        }
+                        if self._has_batch_processed_column:
+                            update_data["batch_processed"] = True
+                        await self.prisma_client.db.litellm_managedobjecttable.update(
+                            where={"id": job.id},
+                            data=update_data,
+                        )
+                        verbose_proxy_logger.info(
+                            f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
+                        )
+                    except Exception as db_err:
+                        verbose_proxy_logger.error(
+                            f"CheckBatchCost: failed to mark job {job.id} as {response.status} in DB: {db_err}"
+                        )
+            except Exception as job_err:
+                verbose_proxy_logger.error(
+                    f"CheckBatchCost: unhandled error processing job "
+                    f"{getattr(job, 'unified_object_id', job.id)}; continuing with next job: {job_err}"
+                )
+                self._record_error(prom_logger, "job_processing_error")
+                continue
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:
