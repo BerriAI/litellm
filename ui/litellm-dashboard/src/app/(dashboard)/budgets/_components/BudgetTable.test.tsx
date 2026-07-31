@@ -35,6 +35,15 @@ describe("BudgetTable", () => {
     expect(screen.getByText("10")).toBeInTheDocument();
   });
 
+  it("should render the budget id without a fixed character-count clamp", () => {
+    const budgetId = "ecc1869c-6231-4380-a56d-1a0be457477d";
+    renderWithProviders(<BudgetTable {...defaultProps} budgets={[makeBudget({ budget_id: budgetId })]} />);
+    const idCell = screen.getByText(budgetId);
+    expect(idCell.className).not.toMatch(/max-w-\[\d+(ch|rem|px)\]/);
+    expect(idCell.className).toContain("max-w-full");
+    expect(idCell.className).toContain("truncate");
+  });
+
   it("should show n/a for missing rate limits and Unlimited for a missing max budget", () => {
     renderWithProviders(
       <BudgetTable {...defaultProps} budgets={[makeBudget({ max_budget: null, tpm_limit: null, rpm_limit: null })]} />,

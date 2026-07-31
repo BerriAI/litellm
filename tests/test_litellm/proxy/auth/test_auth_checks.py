@@ -4876,6 +4876,114 @@ async def test_common_checks_personal_user_budget_skipped_for_team_key():
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "scope, route, expect_blocked",
+    [
+        ("user", "/chat/completions", True),
+        ("user", "/key/list", False),
+        ("team", "/chat/completions", True),
+        ("team", "/key/list", False),
+        ("org", "/chat/completions", True),
+        ("org", "/key/list", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_budget_checks_only_run_on_llm_api_routes(scope, route, expect_blocked):
+    """Budgets cap spend, so they must only gate routes that can spend.
+
+    Enforcing them on management routes locked an over-budget caller out of the
+    Admin UI, which authenticates with a normal virtual key, leaving no way to
+    reach the page that raises the limit.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    over_budget_counter = {"user": "spend:user:u1", "team": "spend:team:t1", "org": "spend:org:o1"}[scope]
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 999.0 if counter_key == over_budget_counter else 0.0
+
+    async def _no_membership(*a, **kw):
+        return None
+
+    org_table = MagicMock()
+    org_table.spend = 999.0
+    org_table.litellm_budget_table = MagicMock()
+    org_table.litellm_budget_table.max_budget = 10.0
+
+    async def _get_org(*a, **kw):
+        return org_table
+
+    user = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=10.0 if scope == "user" else None)
+    team = LiteLLM_TeamTable(team_id="t1", max_budget=10.0) if scope == "team" else None
+    token = UserAPIKeyAuth(
+        token="k1",
+        user_id="u1",
+        team_id="t1" if scope == "team" else None,
+        org_id="o1" if scope == "org" else None,
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    async def _run():
+        return await common_checks(
+            request_body={"messages": [{"role": "user", "content": "hi"}]},
+            team_object=team,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=token,
+            request=MagicMock(spec=Request),
+        )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
+        "litellm.proxy.proxy_server.get_current_spend", _spend_by_counter
+    ), patch("litellm.proxy.auth.auth_checks.get_team_membership", _no_membership), patch(
+        "litellm.proxy.auth.auth_checks.get_org_object", _get_org
+    ):
+        if expect_blocked:
+            with pytest.raises(litellm.BudgetExceededError):
+                await _run()
+        else:
+            assert await _run() is True
+
+
+@pytest.mark.parametrize("route", ["/health", "/health/services", "/health/test_connection"])
+@pytest.mark.asyncio
+async def test_spend_capable_non_llm_routes_still_enforce_budget(route):
+    """These routes are not LLM API routes but still reach a provider or an
+    external service: /health and /health/test_connection run litellm.ahealth_check
+    against real deployments, and /health/services fires Slack/email/webhook sends.
+    Exempting them with the other management routes would let an exhausted budget
+    keep spending.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team = LiteLLM_TeamTable(team_id="t1", spend=150.0, max_budget=100.0)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await common_checks(
+            request_body={},
+            team_object=team,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="k1", team_id="t1"),
+            request=MagicMock(spec=Request),
+        )
+
+
 @pytest.mark.asyncio
 async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(monkeypatch):
     from litellm.proxy.auth.auth_checks import get_default_end_user_budget

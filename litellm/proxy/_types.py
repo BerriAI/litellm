@@ -44,6 +44,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
+    InternalCallOrigin,
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
@@ -3304,6 +3305,7 @@ class SpendLogsMetadata(TypedDict):
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     routing_decision: StandardLoggingRoutingDecision | None
+    internal_call_origin: InternalCallOrigin | None
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     eval_information: Optional[Any]
     status: StandardLoggingPayloadStatus

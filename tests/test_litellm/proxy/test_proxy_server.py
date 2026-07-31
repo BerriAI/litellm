@@ -10572,3 +10572,109 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+def _stream_usage_test_chunks():
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+
+    content_chunk = ModelResponseStream(
+        model="gpt-5.4-nano",
+        choices=[StreamingChoices(delta=Delta(content="pong"))],
+    )
+    finish_chunk = ModelResponseStream(
+        model="gpt-5.4-nano",
+        choices=[StreamingChoices(finish_reason="stop")],
+    )
+    usage_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    usage_chunk.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    return content_chunk, finish_chunk, usage_chunk
+
+
+def _stream_usage_generator_chunks():
+    from litellm.types.utils import ModelResponseStream
+
+    content_chunk, finish_chunk, usage_chunk = _stream_usage_test_chunks()
+    prompt_filter_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    return prompt_filter_chunk, content_chunk, finish_chunk, usage_chunk
+
+
+def test_is_injected_stream_usage_artifact():
+    from litellm.proxy.proxy_server import _is_injected_stream_usage_artifact
+    from litellm.types.utils import ModelResponseStream, Usage
+
+    content_chunk, finish_chunk, empty_choices_usage_chunk = _stream_usage_test_chunks()
+    assert _is_injected_stream_usage_artifact(empty_choices_usage_chunk) is True
+
+    synthetic_final_chunk = ModelResponseStream(model="gpt-5.4-nano")
+    synthetic_final_chunk.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    assert _is_injected_stream_usage_artifact(synthetic_final_chunk) is True
+
+    azure_prompt_filter_chunk = ModelResponseStream(model="gpt-5.4-nano", choices=[])
+    assert _is_injected_stream_usage_artifact(azure_prompt_filter_chunk) is True
+
+    assert _is_injected_stream_usage_artifact(content_chunk) is False
+    assert _is_injected_stream_usage_artifact(finish_chunk) is False
+
+    content_chunk_with_usage, finish_chunk_with_usage, _ = _stream_usage_test_chunks()
+    content_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    finish_chunk_with_usage.usage = Usage(prompt_tokens=50, completion_tokens=188, total_tokens=238)
+    assert _is_injected_stream_usage_artifact(content_chunk_with_usage) is False
+    assert _is_injected_stream_usage_artifact(finish_chunk_with_usage) is False
+
+    assert _is_injected_stream_usage_artifact({"usage": {"prompt_tokens": 1}}) is False
+
+
+async def _collect_async_data_generator_frames(request_data: dict) -> list:
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    chunks = _stream_usage_generator_chunks()
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            for chunk in chunks:
+                yield chunk
+
+        async def aclose(self):
+            pass
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(proxy_server_module.ProxyLogging, "_fire_deferred_stream_logging"):
+            return [
+                frame.decode("utf-8") if isinstance(frame, bytes) else frame
+                async for frame in async_data_generator(
+                    MockStream(), MagicMock(spec=UserAPIKeyAuth), request_data
+                )
+            ]
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_strips_injected_usage_chunk():
+    frames = await _collect_async_data_generator_frames(
+        {"model": "gpt-5.4-nano", "_litellm_strip_stream_usage": True}
+    )
+
+    data_frames = [frame for frame in frames if frame.startswith("data: {")]
+    assert len(data_frames) == 2
+    assert any("pong" in frame for frame in data_frames)
+    assert any("finish_reason" in frame for frame in data_frames)
+    assert not any('"usage"' in frame for frame in data_frames)
+    assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_forwards_usage_chunk_without_strip_marker():
+    frames = await _collect_async_data_generator_frames({"model": "gpt-5.4-nano"})
+
+    data_frames = [frame for frame in frames if frame.startswith("data: {")]
+    assert len(data_frames) == 4
+    assert any('"usage"' in frame and '"completion_tokens":188' in frame.replace(" ", "") for frame in data_frames)
+    assert frames[-1] == "data: [DONE]\n\n"

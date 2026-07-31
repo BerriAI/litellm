@@ -187,6 +187,8 @@ else:
 
 unified_guardrail = UnifiedLLMGuardrails()
 
+NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset({CallTypes.anthropic_messages})
+
 
 def print_verbose(print_statement):
     """
@@ -1763,6 +1765,20 @@ class ProxyLogging:
         return caps
 
     @staticmethod
+    def _stream_requires_guardrail_translation(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        from litellm.litellm_core_utils.api_route_to_call_types import (
+            get_call_types_for_route,
+        )
+
+        route = user_api_key_dict.request_route
+        if not route:
+            return False
+        call_types = get_call_types_for_route(route)
+        if not call_types:
+            return False
+        return call_types[0] in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES
+
+    @staticmethod
     def has_post_call_response_headers_callbacks() -> bool:
         return ProxyLogging._callback_capabilities().has_post_call_response_headers
 
@@ -2723,6 +2739,7 @@ class ProxyLogging:
         request_data = _check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
         current_response = response
+        stream_needs_translation = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
@@ -2731,7 +2748,18 @@ class ProxyLogging:
                     is not True
                 ):
                     continue
-            if kind == "override":
+            effective_kind = (
+                "apply_guardrail"
+                if (
+                    kind == "override"
+                    and stream_needs_translation
+                    and isinstance(resolved_callback, CustomGuardrail)
+                    and resolved_callback.uses_apply_guardrail_interface()
+                    and not resolved_callback.mask_response_content
+                )
+                else kind
+            )
+            if effective_kind == "override":
                 current_response = self._wrap_streaming_iterator_with_enrichment(
                     resolved_callback,
                     resolved_callback.async_post_call_streaming_iterator_hook(
@@ -2742,13 +2770,14 @@ class ProxyLogging:
                 )
             else:
                 # kind == "apply_guardrail": route through unified_guardrail
-                request_data["guardrail_to_apply"] = resolved_callback
                 current_response = self._wrap_streaming_iterator_with_enrichment(
                     resolved_callback,
                     unified_guardrail.async_post_call_streaming_iterator_hook(
                         user_api_key_dict=user_api_key_dict,
                         request_data=request_data,
                         response=current_response,
+                        guardrail_to_apply=resolved_callback,
+                        buffer_until_moderated_default=(kind == "override"),
                     ),
                 )
 
@@ -2785,7 +2814,6 @@ class ProxyLogging:
     async def _arelease_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict | None = None,
     ) -> None:
         """
         Release the api-key max_parallel_requests slot when a streaming
@@ -2805,7 +2833,7 @@ class ProxyLogging:
         limiter = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
             return
-        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
+        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
