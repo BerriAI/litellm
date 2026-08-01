@@ -103,16 +103,36 @@ _CACHE_SPLIT_FIELDS = frozenset(
 )
 
 
-def _baseline_usage(usage: Usage) -> Usage:
+def _is_mid_conversation_switch(
+    previous_model: _ModelIdentity | None, selected: _ModelIdentity, session_tracked: bool
+) -> bool:
+    """Whether some other model was already warm for this conversation.
+
+    Three states, not two. An untracked request named no session at all, so nothing
+    can say why its cache is cold and it stays on the conservative rule, which
+    under-claims rather than inflates. A tracked request with no previous model is a
+    genuine first turn, and one whose previous model is the selected one stayed put;
+    neither is a switch, and both would have paid the same write on a single-model
+    deployment. Only a tracked request served something else before is.
+    """
+    if not session_tracked:
+        return True
+    return previous_model is not None and previous_model != selected
+
+
+def _baseline_usage(usage: Usage, is_switch: bool) -> Usage:
     """The same request as a single-model baseline would have met it.
 
-    Staying on one model, the prompt is written to cache once and read from thereafter,
-    so whatever this request paid to write would already have been cached on the
-    baseline. That holds whether or not this request also read anything: a switch to a
-    cold model reads nothing precisely because its cache is empty, which is the case the
-    penalty exists for. Gating on a read instead would charge the baseline a write it
-    would never repeat, and a cold switch would then report a larger saving than the
-    same traffic with caching turned off.
+    On a switch, the model that was already serving this conversation had the prompt
+    cached, so whatever this request paid to write would have been a read on the
+    baseline. The write is the switch's own cost and has to count against the saving,
+    which is why the cache tokens move into the read bucket here.
+
+    On a first turn nothing was cached anywhere, so the baseline would have paid the
+    same write; leaving the usage alone lets both arms carry it and the saving comes
+    out as the rate difference it really is. Charging the write to both cases, which
+    is what having no discriminator forces, understates a genuine first turn to a
+    few percent of its value and can render it as a loss.
 
     Only the cache buckets move. Every other field the request was priced on travels
     through untouched, audio and image and video counts among them, because the baseline
@@ -122,7 +142,7 @@ def _baseline_usage(usage: Usage) -> Usage:
     """
     cache_read, cache_creation = _cache_token_split(usage)
     details = usage.prompt_tokens_details
-    if details is None or cache_creation <= 0:
+    if details is None or cache_creation <= 0 or not is_switch:
         return usage
     return Usage(
         prompt_tokens=usage.prompt_tokens,
@@ -149,6 +169,8 @@ def compute_autorouter_savings(
     selected_model: str | None,
     selected_provider: str | None,
     usage: Usage,
+    previous_model: str | None = None,
+    session_tracked: bool = False,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
 
@@ -157,6 +179,11 @@ def compute_autorouter_savings(
     incurred; when that charge outweighs the cheaper rates, routing lost money and the
     dashboard has to be able to say so. Zero when both sides resolve to the same
     deployment, or when either cannot be resolved or priced.
+
+    ``previous_model`` is what this conversation was served last and ``session_tracked``
+    whether the request named a session at all. Together they separate a switch from a
+    first turn; without a session there is no discriminator, so every cold cache is
+    charged as a switch, which understates rather than inflates.
     """
     # No provider argument for the baseline on purpose: it arrives from the routing
     # metadata as a single self-describing string, already qualified by the auto-router,
@@ -165,7 +192,11 @@ def compute_autorouter_savings(
     selected = _resolve_model(selected_model, selected_provider)
     if baseline is None or selected is None or baseline == selected:
         return 0.0
-    baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage))
+    # Resolved, not string-compared: the previous model is recorded as the router's own
+    # model-group name while the selected one arrives normalized from the spend log, so
+    # raw equality reads `anthropic/claude-opus-5` as a switch away from `claude-opus-5`.
+    is_switch = _is_mid_conversation_switch(_resolve_model(previous_model, None), selected, session_tracked)
+    baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage, is_switch=is_switch))
     selected_cost = _cost_of_usage(selected, usage)
     if baseline_cost is None or selected_cost is None:
         return 0.0
@@ -193,6 +224,8 @@ def compute_savings_spend(
     cache_read_input_tokens: int,
     baseline_model: str | None = None,
     usage_object: dict | None = None,
+    previous_model: str | None = None,
+    session_tracked: bool = False,
 ) -> SavingsSpend:
     """
     Dollar savings for one request, split by optimization driver.
@@ -201,7 +234,8 @@ def compute_savings_spend(
     input rate. Prompt-caching savings price the cache-read tokens at the
     difference between the input rate and the discounted cache-read rate.
     Auto-router savings compare the served ``model`` against the counterfactual
-    ``baseline_model`` and are zero unless the two differ.
+    ``baseline_model`` and are zero unless the two differ; ``previous_model``
+    tells a mid-conversation switch from a conversation's first turn.
     """
     input_cost, cache_read_cost = _input_and_cache_read_cost(model, custom_llm_provider)
     compression = max(compression_saved_tokens, 0) * input_cost
@@ -215,6 +249,8 @@ def compute_savings_spend(
         baseline_model=baseline_model,
         selected_model=model,
         selected_provider=custom_llm_provider,
+        previous_model=previous_model,
+        session_tracked=session_tracked,
         usage=usage,
     )
     return SavingsSpend(compression=compression, prompt_caching=prompt_caching, autorouter=autorouter)

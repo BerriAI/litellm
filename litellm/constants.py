@@ -1655,3 +1655,10 @@ ADVISOR_TOOL_DESCRIPTION: str = (
     "want to verify your reasoning, or face a complex decision. "
     "Describe your question or challenge clearly in the 'question' field."
 )
+
+########################### AUTO-ROUTER SAVINGS CONSTANTS ###########################
+# How long the model served to a session is remembered, so a later turn can tell a
+# model switch from a conversation that just started. Matches the session-affinity
+# pin's default lifetime; a conversation quieter than this is treated as new, which
+# falls back to the conservative savings rule rather than misattributing a switch.
+AUTOROUTER_PREVIOUS_MODEL_TTL_SECONDS: int = 3600

@@ -129,12 +129,27 @@ def _usage(fresh: int, cached: int, written: int, out: int) -> Usage:
     )
 
 
-def _savings(baseline: str, selected: str, usage: Usage) -> float:
+def _savings(
+    baseline: str,
+    selected: str,
+    usage: Usage,
+    previous: str | None = "claude-opus-5",
+    tracked: bool = True,
+) -> float:
+    """Savings for a request, defaulting to a mid-conversation switch.
+
+    The default `previous` is some other model, because that is what makes a cold cache
+    the switch's own cost. `previous=None` with `tracked=True` is a tracked session's
+    first turn, where nothing was cached on either side; `tracked=False` is a request
+    that named no session at all and therefore has no discriminator.
+    """
     return compute_autorouter_savings(
         baseline_model=baseline,
         selected_model=selected,
         selected_provider="anthropic",
         usage=usage,
+        previous_model=previous,
+        session_tracked=tracked,
     )
 
 
@@ -216,7 +231,7 @@ def test_multimodal_prompts_are_priced_on_the_baseline_too():
         total_tokens=21_000,
         prompt_tokens_details=details,
     )
-    baseline = _baseline_usage(with_images)
+    baseline = _baseline_usage(with_images, is_switch=True)
 
     assert baseline.prompt_tokens_details.image_tokens == 4_000, "image tokens must survive into the baseline"
 
@@ -243,7 +258,7 @@ def test_the_baseline_is_never_charged_a_cache_write():
             "cache_creation_token_details": {"ephemeral_1h_input_tokens": 20_000},
         },
     )
-    baseline = _baseline_usage(long_cache)
+    baseline = _baseline_usage(long_cache, is_switch=True)
 
     opus = litellm.get_model_info("claude-opus-5", "anthropic")
     priced, _ = generic_cost_per_token(model="claude-opus-5", usage=baseline, custom_llm_provider="anthropic")
@@ -299,6 +314,7 @@ def test_compute_savings_spend_carries_a_losing_switch_through():
         cache_read_input_tokens=0,
         baseline_model="claude-sonnet-5",
         usage_object=_cached_usage_object(),
+        previous_model="claude-opus-5",
     )
     assert result.autorouter < 0
 
@@ -370,3 +386,75 @@ def test_baseline_is_priced_under_its_own_provider():
 def test_unresolvable_baseline_fails_open_to_zero():
     usage = _usage(fresh=2000, cached=0, written=0, out=500)
     assert _savings("no-such-provider-xyz/no-such-model", "claude-haiku-4-5", usage) == 0.0
+
+
+def test_a_first_turn_is_the_rate_difference_not_a_switch_penalty():
+    """Nothing was cached anywhere on a conversation's first turn, so the baseline would
+    have paid the same cache write. Charging it to the selected arm alone reported a
+    fraction of the real saving; on this shape roughly 4% of it.
+    """
+    usage = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    first_turn = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous=None)
+
+    opus = litellm.get_model_info("claude-opus-5", "anthropic")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    both_write = (20_000 * opus["cache_creation_input_token_cost"] + 1_000 * opus["output_cost_per_token"]) - (
+        20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    )
+    assert first_turn == pytest.approx(both_write)
+
+    charged_as_a_switch = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous="claude-sonnet-5")
+    assert first_turn > charged_as_a_switch * 10, "the first turn must not be priced as a switch"
+
+
+def test_a_first_turn_that_saves_money_never_reports_a_loss():
+    """The write premium is fixed by prompt size while the saving grows with completion
+    length, so charging the write to a first turn made short answers over a large cached
+    prompt read as losses on requests that genuinely saved. That is the shape most likely
+    to be on the dashboard, and the sign has to be right.
+    """
+    short_answer = _usage(fresh=0, cached=0, written=20_000, out=200)
+    assert _savings("anthropic/claude-opus-5", "claude-haiku-4-5", short_answer, previous=None) > 0
+    assert _savings("anthropic/claude-opus-5", "claude-haiku-4-5", short_answer, previous="claude-sonnet-5") < 0
+
+
+def test_staying_on_one_model_is_not_a_switch():
+    """A session served the same model again pays its write because the conversation
+    grew, not because anything moved; the baseline would have paid it too."""
+    usage = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    stayed = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous="claude-haiku-4-5")
+    brand_new = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous=None)
+    assert stayed == pytest.approx(brand_new)
+
+
+def test_the_previous_model_is_resolved_not_string_compared():
+    """It is recorded as the router's own model-group name while the served model arrives
+    normalized from the spend log, so raw equality reads one deployment as two and
+    invents a switch penalty on a session that never moved."""
+    usage = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    qualified = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous="anthropic/claude-haiku-4-5")
+    bare = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous="claude-haiku-4-5")
+    assert qualified == pytest.approx(bare)
+
+
+def test_an_unresolvable_previous_model_stays_conservative():
+    """A name that resolves to nothing cannot prove a switch happened, and must not be
+    treated as one; the conservative rule understates rather than inflates."""
+    usage = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    unknown = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous="no-such-provider-xyz/nope")
+    brand_new = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous=None)
+    assert unknown == pytest.approx(brand_new)
+
+
+def test_a_request_without_a_session_stays_conservative():
+    """No session id means nothing can say why the cache was cold, and a savings claim
+    must not inflate on a guess. The untracked request is priced exactly as a switch,
+    which under-claims a first turn rather than crediting one that never happened.
+    """
+    usage = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    untracked = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous=None, tracked=False)
+    switch = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous="claude-sonnet-5")
+    tracked_first_turn = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, previous=None)
+
+    assert untracked == pytest.approx(switch), "an untracked request must be priced as a switch"
+    assert untracked < tracked_first_turn, "and must never claim the first turn's larger saving"

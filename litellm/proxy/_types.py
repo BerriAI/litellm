@@ -3322,6 +3322,8 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
     auto_router_savings_baseline_model: str | None  # counterfactual model for the auto-router savings driver
+    auto_router_previous_model: str | None  # model this session was served last; tells a switch from a first turn
+    auto_router_session_tracked: bool | None  # whether the request named a session at all
 
 
 class SpendLogsPayload(TypedDict):

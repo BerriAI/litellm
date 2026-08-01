@@ -1869,6 +1869,8 @@ class DBSpendUpdateWriter:
                 compression_saved_tokens=compression_saved_tokens,
                 cache_read_input_tokens=cache_read_input_tokens,
                 baseline_model=_metadata.get("auto_router_savings_baseline_model"),
+                previous_model=_metadata.get("auto_router_previous_model"),
+                session_tracked=bool(_metadata.get("auto_router_session_tracked")),
                 usage_object=usage_obj,
             )
 

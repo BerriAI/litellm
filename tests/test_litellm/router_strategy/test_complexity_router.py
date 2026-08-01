@@ -3012,6 +3012,22 @@ class TestSessionAffinity:
         assert reasoning.model == "o1-preview"
         assert simple.model == "gpt-4o-mini"
 
+    @staticmethod
+    def _affinity_write(cache) -> dict:
+        """The kwargs of the session-affinity write.
+
+        Asserted by key rather than by call count: the router also records the model
+        served to the session for the savings baseline, so a bare `assert_called_once`
+        would couple these tests to an unrelated feature's cache traffic.
+        """
+        writes = [
+            call.kwargs
+            for call in cache.async_set_cache.call_args_list
+            if call.kwargs.get("key", "").startswith("complexity_router_session_affinity:")
+        ]
+        assert len(writes) == 1, f"expected exactly one session-affinity write, got {writes}"
+        return writes[0]
+
     @pytest.mark.asyncio
     async def test_respects_ttl_seconds(self, mock_router_instance, basic_config):
         cache = AsyncMock()
@@ -3029,8 +3045,7 @@ class TestSessionAffinity:
         await router.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
         )
-        cache.async_set_cache.assert_called_once()
-        call_kwargs = cache.async_set_cache.call_args.kwargs
+        call_kwargs = self._affinity_write(cache)
         assert call_kwargs["ttl"] == 120
         assert call_kwargs["value"] == "gpt-4o-mini"
 
@@ -3054,8 +3069,7 @@ class TestSessionAffinity:
             model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
         )
         assert result.model == "o1-preview"
-        cache.async_set_cache.assert_called_once()
-        call_kwargs = cache.async_set_cache.call_args.kwargs
+        call_kwargs = self._affinity_write(cache)
         assert call_kwargs["value"] == "o1-preview"
         assert call_kwargs["ttl"] == 90
 
@@ -4842,3 +4856,149 @@ class TestSavingsBaselineModel:
         returns = source.count("return PreRoutingHookResponse(")
         assert returns > 0
         assert source.count("savings_baseline_model=self.savings_baseline_model") == returns
+
+
+class TestPreviousModelForSession:
+    """What a session was served last, which is what tells a switch from a first turn."""
+
+    SIMPLE = [{"role": "user", "content": "Hello!"}]
+    REASONING = [{"role": "user", "content": "Let's think step by step and reason through this carefully."}]
+
+    @staticmethod
+    def _kwargs(session_id: str | None = "session-1", key_hash: str | None = None) -> Dict:
+        metadata: Dict = {}
+        if session_id is not None:
+            metadata["session_id"] = session_id
+        if key_hash is not None:
+            metadata["user_api_key_hash"] = key_hash
+        return {"metadata": metadata}
+
+    @staticmethod
+    def _router(mock_router_instance, basic_config, **overrides) -> ComplexityRouter:
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, **overrides},
+        )
+
+    @pytest.mark.asyncio
+    async def test_first_turn_reports_no_previous_model(self, mock_router_instance, basic_config):
+        """Nothing was cached anywhere yet, so both arms would have paid the write and
+        the baseline must not be credited a read it never took."""
+        mock_router_instance.cache = DualCache()
+        router = self._router(mock_router_instance, basic_config, session_affinity=False)
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._kwargs(), messages=self.SIMPLE
+        )
+        assert first.previous_model is None
+
+    @pytest.mark.asyncio
+    async def test_a_later_turn_reports_what_the_session_was_served_before(self, mock_router_instance, basic_config):
+        """The discriminator: turn two knows turn one ran on a different model, which is
+        what makes its cold cache the switch's own cost rather than a first write."""
+        mock_router_instance.cache = DualCache()
+        router = self._router(mock_router_instance, basic_config, session_affinity=False)
+        request_kwargs = self._kwargs()
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
+        assert second.previous_model == "o1-preview", "turn two must see turn one's model"
+
+    @pytest.mark.asyncio
+    async def test_staying_on_one_model_reports_that_same_model(self, mock_router_instance, basic_config):
+        """Equal is not a switch. Reporting the model unchanged lets the pricing treat
+        the write as a first write rather than a switch penalty."""
+        mock_router_instance.cache = DualCache()
+        router = self._router(mock_router_instance, basic_config, session_affinity=False)
+        request_kwargs = self._kwargs()
+        await router.async_pre_routing_hook(model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE)
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE
+        )
+        assert second.previous_model == "gpt-4o-mini"
+        assert second.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_a_request_without_a_session_never_touches_the_cache(self, mock_router_instance, basic_config):
+        """No session means no discriminator and nothing worth a round-trip; the pricing
+        falls back to the conservative rule on its own."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value=None)
+        mock_router_instance.cache = cache
+        router = self._router(mock_router_instance, basic_config, session_affinity=False)
+        result = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={"metadata": {}}, messages=self.SIMPLE
+        )
+        assert result.previous_model is None
+        assert cache.async_get_cache.await_count == 0
+        assert cache.async_set_cache.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_two_callers_sharing_a_session_id_do_not_see_each_others_models(
+        self, mock_router_instance, basic_config
+    ):
+        """A session_id is caller-supplied, so without the authenticated key in the scope
+        one tenant's model would be read as another's previous turn."""
+        mock_router_instance.cache = DualCache()
+        router = self._router(mock_router_instance, basic_config, session_affinity=False)
+        await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._kwargs(key_hash="hash-a"),
+            messages=self.REASONING,
+        )
+        other = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._kwargs(key_hash="hash-b"),
+            messages=self.SIMPLE,
+        )
+        assert other.previous_model is None, "the other caller's model must not leak across the key boundary"
+
+    @pytest.mark.asyncio
+    async def test_a_cache_failure_does_not_fail_the_request(self, mock_router_instance, basic_config):
+        """The counterfactual is a dashboard number; losing it must never cost a live call."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(side_effect=RuntimeError("redis down"))
+        cache.async_set_cache = AsyncMock(side_effect=RuntimeError("redis down"))
+        mock_router_instance.cache = cache
+        router = self._router(mock_router_instance, basic_config, session_affinity=False)
+        result = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._kwargs(), messages=self.SIMPLE
+        )
+        assert result is not None and result.model == "gpt-4o-mini"
+        assert result.previous_model is None
+
+    @pytest.mark.asyncio
+    async def test_the_previous_model_travels_on_every_pre_routing_response(self):
+        """A response without it silently falls back to charging the write on a first turn."""
+        import inspect
+
+        from litellm.router_strategy.complexity_router import complexity_router as module
+
+        source = inspect.getsource(module.ComplexityRouter.async_pre_routing_hook) + inspect.getsource(
+            module.ComplexityRouter._classify_and_route
+        )
+        constructions = source.split("return PreRoutingHookResponse(")[1:]
+        assert len(constructions) > 0
+        missing = [i for i, block in enumerate(constructions) if "previous_model=previous_model" not in block.split(")\n")[0]]
+        assert not missing, f"pre-routing responses {missing} do not carry previous_model"
+
+    @pytest.mark.asyncio
+    async def test_it_is_recorded_independently_of_session_affinity(self, mock_router_instance, basic_config):
+        """`session_affinity` pins a model; this only observes one. Coupling them would
+        make the savings number depend on an unrelated routing feature being enabled."""
+        mock_router_instance.cache = DualCache()
+        router = self._router(mock_router_instance, basic_config, session_affinity=False)
+        request_kwargs = self._kwargs()
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE
+        )
+        assert first.model != second.model, "affinity is off, so the model must be free to change"
+        assert second.previous_model == first.model

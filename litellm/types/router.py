@@ -842,6 +842,8 @@ class PreRoutingHookResponse(BaseModel):
     messages: Optional[List[Dict[str, Any]]]
     routing_decision: StandardLoggingRoutingDecision | None = None
     savings_baseline_model: Optional[str] = None
+    previous_model: Optional[str] = None
+    session_tracked: bool = False
 
 
 _PreRoutingStrategyT_co = TypeVar("_PreRoutingStrategyT_co", covariant=True)

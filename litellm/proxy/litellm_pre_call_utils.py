@@ -204,6 +204,8 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     "policy_sources",
     "routing_decision",
     "auto_router_savings_baseline_model",
+    "auto_router_previous_model",
+    "auto_router_session_tracked",
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",

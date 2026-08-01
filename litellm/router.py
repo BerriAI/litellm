@@ -11224,8 +11224,21 @@ class Router:
             )
         if baseline_model is not None:
             recorded["auto_router_savings_baseline_model"] = baseline_model
+        previous_model = pre_routing_hook_response.previous_model if pre_routing_hook_response else None
+        if previous_model is not None:
+            recorded["auto_router_previous_model"] = previous_model
+        # Recorded even when there is no previous model: a tracked session with none is a
+        # genuine first turn, which is priced the opposite way to a request that named no
+        # session at all. Collapsing the two into a missing key loses that distinction.
+        if pre_routing_hook_response is not None and pre_routing_hook_response.session_tracked:
+            recorded["auto_router_session_tracked"] = True
 
-        cleared = {"routing_decision", "auto_router_savings_baseline_model"} - recorded.keys()
+        cleared = {
+            "routing_decision",
+            "auto_router_savings_baseline_model",
+            "auto_router_previous_model",
+            "auto_router_session_tracked",
+        } - recorded.keys()
         for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
             if isinstance(bucket, dict):
                 for key in cleared:

@@ -25,7 +25,11 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Union, cast
 from pydantic import BaseModel
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import (
+    AUTOROUTER_PREVIOUS_MODEL_TTL_SECONDS,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import (
@@ -1294,34 +1298,25 @@ class ComplexityRouter(CustomLogger):
         return _extract_current_ask_and_system_prompt(messages)
 
     @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
-        """Metadata may land on `metadata` or `litellm_metadata` depending on the
-        endpoint, mirroring DeploymentAffinityCheck's precedence."""
-        return [
-            metadata
-            for metadata_key in ("litellm_metadata", "metadata")
-            if isinstance(metadata := request_kwargs.get(metadata_key), dict)
-        ]
-
-    @staticmethod
     def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
-        """Resolve a client-supplied session_id."""
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
-            session_id = metadata.get("session_id")
-            if session_id is not None:
-                return str(session_id)
-        return None
+        """Resolve the session this request belongs to.
+
+        Wider than a client-supplied `metadata.session_id`: the proxy also writes the
+        session id it derives from an `x-*-session-id` header or from Anthropic's
+        `metadata.user_id` into the same field before routing.
+        """
+        from litellm.router_utils.session_identity import session_id_from_request
+
+        return session_id_from_request(request_kwargs)
 
     @staticmethod
     def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
         """Resolve the proxy-derived API key hash, the same trust boundary
         DeploymentAffinityCheck uses for its own key-based affinity (not the
         client-supplied OpenAI `user` param, which isn't authenticated)."""
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
-            user_key = metadata.get("user_api_key_hash")
-            if user_key is not None:
-                return str(user_key)
-        return None
+        from litellm.router_utils.session_identity import user_api_key_hash_from_request
+
+        return user_api_key_hash_from_request(request_kwargs)
 
     def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> str:
         # Namespace by the caller's API key hash so two different callers reusing the
@@ -1330,6 +1325,54 @@ class ComplexityRouter(CustomLogger):
         # (e.g. direct Router usage without the proxy layer).
         caller_scope = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
+
+    def _previous_model_cache_key(self, request_kwargs: dict) -> str | None:
+        """Where this session's last-served model is remembered, or ``None`` if it names no session.
+
+        Separate from the session-affinity key on purpose: this is recorded on every
+        request whether or not affinity is enabled, and the two must not read each
+        other's values.
+        """
+        from litellm.router_utils.session_identity import session_scope
+
+        return session_scope(
+            request_kwargs, namespace=self.model_name, discriminator="complexity_router_previous_model"
+        )
+
+    async def _previous_model_for_session(self, cache_key: str | None) -> str | None:
+        """The model this conversation was served last, or ``None`` if it is new.
+
+        Savings are priced against a counterfactual single-model deployment, and a cold
+        cache alone cannot say whether this request is cold because the router switched
+        models or because the conversation just started. Those two want opposite
+        arithmetic, so what the session was served last is the discriminator: different
+        from the model picked now means the cache write is the switch's own cost, absent
+        or equal means a single-model deployment would have paid it too.
+
+        Observation only. Nothing read here pins a deployment or narrows the candidate
+        pool; `session_affinity` is a separate feature and is unaffected.
+        """
+        if cache_key is None:
+            return None
+        try:
+            previous_model = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail a live request
+            verbose_router_logger.debug("complexity router: could not read the session's previous model (%s)", e)
+            return None
+        return previous_model if isinstance(previous_model, str) else None
+
+    async def _remember_model_for_session(self, cache_key: str | None, routed_model: str) -> None:
+        """Record what this session was served, for the next turn to compare against."""
+        if cache_key is None:
+            return
+        try:
+            await self.litellm_router_instance.cache.async_set_cache(
+                key=cache_key,
+                value=routed_model,
+                ttl=AUTOROUTER_PREVIOUS_MODEL_TTL_SECONDS,
+            )
+        except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail a live request
+            verbose_router_logger.debug("complexity router: could not record the session's model (%s)", e)
 
     async def async_pre_routing_hook(
         self,
@@ -1358,6 +1401,9 @@ class ComplexityRouter(CustomLogger):
             metadata = request_kwargs.setdefault(metadata_key, {})
             if isinstance(metadata, dict):
                 metadata[RETURN_RAW_MODEL_NAME_METADATA_KEY] = True
+
+        previous_model_key = self._previous_model_cache_key(request_kwargs)
+        previous_model = await self._previous_model_for_session(previous_model_key)
 
         use_session_affinity = self.config.session_affinity and not self.config.plugins
         session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
@@ -1397,10 +1443,13 @@ class ComplexityRouter(CustomLogger):
                         f"ComplexityRouter: routing decision cause={cause}, routed_model={routed_model}"
                     )
                     has_original_messages = messages is not None and len(messages) > 0
+                    await self._remember_model_for_session(previous_model_key, routed_model)
                     return PreRoutingHookResponse(
                         model=routed_model,
                         messages=messages if has_original_messages else None,
                         savings_baseline_model=self.savings_baseline_model,
+                        previous_model=previous_model,
+                        session_tracked=previous_model_key is not None,
                         routing_decision=self._build_routing_decision(
                             routed_model=routed_model,
                             cause=cause,
@@ -1415,7 +1464,11 @@ class ComplexityRouter(CustomLogger):
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            previous_model=previous_model,
+            session_tracked=previous_model_key is not None,
         )
+        if response is not None:
+            await self._remember_model_for_session(previous_model_key, response.model)
         if cache_key is not None and response is not None:
             await self.litellm_router_instance.cache.async_set_cache(
                 key=cache_key,
@@ -1431,6 +1484,8 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None = None,
         input: Union[str, list] | None = None,
         specific_deployment: bool | None = False,
+        previous_model: str | None = None,
+        session_tracked: bool = False,
     ) -> PreRoutingHookResponse | None:
         """
         Classifies the request by complexity and returns the appropriate model.
@@ -1478,6 +1533,8 @@ class ComplexityRouter(CustomLogger):
                 model=routed_model,
                 messages=messages if has_original_messages else None,
                 savings_baseline_model=self.savings_baseline_model,
+                previous_model=previous_model,
+                session_tracked=session_tracked,
                 routing_decision=self._build_routing_decision(routed_model=routed_model, cause="default_fallback"),
             )
 
@@ -1500,6 +1557,8 @@ class ComplexityRouter(CustomLogger):
                 model=routed_model,
                 messages=messages if has_original_messages else None,
                 savings_baseline_model=self.savings_baseline_model,
+                previous_model=previous_model,
+                session_tracked=session_tracked,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     cause=keyword_cause,
@@ -1548,6 +1607,8 @@ class ComplexityRouter(CustomLogger):
             model=routed_model,
             messages=messages if has_original_messages else None,
             savings_baseline_model=self.savings_baseline_model,
+            previous_model=previous_model,
+            session_tracked=session_tracked,
             routing_decision=self._build_routing_decision(
                 routed_model=routed_model,
                 cause=outcome.cause,
