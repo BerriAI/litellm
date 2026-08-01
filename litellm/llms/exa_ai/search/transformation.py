@@ -1,10 +1,10 @@
 """
 Calls Exa AI's /search endpoint to search the web.
 
-Exa AI API Reference: https://docs.exa.ai/reference/search
+Exa AI API Reference: https://exa.ai/docs/reference/search
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import Dict, List, Mapping, Optional, TypedDict, Union
 
 import httpx
 
@@ -26,7 +26,7 @@ class _ExaAISearchRequestRequired(TypedDict):
 class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
     """
     Exa AI Search API request format.
-    Based on: https://docs.exa.ai/reference/search
+    Based on: https://exa.ai/docs/reference/search
     """
 
     type: str  # Optional - search type ('keyword', 'neural', 'fast', 'auto'), default 'auto'
@@ -44,6 +44,7 @@ class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
     context: Union[bool, dict]  # Optional - format results for LLMs
     moderation: bool  # Optional - enable content moderation, default false
     contents: dict  # Optional - content retrieval options
+    outputSchema: Mapping[str, object]
 
 
 class ExaAISearchConfig(BaseSearchConfig):
@@ -167,6 +168,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         - results[].text → SearchResult.snippet
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
+        - SearchResponse.output contains Exa's structured output when requested with `outputSchema`
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -192,4 +194,5 @@ class ExaAISearchConfig(BaseSearchConfig):
         return SearchResponse(
             results=results,
             object="search",
+            **({"output": response_json["output"]} if "output" in response_json else {}),
         )
