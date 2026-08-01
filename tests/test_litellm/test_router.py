@@ -5844,6 +5844,55 @@ def test_get_deployment_model_for_alias_returns_none_for_blocked_deployment():
     assert router.get_deployment_model_for_alias(model_id="dep-1") == "openai/gpt-4o-1"
 
 
+def test_get_deployment_model_for_alias_matches_credential_deployment_per_team():
+    """
+    Model and credential resolution must pick the SAME deployment for a caller.
+
+    Regression: with a team-owned deployment listed before a shared one under
+    the same alias, an unscoped alias lookup returned the team deployment's
+    model while the team-aware credential resolver returned the shared
+    deployment's credentials, so an outside caller's batch reached the provider
+    with team A's private model id on the shared account.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch",
+                "litellm_params": {
+                    "model": "bedrock/team-a-private-model",
+                    "aws_region_name": "team-a-region",
+                },
+                "model_info": {
+                    "id": "team-a-dep",
+                    "team_id": "team-a",
+                    "team_public_model_name": "bedrock-batch",
+                },
+            },
+            {
+                "model_name": "bedrock-batch",
+                "litellm_params": {
+                    "model": "bedrock/shared-model",
+                    "aws_region_name": "shared-region",
+                },
+                "model_info": {"id": "shared-dep"},
+            },
+        ]
+    )
+
+    for team_id, expected_model, expected_region in [
+        (None, "bedrock/shared-model", "shared-region"),
+        ("team-b", "bedrock/shared-model", "shared-region"),
+        ("team-a", "bedrock/team-a-private-model", "team-a-region"),
+    ]:
+        resolved_model = router.get_deployment_model_for_alias(model_id="bedrock-batch", team_id=team_id)
+        credentials = router.get_deployment_credentials_with_provider(model_id="bedrock-batch", team_id=team_id)
+        assert resolved_model == expected_model, f"team_id={team_id}"
+        assert credentials is not None
+        assert credentials["aws_region_name"] == expected_region, (
+            f"team_id={team_id}: credentials came from a different deployment than the model"
+        )
+
+
 def test_resolve_unblocked_deployment_resolves_alias_id_and_wildcard():
     """
     _resolve_unblocked_deployment underpins both the credential resolver and the

@@ -146,12 +146,12 @@ class Harness:
         return dict(self.router_acreate.call_args.kwargs)
 
 
-def _creds_lookup(*, model_id: str) -> Dict[str, str]:
+def _creds_lookup(*, model_id: str, team_id: Optional[str] = None) -> Dict[str, str]:
     # KeyError on an unknown/hardcoded model_id - the bug cannot hide.
     return dict(CREDS[model_id])
 
 
-def _alias_lookup(*, model_id: str) -> str:
+def _alias_lookup(*, model_id: str, team_id: Optional[str] = None) -> str:
     # The endpoint swaps the request model for the deployment's real provider
     # model before calling the provider; mirror that with the CREDS model so a
     # wrong/hardcoded model_id KeyErrors instead of hiding.
@@ -267,7 +267,7 @@ async def test_create__model_encoded_file_id(harness):
     harness.router_acreate.assert_not_called()
 
     # 2. CREDENTIALS - resolved for the model decoded FROM the file id.
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
 
     # 3. SEAM PAYLOAD - exact, whole dict. A new forwarded key breaks this.
     assert harness.acreate_kwargs() == {
@@ -323,7 +323,7 @@ async def test_create__model_encoded_file_id__resolver_gets_decoded_model(harnes
 
     await call_create(harness)
 
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
 
 
 # =========================================================================== #
@@ -347,7 +347,7 @@ async def test_create__model_from_body(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_resolver.assert_called_once_with(model_id="vertex-model", team_id=None)
     payload = harness.acreate_kwargs()
     assert payload["custom_llm_provider"] == "vertex_ai"
     assert payload["input_file_id"] == "file-plain"
@@ -367,7 +367,7 @@ async def test_create__model_from_header(harness):
 
     await call_create(harness, headers={"x-litellm-model": "vertex-model"})
 
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_resolver.assert_called_once_with(model_id="vertex-model", team_id=None)
     harness.router_acreate.assert_not_called()
 
 
@@ -384,7 +384,7 @@ async def test_create__model_from_query(harness):
 
     await call_create(harness, query={"model": "vertex-model"})
 
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_resolver.assert_called_once_with(model_id="vertex-model", team_id=None)
     harness.router_acreate.assert_not_called()
 
 
@@ -407,7 +407,7 @@ async def test_create__body_model_beats_header_and_query(harness):
         query={"model": "vertex-model"},
     )
 
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
 
 
 # =========================================================================== #
@@ -715,7 +715,7 @@ async def test_create__model_encoded_beats_unified(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
 
 
 # =========================================================================== #
@@ -761,7 +761,7 @@ async def test_create__model_encoded_beats_loadbalancing(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
 
 
 # =========================================================================== #
@@ -1072,7 +1072,7 @@ async def test_retrieve__model_encoded_id(retrieve_harness):
     retrieve_harness.router_aretrieve.assert_not_called()
 
     # 2. CREDENTIALS - resolved for the model decoded FROM the batch id.
-    retrieve_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    retrieve_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
 
     # 3. SEAM PAYLOAD - exact, whole dict forwarded to the provider call.
     #    Note `model` is the DECODED model, not the deployment from creds: the
@@ -1130,7 +1130,7 @@ async def test_retrieve__model_encoded_beats_loadbalancing(retrieve_harness):
 
     assert retrieve_harness.litellm_aretrieve.call_count == 1
     retrieve_harness.router_aretrieve.assert_not_called()
-    retrieve_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    retrieve_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -1546,7 +1546,7 @@ async def test_list__model_from_body_routes_and_encodes(list_harness):
 
     assert list_harness.litellm_alist.call_count == 1
     list_harness.router_alist.assert_not_called()
-    list_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    list_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
     assert resp.data[0].id == encode_file_id_with_model("batch-1", "azure/gpt-4o", id_type="batch")
     assert resp.data[1].id == encode_file_id_with_model("batch-2", "azure/gpt-4o", id_type="batch")
 
@@ -1836,7 +1836,7 @@ async def test_cancel__model_encoded_id(cancel_harness):
     cancel_harness.router_acancel.assert_not_called()
 
     # CREDENTIALS - resolved for the model decoded from the batch id.
-    cancel_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    cancel_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
 
     # SEAM PAYLOAD - exact dict. NOTE current behavior: `model` is the
     # DEPLOYMENT name from creds, NOT the decoded model (cancel, unlike
@@ -1874,7 +1874,7 @@ async def test_cancel__model_encoded_beats_unified(cancel_harness):
 
     assert cancel_harness.litellm_acancel.call_count == 1
     cancel_harness.router_acancel.assert_not_called()
-    cancel_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    cancel_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
 
 
 # --------------------------------------------------------------------------- #

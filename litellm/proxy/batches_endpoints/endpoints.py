@@ -52,6 +52,7 @@ def _swap_alias_for_deployment_model(
     create_batch_data: LiteLLMBatchCreateRequest,
     alias: str,
     llm_router: Optional["Router"],
+    team_id: "str | None",
 ) -> None:
     """
     Replace a proxy model-group alias on the batch request with the
@@ -61,11 +62,14 @@ def _swap_alias_for_deployment_model(
     cannot resolve a proxy alias, so a provider transform (e.g. Bedrock's, which
     forwards ``model`` as the batch ``modelId``) would otherwise receive the
     alias and the provider would reject it. Falls back to the alias when the
-    router is unavailable or the alias resolves to nothing.
+    router is unavailable or the alias resolves to nothing. ``team_id`` keeps
+    this lookup on the same team-usable deployment the credential resolver
+    picked, so a team-owned deployment sharing the alias can't leak its model
+    to callers outside that team.
     """
     if llm_router is None:
         return
-    resolved_model = llm_router.get_deployment_model_for_alias(model_id=alias)
+    resolved_model = llm_router.get_deployment_model_for_alias(model_id=alias, team_id=team_id)
     if resolved_model is not None:
         create_batch_data["model"] = resolved_model
 
@@ -214,6 +218,7 @@ async def create_batch(
                 llm_router=llm_router,
                 model_id=model_from_file_id,
                 operation_context="batch creation (file created with model)",
+                team_id=user_api_key_dict.team_id,
             )
 
             original_file_id = get_original_file_id(input_file_id)
@@ -226,6 +231,7 @@ async def create_batch(
                 create_batch_data=_create_batch_data,
                 alias=model_from_file_id,
                 llm_router=llm_router,
+                team_id=user_api_key_dict.team_id,
             )
 
             # Create batch using model credentials
@@ -308,6 +314,7 @@ async def create_batch(
                     llm_router=llm_router,
                     model_id=model_param,
                     operation_context="batch creation",
+                    team_id=user_api_key_dict.team_id,
                 )
 
                 prepare_data_with_credentials(
@@ -318,6 +325,7 @@ async def create_batch(
                     create_batch_data=_create_batch_data,
                     alias=model_param,
                     llm_router=llm_router,
+                    team_id=user_api_key_dict.team_id,
                 )
 
                 # Create batch using model credentials
@@ -518,6 +526,7 @@ async def retrieve_batch(
                 llm_router=llm_router,
                 model_id=model_from_id,
                 operation_context="batch retrieval (batch created with model)",
+                team_id=user_api_key_dict.team_id,
             )
 
             original_batch_id = get_original_file_id(batch_id)
@@ -724,6 +733,7 @@ async def list_batches(
                 llm_router=llm_router,
                 model_id=model_param,
                 operation_context="batch listing",
+                team_id=user_api_key_dict.team_id,
             )
 
             data.update(credentials)
@@ -905,6 +915,7 @@ async def cancel_batch(
                 llm_router=llm_router,
                 model_id=model_from_id,
                 operation_context="batch cancellation (batch created with model)",
+                team_id=user_api_key_dict.team_id,
             )
 
             original_batch_id = get_original_file_id(batch_id)

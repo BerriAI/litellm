@@ -444,6 +444,7 @@ async def test_create_batch_swaps_alias_for_deployment_model_before_provider_cal
     mock_user_api_key_dict = MagicMock()
     mock_user_api_key_dict.parent_otel_span = None
     mock_user_api_key_dict.user_id = "test_user"
+    mock_user_api_key_dict.team_id = "team-caller"
     mock_user_api_key_dict.team_metadata = {}
 
     mock_router = MagicMock()
@@ -510,7 +511,7 @@ async def test_create_batch_swaps_alias_for_deployment_model_before_provider_cal
             user_api_key_dict=mock_user_api_key_dict,
         )
 
-    mock_router.get_deployment_model_for_alias.assert_called_once_with(model_id=alias)
+    mock_router.get_deployment_model_for_alias.assert_called_once_with(model_id=alias, team_id="team-caller")
     create_kwargs = mock_create_batch.call_args.kwargs
     assert create_kwargs["model"] == real_model, (
         "Bedrock batch transform receives modelId from this 'model'; it must be the "
