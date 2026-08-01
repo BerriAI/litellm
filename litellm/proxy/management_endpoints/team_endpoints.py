@@ -13,6 +13,7 @@ import asyncio
 import json
 import math
 import traceback
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 
@@ -2426,6 +2427,123 @@ def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
         verbose_proxy_logger.debug("Prometheus: failed to emit team members metric: %s", str(e))
 
 
+async def _resolve_existing_member_user_ids(
+    members: Sequence[Member],
+    prisma_client: PrismaClient,
+) -> frozenset[str]:
+    """Return the caller-supplied user_ids that already have a user row."""
+    user_repository = UserRepository(prisma_client)
+    found = await asyncio.gather(
+        *(user_repository.find_by_id(member.user_id) for member in members if member.user_id is not None)
+    )
+    return frozenset(user.user_id for user in found if user is not None and user.user_id is not None)
+
+
+def _pre_existing_user_ids(
+    members: Sequence[Member],
+    caller_supplied_user_ids: frozenset[str],
+    existing_user_ids: frozenset[str],
+) -> frozenset[str]:
+    """Return the user_ids that already had a user row before this request.
+
+    Combines the caller-supplied ids that resolved to a user with the ids
+    ``_validate_and_populate_member_user_info`` filled in, which it only does
+    from a matched user row. Deriving it that way keeps this in step with the
+    email matching that resolution performs, rather than repeating it here.
+    """
+    populated_user_ids = frozenset(
+        member.user_id
+        for member in members
+        if member.user_id is not None and member.user_id not in caller_supplied_user_ids
+    )
+    return existing_user_ids | populated_user_ids
+
+
+def _validate_member_user_id_provisioning(
+    members: Sequence[Member],
+    existing_user_ids: frozenset[str],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Restrict adding a caller-chosen user_id that has no user row yet to proxy admins.
+
+    Team and org admins keep the ability to add users that already exist and to
+    invite new ones by user_email, where the user_id is allocated server-side.
+    """
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+    ):
+        return
+
+    unknown_user_ids = tuple(
+        member.user_id for member in members if member.user_id is not None and member.user_id not in existing_user_ids
+    )
+    if not unknown_user_ids:
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+            "error": (
+                "Only proxy admins can add a user_id that does not exist yet: {}. "
+                "Add the member by user_email to invite a new user, or ask a proxy admin "
+                "to create the user first.".format(", ".join(unknown_user_ids))
+            )
+        },
+    )
+
+
+def _members_audit_value(members: Sequence[Member]) -> str:
+    """Serialize a team's member list for an audit-log value.
+
+    The audit-log columns hold a JSON object, so the member list is nested
+    under a key rather than serialized as a top-level array.
+    """
+    return safe_dumps(
+        {  # mutable-ok: the audit-log JSON column rejects a top-level array, so this value must be an object
+            "members_with_roles": tuple(member.model_dump() for member in members)
+        }
+    )
+
+
+async def _create_team_member_add_audit_logs(
+    team_id: str,
+    updated_users: Sequence[LiteLLM_UserTable],
+    existing_user_ids: frozenset[str],
+    before_members: Sequence[Member],
+    after_members: Sequence[Member],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> None:
+    """Record the membership change, and any user row it created, in the audit log."""
+    from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
+
+    for user in updated_users:
+        if user.user_id is None or user.user_id in existing_user_ids:
+            continue
+        await create_object_audit_log(
+            object_id=user.user_id,
+            action="created",
+            litellm_changed_by=None,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+            table_name=LitellmTableNames.USER_TABLE_NAME,
+            before_value=None,
+            after_value=safe_dumps(user.model_dump(exclude_none=True)),
+        )
+
+    await create_object_audit_log(
+        object_id=team_id,
+        action="updated",
+        litellm_changed_by=None,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+        table_name=LitellmTableNames.TEAM_TABLE_NAME,
+        before_value=_members_audit_value(before_members),
+        after_value=_members_audit_value(after_members),
+    )
+
+
 async def _validate_and_populate_member_user_info(
     member: Member,
     prisma_client: PrismaClient,
@@ -2606,6 +2724,19 @@ async def team_member_add(
         data=data,
     )
 
+    requested_members = tuple(data.member) if isinstance(data.member, list) else (data.member,)
+    caller_supplied_user_ids = frozenset(member.user_id for member in requested_members if member.user_id is not None)
+    existing_user_ids = await _resolve_existing_member_user_ids(
+        members=requested_members,
+        prisma_client=prisma_client,
+    )
+    _validate_member_user_id_provisioning(
+        members=requested_members,
+        existing_user_ids=existing_user_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+    members_before_add = tuple(complete_team_data.members_with_roles)
+
     # Validate and populate user_email/user_id for members before processing
     if isinstance(data.member, Member):
         await _validate_and_populate_member_user_info(
@@ -2618,6 +2749,12 @@ async def team_member_add(
                 member=m,
                 prisma_client=prisma_client,
             )
+
+    pre_existing_user_ids = _pre_existing_user_ids(
+        members=requested_members,
+        caller_supplied_user_ids=caller_supplied_user_ids,
+        existing_user_ids=existing_user_ids,
+    )
 
     (
         updated_team,
@@ -2636,6 +2773,16 @@ async def team_member_add(
         raise HTTPException(status_code=404, detail={"error": f"Team with id {data.team_id} not found"})
 
     _emit_team_members_metric(complete_team_data)
+
+    await _create_team_member_add_audit_logs(
+        team_id=data.team_id,
+        updated_users=updated_users,
+        existing_user_ids=pre_existing_user_ids,
+        before_members=members_before_add,
+        after_members=tuple(complete_team_data.members_with_roles),
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
 
     return TeamAddMemberResponse.model_validate(
         {
