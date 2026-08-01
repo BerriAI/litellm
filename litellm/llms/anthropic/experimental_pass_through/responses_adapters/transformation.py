@@ -6,6 +6,7 @@ path used for OpenAI and Azure models.
 """
 
 import json
+from collections.abc import Iterable
 from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm.litellm_core_utils.reasoning_effort_utils import (
@@ -15,15 +16,15 @@ from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
 from litellm.types.llms.anthropic import (
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
-    AnthopicMessagesAssistantMessageParam,
     AnthropicFinishReason,
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
-    AnthropicMessagesUserMessageParam,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
+    AnthropicSystemMessageContent,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -54,19 +55,32 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return source.get("url")
         return None
 
+    @staticmethod
+    def _translate_midturn_system_content_to_responses(
+        content: Union[str, Iterable[AnthropicSystemMessageContent]],
+    ) -> list[dict[str, str]]:  # mutable-ok: API message payload
+        """Convert in-sequence system content to Responses input-text parts."""
+        if isinstance(content, str):
+            return (
+                [{"type": "input_text", "text": content}] if content else []  # mutable-ok: API message payload
+            )  # mutable-ok: API message payload
+        if not isinstance(content, list):
+            return []  # mutable-ok: API message payload
+        return [  # mutable-ok: API message payload
+            {"type": "input_text", "text": text}  # mutable-ok: API message payload
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))
+        ]
+
     def translate_messages_to_responses_input(
         self,
-        messages: List[
-            Union[
-                AnthropicMessagesUserMessageParam,
-                AnthopicMessagesAssistantMessageParam,
-            ]
-        ],
+        messages: List[AllAnthropicPassThroughMessageValues],  # mutable-ok: API message payload
     ) -> List[Dict[str, Any]]:
         """
         Convert Anthropic messages list to Responses API `input` items.
 
         Mapping:
+          system text        -> message(role=system, input_text)
           user text          -> message(role=user, input_text)
           user image         -> message(role=user, input_image)
           user tool_result   -> function_call_output
@@ -76,6 +90,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         input_items: List[Dict[str, Any]] = []
 
         for m in messages:
+            if m["role"] == "system":
+                system_parts = self._translate_midturn_system_content_to_responses(m.get("content"))
+                if system_parts:
+                    input_items.append(
+                        {  # mutable-ok: API message payload
+                            "type": "message",
+                            "role": "system",
+                            "content": system_parts,
+                        }
+                    )
+                continue
+
             role = m["role"]
             content = m.get("content")
 
@@ -287,12 +313,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """
         model: str = anthropic_request["model"]
         messages_list = cast(
-            List[
-                Union[
-                    AnthropicMessagesUserMessageParam,
-                    AnthopicMessagesAssistantMessageParam,
-                ]
-            ],
+            List[AllAnthropicPassThroughMessageValues],
             anthropic_request["messages"],
         )
 
