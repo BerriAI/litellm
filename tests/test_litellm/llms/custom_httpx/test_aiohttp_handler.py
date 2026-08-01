@@ -11,6 +11,7 @@ sys.path.insert(
 
 from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 class TestBaseLLMAIOHTTPHandler:
@@ -54,12 +55,16 @@ class TestBaseLLMAIOHTTPHandler:
 
         assert result is instance_session
 
-    @patch("aiohttp.ClientSession")
-    def test_get_async_client_session_create_new(self, mock_client_session):
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.TCPConnector")
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.ClientSession")
+    def test_get_async_client_session_create_new(
+        self, mock_client_session, mock_tcp_connector
+    ):
         """Test _get_async_client_session creates new session when none provided"""
         handler = BaseLLMAIOHTTPHandler()
         mock_session_instance = Mock()
         mock_client_session.return_value = mock_session_instance
+        mock_tcp_connector.return_value = Mock()
 
         result = handler._get_async_client_session()
 
@@ -151,12 +156,15 @@ class TestBaseLLMAIOHTTPHandler:
         handler2 = BaseLLMAIOHTTPHandler()
         assert handler2._owns_session
 
-        with patch("aiohttp.ClientSession") as mock_client_session:
-            mock_session_instance = Mock()
-            mock_client_session.return_value = mock_session_instance
+        with patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.TCPConnector"):
+            with patch(
+                "litellm.llms.custom_httpx.aiohttp_handler.aiohttp.ClientSession"
+            ) as mock_client_session:
+                mock_session_instance = Mock()
+                mock_client_session.return_value = mock_session_instance
 
-            handler2._get_async_client_session()
-            assert handler2._owns_session
+                handler2._get_async_client_session()
+                assert handler2._owns_session
 
     @pytest.mark.asyncio
     async def test_context_manager_pattern_compatibility(self):
@@ -180,8 +188,9 @@ class TestBaseLLMAIOHTTPHandler:
         # Verify cleanup happened
         mock_session.close.assert_called_once()
 
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.TCPConnector")
     @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.ClientSession")
-    def test_lazy_session_creation(self, mock_client_session):
+    def test_lazy_session_creation(self, mock_client_session, mock_tcp_connector):
         """Test that session is created lazily only when needed"""
         handler = BaseLLMAIOHTTPHandler()
 
@@ -192,6 +201,7 @@ class TestBaseLLMAIOHTTPHandler:
         # Session should be created when requested
         mock_session_instance = Mock()
         mock_client_session.return_value = mock_session_instance
+        mock_tcp_connector.return_value = Mock()
 
         session = handler._get_async_client_session()
 
@@ -323,18 +333,37 @@ class TestBaseLLMAIOHTTPHandler:
         mock_client_session.assert_called_once_with(connector=mock_connector)
         assert result is mock_session_instance
 
-    @patch("aiohttp.ClientSession")
-    def test_create_client_session_default(self, mock_client_session):
-        """Test default session creation when no transport/connector provided"""
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.TCPConnector")
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.ClientSession")
+    def test_create_client_session_default(
+        self, mock_client_session, mock_tcp_connector
+    ):
+        """Test default session creation attaches SSRFGuardResolver via TCPConnector."""
         mock_session_instance = Mock()
         mock_client_session.return_value = mock_session_instance
+        mock_connector_instance = Mock()
+        mock_tcp_connector.return_value = mock_connector_instance
 
         handler = BaseLLMAIOHTTPHandler()
 
         result = handler._create_client_session_with_transport()
 
-        # Should create default session
-        mock_client_session.assert_called_once_with()
+        # Verify TCPConnector was created with an SSRFGuardResolver
+        mock_tcp_connector.assert_called_once()
+        _, kwargs = mock_tcp_connector.call_args
+        from litellm.llms.custom_httpx.aiohttp_handler import _SSRFGuardResolver
+
+        assert isinstance(kwargs.get("resolver"), _SSRFGuardResolver)
+
+        # Verify ClientSession received the connector and SSRF trace config
+        mock_client_session.assert_called_once()
+        _, call_kwargs = mock_client_session.call_args
+        assert call_kwargs.get("connector") is mock_connector_instance
+        trace_configs = call_kwargs.get("trace_configs", [])
+        assert len(trace_configs) == 1
+        import aiohttp as _aiohttp
+
+        assert isinstance(trace_configs[0], _aiohttp.TraceConfig)
         assert result is mock_session_instance
 
     def test_get_or_create_transport(self):
@@ -367,6 +396,17 @@ class TestBaseLLMAIOHTTPHandler:
         result = handler._get_or_create_transport()
 
         assert result is mock_transport
+
+    def test_get_or_create_transport_creation_failure_returns_none(self):
+        """If _create_aiohttp_transport raises, _get_or_create_transport returns None."""
+        handler = BaseLLMAIOHTTPHandler()
+        with patch.object(
+            AsyncHTTPHandler,
+            "_create_aiohttp_transport",
+            side_effect=RuntimeError("transport init failed"),
+        ):
+            result = handler._get_or_create_transport()
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_close_with_owned_transport(self):
@@ -407,6 +447,32 @@ class TestBaseLLMAIOHTTPHandler:
 
         # Should not raise any exceptions
         await handler.close()
+
+    def test_del_without_running_loop_uses_new_event_loop(self):
+        """__del__ falls back to asyncio.new_event_loop() when no loop is running.
+
+        This covers the RuntimeError branch added to replace the deprecated
+        asyncio.get_event_loop() call — the fallback is needed during interpreter
+        shutdown or in synchronous contexts where no event loop is active.
+        """
+        mock_session = Mock()
+        mock_session.closed = False
+
+        handler = BaseLLMAIOHTTPHandler()
+        handler.client_session = mock_session
+        handler._owns_session = True
+
+        with patch(
+            "asyncio.get_running_loop", side_effect=RuntimeError("no running loop")
+        ):
+            with patch("asyncio.new_event_loop") as mock_new_loop:
+                mock_loop = Mock()
+                mock_new_loop.return_value = mock_loop
+                handler.__del__()
+
+        mock_new_loop.assert_called_once()
+        mock_loop.run_until_complete.assert_called_once()
+        mock_loop.close.assert_called_once()
 
     def test_transport_priority_hierarchy(self):
         """Test that session creation follows the right priority: transport > connector > default"""
