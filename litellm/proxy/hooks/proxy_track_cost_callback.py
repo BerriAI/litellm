@@ -6,9 +6,13 @@ from typing import Any, List, Optional, Union, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.api_route_to_call_types import (
+    get_primary_call_type_for_route,
+)
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
+    get_or_create_metadata_bucket,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
@@ -41,6 +45,22 @@ _PASS_THROUGH_CALL_TYPES: frozenset[str] = frozenset(
         CallTypes.allm_passthrough_route.value,
     }
 )
+
+
+def _known_call_type(call_type: object) -> str | None:
+    """
+    Return ``call_type`` when it is a real ``CallTypes`` value.
+
+    Proxy-only failures (auth, rate limits) build their Logging object from the raw HTTP
+    route, so the attribute can hold something like ``/v1/responses``; that must not end
+    up in the spend log's call_type column.
+    """
+    if not isinstance(call_type, str):
+        return None
+    try:
+        return CallTypes(call_type).value
+    except ValueError:
+        return None
 
 
 class _ProxyDBLogger(CustomLogger):
@@ -106,23 +126,31 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata,
         )
 
-        existing_metadata: dict = request_data.get("metadata", None) or {}
-        existing_metadata.update(_metadata)
-
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
 
         existing_litellm_params = request_data.get("litellm_params", {})
-        existing_litellm_metadata = existing_litellm_params.get("metadata", {}) or {}
 
-        # Preserve tags from existing metadata
-        if existing_litellm_metadata.get("tags"):
-            existing_metadata["tags"] = existing_litellm_metadata.get("tags")
+        metadata_key, internal_metadata = get_or_create_metadata_bucket(request_data)
+        merged_metadata = {
+            **(existing_litellm_params.get("metadata") or {}),
+            **(existing_litellm_params.get("litellm_metadata") or {}),
+            **internal_metadata,
+        }
+        spend_metadata = {key: value for key, value in merged_metadata.items() if not key.startswith("user_api_key")}
+        spend_metadata.update(_metadata)
 
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
-        request_data["litellm_params"]["metadata"] = existing_metadata
+        route_call_type = get_primary_call_type_for_route(request_route)
+        if not request_data.get("call_type") and route_call_type is not None:
+            request_data["call_type"] = route_call_type.value
+
+        request_data[metadata_key] = spend_metadata
+        request_data["litellm_params"]["metadata"] = spend_metadata
+        if "litellm_metadata" in existing_litellm_params:
+            request_data["litellm_params"]["litellm_metadata"] = spend_metadata
 
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:
@@ -145,6 +173,10 @@ class _ProxyDBLogger(CustomLogger):
                 )
             if request_data.get("litellm_trace_id") is None:
                 request_data["litellm_trace_id"] = getattr(_litellm_logging_obj, "litellm_trace_id", None)
+            if not request_data.get("call_type"):
+                logged_call_type = _known_call_type(getattr(_litellm_logging_obj, "call_type", None))
+                if logged_call_type is not None:
+                    request_data["call_type"] = logged_call_type
 
         # Use the actual request start time from the logging object so that
         # failed requests record the real duration instead of 0.
