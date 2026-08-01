@@ -97,6 +97,11 @@ def _get_budget_metrics_per_request_timeout() -> float:
     return parsed
 
 
+def _is_wildcard_metrics(metrics: Sequence[str]) -> bool:
+    """True if `metrics` is exactly the single-item wildcard sentinel `[PROMETHEUS_METRICS_WILDCARD]`."""
+    return len(metrics) == 1 and metrics[0] == PROMETHEUS_METRICS_WILDCARD
+
+
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
 
@@ -683,9 +688,7 @@ class PrometheusLogger(CustomLogger):
             # A wildcard group only sets a default label filter - it should
             # never narrow down which metrics get created. Only groups that
             # name real metrics feed into enabled_metrics, same as before.
-            if parsed_config.metrics != [
-                PROMETHEUS_METRICS_WILDCARD
-            ]:  # mutable-ok: single-item literal used only for equality comparison, never mutated
+            if not _is_wildcard_metrics(parsed_config.metrics):
                 self.enabled_metrics.update(parsed_config.metrics)
 
         # Validate all configurations
@@ -727,9 +730,7 @@ class PrometheusLogger(CustomLogger):
                         for metric_name in get_args(DEFINED_PROMETHEUS_METRICS)
                         for label in PrometheusMetricLabels.get_labels(metric_name)
                     }
-                    unknown_labels = [
-                        label for label in config.include_labels if label not in all_valid_labels
-                    ]  # mutable-ok: local list built once, not mutated after construction
+                    unknown_labels = tuple(label for label in config.include_labels if label not in all_valid_labels)
                     if unknown_labels:
                         label_errors.append(
                             LabelValidationError(
@@ -790,12 +791,8 @@ class PrometheusLogger(CustomLogger):
             str, list[str]
         ] = {}  # mutable-ok: accumulator dict returned to the caller, required by the existing return type
 
-        wildcard_configs = [
-            c for c in parsed_configs if c.metrics == [PROMETHEUS_METRICS_WILDCARD]
-        ]  # mutable-ok: accumulator dict returned to the caller, required by the existing return type
-        named_configs = [
-            c for c in parsed_configs if c.metrics != [PROMETHEUS_METRICS_WILDCARD]
-        ]  # mutable-ok: accumulator dict returned to the caller, required by the existing return type
+        wildcard_configs = tuple(c for c in parsed_configs if _is_wildcard_metrics(c.metrics))
+        named_configs = tuple(c for c in parsed_configs if not _is_wildcard_metrics(c.metrics))
 
         for config in wildcard_configs:
             if not config.include_labels:

@@ -2,7 +2,7 @@ import re
 from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import litellm
 
@@ -89,7 +89,7 @@ class LabelValidationError:
     """Error for invalid labels on a metric"""
 
     metric_name: str
-    invalid_labels: List[str]
+    invalid_labels: Sequence[str]
     valid_labels: List[str]
 
     @property
@@ -789,14 +789,12 @@ class PrometheusMetricLabels:
         # Default to no labels instead of raising, so anything that legitimately
         # iterates over every defined metric name (e.g. a wildcard config group)
         # doesn't blow up on a metric like this.
-        default_labels = getattr(
-            PrometheusMetricLabels, label_name, []
-        )  # mutable-ok: empty-list default for getattr fallback, never mutated
-        custom_labels = []
+        default_labels = getattr(PrometheusMetricLabels, label_name, [])  # mutable-ok: unused fallback
+        custom_labels = []  # mutable-ok: built incrementally via extend/append below
 
         # Add custom metadata labels
         custom_labels.extend(
-            [_sanitize_prometheus_label_name(metric) for metric in litellm.custom_prometheus_metadata_labels]
+            _sanitize_prometheus_label_name(metric) for metric in litellm.custom_prometheus_metadata_labels
         )
 
         # Add custom tags labels
