@@ -374,11 +374,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if cached_client:
                 if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
                     return cached_client
+            http_client: Optional[Union[httpx.Client, httpx.AsyncClient]] = (
+                OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
+                if is_async
+                else OpenAIChatCompletion._get_sync_http_client()
+            )
             if is_async:
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_async_http_client(shared_session=shared_session),
+                    http_client=http_client,
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -387,7 +392,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_sync_http_client(),
+                    http_client=http_client,
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -398,6 +403,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 openai_client=_new_client,
                 client_initialization_params=client_initialization_params,
                 client_type="openai",
+                litellm_owned_client=self.owns_wrapped_http_client(http_client),
             )
             return _new_client
 
