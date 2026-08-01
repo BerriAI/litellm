@@ -215,9 +215,18 @@ def test_rejected_token_raises_auth_rejected(status):
     assert "access-1" not in message
 
 
-@pytest.mark.parametrize("status", [200, 404, 500, 503])
-def test_non_auth_statuses_are_tolerated(status):
+@pytest.mark.parametrize("status", [200, 429, 500, 503])
+def test_inconclusive_statuses_are_tolerated(status):
+    # A rate limit or a server-side blip says nothing about the token, and failing
+    # here would send the user back through the whole browser flow.
     verify_token_with_litellm(BASE_URL, "access-1", get=lambda *a, **k: FakeResponse(status))
+
+
+def test_missing_models_route_is_not_treated_as_verified():
+    with pytest.raises(NativeOIDCError) as excinfo:
+        verify_token_with_litellm(BASE_URL, "access-1", get=lambda *a, **k: FakeResponse(404))
+    assert not isinstance(excinfo.value, NativeOIDCAuthRejected)
+    assert "could not be verified" in str(excinfo.value)
 
 
 def test_unreachable_proxy_is_not_an_auth_rejection():

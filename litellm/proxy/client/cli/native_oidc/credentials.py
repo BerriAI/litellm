@@ -125,7 +125,14 @@ def verify_token_with_litellm(
             "signing keys, that the audience matches what the proxy expects, and "
             "that the required user/team/role claim mapping is configured."
         )
-    # Any other non-2xx is tolerated: the probe is an auth check, not a health check.
+    if response.status_code == 404:
+        raise NativeOIDCError(
+            f"{url} returned HTTP 404, so the access token could not be verified; "
+            "check that the configured base URL points at a LiteLLM proxy"
+        )
+    # Every other status is inconclusive rather than a rejection. A 5xx or a 429
+    # says nothing about the token, and failing here would send the user back
+    # through the whole browser flow over a transient proxy blip.
 
 
 @contextmanager
