@@ -16,9 +16,13 @@ from litellm.types.integrations.prometheus import (
 
 def _bare_logger() -> PrometheusLogger:
     """A PrometheusLogger instance with __init__ skipped, for testing the
-    config-parsing helpers in isolation without re-registering ~70 real
-    metrics against prometheus_client's global registry on every test."""
-    return PrometheusLogger.__new__(PrometheusLogger)
+    config-parsing helpers in isolation. Manually seeds exclude_metrics/
+    exclude_labels since __init__ (which normally sets them via
+    _parse_exclude_config) never runs here."""
+    logger = PrometheusLogger.__new__(PrometheusLogger)
+    logger.exclude_metrics = frozenset()
+    logger.exclude_labels = frozenset()
+    return logger
 
 
 def test_wildcard_sets_default_labels_for_every_metric():
