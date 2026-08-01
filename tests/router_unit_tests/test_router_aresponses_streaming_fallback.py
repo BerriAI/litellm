@@ -90,6 +90,27 @@ def test_extract_partial_responses_usage_no_completed_response():
     assert usage is None
 
 
+def test_extract_partial_responses_usage_bridge_iterator_before_any_chunk():
+    """Bridge path: real iterator, no chunks and no completed_response → returns None."""
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    stream_wrapper = MagicMock()
+    stream_wrapper.logging_obj = MagicMock()
+
+    source = LiteLLMCompletionStreamingIterator(
+        model="anthropic/claude-sonnet-4-5",
+        litellm_custom_stream_wrapper=stream_wrapper,
+        request_input="hello",
+        responses_api_request={},
+    )
+
+    assert source.completed_response is None
+    assert source.collected_chat_completion_chunks == []
+    assert Router._extract_partial_responses_usage(source) is None
+
+
 # -------- _combine_responses_fallback_usage --------
 
 
