@@ -1,4 +1,67 @@
 import { resolveLogoSrc } from "@/lib/assetPaths";
+import a2aAgentLogo from "../../public/assets/logos/a2a_agent.png";
+import ai21Logo from "../../public/assets/logos/ai21.svg";
+import aimlApiLogo from "../../public/assets/logos/aiml_api.svg";
+import anthropicLogo from "../../public/assets/logos/anthropic.svg";
+import assemblyaiSmallLogo from "../../public/assets/logos/assemblyai_small.png";
+import basetenLogo from "../../public/assets/logos/baseten.svg";
+import bedrockLogo from "../../public/assets/logos/bedrock.svg";
+import cerebrasLogo from "../../public/assets/logos/cerebras.svg";
+import cloudflareLogo from "../../public/assets/logos/cloudflare.svg";
+import cohereLogo from "../../public/assets/logos/cohere.svg";
+import cometapiLogo from "../../public/assets/logos/cometapi.svg";
+import cursorLogo from "../../public/assets/logos/cursor.svg";
+import databricksLogo from "../../public/assets/logos/databricks.svg";
+import deepgramLogo from "../../public/assets/logos/deepgram.png";
+import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
+import deepseekLogo from "../../public/assets/logos/deepseek.svg";
+import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
+import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
+import featherlessLogo from "../../public/assets/logos/featherless.svg";
+import fireworksLogo from "../../public/assets/logos/fireworks.svg";
+import friendliLogo from "../../public/assets/logos/friendli.svg";
+import githubCopilotLogo from "../../public/assets/logos/github_copilot.svg";
+import googleLogo from "../../public/assets/logos/google.svg";
+import groqLogo from "../../public/assets/logos/groq.svg";
+import huggingfaceLogo from "../../public/assets/logos/huggingface.svg";
+import hyperbolicLogo from "../../public/assets/logos/hyperbolic.svg";
+import infinityLogo from "../../public/assets/logos/infinity.png";
+import jinaLogo from "../../public/assets/logos/jina.png";
+import lambdaLogo from "../../public/assets/logos/lambda.svg";
+import lmstudioLogo from "../../public/assets/logos/lmstudio.svg";
+import metaLlamaLogo from "../../public/assets/logos/meta_llama.svg";
+import microsoftAzureLogo from "../../public/assets/logos/microsoft_azure.svg";
+import minimaxLogo from "../../public/assets/logos/minimax.svg";
+import mistralLogo from "../../public/assets/logos/mistral.svg";
+import moonshotLogo from "../../public/assets/logos/moonshot.svg";
+import morphLogo from "../../public/assets/logos/morph.svg";
+import nebiusLogo from "../../public/assets/logos/nebius.svg";
+import novitaLogo from "../../public/assets/logos/novita.svg";
+import nvidiaNimLogo from "../../public/assets/logos/nvidia_nim.svg";
+import nvidiaTritonLogo from "../../public/assets/logos/nvidia_triton.png";
+import ollamaLogo from "../../public/assets/logos/ollama.svg";
+import openaiSmallLogo from "../../public/assets/logos/openai_small.svg";
+import openrouterLogo from "../../public/assets/logos/openrouter.svg";
+import oracleLogo from "../../public/assets/logos/oracle.svg";
+import perplexityAiLogo from "../../public/assets/logos/perplexity-ai.svg";
+import qwenLogo from "../../public/assets/logos/qwen.png";
+import recraftLogo from "../../public/assets/logos/recraft.svg";
+import replicateLogo from "../../public/assets/logos/replicate.svg";
+import runwayLogo from "../../public/assets/logos/runway.png";
+import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
+import sapLogo from "../../public/assets/logos/sap.png";
+import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
+import sonioxLogo from "../../public/assets/logos/soniox.svg";
+import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
+import topazLogo from "../../public/assets/logos/topaz.svg";
+import v0Logo from "../../public/assets/logos/v0.svg";
+import vercelLogo from "../../public/assets/logos/vercel.svg";
+import vllmLogo from "../../public/assets/logos/vllm.png";
+import volcengineLogo from "../../public/assets/logos/volcengine.png";
+import voyageLogo from "../../public/assets/logos/voyage.webp";
+import watsonxLogo from "../../public/assets/logos/watsonx.svg";
+import xaiLogo from "../../public/assets/logos/xai.svg";
+import xinferenceLogo from "../../public/assets/logos/xinference.svg";
 
 export enum Providers {
   A2A_Agent = "A2A Agent",
@@ -220,94 +283,91 @@ export const provider_map: Record<string, string> = {
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
 
-const asset_logos_folder = "/ui/assets/logos/";
-
-export const providerLogoMap: Record<string, string> = {
-  [Providers.A2A_Agent]: `${asset_logos_folder}a2a_agent.png`,
-  [Providers.AI21]: `${asset_logos_folder}ai21.svg`,
-  [Providers.AI21_CHAT]: `${asset_logos_folder}ai21.svg`,
-  [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,
-  [Providers.AIOHTTP_OPENAI]: `${asset_logos_folder}openai_small.svg`,
-  [Providers.Anthropic]: `${asset_logos_folder}anthropic.svg`,
-  [Providers.ANTHROPIC_TEXT]: `${asset_logos_folder}anthropic.svg`,
-  [Providers.AssemblyAI]: `${asset_logos_folder}assemblyai_small.png`,
-  [Providers.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
-  [Providers.Azure_AI_Studio]: `${asset_logos_folder}microsoft_azure.svg`,
-  [Providers.AZURE_TEXT]: `${asset_logos_folder}microsoft_azure.svg`,
-  [Providers.BASETEN]: `${asset_logos_folder}baseten.svg`,
-  [Providers.Bedrock]: `${asset_logos_folder}bedrock.svg`,
-  [Providers.BedrockMantle]: `${asset_logos_folder}bedrock.svg`,
-  [Providers.SageMaker]: `${asset_logos_folder}bedrock.svg`,
-  [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
-  [Providers.CLOUDFLARE]: `${asset_logos_folder}cloudflare.svg`,
-  [Providers.CODESTRAL]: `${asset_logos_folder}mistral.svg`,
-  [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
-  [Providers.COHERE_CHAT]: `${asset_logos_folder}cohere.svg`,
-  [Providers.COMETAPI]: `${asset_logos_folder}cometapi.svg`,
-  [Providers.Cursor]: `${asset_logos_folder}cursor.svg`,
-  [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
-  [Providers.Dashscope]: `${asset_logos_folder}dashscope.svg`,
-  [Providers.Deepseek]: `${asset_logos_folder}deepseek.svg`,
-  [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`,
-  [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`,
-  [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
-  [Providers.FalAI]: `${asset_logos_folder}fal_ai.jpg`,
-  [Providers.FEATHERLESS_AI]: `${asset_logos_folder}featherless.svg`,
-  [Providers.FireworksAI]: `${asset_logos_folder}fireworks.svg`,
-  [Providers.FRIENDLIAI]: `${asset_logos_folder}friendli.svg`,
-  [Providers.GITHUB_COPILOT]: `${asset_logos_folder}github_copilot.svg`,
-  [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
-  [Providers.GradientAI]: `${asset_logos_folder}gradientai.svg`,
-  [Providers.Groq]: `${asset_logos_folder}groq.svg`,
-  [Providers.Hosted_Vllm]: `${asset_logos_folder}vllm.png`,
-  [Providers.HUGGINGFACE]: `${asset_logos_folder}huggingface.svg`,
-  [Providers.HYPERBOLIC]: `${asset_logos_folder}hyperbolic.svg`,
-  [Providers.Infinity]: `${asset_logos_folder}infinity.png`,
-  [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
-  [Providers.LAMBDA_AI]: `${asset_logos_folder}lambda.svg`,
-  [Providers.LM_STUDIO]: `${asset_logos_folder}lmstudio.svg`,
-  [Providers.LLAMA]: `${asset_logos_folder}meta_llama.svg`,
-  [Providers.MiniMax]: `${asset_logos_folder}minimax.svg`,
-  [Providers.MistralAI]: `${asset_logos_folder}mistral.svg`,
-  [Providers.MOONSHOT]: `${asset_logos_folder}moonshot.svg`,
-  [Providers.MORPH]: `${asset_logos_folder}morph.svg`,
-  [Providers.NEBIUS]: `${asset_logos_folder}nebius.svg`,
-  [Providers.NOVITA]: `${asset_logos_folder}novita.svg`,
-  [Providers.NVIDIA_NIM]: `${asset_logos_folder}nvidia_nim.svg`,
-  [Providers.Ollama]: `${asset_logos_folder}ollama.svg`,
-  [Providers.OLLAMA_CHAT]: `${asset_logos_folder}ollama.svg`,
-  [Providers.OOBABOOGA]: `${asset_logos_folder}openai_small.svg`,
-  [Providers.OpenAI]: `${asset_logos_folder}openai_small.svg`,
-  [Providers.OPENAI_LIKE]: `${asset_logos_folder}openai_small.svg`,
-  [Providers.OpenAI_Text]: `${asset_logos_folder}openai_small.svg`,
-  [Providers.OpenAI_Text_Compatible]: `${asset_logos_folder}openai_small.svg`,
-  [Providers.OpenAI_Compatible]: `${asset_logos_folder}openai_small.svg`,
-  [Providers.Openrouter]: `${asset_logos_folder}openrouter.svg`,
-  [Providers.Oracle]: `${asset_logos_folder}oracle.svg`,
-  [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
-  [Providers.RECRAFT]: `${asset_logos_folder}recraft.svg`,
-  [Providers.REPLICATE]: `${asset_logos_folder}replicate.svg`,
-  [Providers.RunwayML]: `${asset_logos_folder}runwayml.png`,
-  [Providers.SAGEMAKER_LEGACY]: `${asset_logos_folder}bedrock.svg`,
-  [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
-  [Providers.SAP]: `${asset_logos_folder}sap.png`,
-  [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
-  [Providers.Soniox]: `${asset_logos_folder}soniox.svg`,
-  [Providers.TEXT_COMPLETION_CODESTRAL]: `${asset_logos_folder}mistral.svg`,
-  [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
-  [Providers.TOPAZ]: `${asset_logos_folder}topaz.svg`,
-  [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
-  [Providers.V0]: `${asset_logos_folder}v0.svg`,
-  [Providers.VERCEL_AI_GATEWAY]: `${asset_logos_folder}vercel.svg`,
-  [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
-  [Providers.VERTEX_AI_BETA]: `${asset_logos_folder}google.svg`,
-  [Providers.VLLM]: `${asset_logos_folder}vllm.png`,
-  [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
-  [Providers.Voyage]: `${asset_logos_folder}voyage.webp`,
-  [Providers.WATSONX]: `${asset_logos_folder}watsonx.svg`,
-  [Providers.WATSONX_TEXT]: `${asset_logos_folder}watsonx.svg`,
-  [Providers.xAI]: `${asset_logos_folder}xai.svg`,
-  [Providers.XINFERENCE]: `${asset_logos_folder}xinference.svg`,
+export const providerLogoMap: Partial<Record<Providers, string>> = {
+  [Providers.A2A_Agent]: a2aAgentLogo.src,
+  [Providers.AI21]: ai21Logo.src,
+  [Providers.AI21_CHAT]: ai21Logo.src,
+  [Providers.AIML]: aimlApiLogo.src,
+  [Providers.AIOHTTP_OPENAI]: openaiSmallLogo.src,
+  [Providers.Anthropic]: anthropicLogo.src,
+  [Providers.ANTHROPIC_TEXT]: anthropicLogo.src,
+  [Providers.AssemblyAI]: assemblyaiSmallLogo.src,
+  [Providers.Azure]: microsoftAzureLogo.src,
+  [Providers.Azure_AI_Studio]: microsoftAzureLogo.src,
+  [Providers.AZURE_TEXT]: microsoftAzureLogo.src,
+  [Providers.BASETEN]: basetenLogo.src,
+  [Providers.Bedrock]: bedrockLogo.src,
+  [Providers.BedrockMantle]: bedrockLogo.src,
+  [Providers.SageMaker]: bedrockLogo.src,
+  [Providers.Cerebras]: cerebrasLogo.src,
+  [Providers.CLOUDFLARE]: cloudflareLogo.src,
+  [Providers.CODESTRAL]: mistralLogo.src,
+  [Providers.Cohere]: cohereLogo.src,
+  [Providers.COHERE_CHAT]: cohereLogo.src,
+  [Providers.COMETAPI]: cometapiLogo.src,
+  [Providers.Cursor]: cursorLogo.src,
+  [Providers.Databricks]: databricksLogo.src,
+  [Providers.Dashscope]: qwenLogo.src,
+  [Providers.Deepseek]: deepseekLogo.src,
+  [Providers.Deepgram]: deepgramLogo.src,
+  [Providers.DeepInfra]: deepinfraLogo.src,
+  [Providers.ElevenLabs]: elevenlabsLogo.src,
+  [Providers.FalAI]: falAiLogo.src,
+  [Providers.FEATHERLESS_AI]: featherlessLogo.src,
+  [Providers.FireworksAI]: fireworksLogo.src,
+  [Providers.FRIENDLIAI]: friendliLogo.src,
+  [Providers.GITHUB_COPILOT]: githubCopilotLogo.src,
+  [Providers.Google_AI_Studio]: googleLogo.src,
+  [Providers.Groq]: groqLogo.src,
+  [Providers.Hosted_Vllm]: vllmLogo.src,
+  [Providers.HUGGINGFACE]: huggingfaceLogo.src,
+  [Providers.HYPERBOLIC]: hyperbolicLogo.src,
+  [Providers.Infinity]: infinityLogo.src,
+  [Providers.JinaAI]: jinaLogo.src,
+  [Providers.LAMBDA_AI]: lambdaLogo.src,
+  [Providers.LM_STUDIO]: lmstudioLogo.src,
+  [Providers.LLAMA]: metaLlamaLogo.src,
+  [Providers.MiniMax]: minimaxLogo.src,
+  [Providers.MistralAI]: mistralLogo.src,
+  [Providers.MOONSHOT]: moonshotLogo.src,
+  [Providers.MORPH]: morphLogo.src,
+  [Providers.NEBIUS]: nebiusLogo.src,
+  [Providers.NOVITA]: novitaLogo.src,
+  [Providers.NVIDIA_NIM]: nvidiaNimLogo.src,
+  [Providers.Ollama]: ollamaLogo.src,
+  [Providers.OLLAMA_CHAT]: ollamaLogo.src,
+  [Providers.OOBABOOGA]: openaiSmallLogo.src,
+  [Providers.OpenAI]: openaiSmallLogo.src,
+  [Providers.OPENAI_LIKE]: openaiSmallLogo.src,
+  [Providers.OpenAI_Text]: openaiSmallLogo.src,
+  [Providers.OpenAI_Text_Compatible]: openaiSmallLogo.src,
+  [Providers.OpenAI_Compatible]: openaiSmallLogo.src,
+  [Providers.Openrouter]: openrouterLogo.src,
+  [Providers.Oracle]: oracleLogo.src,
+  [Providers.Perplexity]: perplexityAiLogo.src,
+  [Providers.RECRAFT]: recraftLogo.src,
+  [Providers.REPLICATE]: replicateLogo.src,
+  [Providers.RunwayML]: runwayLogo.src,
+  [Providers.SAGEMAKER_LEGACY]: bedrockLogo.src,
+  [Providers.Sambanova]: sambanovaLogo.src,
+  [Providers.SAP]: sapLogo.src,
+  [Providers.Snowflake]: snowflakeLogo.src,
+  [Providers.Soniox]: sonioxLogo.src,
+  [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
+  [Providers.TogetherAI]: togetheraiLogo.src,
+  [Providers.TOPAZ]: topazLogo.src,
+  [Providers.Triton]: nvidiaTritonLogo.src,
+  [Providers.V0]: v0Logo.src,
+  [Providers.VERCEL_AI_GATEWAY]: vercelLogo.src,
+  [Providers.Vertex_AI]: googleLogo.src,
+  [Providers.VERTEX_AI_BETA]: googleLogo.src,
+  [Providers.VLLM]: vllmLogo.src,
+  [Providers.VolcEngine]: volcengineLogo.src,
+  [Providers.Voyage]: voyageLogo.src,
+  [Providers.WATSONX]: watsonxLogo.src,
+  [Providers.WATSONX_TEXT]: watsonxLogo.src,
+  [Providers.xAI]: xaiLogo.src,
+  [Providers.XINFERENCE]: xinferenceLogo.src,
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
@@ -335,7 +395,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 
   // Get the display name from Providers enum and logo from map
   const displayName = Providers[enumKey as keyof typeof Providers];
-  const logo = resolveLogoSrc(providerLogoMap[displayName as keyof typeof providerLogoMap]) ?? "";
+  const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
 
   return { logo, displayName };
 };

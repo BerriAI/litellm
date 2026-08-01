@@ -1,8 +1,8 @@
 import * as networking from "@/components/networking";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import TeamInfoView from "./TeamInfo";
 
 vi.mock("@/components/networking", () => ({
@@ -18,6 +18,7 @@ vi.mock("@/components/networking", () => ({
   getTeamPermissionsCall: vi.fn(),
   organizationInfoCall: vi.fn(),
   getRouterSettingsCall: vi.fn().mockResolvedValue({ fields: [] }),
+  getPassThroughEndpointsCall: vi.fn(),
 }));
 
 vi.mock("@/components/utils/dataUtils", () => ({
@@ -442,6 +443,29 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByRole("tab", { name: "Settings" })).toBeInTheDocument();
       });
+    });
+
+    it("shows edit tabs when the fetched team data marks the session user as team admin, even without the is_team_admin prop", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          members_with_roles: [
+            {
+              user_id: "user-1",
+              user_email: "admin@test.com",
+              role: "admin",
+              spend: 0,
+              budget_id: "budget1",
+            },
+          ],
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} is_team_admin={false} is_proxy_admin={false} />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("tab", { name: "Settings" })).toBeInTheDocument();
+      });
+      expect(screen.getByRole("tab", { name: "Members" })).toBeInTheDocument();
     });
 
     it("should navigate to settings tab when clicked", async () => {
@@ -1022,6 +1046,151 @@ describe("TeamInfoView", () => {
 
       const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
       expect(payload).not.toHaveProperty("model_aliases");
+    });
+  });
+
+  describe("guardrails dropdown grouping", () => {
+    const guardrail = (name: string, defaultOn: boolean) => ({
+      guardrail_name: name,
+      litellm_params: { default_on: defaultOn },
+    });
+
+    const openGuardrailsDropdown = async (user: ReturnType<typeof userEvent.setup>) => {
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/^Guardrails/)).toBeInTheDocument();
+      });
+
+      const dropdownsBefore = new Set(document.querySelectorAll(".ant-select-dropdown"));
+
+      await user.click(screen.getByLabelText(/^Guardrails/));
+
+      return waitFor(
+        () => {
+          const opened = Array.from(document.querySelectorAll(".ant-select-dropdown")).find(
+            (el) => !dropdownsBefore.has(el),
+          );
+          expect(opened).toBeDefined();
+          return opened as HTMLElement;
+        },
+        { timeout: 5000 },
+      );
+    };
+
+    beforeEach(() => {
+      testQueryClient.clear();
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+    });
+
+    it("should not render the Global or Other group headers when no global guardrails exist", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.getGuardrailsList).mockResolvedValue({
+        guardrails: [guardrail("dwacxzcz", false), guardrail("dwadsa", false)],
+      });
+
+      const dropdown = await openGuardrailsDropdown(user);
+
+      await waitFor(() => {
+        expect(within(dropdown).getByTitle("dwacxzcz")).toBeInTheDocument();
+      });
+      expect(within(dropdown).getByTitle("dwadsa")).toBeInTheDocument();
+      expect(within(dropdown).queryByText("Global")).not.toBeInTheDocument();
+      expect(within(dropdown).queryByText("Other")).not.toBeInTheDocument();
+    });
+
+    it("should not render the Global or Other group headers when every guardrail is global", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.getGuardrailsList).mockResolvedValue({
+        guardrails: [guardrail("always-on", true)],
+      });
+
+      const dropdown = await openGuardrailsDropdown(user);
+
+      await waitFor(() => {
+        expect(within(dropdown).getByTitle("always-on")).toBeInTheDocument();
+      });
+      expect(within(dropdown).queryByText("Global")).not.toBeInTheDocument();
+      expect(within(dropdown).queryByText("Other")).not.toBeInTheDocument();
+    });
+
+    it("should render both group headers when global and non-global guardrails exist", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.getGuardrailsList).mockResolvedValue({
+        guardrails: [guardrail("always-on", true), guardrail("opt-in", false)],
+      });
+
+      const dropdown = await openGuardrailsDropdown(user);
+
+      await waitFor(() => {
+        expect(within(dropdown).getByText("Global")).toBeInTheDocument();
+      });
+      expect(within(dropdown).getByText("Other")).toBeInTheDocument();
+      expect(within(dropdown).getByTitle("always-on")).toBeInTheDocument();
+      expect(within(dropdown).getByTitle("opt-in")).toBeInTheDocument();
+    });
+  });
+
+  describe("allowed pass through routes", () => {
+    beforeEach(() => {
+      testQueryClient.clear();
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      vi.mocked(networking.getPassThroughEndpointsCall).mockResolvedValue({
+        endpoints: [{ path: "/bedrock-passthrough", methods: ["POST"] }],
+      });
+    });
+
+    it("should show a route picked from the dropdown in the field and save it", async () => {
+      const user = userEvent.setup({ delay: null });
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const routesLabel = await screen.findByText("Allowed Pass Through Routes");
+      const routesFormItem = routesLabel.closest(".ant-form-item") as HTMLElement;
+
+      await user.click(within(routesFormItem).getByRole("combobox"));
+
+      const option = await screen.findByTitle("POST /bedrock-passthrough");
+      await user.click(option);
+
+      await waitFor(() => {
+        expect(within(routesFormItem).getByText(/\/bedrock-passthrough/)).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.objectContaining({
+            team_id: "123",
+            metadata: expect.objectContaining({
+              allowed_passthrough_routes: ["/bedrock-passthrough"],
+            }),
+          }),
+        );
+      });
     });
   });
 });

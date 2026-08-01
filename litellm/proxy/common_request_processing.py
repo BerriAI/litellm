@@ -5,6 +5,7 @@ import math
 import time
 import traceback
 from datetime import datetime
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -12,6 +13,7 @@ from typing import (
     Callable,
     Dict,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Union,
@@ -33,10 +35,14 @@ from litellm.constants import (
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
@@ -50,7 +56,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
@@ -89,6 +95,13 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation =
     "error_message": "Client disconnected the request",
     "error_class": "ClientDisconnected",
 }
+
+
+def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
+    return any(
+        isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
+        for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))
+    )
 
 
 def _apply_client_disconnect_metadata(target_metadata: Optional[dict[str, object]]) -> None:
@@ -151,6 +164,80 @@ async def _record_streaming_client_disconnect_if_needed(
     return True
 
 
+def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
+    logging_obj = request_data.get("litellm_logging_obj")
+    if logging_obj is None:
+        return False
+    return (
+        getattr(logging_obj, "_on_deferred_stream_complete", None) is not None
+        and getattr(logging_obj, "_deferred_stream_complete_args", None) is not None
+    )
+
+
+async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
+    """
+    A client disconnect throws GeneratorExit/CancelledError into the streaming
+    generator, so neither the success nor the failure logging callback fires
+    and the chunks already streamed (plus any sub-call cost folded into the
+    logging object) would never reach spend tracking. Assemble the partial
+    response from the wrapper's collected chunks and dispatch success logging
+    for it; dispatch_success_handlers dedups against a natural end-of-stream
+    dispatch via has_dispatched_final_stream_success.
+
+    Awaited directly by the shielded cleanup rather than scheduled with
+    create_task: the client is already gone so the extra latency is harmless,
+    and an unrooted task could be garbage-collected before it bills.
+
+    Returns True when a disconnect-time success event owns the request's
+    max_parallel_requests slot release (one was dispatched here, or one had
+    already been dispatched for this stream), so the caller can skip the
+    explicit slot release and avoid a double release. Returns False when no
+    success event fired (logging disabled, nothing streamed, or assembly
+    failed) and the caller must release the slot itself.
+    """
+    if litellm.disable_streaming_logging is True:
+        return False
+    logging_obj = request_data.get("litellm_logging_obj")
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return False
+    if logging_obj.model_call_details.get("has_dispatched_final_stream_success"):
+        # A natural end-of-stream success event already fired and released the
+        # slot; do not bill again, and let the caller skip the slot release.
+        return True
+    chunks: object = getattr(response, "chunks", None)
+    if not isinstance(chunks, list) or not chunks:
+        return False
+    verbose_proxy_logger.debug(
+        "Billing partial streamed spend for %s chunks after client disconnect, litellm_call_id=%s",
+        len(chunks),
+        request_data.get("litellm_call_id"),
+    )
+    messages: object = getattr(response, "messages", None)
+    try:
+        partial_response = litellm.stream_chunk_builder(
+            chunks=chunks,
+            messages=messages if isinstance(messages, list) else None,
+            logging_obj=logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # partial billing is best-effort; never break stream teardown
+        verbose_proxy_logger.debug("Failed to assemble partial streamed response for disconnect billing: %s", e)
+        return False
+    if partial_response is None:
+        return False
+    try:
+        await logging_obj.dispatch_success_handlers(
+            partial_response,
+            cache_hit=False,
+            start_time=None,
+            end_time=None,
+            prefer_async_handlers=True,
+        )
+    except Exception as e:  # noqa: BLE001  # partial billing is best-effort; never break stream teardown
+        verbose_proxy_logger.debug("Failed to dispatch disconnect billing event: %s", e)
+        return False
+    return True
+
+
 async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
     pending_tasks = [task for task in tasks if not task.done()]
     for task in pending_tasks:
@@ -160,6 +247,71 @@ async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None
             await task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
+
+
+@lru_cache(maxsize=512)
+def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
+    try:
+        supported_params = get_supported_openai_params(model=litellm_model)
+    except Exception:  # noqa: BLE001  # unmapped or malformed model strings must disable injection, not fail the request
+        return False
+    return supported_params is not None and "stream_options" in supported_params
+
+
+def _deployment_litellm_model(deployment: Mapping[str, object]) -> str | None:
+    litellm_params = deployment.get("litellm_params")
+    if isinstance(litellm_params, Mapping):
+        litellm_model = litellm_params.get("model")
+    else:
+        litellm_model = getattr(litellm_params, "model", None)
+    return litellm_model if isinstance(litellm_model, str) else None
+
+
+def _model_deployments_support_stream_options(
+    model: object,
+    llm_router: Router | None,
+    team_id: str | None,
+) -> bool:
+    if not isinstance(model, str):
+        return False
+    deployments = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router is not None else None
+    deployment_models = tuple(
+        litellm_model
+        for deployment in deployments or ()
+        if (litellm_model := _deployment_litellm_model(deployment)) is not None
+    )
+    candidate_models = deployment_models if deployment_models else (model,)
+    return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
+
+
+def _stream_usage_tracking_updates(
+    data: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    route_type: str,
+    supports_stream_options: Callable[[], bool],
+) -> Mapping[str, object]:
+    scrub = {"_litellm_strip_stream_usage": False} if "_litellm_strip_stream_usage" in data else {}
+    if data.get("stream", False) is not True:
+        return scrub
+    always_include = general_settings.get("always_include_stream_usage")
+    stream_options = data.get("stream_options")
+    if always_include is True:
+        if "stream_options" not in data:
+            return {**scrub, "stream_options": {"include_usage": True}}
+        if isinstance(stream_options, dict) and "include_usage" not in stream_options:
+            return {**scrub, "stream_options": {**stream_options, "include_usage": True}}
+        return scrub
+    if always_include is False or route_type != "acompletion":
+        return scrub
+    if isinstance(stream_options, dict) and stream_options.get("include_usage") is True:
+        return scrub
+    if not supports_stream_options():
+        return scrub
+    merged_stream_options = {**stream_options} if isinstance(stream_options, dict) else {}
+    return {
+        "stream_options": {**merged_stream_options, "include_usage": True},
+        "_litellm_strip_stream_usage": True,
+    }
 
 
 def _serialize_http_exception_detail(
@@ -598,6 +750,7 @@ def _override_openai_response_model(
     response_obj: Any,
     requested_model: str,
     log_context: str,
+    return_raw_model_name: bool = False,
 ) -> None:
     """
     Force the OpenAI-compatible `model` field in the response to match what the client requested.
@@ -621,7 +774,7 @@ def _override_openai_response_model(
     3. If this was a fastest_response batch completion, use the winning model's
        model group name instead of the comma-separated list the client sent.
     """
-    if not requested_model:
+    if return_raw_model_name or not requested_model:
         return
 
     hidden_params = get_hidden_params_dict(response_obj)
@@ -851,9 +1004,12 @@ class ProxyBaseLLMRequestProcessing:
                 # If conversion fails, use original spend
                 pass
 
+        model_name = ProxyBaseLLMRequestProcessing._get_deployment_model_name(litellm_logging_obj)
+
         headers = {
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
+            "x-litellm-model-name": model_name,
             "x-litellm-cache-key": cache_key,
             "x-litellm-model-api-base": (
                 api_base.split("?")[0] if api_base else None
@@ -1146,17 +1302,18 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         ### AUTO STREAM USAGE TRACKING ###
-        # If always_include_stream_usage is enabled and this is a streaming request
-        # automatically add stream_options={'include_usage': True} if not already set
-        if (
-            general_settings.get("always_include_stream_usage", False) is True
-            and self.data.get("stream", False) is True
-        ):
-            # Only set if stream_options is not already provided by the client
-            if "stream_options" not in self.data:
-                self.data["stream_options"] = {"include_usage": True}
-            elif isinstance(self.data["stream_options"], dict) and "include_usage" not in self.data["stream_options"]:
-                self.data["stream_options"]["include_usage"] = True
+        self.data.update(
+            _stream_usage_tracking_updates(
+                data=self.data,
+                general_settings=general_settings,
+                route_type=route_type,
+                supports_stream_options=lambda: _model_deployments_support_stream_options(
+                    model=self.data.get("model"),
+                    llm_router=llm_router,
+                    team_id=user_api_key_dict.team_id,
+                ),
+            )
+        )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -1169,6 +1326,21 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        # Merge model-level guardrails before pre_call_hook so DB/UI-configured
+        # guardrails actually execute on pre_call. Without this, guardrails set
+        # via litellm_params.guardrails are only honored on post_call paths
+        # (#29652, partial fix in #23774 covered non-streaming post_call only).
+        # trust_client_model_info=False on pre_call: route_request hasn't run
+        # and add_litellm_data_to_request preserves client-supplied
+        # model_info when allow_client_pricing_override is set, so a caller
+        # could otherwise spoof an unguarded model_info.id while requesting
+        # a guarded alias and bypass guardrails (veria-ai HIGH on #29654).
+        self.data = _check_and_merge_model_level_guardrails(
+            data=self.data,
+            llm_router=llm_router,
+            trust_client_model_info=False,
+        )
 
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict,
@@ -1321,6 +1493,27 @@ class ProxyBaseLLMRequestProcessing:
             model_info = litellm_metadata.get("model_info", {}) or {}
             model_id = model_info.get("id", "") or ""
         return model_id
+
+    @staticmethod
+    def _get_deployment_model_name(
+        litellm_logging_obj: LiteLLMLoggingObj | None,
+    ) -> str | None:
+        """Extract the underlying deployment model string (e.g. ``azure/gpt-4o``).
+
+        The router rewrites the response ``model`` field to the model-group alias
+        the client requested, so neither the response body nor the existing
+        headers expose the concrete deployment model. The router records it under
+        ``litellm_params`` metadata as ``deployment``, so read it back from there.
+        """
+        litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
+        if not isinstance(litellm_params, dict):
+            return None
+        for key in ("litellm_metadata", "metadata"):
+            metadata = litellm_params.get(key, {}) or {}
+            deployment = metadata.get("deployment")
+            if deployment:
+                return deployment
+        return None
 
     @staticmethod
     def _response_cost_from_logging_obj(
@@ -1840,6 +2033,7 @@ class ProxyBaseLLMRequestProcessing:
                 response_obj=response,
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+                return_raw_model_name=_should_return_raw_model_name(self.data),
             )
 
         hidden_params = get_hidden_params_dict(response)  # get any updated response headers
@@ -2575,6 +2769,8 @@ class ProxyBaseLLMRequestProcessing:
         response: Any,
         stream_completed: bool = False,
         client_disconnected: bool = False,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+        proxy_logging_obj: ProxyLogging | None = None,
     ) -> None:
         with anyio.CancelScope(shield=True):
             should_record_client_disconnect = client_disconnected or (not stream_completed)
@@ -2586,7 +2782,26 @@ class ProxyBaseLLMRequestProcessing:
                     client_disconnected,
                 )
             if recorded_client_disconnect:
+                deferred_stream_logging_armed = _deferred_stream_logging_is_armed(request_data)
                 ProxyLogging._fire_deferred_stream_logging(request_data)
+                # A disconnect-time success event (the deferred-guardrail flush
+                # above, or the partial-spend billing below) releases the
+                # request's max_parallel_requests slot through the limiter's
+                # own success callback. Release the slot explicitly only when
+                # no such event fires, so exactly one release happens; two
+                # concurrent releases would race and double-decrement under the
+                # limiter's in-memory fallback.
+                success_event_owns_slot_release = deferred_stream_logging_armed
+                if not deferred_stream_logging_armed:
+                    success_event_owns_slot_release = await _bill_partial_streamed_spend_on_disconnect(
+                        request_data, response
+                    )
+                if (
+                    not success_event_owns_slot_release
+                    and proxy_logging_obj is not None
+                    and user_api_key_dict is not None
+                ):
+                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
             if hasattr(response, "aclose"):
                 try:
@@ -2675,12 +2890,13 @@ class ProxyBaseLLMRequestProcessing:
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
             # are BaseException and bypass the success/failure logging
-            # callbacks that release the pre-call max_parallel_requests +1;
-            # release it here. This is the outermost generator Starlette closes
-            # on disconnect, so the nested iterator hook (which only sees
-            # GeneratorExit on GC) cannot own the refund.
+            # callbacks that release the pre-call max_parallel_requests +1.
+            # Flag the disconnect; the shielded cleanup in `finally` owns the
+            # slot release so it can coordinate with disconnect-time success
+            # billing and release exactly once. This is the outermost generator
+            # Starlette closes on disconnect, so the nested iterator hook (which
+            # only sees GeneratorExit on GC) cannot own the refund.
             if not stream_completed:
-                proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict)
                 client_disconnected = True
             if not delivered_chunk:
                 from litellm.proxy.spend_tracking.budget_reservation import (
@@ -2723,6 +2939,8 @@ class ProxyBaseLLMRequestProcessing:
                 response=response,
                 stream_completed=stream_completed,
                 client_disconnected=client_disconnected,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
     @staticmethod

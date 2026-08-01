@@ -49,11 +49,7 @@ vi.mock("@/components/provider_info_helpers", () => ({
   Providers: { OpenAI: "OpenAI" },
   provider_map: { OpenAI: "openai" },
   providerLogoMap: {},
-}));
-
-vi.mock("./provider_display_helpers", () => ({
-  getProviderDisplayInfo: vi.fn(() => ({ displayName: "OpenAI", logo: "", enumKey: "OpenAI" })),
-  handleImageError: vi.fn(),
+  getProviderLogoAndName: (providerValue: string) => ({ logo: "", displayName: providerValue }),
 }));
 
 const ADMIN_PROPS = {

@@ -153,6 +153,7 @@ def _build_long_prompt(target_tokens: int = TARGET_INPUT_TOKENS) -> str:
     return preamble + "".join(pad_lines) + closing
 
 
+@pytest.mark.skip(reason="stage red: 1M long_context not green on stage Anthropic path yet (200k sonnet / model alias)")
 @pytest.mark.covers("llm.messages.anthropic.long_context_1m.nonstream.works")
 def test_long_context_1m_anthropic(compat_result):
     """Drive the `claude` CLI with a ~210k-token prompt and the

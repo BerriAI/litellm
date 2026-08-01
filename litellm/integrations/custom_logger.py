@@ -519,7 +519,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         This log gets called after the MCP tool call is made.
 
-        Useful if you want to modiy the standard logging payload after the MCP tool call is made.
+        Useful if you want to modify the standard logging payload after the MCP tool call is made.
+
+        To change what the caller sends back to the MCP client, mutate ``response_obj``
+        in place: every call site discards the returned object, because the
+        dispatcher unwraps it to ``mcp_tool_call_response`` (a raw content list, not
+        a ``CallToolResult``) which the tool-call paths cannot forward. Guardrails
+        that mask or reject tool output should use ``post_mcp_call`` instead.
         """
         return None
 

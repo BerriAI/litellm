@@ -227,6 +227,8 @@ async def _update_request_data_with_model_routing_hint(
     model_hint = data.get("model") or user_controlled_model_hint
     should_authorize_model_hint = isinstance(model_hint, str) and model_hint == user_controlled_model_hint
 
+    caller_team_id = getattr(user_api_key_dict, "team_id", None) if user_api_key_dict else None
+
     should_route = False
     credentials = None
     if isinstance(model_hint, str) and "*" in model_hint:
@@ -237,7 +239,9 @@ async def _update_request_data_with_model_routing_hint(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
-            credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_hint)
+            credentials = llm_router.get_deployment_credentials_with_provider(
+                model_id=model_hint, team_id=caller_team_id
+            )
             should_route = credentials is not None
     else:
         if isinstance(model_hint, str) and should_authorize_model_hint:
@@ -285,7 +289,7 @@ async def _update_request_data_with_model_routing_hint(
 
     openai_credentials = None
     for model_name in model_names_to_check:
-        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name)
+        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name, team_id=caller_team_id)
         if credentials is None:
             continue
 

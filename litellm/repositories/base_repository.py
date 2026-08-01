@@ -3,38 +3,58 @@ Base repository class with common functionality.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, Dict, Generic, List, Optional, Protocol, Tuple, Type, TypeVar, Union, runtime_checkable
 
 from pydantic import BaseModel
 
 T = TypeVar("T", bound=BaseModel)
 
 
-def _record_to_dict(record: Any) -> Dict[str, Any]:
-    if isinstance(record, dict):
-        return record
-    if hasattr(record, "model_dump") and callable(record.model_dump):
+@runtime_checkable
+class SupportsModelDump(Protocol):
+    def model_dump(self) -> Dict[str, object]: ...
+
+
+@runtime_checkable
+class SupportsDict(Protocol):
+    def dict(self) -> Dict[str, object]: ...
+
+
+DbRecord = Union[
+    Mapping[str, object],
+    SupportsModelDump,
+    SupportsDict,
+    Sequence[Tuple[str, object]],
+]
+
+
+def record_to_dict(record: DbRecord) -> Mapping[str, object]:
+    """Project a database record into a mapping of column name to value."""
+    if isinstance(record, SupportsModelDump):
         return record.model_dump()
-    if hasattr(record, "dict") and callable(record.dict):
+    if isinstance(record, SupportsDict):
         return record.dict()
-    return dict(record)
+    if isinstance(record, Mapping):
+        return record
+    return {key: value for key, value in record}
 
 
 class BaseRepository(ABC, Generic[T]):
     """Abstract base class for all repositories."""
 
-    def __init__(self, prisma_client: Any):
+    def __init__(self, prisma_client: Any):  # any-ok: PrismaClient is an untyped runtime wrapper
         self._prisma_client = prisma_client
 
     @property
-    def prisma_client(self) -> Any:
+    def prisma_client(self) -> Any:  # any-ok: PrismaClient is an untyped runtime wrapper
         if self._prisma_client is None:
             raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
 
     @property
     @abstractmethod
-    def table(self) -> Any:
+    def table(self) -> Any:  # any-ok: Prisma table actions are reached through the untyped client wrapper
         """Return the Prisma table for this repository."""
         ...
 
@@ -44,21 +64,15 @@ class BaseRepository(ABC, Generic[T]):
         """Return the domain model class for this repository."""
         ...
 
-    def _to_model(self, record: Any) -> Optional[T]:
+    def _to_model(self, record: Optional[DbRecord]) -> Optional[T]:
         """Convert a database record to a domain model."""
         if record is None:
             return None
-        return self.model_class(**_record_to_dict(record))
+        return self.model_class.model_validate(record_to_dict(record))
 
-    def _to_model_list(self, records: List[Any]) -> List[T]:
+    def _to_model_list(self, records: Iterable[Optional[DbRecord]]) -> List[T]:
         """Convert a list of database records to domain models."""
-        result: List[T] = []
-        for r in records:
-            if r is not None:
-                model = self._to_model(r)
-                if model is not None:
-                    result.append(model)
-        return result
+        return [model for record in records if record is not None and (model := self._to_model(record)) is not None]
 
     async def find_by_id(self, id_value: str, id_field: str = "id") -> Optional[T]:
         """Find a record by its primary key."""

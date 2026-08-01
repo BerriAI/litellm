@@ -729,10 +729,15 @@ async def test_openai_moderation_post_call_request_data_passthrough():
 
         mock_make_request.assert_called_once()
 
-        # Guardrail info in the REAL request_data (not a throwaway)
-        guardrail_info_list = request_data["metadata"].get(
-            "standard_logging_guardrail_information"
+        # Guardrail info in the REAL request_data (not a throwaway). The unified hook
+        # seeds litellm_metadata, so read the bucket the resolver names rather than
+        # assuming "metadata"; the spend log reads it the same way.
+        from litellm.litellm_core_utils.core_helpers import (
+            get_metadata_variable_name_from_kwargs,
         )
+
+        bucket = request_data[get_metadata_variable_name_from_kwargs(request_data)]
+        guardrail_info_list = bucket.get("standard_logging_guardrail_information")
         assert guardrail_info_list is not None
         assert isinstance(guardrail_info_list[0]["guardrail_response"], dict)
         assert "results" in guardrail_info_list[0]["guardrail_response"]

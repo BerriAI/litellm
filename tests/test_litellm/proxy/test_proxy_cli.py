@@ -582,6 +582,79 @@ class TestProxyInitializationHelpers:
             ), f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
 
+    @patch("uvicorn.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_limit_concurrency_passed_to_uvicorn(
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+    ):
+        """--limit_concurrency must reach uvicorn.run so uvicorn sheds load with 503
+        past the cap; omitted values stay absent and non-positive values are rejected."""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.side_effect = lambda *a, **k: {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server, ["--local", "--limit_concurrency", "250"]
+            )
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_uvicorn_run.assert_called_once()
+            assert mock_uvicorn_run.call_args.kwargs.get("limit_concurrency") == 250
+
+            mock_uvicorn_run.reset_mock()
+            result = runner.invoke(run_server, ["--local"])
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_uvicorn_run.assert_called_once()
+            assert "limit_concurrency" not in mock_uvicorn_run.call_args.kwargs
+
+            for invalid_value in ("0", "-1"):
+                mock_uvicorn_run.reset_mock()
+                result = runner.invoke(
+                    run_server,
+                    ["--local", "--limit_concurrency", invalid_value],
+                )
+                assert result.exit_code == 2
+                assert "Invalid value for '--limit_concurrency'" in result.output
+                mock_uvicorn_run.assert_not_called()
+
     @pytest.mark.parametrize(
         "timeout_config,expected_timeout",
         [

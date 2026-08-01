@@ -9,10 +9,28 @@ const rebaseUrl = (requestUrl: string, base: string): string => {
   return `${base.replace(/\/+$/, "")}${pathname}${search}`;
 };
 
+const rebaseRequest = async (request: Request, url: string): Promise<Request> => {
+  const init: RequestInit = {
+    method: request.method,
+    headers: request.headers,
+    body: request.body ? await request.arrayBuffer() : undefined,
+    mode: request.mode,
+    credentials: request.credentials,
+    cache: request.cache,
+    redirect: request.redirect,
+    referrer: request.referrer,
+    referrerPolicy: request.referrerPolicy,
+    integrity: request.integrity,
+    keepalive: request.keepalive,
+    signal: request.signal,
+  };
+  return new Request(url, init);
+};
+
 const middleware: Middleware = {
-  onRequest({ request }) {
+  async onRequest({ request }) {
     const base = getRequestBaseUrl();
-    const next = new Request(base ? rebaseUrl(request.url, base) : request.url, request);
+    const next = base ? await rebaseRequest(request, rebaseUrl(request.url, base)) : request;
     const token = getAuthToken();
     if (token) {
       next.headers.set(getAuthHeaderName(), `Bearer ${token}`);

@@ -18,6 +18,7 @@ import {
   getOAuthAuthorizationIdentity,
   CLEARED_ON_INVALIDATION,
   isHeldOAuthTokenStale,
+  preservedAdminCredentials,
   preservedDeclaredAppCredentials,
   withoutMintedTokenCredentials,
 } from "@/components/mcp_tools/types";
@@ -25,6 +26,7 @@ import OAuthFormFields from "./OAuthFormFields";
 import TruePassthroughWarning from "./TruePassthroughWarning";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
+import IdJagFormFields from "./IdJagFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -39,10 +41,9 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import mcpLogo from "../../../../../public/assets/logos/mcp_logo.png";
 
-const asset_logos_folder = "/ui/assets/logos/";
-export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
+export const mcpLogoImg = mcpLogo.src;
 
 interface CreateMCPServerProps {
   userRole: string;
@@ -61,6 +62,7 @@ const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   ...AUTH_TYPES_REQUIRING_AUTH_VALUE,
   AUTH_TYPE.OAUTH2,
   AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
+  AUTH_TYPE.OAUTH2_ID_JAG,
   AUTH_TYPE.AWS_SIGV4,
   AUTH_TYPE.TRUE_PASSTHROUGH,
   AUTH_TYPE.OAUTH_DELEGATE,
@@ -140,6 +142,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
   const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
+  const isIdJagAuthType = authType === AUTH_TYPE.OAUTH2_ID_JAG;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
@@ -208,7 +211,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         // registered client (useMcpOAuthFlow keys reuse off credentials.client_id) instead of re-DCRing;
         // the client-forwarded modes carry only the declared app.
         credentials: isClientForwardedTokenMode(values.auth_type)
-          ? preservedDeclaredAppCredentials(values.credentials)
+          ? preservedAdminCredentials(values.credentials)
           : { ...((values.credentials as Record<string, unknown> | undefined) ?? {}), ...(dcrClientRef.current ?? {}) },
         issuer: values.issuer,
         authorization_url: values.authorization_url,
@@ -252,7 +255,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
       const current = (form.getFieldValue("credentials") as Record<string, unknown> | undefined) ?? {};
       const nextCredentials = {
-        ...(preservedDeclaredAppCredentials(current) ?? {}),
+        ...(preservedAdminCredentials(current) ?? {}),
         ...(current.scopes !== undefined && { scopes: current.scopes }),
         access_token: token.access_token,
         ...(token.refresh_token && { refresh_token: token.refresh_token }),
@@ -289,10 +292,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     // Capture the admin-typed app before resetFields destroys it, then re-apply it: the app is
     // upstream-scoped config, not minted material, so it survives every invalidation (the token is
     // what gets discarded). Token-shaped keys are excluded by the helper's key filter.
-    const keptAppCredentials = preservedDeclaredAppCredentials(form.getFieldValue("credentials"));
+    const keptAdminCredentials = preservedAdminCredentials(form.getFieldValue("credentials"));
     form.resetFields([...CLEARED_ON_INVALIDATION]);
-    if (keptAppCredentials) {
-      form.setFieldsValue({ credentials: keptAppCredentials });
+    if (keptAdminCredentials) {
+      form.setFieldsValue({ credentials: keptAdminCredentials });
     }
     // Re-apply the in-flight edit last; rc-field-form deep-merges nested objects, so a changed
     // credentials sub-field composes with the preserved sibling instead of replacing the object.
@@ -569,7 +572,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // Client-forwarded rows persist ONLY the declared app; strip any token material that lingered in
       // the form (e.g. from a prior oauth2 authorize on the same session) so it can never reach the row.
       const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
-        ? preservedDeclaredAppCredentials(credentialsPayload)
+        ? preservedAdminCredentials(credentialsPayload)
         : credentialsPayload;
 
       if (includeCredentials && submitCredentials && Object.keys(submitCredentials).length > 0) {
@@ -791,7 +794,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             </button>
           )}
           <img
-            src={resolveLogoSrc(mcpLogoImg)}
+            src={mcpLogoImg}
             alt="MCP Logo"
             className="w-8 h-8 object-contain"
             style={{
@@ -1071,7 +1074,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     children: (
                       <>
                         <Form.Item name="auth_type" rules={[{ required: true, message: "Please select an auth type" }]}>
-                          <Select placeholder="Select auth type" className="rounded-lg" size="large">
+                          <Select placeholder="Select auth type" className="rounded-lg" size="large" virtual={false}>
                             <Select.Option value="none">None</Select.Option>
                             <Select.Option value="api_key">API Key</Select.Option>
                             <Select.Option value="bearer_token">Bearer Token</Select.Option>
@@ -1079,6 +1082,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="basic">Basic Auth</Select.Option>
                             <Select.Option value="oauth2">OAuth</Select.Option>
                             <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
+                            <Select.Option value="oauth2_id_jag">ID-JAG (Okta Cross App Access)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                             <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
                             <Select.Option value="oauth_delegate">
@@ -1144,6 +1148,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         )}
 
                         {isTokenExchangeAuthType && <TokenExchangeFormFields />}
+
+                        {isIdJagAuthType && <IdJagFormFields />}
                       </>
                     ),
                   },

@@ -57,7 +57,7 @@ class MCPUpstreamAuthError(Exception):
         ``/.well-known/oauth-protected-resource/mcp/{server_name}``. This
         keeps the ``resource_metadata`` URI aligned with the resource pattern
         the client originally targeted, matching the path-aware behaviour of
-        ``_get_passthrough_resource_metadata_url`` in ``server.py``.
+        ``get_passthrough_resource_metadata_url`` in ``oauth_utils.py``.
         """
         challenge: Optional[str] = self.www_authenticate
         if challenge is None and self.status_code == 401 and base_url:
@@ -88,3 +88,19 @@ class MCPToolResultError(Exception):
     into two identities, breaking ``isinstance`` checks against instances
     created before the reload.
     """
+
+
+class MCPServerListError(Exception):
+    """Carrier for a classified per-server listing fault (``faults.list_outcomes.ServerListFault``).
+
+    Raised where a server fetch used to silently return an empty tool list, so each boundary can
+    apply its own policy: the aggregate listing absorbs it into that server's outcome, while
+    single-server routes relay a truthful HTTP status instead of empty-success. The fault value is
+    typed as ``object`` here only to avoid a circular import with the faults package; construction
+    sites always pass a ``ServerListFault``.
+    """
+
+    def __init__(self, fault: object, server_name: str) -> None:
+        self.fault = fault
+        self.server_name = server_name
+        super().__init__(f"Listing tools from MCP server {server_name!r} failed")

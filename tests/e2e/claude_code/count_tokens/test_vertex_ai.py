@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code._env import require_proxy
+from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_count_tokens_shape,
     probe_count_tokens,
@@ -53,16 +53,17 @@ VERTEX_AI_MODELS = [
 ]
 
 
+@pytest.mark.skip(reason="stage red: Vertex returns not supported for token counting for Claude aliases")
 @pytest.mark.covers("llm.messages.vertex.count_tokens.nonstream.works")
 def test_count_tokens_vertex_ai(compat_result):
     """Probe `/v1/messages/count_tokens` for each Vertex AI tier and
     assert the response shape."""
-    base_url, api_key = require_proxy(compat_result)
+    client, api_key = require_proxy_client(compat_result)
 
     failures = []
     for model in VERTEX_AI_MODELS:
         result = probe_count_tokens(
-            base_url=base_url, api_key=api_key, model=model
+            client=client, api_key=api_key, model=model
         )
         shape_error = assert_count_tokens_shape(result)
         if shape_error is not None:

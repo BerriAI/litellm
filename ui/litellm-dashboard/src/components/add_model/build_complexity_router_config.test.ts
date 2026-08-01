@@ -16,21 +16,38 @@ const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
+  classifierContextWindowSize: undefined,
+  classifierContextPerTurnChars: undefined,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
   embeddingModel: undefined,
   matchThreshold: 0.5,
+  escalationKeywords: ["LITELLM ESCALATE"],
   adaptive: false,
   adaptiveWeights: { quality: 0.3, cost: 0.7 },
   tierDistancePenalty: 0.5,
   adaptiveEligible: "all",
+  returnRawModelName: false,
 };
 
 describe("buildComplexityRouterConfig", () => {
-  it("emits only tiers and classifier_type when nothing else is configured", () => {
+  it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
-    expect(config).toEqual({ tiers, classifier_type: "heuristic" });
+    expect(config).toEqual({ tiers, classifier_type: "heuristic", escalation_keywords: ["LITELLM ESCALATE"] });
+  });
+
+  it("trims escalation keywords and drops blank entries", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      escalationKeywords: [" LITELLM ESCALATE ", "", "  ", "MAKE IT BETTER"],
+    });
+    expect(config.escalation_keywords).toEqual(["LITELLM ESCALATE", "MAKE IT BETTER"]);
+  });
+
+  it("emits an empty escalation_keywords list so clearing the field disables escalation", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, escalationKeywords: [] });
+    expect(config.escalation_keywords).toEqual([]);
   });
 
   it("passes through a tier configured with more than one model as a pool", () => {
@@ -58,6 +75,52 @@ describe("buildComplexityRouterConfig", () => {
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
     });
     expect(config.classifier_llm_config).toBeUndefined();
+  });
+
+  it("includes classifier_context_window_size and classifier_context_per_turn_chars only when classifier_type is llm", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierContextWindowSize: 5,
+      classifierContextPerTurnChars: 300,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_context_window_size).toBe(5);
+    expect(config.classifier_context_per_turn_chars).toBe(300);
+  });
+
+  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is heuristic even if values linger in state", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "heuristic",
+      classifierContextWindowSize: 5,
+      classifierContextPerTurnChars: 300,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+  });
+
+  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is llm but neither was set, leaving the backend default", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    });
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+  });
+
+  it("allows classifier_context_window_size of 0, distinct from unset, to send no prior-turn context", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierContextWindowSize: 0,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_context_window_size).toBe(0);
   });
 
   it("sends keyword_tier_rules with their per-tier targeting preserved (not flattened)", () => {
@@ -148,6 +211,16 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.adaptive_weights).toBeUndefined();
     expect(config.tier_distance_penalty).toBeUndefined();
     expect(config.adaptive_eligible).toBeUndefined();
+  });
+
+  it("omits return_raw_model_name when disabled", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: false });
+    expect(config.return_raw_model_name).toBeUndefined();
+  });
+
+  it("includes return_raw_model_name when enabled", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: true });
+    expect(config.return_raw_model_name).toBe(true);
   });
 
   it("includes tier_distance_penalty when adaptive is enabled with eligible='all'", () => {

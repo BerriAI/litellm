@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
+from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
 
 import litellm
@@ -291,21 +292,55 @@ def test_web_identity_token_oidc_reference_still_resolved():
     assert exc.value.status_code == 401
 
 
-def test_web_identity_path_not_cached_in_iam_cache():
+def test_web_identity_credentials_cached_in_iam_cache():
+    """
+    Web identity STS credentials are cached for their STS lifetime, so repeated
+    get_credentials calls (e.g. per-request guardrail auth) reuse the assumed-role
+    credentials instead of replaying the OIDC token to STS on every request.
+    """
     base = BaseAWSLLM()
     with patch.object(
         base,
         "_auth_with_web_identity_token",
-        return_value=(Credentials("wi-ak", "wi-sk", "wi-tok"), None),
+        return_value=(Credentials("wi-ak", "wi-sk", "wi-tok"), 3540),
     ) as mock_wi:
         kwargs = dict(
-            aws_web_identity_token="jwt-token",
+            aws_web_identity_token="oidc/google/https://example.com/",
             aws_role_name="arn:aws:iam::123456789012:role/WebIdentity",
             aws_session_name="web-id-session",
         )
-        base.get_credentials(**kwargs)
-        base.get_credentials(**kwargs)
+        first = base.get_credentials(**kwargs)
+        second = base.get_credentials(**kwargs)
+        assert mock_wi.call_count == 1
+        assert first is second
+
+
+def test_web_identity_cache_is_keyed_on_credential_args():
+    """
+    Two web identity configs that differ in any credential arg (here the role)
+    must not share cached credentials.
+    """
+    base = BaseAWSLLM()
+    with patch.object(
+        base,
+        "_auth_with_web_identity_token",
+        side_effect=[
+            (Credentials("wi-ak-a", "wi-sk-a", "wi-tok-a"), 3540),
+            (Credentials("wi-ak-b", "wi-sk-b", "wi-tok-b"), 3540),
+        ],
+    ) as mock_wi:
+        first = base.get_credentials(
+            aws_web_identity_token="oidc/google/https://example.com/",
+            aws_role_name="arn:aws:iam::123456789012:role/RoleA",
+            aws_session_name="web-id-session",
+        )
+        second = base.get_credentials(
+            aws_web_identity_token="oidc/google/https://example.com/",
+            aws_role_name="arn:aws:iam::123456789012:role/RoleB",
+            aws_session_name="web-id-session",
+        )
         assert mock_wi.call_count == 2
+        assert first.access_key != second.access_key
 
 
 def test_boto3_init_tracer_wrapping():
@@ -766,6 +801,30 @@ def test_get_request_headers_with_sigv4():
         mock_sigv4_class.assert_called_once_with(credentials, "bedrock", "us-west-2")
         mock_sigv4.add_auth.assert_called_once_with(mock_request)
         assert result == mock_request.prepare.return_value
+
+
+def test_sigv4_matches_rust_golden_vector():
+    request = AWSRequest(
+        method="POST",
+        url="https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke",
+        data=b'{"input":"hello"}',
+        headers={"Content-Type": "application/json"},
+    )
+    credentials = Credentials(
+        "AKIDEXAMPLE",
+        "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+        "session-token",
+    )
+    with patch("botocore.auth.get_current_datetime", return_value=datetime(2024, 1, 2, 3, 4, 5)):
+        SigV4Auth(credentials, "bedrock", "us-east-1").add_auth(request)
+    assert request.headers["X-Amz-Date"] == "20240102T030405Z"
+    assert request.headers["X-Amz-Security-Token"] == "session-token"
+    assert (
+        request.headers["Authorization"]
+        == "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, "
+        "SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, "
+        "Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464"
+    )
 
 
 def test_get_request_headers_with_api_key_bearer_token():

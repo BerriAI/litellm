@@ -31,6 +31,9 @@ TIER_SEVERITY_ORDER: tuple[ComplexityTier, ...] = (
 
 DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
 
+DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: int = 3
+DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: int = 200
+
 
 class KeywordTierRule(BaseModel):
     """A deterministic override: if any keyword matches, route to this tier."""
@@ -161,6 +164,9 @@ DEFAULT_TECHNICAL_KEYWORDS: list[str] = [
     "orchestration",
     # Note: "async", "kubernetes", "docker" are in DEFAULT_CODE_KEYWORDS
 ]
+
+DEFAULT_ESCALATION_KEYWORDS: list[str] = ["LITELLM ESCALATE"]
+
 
 DEFAULT_SIMPLE_KEYWORDS: list[str] = [
     "what is",
@@ -308,6 +314,14 @@ class ComplexityRouterConfig(BaseModel):
         description="Default model to use if tier cannot be determined",
     )
 
+    return_raw_model_name: bool = Field(
+        default=False,
+        description=(
+            "Return the resolved raw model name in the response model field instead of "
+            "the client-requested complexity-router alias"
+        ),
+    )
+
     # Classifier strategy
     classifier_type: Literal["heuristic", "llm"] = Field(
         default="heuristic",
@@ -316,6 +330,28 @@ class ComplexityRouterConfig(BaseModel):
     classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
         description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
+    )
+
+    classifier_context_window_size: int = Field(
+        default=DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+        ge=0,
+        description=(
+            "Number of prior user turns (tool output and harness reminders excluded) to include as context "
+            "in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is "
+            "classified against what it refers to. These turns are sent to the classifier model, which may "
+            "be a different deployment or provider than the routed completion model; that call already "
+            "carries the current user ask and the caller's system prompt in full. Set to 0 to send neither "
+            "prior turns nor any conversation context beyond the current ask. Only applies when "
+            "classifier_type is 'llm'."
+        ),
+    )
+    classifier_context_per_turn_chars: int = Field(
+        default=DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+        gt=0,
+        description=(
+            "Maximum character length for each prior turn's text in the classifier context window. "
+            "Turns exceeding this are truncated. Only applies when classifier_type is 'llm'."
+        ),
     )
 
     adaptive: bool = Field(
@@ -336,6 +372,16 @@ class ComplexityRouterConfig(BaseModel):
         description=(
             "When adaptive=True: 'all' scores every pool model with a tier-distance penalty (soft floors); "
             "'classified_tier' Thompson-samples only inside the classified tier's pool"
+        ),
+    )
+
+    escalation_keywords: list[str] | None = Field(
+        default=None,
+        description=(
+            "Case-sensitive phrases a user can include to force a bump to the next-higher "
+            "complexity tier when they aren't satisfied with results (they can force a stronger "
+            "model, but not choose which one). Defaults to ['LITELLM ESCALATE'] when unset; "
+            "set to an empty list to disable."
         ),
     )
 
@@ -399,6 +445,13 @@ class ComplexityRouterConfig(BaseModel):
             else:
                 coerced[key] = item
         return coerced
+
+    @field_validator("escalation_keywords")
+    @classmethod
+    def _normalize_escalation_keywords(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [stripped for keyword in value if (stripped := keyword.strip())]
 
     @model_validator(mode="after")
     def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":

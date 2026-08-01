@@ -175,6 +175,7 @@ class ScimTransformations:
                 SCIMMember(
                     value=ScimTransformations._get_scim_member_value(member),
                     display=ScimTransformations._get_scim_member_display(member),
+                    type="User",
                 )
             )
 

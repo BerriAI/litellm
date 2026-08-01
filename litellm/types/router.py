@@ -5,7 +5,18 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
+from typing import (
+    Any,
+    Dict,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    get_type_hints,
+)
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -17,7 +28,7 @@ from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
-from .utils import CustomPricingLiteLLMParams, ModelResponse
+from .utils import CustomPricingLiteLLMParams, ModelResponse, StandardLoggingRoutingDecision
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -828,6 +839,32 @@ class PreRoutingHookResponse(BaseModel):
 
     model: str
     messages: Optional[List[Dict[str, Any]]]
+    routing_decision: StandardLoggingRoutingDecision | None = None
+
+
+_PreRoutingStrategyT_co = TypeVar("_PreRoutingStrategyT_co", covariant=True)
+
+
+@dataclass(frozen=True, slots=True)
+class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
+    """A pre-routing strategy paired with the deployment `tags` it was registered under."""
+
+    tags: tuple[str, ...]
+    strategy: _PreRoutingStrategyT_co
+
+
+@runtime_checkable
+class PreRoutingStrategy(Protocol):
+    """Structural interface shared by the auto / complexity / adaptive / quality routers."""
+
+    async def async_pre_routing_hook(
+        self,
+        model: str,
+        request_kwargs: dict[str, Any],
+        messages: list[dict[str, Any]] | None = None,
+        input: "str | list[Any] | None" = None,
+        specific_deployment: bool | None = False,
+    ) -> "PreRoutingHookResponse | None": ...
 
 
 class RoutingContext(BaseModel):

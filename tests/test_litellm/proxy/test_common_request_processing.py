@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import datetime
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -11,12 +11,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
     _await_llm_call_cancelling_on_disconnect,
+    _bill_partial_streamed_spend_on_disconnect,
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
     _ClientDisconnectedBeforeFirstChunk,
@@ -26,6 +28,7 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _should_return_raw_model_name,
     _UpstreamClosingStreamingResponse,
     create_response,
 )
@@ -1674,6 +1677,31 @@ class TestExtractErrorFromSSEChunk:
 class TestOverrideOpenAIResponseModel:
     """Tests for _override_openai_response_model function"""
 
+    @pytest.mark.parametrize("return_raw_model_name", [False, True])
+    def test_raw_model_name_toggle(self, return_raw_model_name):
+        response_obj = {"model": "gpt-4o-mini"}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="auto_router/complexity_router",
+            log_context="test_context",
+            return_raw_model_name=return_raw_model_name,
+        )
+
+        expected_model = "gpt-4o-mini" if return_raw_model_name else "auto_router/complexity_router"
+        assert response_obj["model"] == expected_model
+
+    @pytest.mark.parametrize(
+        "request_data, expected",
+        [
+            ({"metadata": {}}, False),
+            ({"metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}}, True),
+            ({"litellm_metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}}, True),
+        ],
+    )
+    def test_raw_model_name_toggle_metadata(self, request_data, expected):
+        assert _should_return_raw_model_name(request_data) is expected
+
     def test_override_model_preserves_fallback_model_when_fallback_occurred_object(
         self,
     ):
@@ -3202,8 +3230,6 @@ class TestDisconnectGatherCleanup:
     async def test_base_process_llm_request_preserves_llm_error_after_gather(
         self, monkeypatch
     ):
-        import asyncio
-
         import litellm.proxy.common_request_processing as cpr
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -4871,3 +4897,460 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     },
                     call_type="acompletion",
                 )
+
+
+class _RecordingSuccessLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.success_events = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_events.append({"kwargs": kwargs, "response_obj": response_obj})
+
+
+class TestStreamingClientDisconnectBilling:
+    """
+    A client disconnect throws GeneratorExit into the proxy streaming
+    generator; neither the success nor failure logging callback fires from the
+    stream wrapper, so without disconnect-time finalization the chunks already
+    streamed (and any sub-call cost folded into the logging object) never
+    reach spend tracking.
+    """
+
+    async def _start_partial_stream(self):
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "tell me a story"}],
+            mock_response="The codename is AZURE-FALCON-42 and the story is long.",
+            stream=True,
+            api_key="test-key",
+        )
+        stream_iter = response.__aiter__()
+        await stream_iter.__anext__()
+        await stream_iter.__anext__()
+        return response
+
+    @pytest.mark.asyncio
+    async def test_disconnect_bills_partial_streamed_spend(self):
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await self._start_partial_stream()
+            logging_obj = response.logging_obj
+            logging_obj.model_call_details["additional_response_cost"] = 0.002
+
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_logging_obj": logging_obj},
+                response=response,
+                stream_completed=False,
+                client_disconnected=True,
+            )
+
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
+        finally:
+            litellm.callbacks = original_callbacks
+
+        assert len(recorder.success_events) == 1
+        standard_logging_object = recorder.success_events[0]["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["total_tokens"] > 0
+        assert standard_logging_object["response_cost"] >= 0.002
+
+    @pytest.mark.asyncio
+    async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="hello there",
+                stream=True,
+                api_key="test-key",
+            )
+            async for _ in response:
+                pass
+
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_logging_obj": response.logging_obj},
+                response=response,
+                stream_completed=False,
+                client_disconnected=True,
+            )
+
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
+        finally:
+            litellm.callbacks = original_callbacks
+
+        assert len(recorder.success_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_disconnect_bills_partial_spend_for_router_stream(self):
+        """
+        The router wraps streamed responses in FallbackStreamWrapper, whose
+        __anext__ bypasses the base class, so its own chunk list stays empty
+        unless it aliases the inner stream's chunks; without the alias the
+        disconnect path sees no chunks and bills nothing for router requests,
+        which is every proxy request.
+        """
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                }
+            ]
+        )
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await router.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "tell me a story"}],
+                mock_response="The codename is AZURE-FALCON-42 and the story is long.",
+                stream=True,
+            )
+            stream_iter = response.__aiter__()
+            await stream_iter.__anext__()
+            await stream_iter.__anext__()
+
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_logging_obj": response.logging_obj},
+                response=response,
+                stream_completed=False,
+                client_disconnected=True,
+            )
+
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
+        finally:
+            litellm.callbacks = original_callbacks
+
+        assert len(recorder.success_events) == 1
+        standard_logging_object = recorder.success_events[0]["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["total_tokens"] > 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_does_not_double_release_slot(self):
+        """
+        The disconnect billing fires a success event whose limiter callback
+        already releases the max_parallel_requests slot. The shielded cleanup
+        must therefore NOT also release the slot explicitly; two releases of
+        the same acquisition race and double-decrement under the limiter's
+        in-memory fallback.
+        """
+        import types
+
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [_RecordingSuccessLogger()]
+        try:
+            response = await self._start_partial_stream()
+            proxy_logging_obj = types.SimpleNamespace(
+                _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+            )
+
+            billed = await _bill_partial_streamed_spend_on_disconnect(
+                {"litellm_logging_obj": response.logging_obj}, response
+            )
+            assert billed is True
+
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_logging_obj": response.logging_obj},
+                response=response,
+                stream_completed=False,
+                client_disconnected=True,
+                user_api_key_dict=MagicMock(),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        finally:
+            litellm.callbacks = original_callbacks
+
+        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_without_billable_chunks_releases_slot(self):
+        """
+        When there is nothing to bill (no chunks streamed), no success event
+        fires, so the slot would leak unless the cleanup releases it
+        explicitly. The explicit release must run exactly once in that case.
+        """
+        import types
+
+        response = await self._start_partial_stream()
+        # No chunks to assemble -> billing dispatches no success event.
+        empty_response = types.SimpleNamespace(chunks=[], messages=None)
+        proxy_logging_obj = types.SimpleNamespace(
+            _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+        )
+
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=None,
+            request_data={"litellm_logging_obj": response.logging_obj},
+            response=empty_response,
+            stream_completed=False,
+            client_disconnected=True,
+            user_api_key_dict=MagicMock(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+def _apply_stream_usage_tracking(
+    data: dict,
+    general_settings: dict,
+    route_type: str,
+    supports_stream_options: Callable[[], bool] = lambda: True,
+) -> None:
+    from litellm.proxy.common_request_processing import _stream_usage_tracking_updates
+
+    data.update(
+        _stream_usage_tracking_updates(
+            data=data,
+            general_settings=general_settings,
+            route_type=route_type,
+            supports_stream_options=supports_stream_options,
+        )
+    )
+
+
+class TestApplyStreamUsageTracking:
+    def test_default_injects_usage_and_marks_strip_for_chat_completions(self):
+        data = {"stream": True, "model": "gpt-5.4-nano"}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_default_preserves_other_client_stream_options_keys(self):
+        data = {"stream": True, "stream_options": {"include_obfuscation": True}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_obfuscation": True, "include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_client_requested_usage_is_left_untouched_and_not_stripped(self):
+        data = {"stream": True, "stream_options": {"include_usage": True}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_client_include_usage_false_is_overridden_and_stripped(self):
+        data = {"stream": True, "stream_options": {"include_usage": False}}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["stream_options"]["include_usage"] is True
+        assert data["_litellm_strip_stream_usage"] is True
+
+    def test_explicit_false_flag_disables_injection_entirely(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": False},
+            route_type="acompletion",
+        )
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_flag_true_injects_without_strip_marker(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_flag_true_respects_client_explicit_include_usage_false(self):
+        data = {"stream": True, "stream_options": {"include_usage": False}}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": False}
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_default_does_not_touch_non_chat_completion_routes(self):
+        data = {"stream": True}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="anthropic_messages")
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_non_streaming_request_is_untouched(self):
+        data = {"model": "gpt-5.4-nano"}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_default_skips_injection_when_provider_lacks_stream_options_support(self):
+        data = {"stream": True, "model": "bytez-model"}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={},
+            route_type="acompletion",
+            supports_stream_options=lambda: False,
+        )
+
+        assert "stream_options" not in data
+        assert "_litellm_strip_stream_usage" not in data
+
+    def test_client_supplied_strip_marker_is_neutralized(self):
+        data = {
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "_litellm_strip_stream_usage": True,
+        }
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["_litellm_strip_stream_usage"] is False
+        assert data["stream_options"] == {"include_usage": True}
+
+    def test_client_supplied_strip_marker_is_neutralized_with_flag_true(self):
+        data = {
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "_litellm_strip_stream_usage": True,
+        }
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["_litellm_strip_stream_usage"] is False
+
+    def test_client_supplied_strip_marker_is_neutralized_on_non_streaming_request(self):
+        data = {"_litellm_strip_stream_usage": True}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="acompletion")
+
+        assert data["_litellm_strip_stream_usage"] is False
+
+
+class TestModelDeploymentsSupportStreamOptions:
+    def _support(self, model, llm_router=None, team_id=None) -> bool:
+        from litellm.proxy.common_request_processing import (
+            _model_deployments_support_stream_options,
+        )
+
+        return _model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
+
+    def test_openai_compatible_deployment_supports_stream_options(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "azure-nano",
+                    "litellm_params": {
+                        "model": "azure/gpt-5.4-nano",
+                        "api_key": "fake",
+                        "api_base": "https://example.openai.azure.com",
+                    },
+                }
+            ]
+        )
+
+        assert self._support("azure-nano", router) is True
+
+    def test_deployment_on_provider_rejecting_stream_options_is_not_injected(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "tiny",
+                    "litellm_params": {"model": "bytez/openai-community/gpt2", "api_key": "fake"},
+                }
+            ]
+        )
+
+        assert self._support("tiny", router) is False
+
+    def test_mixed_provider_model_group_is_not_injected(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "mixed",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+                },
+                {
+                    "model_name": "mixed",
+                    "litellm_params": {"model": "oci/cohere.command-r-plus", "api_key": "fake"},
+                },
+            ]
+        )
+
+        assert self._support("mixed", router) is False
+
+    def test_wildcard_route_resolves_provider_support(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                }
+            ]
+        )
+
+        assert self._support("openai/gpt-4o", router) is True
+
+    def test_provider_prefixed_model_without_router_is_resolved_directly(self):
+        assert self._support("openai/gpt-4o", None) is True
+        assert self._support("bytez/openai-community/gpt2", None) is False
+
+    def test_unmapped_model_name_is_not_injected(self):
+        assert self._support("some-unmapped-public-alias", None) is False
+
+    def test_team_alias_model_resolves_with_team_id(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "model_name_team-1_8b6a0b3f",
+                    "litellm_params": {"model": "azure/gpt-5.4-nano", "api_key": "fake"},
+                    "model_info": {
+                        "team_id": "team-1",
+                        "team_public_model_name": "team-gpt",
+                    },
+                }
+            ]
+        )
+
+        assert self._support("team-gpt", router, team_id="team-1") is True
+        assert self._support("team-gpt", router, team_id=None) is False
+
+    def test_non_string_model_is_not_injected(self):
+        assert self._support(None, None) is False

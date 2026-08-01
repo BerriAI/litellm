@@ -1,4 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+import { serializeKeywordTierRules } from "./complexity_router_keywords";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -11,30 +12,38 @@ export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierContextWindowSize: number | undefined;
+  classifierContextPerTurnChars: number | undefined;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
   semanticMatchingEnabled: boolean;
   embeddingModel: string | undefined;
   matchThreshold: number;
+  escalationKeywords: string[];
   adaptive: boolean;
   adaptiveWeights: AdaptiveRouterWeights;
   tierDistancePenalty: number;
   adaptiveEligible: AdaptiveEligible;
+  returnRawModelName: boolean;
 }
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  classifier_context_window_size?: number;
+  classifier_context_per_turn_chars?: number;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
   embedding_model?: string;
   match_threshold?: number;
+  escalation_keywords?: string[];
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
+  return_raw_model_name?: boolean;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -64,30 +73,39 @@ export const buildComplexityRouterConfig = ({
   tiers,
   classifierType,
   classifierLlmConfig,
+  classifierContextWindowSize,
+  classifierContextPerTurnChars,
   customTechnicalKeywords,
   keywordTierRules,
   semanticMatchingEnabled,
   embeddingModel,
   matchThreshold,
+  escalationKeywords,
   adaptive,
   adaptiveWeights,
   tierDistancePenalty,
   adaptiveEligible,
+  returnRawModelName,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
+  const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   // Trim keywords and drop empty ones; drop any rule left with no keywords. Clicking
-  // "Add keyword rule" seeds a rule with an empty keywords list, so without this an
-  // unfilled row (common in the heuristic flow, where getSemanticConfigError doesn't run)
-  // would ship keyword_tier_rules the backend validator rejects with a 400.
-  const cleanedKeywordTierRules = keywordTierRules
-    .map((rule) => ({ keywords: rule.keywords.map((k) => k.trim()).filter(Boolean), tier: rule.tier }))
-    .filter((rule) => rule.keywords.length > 0);
+  const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
 
   return {
     tiers,
     classifier_type: classifierType,
     ...(classifierType === "llm" && classifierLlmConfig && { classifier_llm_config: classifierLlmConfig }),
+    ...(classifierType === "llm" &&
+      classifierContextWindowSize !== undefined && {
+        classifier_context_window_size: classifierContextWindowSize,
+      }),
+    ...(classifierType === "llm" &&
+      classifierContextPerTurnChars !== undefined && {
+        classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      }),
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
+    escalation_keywords: cleanedEscalationKeywords,
     ...(semanticMatchingEnabled && {
       semantic_keyword_matching: true,
       embedding_model: embeddingModel,
@@ -99,5 +117,6 @@ export const buildComplexityRouterConfig = ({
       ...(adaptiveEligible === "all" && { tier_distance_penalty: tierDistancePenalty }),
       adaptive_eligible: adaptiveEligible,
     }),
+    ...(returnRawModelName && { return_raw_model_name: true }),
   };
 };

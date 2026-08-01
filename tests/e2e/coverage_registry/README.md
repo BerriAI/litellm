@@ -37,6 +37,16 @@ def test_openai_streaming_tool_calls(self) -> None:
 It is static: a collect-only pass reads the markers, so it runs no test and needs no live
 proxy. Whether a covered cell currently passes or fails is a separate, live concern.
 
+A skipped test asserts nothing, so its markers do not count. A cell is covered only when
+at least one test pytest would actually run declares it; a cell claimed by both a live
+test and a skipped one stays covered. Skip state comes from pytest's own evaluator, so
+`skip` and `skipif` resolve exactly as they do in the e2e run, which also means a
+`skipif` on an absent credential makes that cell uncovered in the environments where the
+test cannot run. Cells left uncovered this way are listed under the headline (and counted
+by `litellm_e2e_coverage_skipped_markers`) so an unskipped-pending gap is visible rather
+than inflating the number. The one skip the collector cannot see is `pytest.skip()`
+called from inside a test body, since it does not exist until the test runs.
+
 ```
 cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector
 ```
@@ -52,11 +62,6 @@ This emits exactly one `COVERAGE_TOTAL` line and one `COVERAGE_MODULE` line per 
 in `MODULE_ORDER`, in that order. Loki uses log-safe `module=` labels from
 `LOKI_MODULE_LABELS` (`core_llms`, `management_ui`, etc.) so existing JSON and
 Prometheus consumers keep their human-readable module names unchanged.
-
-Live pass/fail is separate: each finished pytest node prints an `E2E_RESULT`
-logfmt line (see `tests/e2e/e2e_result_reporter.py` and
-`tests/e2e/grafana/status_history_panels.md`). Coverage answers "is there a
-test for this cell?"; `E2E_RESULT` answers "did that run pass?"
 
 The headline is overall coverage. The collector also lists markers that point at ids
 not in the registry, so a typo or an unenumerated behavior surfaces instead of being

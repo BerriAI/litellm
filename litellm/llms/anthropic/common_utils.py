@@ -906,16 +906,17 @@ def strip_advisor_blocks_from_messages(messages: List[Any], replace_with_text: b
 
 def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
     """
-    Detect Anthropic 400 when encrypted thinking signatures in history do not match
-    the current deployment (e.g. user rotated API key or switched model endpoint).
+    Detect Anthropic 400 errors caused by missing or invalid thinking signatures.
 
-    Example API message:
+    Known error formats:
+    {"message":"messages.2.content.0.thinking.signature.str: Input should be a valid string"}
+    messages.N.content.M.thinking.signature.str: Input should be a valid string
     messages.N.content.M: Invalid `signature` in `thinking` block
     """
     if not error_text:
         return False
     lower = error_text.lower()
-    return "invalid" in lower and "signature" in lower and "thinking" in lower and "block" in lower
+    return "thinking" in lower and "signature" in lower and ("invalid" in lower or "valid string" in lower)
 
 
 def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[Any]:

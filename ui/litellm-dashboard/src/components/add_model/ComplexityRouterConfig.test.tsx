@@ -77,6 +77,20 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
   });
 
+  it("should toggle returning the raw model name", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+
+    await user.click(screen.getByText("Advanced: Response Format"));
+    await user.click(screen.getByRole("switch"));
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...defaultValue,
+      return_raw_model_name: true,
+    });
+  });
+
   it("should reveal classifier model and timeout fields when llm is selected", () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />);
@@ -85,11 +99,14 @@ describe("ComplexityRouterConfig", () => {
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     fireEvent.click(screen.getByText("LLM Classifier"));
 
-    expect(onChange).toHaveBeenCalledWith({
+    const expectedValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
       classifier_llm_config: { model: "", timeout_ms: 3000 },
-    });
+      classifier_context_window_size: 3,
+      classifier_context_per_turn_chars: 200,
+    };
+    expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
 
   it("should show classifier fields and use the configured values when classifier_type is llm", () => {
@@ -97,6 +114,8 @@ describe("ComplexityRouterConfig", () => {
       ...defaultValue,
       classifier_type: "llm",
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 750 },
+      classifier_context_window_size: 5,
+      classifier_context_per_turn_chars: 400,
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
 
@@ -105,6 +124,74 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText("Classifier Model")).toBeInTheDocument();
     expect(screen.getByText("Timeout (ms)")).toBeInTheDocument();
     expect(screen.getByDisplayValue("750")).toBeInTheDocument();
+    expect(screen.getByText("Context Window Size")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("5")).toBeInTheDocument();
+    expect(screen.getByText("Context Per-Turn Character Limit")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("400")).toBeInTheDocument();
+  });
+
+  it("should default classifier context fields to 3 and 200 when llm is selected without explicit values", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
+    expect(within(windowSizeSection).getByDisplayValue("3")).toBeInTheDocument();
+
+    const perTurnCharsSection = screen.getByText("Context Per-Turn Character Limit").closest("div") as HTMLElement;
+    expect(within(perTurnCharsSection).getByDisplayValue("200")).toBeInTheDocument();
+  });
+
+  it("should hide classifier context fields when classifier_type is heuristic", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByText("Context Window Size")).not.toBeInTheDocument();
+    expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
+  });
+
+  it("should call onChange with the updated classifier_context_window_size when edited", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
+    const input = within(windowSizeSection).getByRole("spinbutton");
+    fireEvent.change(input, { target: { value: "7" } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_context_window_size: 7,
+    });
+  });
+
+  it("should call onChange with the updated classifier_context_per_turn_chars when edited", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const perTurnCharsSection = screen.getByText("Context Per-Turn Character Limit").closest("div") as HTMLElement;
+    const input = within(perTurnCharsSection).getByRole("spinbutton");
+    fireEvent.change(input, { target: { value: "500" } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_context_per_turn_chars: 500,
+    });
   });
 
   it("should render the custom technical keywords field", () => {
@@ -268,5 +355,23 @@ describe("ComplexityRouterConfig", () => {
       />,
     );
     expect(screen.getAllByText("This tier is required")).toHaveLength(1);
+  });
+
+  it("renders the escalation keywords section with current keywords when the handler is provided", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        escalationKeywords={["LITELLM ESCALATE"]}
+        onEscalationKeywordsChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Escalation Keywords"));
+    expect(screen.getByText("Escalation Keywords")).toBeInTheDocument();
+    expect(screen.getByText("LITELLM ESCALATE")).toBeInTheDocument();
+  });
+
+  it("hides the escalation keywords section when no handler is provided", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.queryByText("Advanced: Escalation Keywords")).not.toBeInTheDocument();
   });
 });

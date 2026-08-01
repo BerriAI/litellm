@@ -1,8 +1,8 @@
 import base64
-import json  # <--- NEW
+import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -25,6 +25,8 @@ else:
 
 LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
+LANGFUSE_INGESTION_VERSION_HEADER = "x-langfuse-ingestion-version"
+LANGFUSE_INGESTION_VERSION = "4"
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -326,7 +328,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         return OpenTelemetryConfig(
             exporter="otlp_http",
             endpoint=endpoint,
-            headers=f"Authorization={auth_header}",
+            headers=LangfuseOtelLogger._format_otel_headers(
+                LangfuseOtelLogger._build_langfuse_otel_headers(auth_header)
+            ),
         )
 
     @staticmethod
@@ -337,6 +341,26 @@ class LangfuseOtelLogger(OpenTelemetry):
         auth_string = f"{public_key}:{secret_key}"
         auth_header = base64.b64encode(auth_string.encode()).decode()
         return f"Basic {auth_header}"
+
+    @staticmethod
+    def _build_langfuse_otel_headers(auth_header: str) -> Dict[str, str]:
+        """
+        Build the OTLP header set Langfuse expects.
+
+        `x-langfuse-ingestion-version: 4` selects Langfuse's v4 ingestion path;
+        without it spans fall back to the older transformation path.
+        """
+        return {
+            "Authorization": auth_header,
+            LANGFUSE_INGESTION_VERSION_HEADER: LANGFUSE_INGESTION_VERSION,
+        }
+
+    @staticmethod
+    def _format_otel_headers(headers: Dict[str, str]) -> str:
+        """
+        Serialize a header mapping into the comma-separated OTLP header string
+        """
+        return ",".join(f"{key}={value}" for key, value in headers.items())
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
@@ -358,7 +382,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key,
             )
-            dynamic_headers["Authorization"] = auth_header
+            dynamic_headers.update(LangfuseOtelLogger._build_langfuse_otel_headers(auth_header))
 
         return dynamic_headers
 

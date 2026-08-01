@@ -4,16 +4,19 @@ import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional
 
 import httpx
+from collections.abc import Mapping, Sequence
 from fastapi import HTTPException
 
 import litellm
 from httpx import Response as HttpxResponse
+from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
 from typing_extensions import TypeGuard
 
 from litellm._logging import verbose_proxy_logger
+from litellm.compression.compress import get_protected_indices
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -21,11 +24,18 @@ from litellm.integrations.custom_guardrail import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     get_attribute_or_key,
     get_tool_calls_from_response,
+    group_tool_exchanges,
     has_tool_with_name,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
+)
+from litellm.proxy.guardrails.guardrail_hooks.content_text import (
+    assistant_text_from_response,
+    content_to_text,
+    is_all_text_parts,
+    merge_rewritten_text_parts,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
@@ -48,6 +58,96 @@ def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard
 
 def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
     return isinstance(value, list)
+
+
+def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Collapse all-text list-of-parts content to plain strings for /v1/compress.
+
+    The compression service's transforms only rewrite string content and skip
+    the OpenAI list-of-parts shape, which is what every Anthropic-format
+    request translates to. Only rows whose parts are ALL text are flattened:
+    cache_control breakpoints are positional (each caches the prefix ending
+    at its part), so merging text across a non-text part would move a later
+    breakpoint to the other side of it. Rows with non-text parts are sent
+    unchanged and pass through the service untouched.
+    """
+    flattened: list[dict[str, object]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if is_all_text_parts(content):
+            text = content_to_text(content)
+            if text:
+                flattened.append({**msg, "content": text})
+                continue
+        flattened.append(msg)
+    return flattened
+
+
+def _restore_content_shapes(
+    originals: list[dict[str, object]], returned: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """Write compressed text back into each original row's content shape.
+
+    Rows are matched positionally; the pairing is only trusted when the
+    service kept the row count and every role lines up. If it restructured
+    the conversation (e.g. dropped rows), its output is adopted as-is, which
+    is the pre-flattening behavior.
+    """
+    if len(returned) != len(originals):
+        return returned
+    for orig, ret in zip(originals, returned):
+        if orig.get("role") != ret.get("role"):
+            return returned
+    restored: list[dict[str, object]] = []
+    for orig, ret in zip(originals, returned):
+        orig_content = orig.get("content")
+        ret_content = ret.get("content")
+        if isinstance(orig_content, list) and isinstance(ret_content, str):
+            if ret_content == content_to_text(orig_content):
+                # Untouched row: keep the exact original parts, including
+                # per-part fields like cache_control on later text parts.
+                restored.append({**ret, "content": orig_content})
+            else:
+                restored.append({**ret, "content": merge_rewritten_text_parts(orig_content, ret_content)})
+        else:
+            restored.append(ret)
+    return restored
+
+
+def _protected_indices(messages: Sequence[Mapping[str, object]]) -> frozenset[int]:
+    """Indices headroom must not send to the compression service.
+
+    ``get_protected_indices`` is litellm's own compression policy: the system
+    rows, the last user row, the last assistant row. It is expanded over whole
+    tool exchanges the way ``compress()`` expands it, so a protected assistant
+    tool call cannot end up answered by a marker standing in for the result the
+    model just asked for.
+    """
+    protected = frozenset(get_protected_indices(messages))
+    return protected | frozenset(
+        index
+        for group in group_tool_exchanges(messages)
+        if any(member in protected for member in group)
+        for index in group
+    )
+
+
+def _restore_protected_messages(
+    messages: Sequence[dict[str, object]],
+    compressed: Sequence[dict[str, object]],
+    protected_indices: frozenset[int],
+) -> Sequence[dict[str, object]]:
+    """Put the rows that were held back from compression at their original positions.
+
+    Requires one returned row per row actually sent, which ``_call_compress``
+    enforces; a service that changed the row count is treated as a failure
+    there, because a reshaped conversation cannot be re-interleaved.
+    """
+    sent_positions = tuple(index for index in range(len(messages)) if index not in protected_indices)
+    compressed_by_index = dict(zip(sent_positions, compressed))
+    return [
+        messages[index] if index in protected_indices else compressed_by_index[index] for index in range(len(messages))
+    ]
 
 
 def extract_hashes_from_messages(messages: list[dict[str, object]]) -> list[str]:
@@ -115,30 +215,33 @@ def _extract_headroom_tool_calls(response: object) -> list[dict[str, object]]:
     ]
 
 
-def _build_assistant_message_from_response(response: object) -> dict[str, object]:
-    choices = getattr(response, "choices", None)
-    if not isinstance(choices, list) or not choices:
-        return {"role": "assistant", "content": None, "tool_calls": []}
-    message = getattr(choices[0], "message", None)
-    if message is None:
-        return {"role": "assistant", "content": None, "tool_calls": []}
-    content = getattr(message, "content", None)
-    tool_calls = getattr(message, "tool_calls", None)
-    raw_tool_calls: list[dict[str, object]] = []
-    if isinstance(tool_calls, list):
-        for tc in tool_calls:
-            fn = getattr(tc, "function", None)
-            raw_tool_calls.append(
-                {
-                    "id": getattr(tc, "id", None),
-                    "type": "function",
-                    "function": {
-                        "name": getattr(fn, "name", None) if fn else None,
-                        "arguments": getattr(fn, "arguments", "{}") if fn else "{}",
-                    },
-                }
-            )
-    return {"role": "assistant", "content": content, "tool_calls": raw_tool_calls}
+def _build_assistant_message_from_response(
+    response: object,
+    retrieved: Sequence[tuple[dict[str, object], str]],
+) -> dict[str, object]:
+    """Rebuild the chat-completions assistant turn for the retrieval follow-up.
+
+    Only the ``headroom_retrieve`` calls are echoed, each answered by a tool
+    result below. Other tool calls made in the same turn are omitted on purpose:
+    the follow-up re-runs the model with the recovered content so it re-plans
+    them. Echoing them would leave tool_calls with no matching tool result and
+    the provider would reject the request.
+    """
+    return {
+        "role": "assistant",
+        "content": assistant_text_from_response(response),
+        "tool_calls": [
+            {
+                "id": tool_call.get("id"),
+                "type": "function",
+                "function": {
+                    "name": tool_call.get("name"),
+                    "arguments": json.dumps(tool_call.get("arguments", {})),
+                },
+            }
+            for tool_call, _ in retrieved
+        ],
+    }
 
 
 def _is_responses_api_response(response: object) -> bool:
@@ -153,17 +256,22 @@ def _is_anthropic_messages_response(response: object) -> bool:
 
 
 def _build_anthropic_followup_messages(
+    response: object,
     retrieved: list[tuple[dict[str, object], str]],
 ) -> list[dict[str, object]]:
     """Build Anthropic Messages API follow-up messages for a tool round-trip.
 
     Anthropic requires the tool_use block to be echoed back in an assistant
     message, paired with a tool_result block in a user message keyed by the
-    same tool_use_id -- it does not accept chat-style tool-role messages.
+    same tool_use_id -- it does not accept chat-style tool-role messages. Any
+    text the model wrote alongside the tool call is preserved, so its reasoning
+    survives into the follow-up turn.
     """
+    text = assistant_text_from_response(response)
     assistant_message: dict[str, object] = {
         "role": "assistant",
-        "content": [
+        "content": ([{"type": "text", "text": text}] if text else [])
+        + [
             {
                 "type": "tool_use",
                 "id": tool_call.get("id"),
@@ -184,15 +292,18 @@ def _build_anthropic_followup_messages(
 
 
 def _build_responses_followup_items(
+    response: object,
     retrieved: list[tuple[dict[str, object], str]],
 ) -> list[dict[str, object]]:
     """Build Responses API input items for a tool round-trip.
 
     The Responses API does not accept chat-style assistant/tool messages as
     follow-up input; it requires the model's function_call to be echoed back
-    paired with a function_call_output keyed by the same call_id.
+    paired with a function_call_output keyed by the same call_id. Any text the
+    model wrote alongside the tool call is preserved.
     """
-    items: list[dict[str, object]] = []
+    text = assistant_text_from_response(response)
+    items: List[dict[str, object]] = [{"role": "assistant", "content": text}] if text else []
     for tool_call, content in retrieved:
         call_id = tool_call.get("id")
         items.append(
@@ -208,6 +319,8 @@ def _build_responses_followup_items(
 
 
 class HeadroomGuardrail(CustomGuardrail):
+    records_own_guardrail_information: ClassVar[bool] = True
+
     @classmethod
     def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
         return [
@@ -391,6 +504,19 @@ class HeadroomGuardrail(CustomGuardrail):
                 {},
             )
 
+        if len(filtered) != len(messages):
+            # Rows are matched positionally when the never-compressed messages
+            # are put back, so a reshaped conversation cannot be applied at all.
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service changed the message count",
+                    {"sent": len(messages), "returned": len(filtered)},
+                ),
+                False,
+                {},
+            )
+
         verbose_proxy_logger.debug(
             "Headroom: compressed %s tokens -> %s tokens (ratio %.2f)",
             body.get("tokens_before", "?"),
@@ -409,6 +535,19 @@ class HeadroomGuardrail(CustomGuardrail):
             )
             if key in body
         }
+        tokens_before = stats.get("tokens_before")
+        tokens_after = stats.get("tokens_after")
+        if (
+            "tokens_saved" not in stats
+            and isinstance(tokens_before, (int, float))
+            and not isinstance(tokens_before, bool)
+            and isinstance(tokens_after, (int, float))
+            and not isinstance(tokens_after, bool)
+        ):
+            # Spend tracking (extract_compression_saved_tokens) reads only
+            # tokens_saved, which the live compression service omits; derive it
+            # so savings are counted, but let a service-sent value win.
+            stats["tokens_saved"] = tokens_before - tokens_after
         return filtered, True, stats
 
     async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
@@ -472,26 +611,65 @@ class HeadroomGuardrail(CustomGuardrail):
         if not messages:
             return inputs
 
+        # The last user message is the instruction the model is being asked to
+        # act on, so replacing it with a marker means the model answers a
+        # retrieval result instead of the request. Protected rows are held back
+        # from the payload rather than pinned after the fact, so their tokens
+        # are not counted as savings we never apply; the Anthropic write-back
+        # discards a compressed system prompt outright. Keep it that way unless
+        # /v1/compress grows a field for sending the live turn as the retrieval
+        # query without compressing it: query-aware compression reads the newest
+        # user message, so it is withheld here at some cost to history ranking.
+        protected_indices = _protected_indices(messages)
+        compressible = [m for i, m in enumerate(messages) if i not in protected_indices]
+        if not compressible:
+            return inputs
+
         model = self.headroom_model or request_data.get("model")
         start_time = time.time()
-        compressed, compression_succeeded, stats = await self._call_compress(
-            messages=messages,
+        returned, compression_succeeded, stats = await self._call_compress(
+            messages=_flatten_messages_for_compression(compressible),
             model=model if isinstance(model, str) else None,
         )
         end_time = time.time()
 
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
         if not compression_succeeded:
-            return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={"error": "headroom compression unavailable; request forwarded uncompressed"},
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+                start_time=start_time,
+                end_time=end_time,
+                duration=end_time - start_time,
+            )
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+            # Hand back the caller's own inputs object. Translation handlers
+            # detect "the guardrail rewrote the messages" by identity, so
+            # returning a rebuilt copy sends an unchanged request through the
+            # write-back and restructures it for nothing.
+            return inputs
+
+        compressed = _restore_protected_messages(
+            messages=messages,
+            compressed=_restore_content_shapes(originals=compressible, returned=returned),
+            protected_indices=protected_indices,
+        )
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=stats,
             request_data=request_data,
             guardrail_status="success",
-            guardrail_provider="headroom",
+            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
             start_time=start_time,
             end_time=end_time,
             duration=end_time - start_time,
         )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
         hashes = extract_hashes_from_messages(compressed)
         if not hashes:
@@ -577,11 +755,11 @@ class HeadroomGuardrail(CustomGuardrail):
             retrieved.append((tc, content))
 
         if _is_responses_api_response(response):
-            follow_up_messages = list(messages) + _build_responses_followup_items(retrieved)
+            follow_up_messages = list(messages) + _build_responses_followup_items(response, retrieved)
         elif _is_anthropic_messages_response(response):
-            follow_up_messages = list(messages) + _build_anthropic_followup_messages(retrieved)
+            follow_up_messages = list(messages) + _build_anthropic_followup_messages(response, retrieved)
         else:
-            assistant_message = _build_assistant_message_from_response(response)
+            assistant_message = _build_assistant_message_from_response(response, retrieved)
             tool_results = [
                 {"role": "tool", "tool_call_id": tc.get("id"), "content": content} for tc, content in retrieved
             ]
