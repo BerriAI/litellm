@@ -134,3 +134,49 @@ async def test_e2e_semantic_filter():
         f"✅ E2E test passed: Filtering reduced tools from {len(tools)} to {len(result['tools'])}"
     )
     print(f"   Filtered tools: {[t.name for t in result['tools']]}")
+
+
+@pytest.mark.asyncio
+async def test_expand_mcp_tools_uses_chat_format():
+    """_expand_mcp_tools must request the Chat Completions tool shape
+    ({"type": "function", "function": {...}}), not the flat Responses API
+    shape, since it feeds /v1/chat/completions providers with strict
+    schema validation (e.g. hosted_vllm). Regression test for #32281.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.hooks.mcp_semantic_filter.hook import SemanticToolFilterHook
+
+    fake_tools = [
+        MCPTool(
+            name="matomo-matomo_site_list",
+            description="List sites",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+    ]
+
+    with patch(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager",
+        new=AsyncMock(return_value=(fake_tools, ["matomo"])),
+    ):
+        hook = SemanticToolFilterHook(Mock())
+        result = await hook._expand_mcp_tools(
+            tools=[
+                {
+                    "type": "mcp",
+                    "server_url": "litellm_proxy/mcp/matomo",
+                    "server_label": "matomo_mcp",
+                    "require_approval": "never",
+                }
+            ],
+            user_api_key_dict=Mock(),
+        )
+
+    assert len(result) == 1
+    tool = result[0]
+    assert tool["type"] == "function"
+    assert "function" in tool, (
+        "Expected the Chat Completions wrapper shape "
+        f"{{'type': 'function', 'function': {{...}}}}, got flat keys: {list(tool.keys())}"
+    )
+    assert tool["function"]["name"] == "matomo-matomo_site_list"

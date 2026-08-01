@@ -379,6 +379,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]],
         litellm_trace_id: Optional[str] = None,
         request_tags: Optional[list[str]] = None,
+        target_format: Literal["responses", "chat"] = "responses",
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Centralized method to process MCP tools through the complete pipeline.
@@ -402,8 +403,9 @@ class LiteLLM_Proxy_MCP_Handler:
             request_tags=request_tags,
         )
 
-        openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(deduplicated_mcp_tools)
-
+        openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
+            deduplicated_mcp_tools, target_format=target_format
+        )
         return openai_tools, tool_server_map
 
     @staticmethod
