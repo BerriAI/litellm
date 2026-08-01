@@ -107,6 +107,48 @@ def test_combine_responses_fallback_usage_sums_completed_event():
     assert combined.total_tokens == 26
 
 
+def _make_completed_event_with_dict_response(
+    input_tokens: int, output_tokens: int, total_tokens: int
+) -> ResponseCompletedEvent:
+    """A provider payload that failed validation keeps `response` as a raw dict (model_construct)."""
+    return ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response={
+            "id": "resp_123",
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+            },
+        },
+    )
+
+
+def test_extract_partial_responses_usage_dict_response():
+    """Regression test for https://github.com/BerriAI/litellm/issues/34754: dict response payload."""
+    source = MagicMock()
+    source.completed_response = _make_completed_event_with_dict_response(11, 7, 18)
+
+    usage = Router._extract_partial_responses_usage(source)
+    assert usage is not None
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (11, 7, 18)
+
+
+def test_combine_responses_fallback_usage_dict_response():
+    """Usage is summed into a fallback event whose response payload is a raw dict."""
+    fallback_event = _make_completed_event_with_dict_response(5, 3, 8)
+    partial = ResponseAPIUsage(input_tokens=11, output_tokens=7, total_tokens=18)
+
+    Router._combine_responses_fallback_usage(fallback_event, partial)
+
+    combined = fallback_event.response["usage"]
+    assert (combined.input_tokens, combined.output_tokens, combined.total_tokens) == (
+        16,
+        10,
+        26,
+    )
+
+
 def test_combine_responses_fallback_usage_passthrough_for_unknown_event():
     """Events that are not completed/failed/incomplete are not mutated."""
     other = MagicMock()  # not a ResponseCompletedEvent etc. → isinstance false

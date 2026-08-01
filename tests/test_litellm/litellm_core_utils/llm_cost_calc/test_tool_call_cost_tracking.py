@@ -142,6 +142,22 @@ def test_get_cost_for_anthropic_web_search():
     assert cost > 0.0
 
 
+def test_response_includes_output_type_with_null_output():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34754
+
+    Providers may send `response.output: null`, which used to make cost tracking raise
+    `TypeError: 'NoneType' object is not iterable` and drop the response cost.
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    response = ResponsesAPIResponse.model_construct(id="resp_1", output=None)
+
+    assert not StandardBuiltInToolCostTracking.response_includes_output_type(
+        response_object=response, output_type="web_search_call"
+    )
+
+
 def test_get_cost_for_anthropic_web_search_with_server_tool_use_dict():
     """
     Anthropic-compatible passthrough responses can construct Usage from a raw

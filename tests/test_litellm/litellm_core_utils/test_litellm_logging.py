@@ -2678,6 +2678,44 @@ def test_streaming_success_handler_includes_vertex_ai_metadata_in_standard_loggi
     assert payload["response"]["vertex_ai_url_context_metadata"] == url_context_metadata
 
 
+def test_get_assembled_streaming_response_handles_dict_response_payload():
+    """Regression test for https://github.com/BerriAI/litellm/issues/34754
+
+    Completed events built via model_construct carry a raw dict response; usage must still be
+    assembled into chat-style usage instead of raising AttributeError and dropping the log.
+    """
+    import datetime
+
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    logging_obj = _make_logging_obj(stream=True)
+    event = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response={
+            "id": "resp-1",
+            "status": "completed",
+            "output": [],
+            "usage": {"input_tokens": 9, "output_tokens": 6, "total_tokens": 15},
+        },
+    )
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=event,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert assembled is not None
+    assert assembled.usage["prompt_tokens"] == 9
+    assert assembled.usage["completion_tokens"] == 6
+    assert assembled.usage["total_tokens"] == 15
+
+
 def test_get_assembled_streaming_response_returns_none_for_non_streaming_text_completion():
     """Non-streaming TextCompletionResponse should also return None."""
     import datetime
