@@ -110,7 +110,12 @@ async def test_team_logging():
 
             print(f"searching for trace_id={_trace_id} on langfuse")
 
-            generations = langfuse_client.get_generations(trace_id=_trace_id).data
+            trace_id = langfuse_client.create_trace_id(seed=_trace_id)
+            generations = langfuse_client.api.observations.get_many(
+                trace_id=trace_id,
+                type="GENERATION",
+                parse_io_as_json=True,
+            ).data
 
             # 1 generation with this trace id
             assert len(generations) == 1

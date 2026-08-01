@@ -7,7 +7,8 @@ langfuse = Langfuse(
 )
 
 print("sending langfuse trace request")
-trace = langfuse.trace(name="test-trace-litellm-proxy-passthrough")
+with langfuse.start_as_current_observation(name="test-trace-litellm-proxy-passthrough"):
+    pass
 print("flushing langfuse request")
 langfuse.flush()
 

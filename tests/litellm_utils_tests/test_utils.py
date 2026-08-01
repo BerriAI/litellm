@@ -930,6 +930,7 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     - Unit test for `_get_trace_id` function in Logging obj
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from langfuse import Langfuse
 
     litellm.success_callback = ["langfuse"]
     litellm_call_id = "my-unique-call-id"
@@ -961,24 +962,23 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     time.sleep(3)
     assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
 
-    ## if existing_trace_id exists
-    if langfuse_existing_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_existing_trace_id
-        )
-    ## if trace_id exists
-    elif langfuse_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_trace_id
-        )
-    ## if no trace_id or existing_trace_id is provided, use litellm_trace_id
-    else:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == litellm_logging_obj.litellm_trace_id
-        )
+    source_trace_id = (
+        langfuse_existing_trace_id
+        or langfuse_trace_id
+        or litellm_logging_obj.litellm_trace_id
+    )
+    normalized_trace_id = source_trace_id.lower().replace("-", "")
+    expected_trace_id = (
+        normalized_trace_id
+        if len(normalized_trace_id) == 32
+        and normalized_trace_id != "0" * 32
+        and all(character in "0123456789abcdef" for character in normalized_trace_id)
+        else Langfuse.create_trace_id(seed=source_trace_id)
+    )
+    assert (
+        litellm_logging_obj._get_trace_id(service_name="langfuse")
+        == expected_trace_id
+    )
 
 
 def test_convert_model_response_object():

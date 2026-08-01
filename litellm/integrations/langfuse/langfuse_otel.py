@@ -27,6 +27,20 @@ LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
 LANGFUSE_INGESTION_VERSION_HEADER = "x-langfuse-ingestion-version"
 LANGFUSE_INGESTION_VERSION = "4"
+LANGFUSE_OTEL_INGESTION_VERSION_HEADER = LANGFUSE_INGESTION_VERSION_HEADER
+LANGFUSE_OTEL_INGESTION_VERSION = LANGFUSE_INGESTION_VERSION
+
+
+def build_langfuse_otel_headers(
+    public_key: str,
+    secret_key: str,
+) -> dict[str, str]:
+    auth_string = f"{public_key}:{secret_key}"
+    auth_header = base64.b64encode(auth_string.encode()).decode()
+    return {
+        "Authorization": f"Basic {auth_header}",
+        LANGFUSE_INGESTION_VERSION_HEADER: LANGFUSE_INGESTION_VERSION,
+    }
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -91,21 +105,43 @@ class LangfuseOtelLogger(OpenTelemetry):
             "generation_name": LangfuseSpanAttributes.GENERATION_NAME,
             "generation_id": LangfuseSpanAttributes.GENERATION_ID,
             "parent_observation_id": LangfuseSpanAttributes.PARENT_OBSERVATION_ID,
-            "version": LangfuseSpanAttributes.GENERATION_VERSION,
             "mask_input": LangfuseSpanAttributes.MASK_INPUT,
             "mask_output": LangfuseSpanAttributes.MASK_OUTPUT,
+            "user_id": LangfuseSpanAttributes.TRACE_USER_ID,
             "trace_user_id": LangfuseSpanAttributes.TRACE_USER_ID,
             "session_id": LangfuseSpanAttributes.SESSION_ID,
             "tags": LangfuseSpanAttributes.TAGS,
             "trace_name": LangfuseSpanAttributes.TRACE_NAME,
             "trace_id": LangfuseSpanAttributes.TRACE_ID,
-            "trace_metadata": LangfuseSpanAttributes.TRACE_METADATA,
-            "trace_version": LangfuseSpanAttributes.TRACE_VERSION,
             "trace_release": LangfuseSpanAttributes.TRACE_RELEASE,
             "existing_trace_id": LangfuseSpanAttributes.EXISTING_TRACE_ID,
             "update_trace_keys": LangfuseSpanAttributes.UPDATE_TRACE_KEYS,
             "debug_langfuse": LangfuseSpanAttributes.DEBUG_LANGFUSE,
         }
+
+        trace_metadata = metadata.get("trace_metadata")
+        if isinstance(trace_metadata, dict):
+            for key, value in trace_metadata.items():
+                serialized_value = json.dumps(value) if isinstance(value, (list, dict)) else value
+                safe_set_attribute(
+                    span,
+                    f"{LangfuseSpanAttributes.TRACE_METADATA.value}.{key}",
+                    serialized_value,
+                )
+        elif trace_metadata is not None:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.TRACE_METADATA.value,
+                trace_metadata,
+            )
+
+        version = metadata.get("version") if metadata.get("version") is not None else metadata.get("trace_version")
+        if version is not None:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.GENERATION_VERSION.value,
+                version,
+            )
 
         for key, enum_attr in mapping.items():
             if key in metadata and metadata[key] is not None:
