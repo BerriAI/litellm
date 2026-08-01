@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -53,18 +53,20 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
 
         # check if current model is in internal_model_max_budget
-        _current_model_budget_info = self._get_request_model_budget_config(
+        _budget_match = self._get_request_model_budget_key_and_config(
             model=model, internal_model_max_budget=internal_model_max_budget
         )
-        if _current_model_budget_info is None:
+        if _budget_match is None:
             verbose_proxy_logger.debug(f"Model {model} not found in internal_model_max_budget")
             return True
+
+        _budget_key, _current_model_budget_info = _budget_match
 
         # check if current model is within budget
         if _current_model_budget_info.max_budget and _current_model_budget_info.max_budget > 0:
             _current_spend = await self._get_virtual_key_spend_for_model(
                 user_api_key_hash=user_api_key_dict.token,
-                model=model,
+                model=_budget_key,
                 key_budget_config=_current_model_budget_info,
             )
             if (
@@ -73,7 +75,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 and _current_spend > _current_model_budget_info.max_budget
             ):
                 raise litellm.BudgetExceededError(
-                    message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
+                    message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for {self._describe_budget_scope(_budget_key, model)}",
                     current_cost=_current_spend,
                     max_budget=_current_model_budget_info.max_budget,
                     entity_type=Litellm_EntityType.KEY.value,
@@ -119,18 +121,20 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
 
         # check if current model is in internal_model_max_budget
-        _current_model_budget_info = self._get_request_model_budget_config(
+        _budget_match = self._get_request_model_budget_key_and_config(
             model=model, internal_model_max_budget=internal_model_max_budget
         )
-        if _current_model_budget_info is None:
+        if _budget_match is None:
             verbose_proxy_logger.debug(f"Model {model} not found in end_user_model_max_budget")
             return True
+
+        _budget_key, _current_model_budget_info = _budget_match
 
         # check if current model is within budget
         if _current_model_budget_info.max_budget and _current_model_budget_info.max_budget > 0:
             _current_spend = await self._get_end_user_spend_for_model(
                 end_user_id=end_user_id,
-                model=model,
+                model=_budget_key,
                 key_budget_config=_current_model_budget_info,
             )
             if (
@@ -139,7 +143,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 and _current_spend > _current_model_budget_info.max_budget
             ):
                 raise litellm.BudgetExceededError(
-                    message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
+                    message=f"LiteLLM End User: {end_user_id}, exceeded budget for {self._describe_budget_scope(_budget_key, model)}",
                     current_cost=_current_spend,
                     max_budget=_current_model_budget_info.max_budget,
                     entity_type=Litellm_EntityType.END_USER.value,
@@ -209,10 +213,48 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         1. Check if `model` is in `internal_model_max_budget`
         2. If not, check if `model` without custom llm provider is in `internal_model_max_budget`
+        3. If not, check if `model` belongs to a model-group budget (an entry whose
+           `models` list contains the request model)
         """
-        return internal_model_max_budget.get(model, None) or internal_model_max_budget.get(
-            self._get_model_without_custom_llm_provider(model), None
+        _match = self._get_request_model_budget_key_and_config(
+            model=model, internal_model_max_budget=internal_model_max_budget
         )
+        return _match[1] if _match is not None else None
+
+    def _get_request_model_budget_key_and_config(
+        self, model: str, internal_model_max_budget: GenericBudgetConfigType
+    ) -> "Tuple[str, BudgetConfig] | None":
+        """
+        Resolve the budget entry for the request model and the cache key its spend
+        is tracked under.
+
+        Returns a ``(budget_key, config)`` tuple where ``budget_key`` is the model
+        name for per-model budgets and the group name for model-group budgets. Using
+        the group name as the cache key is what makes every model in the group draw
+        from one shared spend counter.
+
+        Resolution order:
+            1. Direct per-model match on `model`
+            2. Per-model match on `model` without its custom llm provider prefix
+            3. Model-group match: an entry whose `models` list contains the request
+               model (with or without the provider prefix)
+        """
+        model_without_provider = self._get_model_without_custom_llm_provider(model)
+        for candidate in (model, model_without_provider):
+            config = internal_model_max_budget.get(candidate)
+            if config is not None and not config.models:
+                return candidate, config
+
+        for group_name, config in internal_model_max_budget.items():
+            if config.models and (model in config.models or model_without_provider in config.models):
+                return group_name, config
+
+        return None
+
+    def _describe_budget_scope(self, budget_key: str, model: str) -> str:
+        if budget_key == model or budget_key == self._get_model_without_custom_llm_provider(model):
+            return f"model={model}"
+        return f"model={model} (model_group={budget_key})"
 
     def _get_model_without_custom_llm_provider(self, model: str) -> str:
         if "/" in model:
@@ -282,13 +324,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             internal_model_max_budget: GenericBudgetConfigType = {}
             for _model, _budget_info in user_api_key_model_max_budget.items():
                 internal_model_max_budget[_model] = BudgetConfig(**_budget_info)
-            key_budget_config = self._get_request_model_budget_config(
+            budget_match = self._get_request_model_budget_key_and_config(
                 model=model, internal_model_max_budget=internal_model_max_budget
             )
-            if key_budget_config is not None and key_budget_config.budget_duration:
-                virtual_spend_key = (
-                    f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{key_budget_config.budget_duration}"
-                )
+            if budget_match is not None and budget_match[1].budget_duration:
+                budget_key, key_budget_config = budget_match
+                virtual_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{budget_key}:{key_budget_config.budget_duration}"
                 virtual_start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
                 await self._increment_spend_for_key(
                     budget_config=key_budget_config,
@@ -305,12 +346,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             internal_model_max_budget: GenericBudgetConfigType = {}
             for _model, _budget_info in user_api_key_end_user_model_max_budget.items():
                 internal_model_max_budget[_model] = BudgetConfig(**_budget_info)
-            key_budget_config = self._get_request_model_budget_config(
+            budget_match = self._get_request_model_budget_key_and_config(
                 model=model, internal_model_max_budget=internal_model_max_budget
             )
-            if key_budget_config is not None and key_budget_config.budget_duration:
+            if budget_match is not None and budget_match[1].budget_duration:
+                budget_key, key_budget_config = budget_match
                 end_user_spend_key = (
-                    f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
+                    f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{budget_key}:{key_budget_config.budget_duration}"
                 )
                 end_user_start_time_key = f"end_user_budget_start_time:{end_user_id}"
                 await self._increment_spend_for_key(
