@@ -32,7 +32,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     resolve_llm_passthrough_timeout,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
@@ -3672,9 +3672,11 @@ class TestStaleRouteCleanupOnReload:
 
     def setup_method(self):
         _registered_pass_through_routes.clear()
+        self.original_openai_routes = list(LiteLLMRoutes.openai_routes.value)
 
     def teardown_method(self):
         _registered_pass_through_routes.clear()
+        LiteLLMRoutes.openai_routes.value[:] = self.original_openai_routes
 
     @staticmethod
     def _patches():
@@ -3769,6 +3771,103 @@ class TestStaleRouteCleanupOnReload:
         assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
             "/live-passthrough/some/subpath"
         )
+
+    @pytest.mark.asyncio
+    async def test_departed_authenticated_endpoint_is_removed_from_openai_routes(self):
+        path = "/departed-authenticated-passthrough"
+        wildcard_path = path + "/*"
+        with self._patches():
+            await initialize_pass_through_endpoints(
+                [
+                    {
+                        "id": "departed-endpoint",
+                        "path": path,
+                        "target": "http://example.com",
+                        "include_subpath": True,
+                        "auth": True,
+                    }
+                ]
+            )
+            assert path in LiteLLMRoutes.openai_routes.value
+            assert wildcard_path in LiteLLMRoutes.openai_routes.value
+
+            await initialize_pass_through_endpoints([])
+
+        assert path not in LiteLLMRoutes.openai_routes.value
+        assert wildcard_path not in LiteLLMRoutes.openai_routes.value
+
+    @pytest.mark.asyncio
+    async def test_live_authenticated_path_survives_idless_reload(self):
+        path = "/live-authenticated-passthrough"
+        wildcard_path = path + "/*"
+        with self._patches():
+            for _ in range(3):
+                await initialize_pass_through_endpoints(
+                    [
+                        {
+                            "path": path,
+                            "target": "http://example.com",
+                            "include_subpath": True,
+                            "auth": True,
+                        }
+                    ]
+                )
+
+        assert LiteLLMRoutes.openai_routes.value.count(path) == 1
+        assert LiteLLMRoutes.openai_routes.value.count(wildcard_path) == 1
+
+    @pytest.mark.asyncio
+    async def test_shared_authenticated_path_survives_partial_removal(self):
+        path = "/shared-authenticated-passthrough"
+        endpoints = [
+            {
+                "id": endpoint_id,
+                "path": path,
+                "target": "http://example.com",
+                "auth": True,
+            }
+            for endpoint_id in ("departed", "live")
+        ]
+        with self._patches():
+            await initialize_pass_through_endpoints(endpoints)
+            await initialize_pass_through_endpoints([endpoints[1]])
+
+        assert path in LiteLLMRoutes.openai_routes.value
+
+    @pytest.mark.asyncio
+    async def test_disabling_auth_removes_dynamic_openai_route(self):
+        path = "/auth-toggle-passthrough"
+        endpoint = {
+            "id": "auth-toggle",
+            "path": path,
+            "target": "http://example.com",
+            "auth": True,
+        }
+        with self._patches():
+            await initialize_pass_through_endpoints([endpoint])
+            assert path in LiteLLMRoutes.openai_routes.value
+
+            await initialize_pass_through_endpoints([{**endpoint, "auth": False}])
+
+        assert path not in LiteLLMRoutes.openai_routes.value
+
+    @pytest.mark.asyncio
+    async def test_builtin_openai_route_is_never_removed(self):
+        path = "/v1/chat/completions"
+        with self._patches():
+            await initialize_pass_through_endpoints(
+                [
+                    {
+                        "id": "builtin-collision",
+                        "path": path,
+                        "target": "http://example.com",
+                        "auth": True,
+                    }
+                ]
+            )
+            await initialize_pass_through_endpoints([])
+
+        assert path in LiteLLMRoutes.openai_routes.value
 
 
 # Regression (LIT-3538): a pre-call guardrail block on a passthrough endpoint

@@ -92,6 +92,7 @@ pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Dict[str, Dict[str, Union[str, bool, List[str], Dict[str, Any]]]] = {}
+_STATIC_OPENAI_ROUTES = frozenset(LiteLLMRoutes.openai_routes.value)
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
@@ -2623,19 +2624,15 @@ class InitPassThroughEndpointHelpers:
         keys_to_remove = [
             key for key, value in _registered_pass_through_routes.items() if value["endpoint_id"] == endpoint_id
         ]
+        removed_openai_routes = frozenset(
+            route
+            for key in keys_to_remove
+            if (route := _get_registered_pass_through_openai_route(_registered_pass_through_routes[key])) is not None
+        )
         for key in keys_to_remove:
-            route_info = _registered_pass_through_routes[key]
-            path = route_info.get("path")
-            if isinstance(path, str):
-                openai_routes = LiteLLMRoutes.openai_routes.value
-                if path in openai_routes:
-                    openai_routes.remove(path)
-                if route_info.get("type") == "subpath":
-                    wildcard_path = path.rstrip("/") + "/*"
-                    if wildcard_path in openai_routes:
-                        openai_routes.remove(wildcard_path)
             del _registered_pass_through_routes[key]
             verbose_proxy_logger.debug("Removed pass-through route from registry: %s", key)
+        _remove_unused_pass_through_openai_routes(removed_openai_routes)
 
     @staticmethod
     def clear_all_pass_through_routes():
@@ -2739,6 +2736,48 @@ def _get_combined_pass_through_endpoints(
 ):
     """Get combined pass-through endpoints from db + config"""
     return pass_through_endpoints + config_pass_through_endpoints
+
+
+def _get_registered_pass_through_openai_route(
+    route_info: Mapping[str, object],
+) -> Optional[str]:
+    if route_info.get("auth") is not True:
+        return None
+    path = route_info.get("path")
+    if not isinstance(path, str):
+        return None
+    match route_info.get("type"):
+        case "exact":
+            return path
+        case "subpath":
+            return path.rstrip("/") + "/*"
+        case _:
+            return None
+
+
+def _remove_unused_pass_through_openai_routes(
+    previously_registered_routes: frozenset[str],
+) -> None:
+    active_routes = frozenset(
+        route
+        for route_info in _registered_pass_through_routes.values()
+        if (route := _get_registered_pass_through_openai_route(route_info)) is not None
+    )
+    routes_to_remove = previously_registered_routes.difference(active_routes, _STATIC_OPENAI_ROUTES)
+    LiteLLMRoutes.openai_routes.value[:] = [
+        route for route in LiteLLMRoutes.openai_routes.value if route not in routes_to_remove
+    ]
+
+
+def _remove_stale_pass_through_routes(
+    registered_keys: tuple[str, ...],
+    visited_keys: set[str],
+    previously_registered_openai_routes: frozenset[str],
+) -> None:
+    for endpoint_key in registered_keys:
+        if endpoint_key not in visited_keys:
+            _registered_pass_through_routes.pop(endpoint_key, None)
+    _remove_unused_pass_through_openai_routes(previously_registered_openai_routes)
 
 
 async def _register_pass_through_endpoint(
@@ -2884,7 +2923,12 @@ async def initialize_pass_through_endpoints(
     # get a list of all registered pass-through endpoints
     # mark the ones that are visited in the list
     # remove the ones that are not visited from the list
-    registered_pass_through_endpoints = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+    registered_pass_through_endpoints = tuple(InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes())
+    previously_registered_openai_routes = frozenset(
+        route
+        for route_info in _registered_pass_through_routes.values()
+        if (route := _get_registered_pass_through_openai_route(route_info)) is not None
+    )
 
     visited_endpoints: set[str] = set()
 
@@ -2897,14 +2941,11 @@ async def initialize_pass_through_endpoints(
             config_file_path=config_file_path,
         )
 
-    # Drop stale registry entries by their exact route key. registered_pass_through_endpoints
-    # holds route keys ("{id}:{type}:{path}:{methods}"), not endpoint ids, so remove_endpoint_routes
-    # (which matches on endpoint_id) never matched and left the registry growing every reload cycle.
-    # We pop the key directly and leave openai_routes alone: its append is path-deduped, and the path
-    # is still owned by the live endpoint that was just re-registered under a new id this same cycle.
-    for endpoint_key in registered_pass_through_endpoints:
-        if endpoint_key not in visited_endpoints:
-            _registered_pass_through_routes.pop(endpoint_key, None)
+    _remove_stale_pass_through_routes(
+        registered_keys=registered_pass_through_endpoints,
+        visited_keys=visited_endpoints,
+        previously_registered_openai_routes=previously_registered_openai_routes,
+    )
 
 
 def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint]:
