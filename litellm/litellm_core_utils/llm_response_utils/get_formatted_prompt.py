@@ -6,11 +6,17 @@ def get_formatted_prompt(
     call_type: Literal[
         "acompletion",
         "completion",
-        "embedding",
-        "image_generation",
-        "audio_transcription",
-        "moderation",
+        "atext_completion",
         "text_completion",
+        "aembedding",
+        "embedding",
+        "embeddings",
+        "aimage_generation",
+        "image_generation",
+        "atranscription",
+        "audio_transcription",
+        "amoderation",
+        "moderation",
     ],
 ) -> str:
     """
@@ -19,7 +25,7 @@ def get_formatted_prompt(
     Returns a string.
     """
     prompt = ""
-    if call_type == "acompletion" or call_type == "completion":
+    if call_type in ("acompletion", "completion"):
         for message in data["messages"]:
             if message.get("content", None) is not None:
                 content = message.get("content")
@@ -34,17 +40,23 @@ def get_formatted_prompt(
                     if "function" in tool_call:
                         function_arguments = tool_call["function"]["arguments"]
                         prompt += function_arguments
-    elif call_type == "text_completion":
+    elif call_type in ("atext_completion", "text_completion"):
         prompt = data["prompt"]
-    elif call_type == "embedding" or call_type == "moderation":
+    elif call_type in (
+        "aembedding",
+        "embedding",
+        "embeddings",
+        "amoderation",
+        "moderation",
+    ):
         if isinstance(data["input"], str):
             prompt = data["input"]
         elif isinstance(data["input"], list):
             for m in data["input"]:
                 prompt += m
-    elif call_type == "image_generation":
+    elif call_type in ("aimage_generation", "image_generation"):
         prompt = data["prompt"]
-    elif call_type == "audio_transcription":
+    elif call_type in ("atranscription", "audio_transcription"):
         if "prompt" in data:
             prompt = data["prompt"]
     return prompt
