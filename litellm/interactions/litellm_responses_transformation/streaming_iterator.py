@@ -193,15 +193,15 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             if self._interaction_id is None:
                 self._interaction_id = interaction_id
 
-            events: List[InteractionsAPIStreamingResponse] = []
-            if not self.sent_interaction_start:
-                self.sent_interaction_start = True
-                events.append(self._build_interaction_start_event(interaction_id))
-            if not self.sent_content_start:
-                self.sent_content_start = True
-                events.append(self._build_content_start_event(interaction_id))
-            events.append(self._build_text_delta_event(interaction_id, delta_text))
-            return events
+            needs_interaction_start = not self.sent_interaction_start
+            needs_content_start = not self.sent_content_start
+            self.sent_interaction_start = True
+            self.sent_content_start = True
+            return [
+                *((self._build_interaction_start_event(interaction_id),) if needs_interaction_start else ()),
+                *((self._build_content_start_event(interaction_id),) if needs_content_start else ()),
+                self._build_text_delta_event(interaction_id, delta_text),
+            ]
 
         # Response created / in-progress: synthesize interaction start if we
         # haven't already sent one.

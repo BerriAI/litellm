@@ -4692,20 +4692,15 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
         responses_api_response = getattr(response_obj, "response", None)
         if responses_api_response and hasattr(responses_api_response, "output"):
             output_list = responses_api_response.output
-            # Use list accumulation to avoid O(n^2) string concatenation:
-            # repeatedly doing `response_str += part` copies the full string each time
-            # because Python strings are immutable, so total work grows with n^2.
-            response_output_parts: List[str] = []
-            for output_item in output_list:
-                # Handle output items with content array
-                if hasattr(output_item, "content"):
-                    for content_part in output_item.content:
-                        if hasattr(content_part, "text"):
-                            response_output_parts.append(content_part.text)
-                # Handle output items with direct text field
-                elif hasattr(output_item, "text"):
-                    response_output_parts.append(output_item.text)
-            return "".join(response_output_parts)
+            return "".join(
+                text
+                for output_item in output_list
+                for text in (
+                    tuple(content_part.text for content_part in output_item.content if hasattr(content_part, "text"))
+                    if hasattr(output_item, "content")
+                    else ((output_item.text,) if hasattr(output_item, "text") else ())
+                )
+            )
 
     # Handle Responses API text delta events
     if hasattr(response_obj, "type") and hasattr(response_obj, "delta"):
