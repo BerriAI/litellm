@@ -28,6 +28,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
 )
 from litellm.router_strategy.complexity_router.config import (
     CLASSIFIER_TIER_RUBRIC_WARN_CHARS,
+    DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
     ComplexityRouterConfig,
@@ -4953,7 +4954,9 @@ class TestClassifierTrustBoundary:
         )
 
         system_message, user_message = mock_router_instance.acompletion.call_args.kwargs["messages"]
-        assert system_message["content"] == _classification_system_prompt(None)
+        assert system_message["content"] == _classification_system_prompt(
+            None, router.config.classifier_context_window_size
+        )
         assert hostile not in system_message["content"]
         assert hostile in user_message["content"]
 
@@ -4978,14 +4981,21 @@ class TestClassifierTrustBoundary:
         from litellm.router_strategy.complexity_router.complexity_router import (
             _CLASSIFICATION_TIER_RUBRIC,
             _CLASSIFICATION_TRUST_BOUNDARY,
+            _CLASSIFICATION_WITH_CONVERSATION,
             _classification_system_prompt,
         )
 
-        system_prompt = _classification_system_prompt(configured_rubric)
+        system_prompt = _classification_system_prompt(configured_rubric, DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
 
-        assert system_prompt.endswith(_CLASSIFICATION_TRUST_BOUNDARY)
-        assert ("Answer SMALL for small things" in system_prompt) is tiers_come_from_operator
-        assert (_CLASSIFICATION_TIER_RUBRIC in system_prompt) is not tiers_come_from_operator
+        expected_tiers = (
+            "Answer SMALL for small things and BIG for big ones."
+            if tiers_come_from_operator
+            else _CLASSIFICATION_TIER_RUBRIC
+        )
+        expected_framing = _CLASSIFICATION_WITH_CONVERSATION.format(
+            window_size=DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE, turn_noun="turns"
+        )
+        assert system_prompt == f"{expected_tiers}\n\n{_CLASSIFICATION_TRUST_BOUNDARY}\n\n{expected_framing}"
 
     @pytest.mark.asyncio
     async def test_operator_rubric_still_cannot_be_reached_by_a_caller(self, mock_router_instance):
@@ -5039,18 +5049,85 @@ class TestClassifierTrustBoundary:
         warned = any("classifier_tier_rubric" in record.message for record in caplog.records)
         assert warned is expect_warning
 
-    def test_rubric_rates_the_work_a_short_reply_approves(self):
-        """The rubric must not tell the classifier to read the current message in isolation.
+    @pytest.mark.parametrize(
+        "window_size,conversation_is_quoted",
+        [
+            pytest.param(0, False, id="window-off-promises-nothing-about-the-conversation"),
+            pytest.param(1, True, id="window-of-one"),
+            pytest.param(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE, True, id="default-window"),
+        ],
+    )
+    def test_context_framing_describes_the_payload_the_window_actually_produces(
+        self, window_size, conversation_is_quoted
+    ):
+        """The classifier is told what it was given, so neither setting is instructed against.
 
         "Classify only the current message" was applied literally: a conversation whose difficulty was
-        established earlier came back SIMPLE because the message being rated was the word "yes". A
-        context window the rubric then instructs the model to disregard buys nothing, so the wording is
-        pinned here rather than left to be rediscovered.
+        established earlier came back SIMPLE because the message being rated was the word "yes", so a
+        window the rubric then instructs the model to disregard bought nothing. Replacing that clause
+        with contextual judgment unconditionally broke the other setting instead: at window 0 nothing
+        about the conversation is sent, and rating "the work a short reply approves" is then a demand
+        to weigh an exchange the classifier cannot see. Both framings are pinned here.
         """
         from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
 
-        system_prompt = _classification_system_prompt(None)
+        system_prompt = _classification_system_prompt(None, window_size)
 
         assert "Classify only the current message" not in system_prompt
-        assert "in the context of the conversation it continues" in system_prompt
+        assert ("in the context of the conversation it continues" in system_prompt) is conversation_is_quoted
+        assert ('short reply such as "yes" or "continue"' in system_prompt) is conversation_is_quoted
+        assert ("No earlier turns of the conversation are quoted" in system_prompt) is not conversation_is_quoted
         assert "Do not rate the quoted sections as if one of them were the request." in system_prompt
+
+    @pytest.mark.parametrize(
+        "window_size,expected",
+        [
+            pytest.param(1, "Up to 1 earlier turn of the conversation may be quoted", id="a-window-of-one-is-singular"),
+            pytest.param(5, "Up to 5 earlier turns of the conversation may be quoted", id="the-operators-count"),
+        ],
+    )
+    def test_the_window_the_classifier_is_told_about_is_the_configured_one(self, window_size, expected):
+        """A count of turns the operator did not configure would misdescribe how bounded the view is."""
+        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+
+        assert expected in _classification_system_prompt(None, window_size)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("window_size", [0, 5])
+    async def test_the_classifier_call_frames_the_window_the_deployment_configured(
+        self, mock_router_instance, window_size
+    ):
+        """What the system role promises and what the user payload carries have to agree.
+
+        Asserted on the call the classifier model actually receives rather than on the helper, since
+        the defect was a call site that read the rubric override and never the window beside it.
+        """
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier"},
+                "classifier_context_window_size": window_size,
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        messages = [
+            {"role": "user", "content": "Design a scheduler for the events pipeline"},
+            {"role": "assistant", "content": "Here is the plan; it is involved. Should I execute?"},
+            {"role": "user", "content": "yes"},
+        ]
+
+        await router.aclassify("yes", messages=messages)
+
+        system_content, user_content = (
+            message["content"] for message in mock_router_instance.acompletion.call_args.kwargs["messages"]
+        )
+        quotes_conversation = window_size > 0
+        assert (f"Up to {window_size} earlier turns of the conversation may be quoted" in system_content) is (
+            quotes_conversation
+        )
+        assert ("No earlier turns of the conversation are quoted" in system_content) is not quotes_conversation
+        assert ("Recent conversation" in user_content) is quotes_conversation
+        assert ("Design a scheduler for the events pipeline" in user_content) is quotes_conversation
