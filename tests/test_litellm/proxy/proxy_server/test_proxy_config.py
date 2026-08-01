@@ -1404,12 +1404,12 @@ def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__delete_deployment_empty_returns_zero(monkeypatch):
+async def test_ProxyConfig__delete_deployment_no_router_returns_none(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     pc = ProxyConfig()
     result = await pc._delete_deployment(db_models=[])
-    snapshot = {"deleted": result, "router_was": "none", "empty_db_models": True}
-    assert snapshot == {"deleted": 0, "router_was": "none", "empty_db_models": True}
+    snapshot = {"still_desired": result, "router_was": "none", "empty_db_models": True}
+    assert snapshot == {"still_desired": None, "router_was": "none", "empty_db_models": True}
 
 
 @pytest.mark.asyncio
