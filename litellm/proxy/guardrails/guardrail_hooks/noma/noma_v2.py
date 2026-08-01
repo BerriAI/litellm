@@ -51,6 +51,8 @@ class NomaV2Guardrail(CustomGuardrail):
         application_id: Optional[str] = None,
         monitor_mode: Optional[bool] = None,
         block_failures: Optional[bool] = None,
+        streaming_end_of_stream_only: bool | None = None,
+        streaming_sampling_rate: int | None = None,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -67,6 +69,13 @@ class NomaV2Guardrail(CustomGuardrail):
             self.block_failures = os.environ.get("NOMA_BLOCK_FAILURES", "true").lower() == "true"
         else:
             self.block_failures = block_failures
+
+        self.streaming_end_of_stream_only: bool = (
+            False if streaming_end_of_stream_only is None else streaming_end_of_stream_only
+        )
+        if streaming_sampling_rate is not None and streaming_sampling_rate < 1:
+            raise ValueError(f"streaming_sampling_rate must be >= 1 (got {streaming_sampling_rate})")
+        self.streaming_sampling_rate: int = 5 if streaming_sampling_rate is None else streaming_sampling_rate
 
         if self._requires_api_key(api_base=self.api_base) and not self.api_key:
             raise ValueError("Noma v2 guardrail requires api_key when using Noma SaaS endpoint")

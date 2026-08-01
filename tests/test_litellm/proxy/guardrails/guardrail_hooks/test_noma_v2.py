@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.noma import NomaV2Guardrail
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
@@ -655,3 +656,162 @@ class TestNomaV2ApplicationIdResolution:
 
         payload = call_mock.call_args.kwargs["payload"]
         assert "application_id" not in payload
+
+
+class TestNomaV2StreamingKnobs:
+    @staticmethod
+    def _guardrail(**kwargs):
+        return NomaV2Guardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            application_id="test-app",
+            guardrail_name="test-noma-v2-guardrail",
+            event_hook="post_call",
+            default_on=True,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _stream(num_chunks: int):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        async def gen():
+            for i in range(num_chunks):
+                yield ModelResponseStream(
+                    model="gpt-4o",
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(content=f"chunk-{i}", role="assistant"),
+                            finish_reason="stop" if i == num_chunks - 1 else None,
+                        )
+                    ],
+                )
+
+        return gen()
+
+    async def _run_stream(self, guardrail, num_chunks: int):
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        scan_mock = AsyncMock(return_value={"action": "NONE"})
+        user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
+        request_data = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": guardrail,
+            "metadata": {"guardrails": [guardrail.guardrail_name]},
+        }
+
+        with patch.object(guardrail, "_call_noma_scan", scan_mock):
+            chunks = [
+                chunk
+                async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=self._stream(num_chunks),
+                    request_data=request_data,
+                )
+            ]
+
+        return chunks, scan_mock.call_count
+
+    def test_init_defaults_streaming_knobs(self):
+        guardrail = self._guardrail()
+
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 5
+
+    def test_init_rejects_sampling_rate_below_one(self):
+        with pytest.raises(ValueError, match="streaming_sampling_rate must be >= 1"):
+            self._guardrail(streaming_sampling_rate=0)
+
+    @pytest.mark.asyncio
+    async def test_streaming_end_of_stream_only_scans_once(self):
+        guardrail = self._guardrail(streaming_end_of_stream_only=True, streaming_sampling_rate=1)
+
+        chunks, scan_calls = await self._run_stream(guardrail, num_chunks=6)
+
+        assert len(chunks) == 6
+        assert scan_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_streaming_sampling_rate_controls_scan_cadence(self):
+        sparse_calls = (await self._run_stream(self._guardrail(streaming_sampling_rate=6), num_chunks=6))[1]
+        dense_calls = (await self._run_stream(self._guardrail(streaming_sampling_rate=2), num_chunks=6))[1]
+
+        assert sparse_calls == 2
+        assert dense_calls == 4
+
+    @pytest.mark.asyncio
+    async def test_default_streaming_scans_every_fifth_chunk(self):
+        guardrail = self._guardrail()
+
+        chunks, scan_calls = await self._run_stream(guardrail, num_chunks=6)
+
+        assert len(chunks) == 6
+        assert scan_calls == 2
+
+
+class TestNomaV2StreamingKnobInitialization:
+    @staticmethod
+    def _initialize(guardrail_provider: str = "noma_v2", **litellm_param_overrides):
+        from litellm.proxy.guardrails.guardrail_hooks.noma import (
+            guardrail_initializer_registry,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail=guardrail_provider,
+            mode="post_call",
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            **litellm_param_overrides,
+        )
+        initializer = guardrail_initializer_registry[guardrail_provider]
+        return initializer(litellm_params=litellm_params, guardrail={"guardrail_name": "noma-v2"})
+
+    def test_forwards_streaming_knobs_from_litellm_params(self):
+        guardrail = self._initialize(streaming_end_of_stream_only=True, streaming_sampling_rate=3)
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 3
+
+    def test_forwards_streaming_knobs_from_string_values(self):
+        guardrail = self._initialize(streaming_end_of_stream_only="true", streaming_sampling_rate="3")
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 3
+
+    def test_forwards_streaming_knobs_via_legacy_noma_with_use_v2(self):
+        guardrail = self._initialize(
+            guardrail_provider="noma",
+            use_v2=True,
+            streaming_end_of_stream_only=True,
+            streaming_sampling_rate=4,
+        )
+
+        assert isinstance(guardrail, NomaV2Guardrail)
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 4
+
+    def test_forwards_streaming_knobs_from_optional_params(self):
+        guardrail = self._initialize(optional_params={"streaming_end_of_stream_only": True, "streaming_sampling_rate": 2})
+
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 2
+
+    def test_defaults_when_streaming_knobs_absent(self):
+        guardrail = self._initialize()
+
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 5
+
+    def test_rejects_invalid_sampling_rate_from_config(self):
+        with pytest.raises(ValueError):
+            self._initialize(streaming_sampling_rate=0)
+
+    def test_config_model_declares_streaming_knobs(self):
+        fields = NomaV2GuardrailConfigModel.model_fields
+
+        assert "streaming_end_of_stream_only" in fields
+        assert "streaming_sampling_rate" in fields
