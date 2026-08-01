@@ -575,7 +575,7 @@ def ocr(
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     **kwargs: object,
-) -> OCRResponse | Coroutine[None, None, OCRResponse]:
+) -> OCRResponse | Coroutine[object, object, OCRResponse]:
     """
     Synchronous OCR function.
 
