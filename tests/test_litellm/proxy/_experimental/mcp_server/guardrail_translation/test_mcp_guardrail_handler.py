@@ -1,13 +1,23 @@
 """Tests for the MCP guardrail translation handler."""
 
+import asyncio
+from typing import Optional
+
 import pytest
+from fastapi import HTTPException
 from mcp.types import CallToolResult, ImageContent, TextContent
 
+import litellm
+from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
+from litellm.proxy._experimental.mcp_server.utils import MAX_STRUCTURED_CONTENT_SCAN_DEPTH
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import unified_guardrail
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -29,7 +39,7 @@ class MockGuardrail(CustomGuardrail):
 
 @pytest.mark.asyncio
 async def test_process_input_messages_updates_content():
-    """Handler should pass tool definition to guardrail when mcp_tool_name is present."""
+    """Handler should pass the tool definition and the argument strings to the guardrail."""
     handler = MCPGuardrailTranslationHandler()
     guardrail = MockGuardrail()
 
@@ -45,7 +55,7 @@ async def test_process_input_messages_updates_content():
     assert result == data
     # Guardrail was called
     assert guardrail.call_count == 1
-    # Guardrail received tools (not texts) with tool definition
+    # Guardrail received tools with the tool definition
     assert guardrail.last_inputs is not None
     tools = guardrail.last_inputs.get("tools", [])
     assert len(tools) == 1
@@ -83,6 +93,392 @@ async def test_process_input_messages_handles_minimal_data():
     tools = guardrail.last_inputs.get("tools", [])
     assert len(tools) == 1
     assert tools[0]["function"]["name"] == "simple_tool"
+
+
+class ArgumentMaskingGuardrail(CustomGuardrail):
+    """Unified guardrail that rewrites every text it is handed, like presidio does."""
+
+    def __init__(
+        self,
+        secret: str = "jane.doe@example.com",
+        replacement: str = "<EMAIL_ADDRESS>",
+        texts_override: Optional[list] = None,
+        **kwargs,
+    ):
+        kwargs.setdefault("guardrail_name", "argument-masking-mcp-guardrail")
+        super().__init__(**kwargs)
+        self.secret = secret
+        self.replacement = replacement
+        self.texts_override = texts_override
+        self.seen_texts: Optional[list] = None
+
+    def _mask(self, text: str) -> str:
+        return text.replace(self.secret, self.replacement)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        self.seen_texts = list(inputs.get("texts") or [])
+        if self.texts_override is not None:
+            inputs["texts"] = self.texts_override
+        else:
+            inputs["texts"] = [self._mask(text) for text in self.seen_texts]
+        return inputs
+
+
+@pytest.fixture
+def restore_callbacks():
+    """Restore the process-wide state driving pre_call_hook through unified_guardrail.
+
+    unified_guardrail memoizes its translation mappings in a module global, and
+    ProxyLogging caches callback capabilities keyed on id()s of litellm.callbacks,
+    so leaving either populated leaks into unrelated tests in the same worker.
+    """
+    original_callbacks = litellm.callbacks
+    original_mappings = unified_guardrail.endpoint_guardrail_translation_mappings
+    yield
+    litellm.callbacks = original_callbacks
+    unified_guardrail.endpoint_guardrail_translation_mappings = original_mappings
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_argument_strings_are_handed_to_the_guardrail():
+    """A guardrail must see the argument values, not just the tool definition.
+
+    Without this the guardrail is handed a name and an empty schema, so no
+    sensitive-data detection can ever fire on an MCP tool call.
+    """
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = MockGuardrail()
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"query": "contact jane.doe@example.com about the invoice"},
+    }
+
+    await handler.process_input_messages(data, guardrail)
+
+    assert guardrail.last_inputs is not None
+    assert guardrail.last_inputs.get("texts") == ["contact jane.doe@example.com about the invoice"]
+
+
+@pytest.mark.asyncio
+async def test_masked_arguments_are_written_back_for_the_call_path():
+    """A mask only takes effect once it lands in modified_arguments."""
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail()
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"query": "contact jane.doe@example.com about the invoice"},
+    }
+
+    result = await handler.process_input_messages(data, guardrail)
+
+    masked = {"query": "contact <EMAIL_ADDRESS> about the invoice"}
+    assert result["modified_arguments"] == masked
+    assert result["mcp_arguments"] == masked
+
+
+@pytest.mark.asyncio
+async def test_nested_arguments_keep_their_shape_when_masked():
+    """Masking rewrites string leaves in place and preserves non-string values."""
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail()
+
+    arguments = {
+        "recipients": ["jane.doe@example.com", "ops@example.net"],
+        "envelope": {"reply_to": "jane.doe@example.com", "retries": 3, "urgent": True, "cc": None},
+        "count": 2,
+    }
+    data = {"mcp_tool_name": "send_email", "mcp_arguments": arguments}
+
+    result = await handler.process_input_messages(data, guardrail)
+
+    assert guardrail.seen_texts == [
+        "jane.doe@example.com",
+        "ops@example.net",
+        "jane.doe@example.com",
+    ]
+    assert result["modified_arguments"] == {
+        "recipients": ["<EMAIL_ADDRESS>", "ops@example.net"],
+        "envelope": {"reply_to": "<EMAIL_ADDRESS>", "retries": 3, "urgent": True, "cc": None},
+        "count": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_clean_arguments_are_not_overridden():
+    """A guardrail that changes nothing must not set modified_arguments."""
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail()
+
+    data = {"mcp_tool_name": "search", "mcp_arguments": {"query": "quarterly revenue"}}
+
+    result = await handler.process_input_messages(data, guardrail)
+
+    assert "modified_arguments" not in result
+    assert result["mcp_arguments"] == {"query": "quarterly revenue"}
+
+
+@pytest.mark.asyncio
+async def test_guardrail_returning_wrong_text_count_leaves_arguments_alone():
+    """Write-back is positional, so a length mismatch must not scramble arguments."""
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail(texts_override=["only", "two", "texts"])
+
+    arguments = {"query": "contact jane.doe@example.com about the invoice"}
+    data = {"mcp_tool_name": "search", "mcp_arguments": arguments}
+
+    result = await handler.process_input_messages(data, guardrail)
+
+    assert "modified_arguments" not in result
+    assert result["mcp_arguments"] == arguments
+
+
+@pytest.mark.asyncio
+async def test_deeply_nested_arguments_are_blocked_rather_than_skipped():
+    """Arguments too deep to walk must block instead of passing unscanned."""
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail()
+
+    nested: dict = {"leaf": "jane.doe@example.com"}
+    for _ in range(MAX_STRUCTURED_CONTENT_SCAN_DEPTH + 1):
+        nested = {"next": nested}
+
+    data = {"mcp_tool_name": "search", "mcp_arguments": nested}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.process_input_messages(data, guardrail)
+
+    assert exc_info.value.status_code == 400
+
+
+class SelfWritingMaskingGuardrail(ArgumentMaskingGuardrail):
+    """Masks through ``texts`` and writes the masked arguments itself.
+
+    The shape the bundled content filter guardrail already has: it rewrites
+    ``request_data["mcp_arguments"]`` from inside ``apply_guardrail`` as well as
+    returning masked texts.
+    """
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        returned = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        arguments = request_data.get("mcp_arguments") or {}
+        masked = {key: self._mask(value) if isinstance(value, str) else value for key, value in arguments.items()}
+        request_data["mcp_arguments"] = masked
+        request_data["modified_arguments"] = masked
+        return returned
+
+
+@pytest.mark.asyncio
+async def test_guardrail_that_masks_the_arguments_itself_is_not_treated_as_a_conflict():
+    """Converging on the same replacement is not an unmergeable rewrite.
+
+    A guardrail that both returns masked texts and rewrites the arguments in
+    request_data must still mask, not be rejected as if a second guardrail had
+    clobbered the leaf.
+    """
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = SelfWritingMaskingGuardrail()
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"query": "contact jane.doe@example.com about the invoice"},
+    }
+
+    result = await handler.process_input_messages(data, guardrail)
+
+    assert result["modified_arguments"] == {"query": "contact <EMAIL_ADDRESS> about the invoice"}
+
+
+class ReshapingGuardrail(ArgumentMaskingGuardrail):
+    """Masks through ``texts`` while moving the secret to a different path."""
+
+    def __init__(self, reshaped: dict, **kwargs):
+        super().__init__(**kwargs)
+        self.reshaped = reshaped
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        returned = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        request_data["mcp_arguments"] = self.reshaped
+        return returned
+
+
+@pytest.mark.asyncio
+async def test_arguments_reshaped_under_the_guardrail_fail_closed():
+    """A payload that no longer lines up leaf for leaf must block, not be written blind.
+
+    Write-back pairs masked texts to leaves positionally, so a tree another guardrail
+    reshaped would take the redaction on the wrong value.
+    """
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ReshapingGuardrail({"query": "contact jane.doe@example.com", "note": "added"})
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"query": "contact jane.doe@example.com about the invoice"},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.process_input_messages(data, guardrail)
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_renamed_argument_key_blocks_rather_than_dropping_the_mask():
+    """The leak this closes: same text, new path, so the write-back would find nothing.
+
+    Matching purely on position would see an unchanged value and write the mask to a
+    path that no longer exists, shipping the secret while reporting a clean scan.
+    """
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ReshapingGuardrail({"renamed": "jane.doe@example.com", "other": "kept"})
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"query": "jane.doe@example.com", "other": "kept"},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.process_input_messages(data, guardrail)
+
+    assert exc_info.value.status_code == 400
+    assert "jane.doe@example.com" not in str(data.get("modified_arguments"))
+
+
+@pytest.mark.parametrize("run_in_parallel", [False, True])
+@pytest.mark.asyncio
+async def test_masked_arguments_reach_the_outbound_mcp_call(restore_callbacks, run_in_parallel):
+    """End to end over the real MCP pre-call path, not just the handler.
+
+    Drives the same sequence mcp_server_manager.call_tool uses:
+    synthetic payload -> pre_call_hook -> arguments sent upstream.
+
+    Covers run_in_parallel both ways: that path shares one payload snapshot and
+    discards whatever a guardrail returns, so the mask has to land on the caller's
+    dict rather than on a copy of it.
+    """
+    guardrail = ArgumentMaskingGuardrail(
+        event_hook="pre_mcp_call",
+        default_on=True,
+        run_in_parallel=run_in_parallel,
+    )
+    litellm.callbacks = [guardrail]
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    arguments = {"query": "contact jane.doe@example.com about the invoice"}
+    pre_hook_kwargs = {
+        "name": "search",
+        "arguments": arguments,
+        "server_name": "test-server",
+        "user_api_key_auth": UserAPIKeyAuth(api_key="sk-test", user_id="test-user"),
+    }
+
+    request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(pre_hook_kwargs)
+    synthetic_data = proxy_logging_obj._convert_mcp_to_llm_format(request_obj, pre_hook_kwargs)
+
+    modified_data = await proxy_logging_obj.pre_call_hook(
+        user_api_key_dict=pre_hook_kwargs["user_api_key_auth"],
+        data=synthetic_data,
+        call_type="call_mcp_tool",
+    )
+    modified_kwargs = proxy_logging_obj._convert_mcp_hook_response_to_kwargs(modified_data, pre_hook_kwargs)
+
+    assert modified_kwargs["arguments"] == {"query": "contact <EMAIL_ADDRESS> about the invoice"}
+
+
+class SlowSubstitutionGuardrail(CustomGuardrail):
+    """Rewrites one substring, after a delay, so two instances genuinely interleave."""
+
+    def __init__(self, needle: str, replacement: str, delay: float, **kwargs):
+        super().__init__(**kwargs)
+        self.needle = needle
+        self.replacement = replacement
+        self.delay = delay
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        await asyncio.sleep(self.delay)
+        inputs["texts"] = [text.replace(self.needle, self.replacement) for text in (inputs.get("texts") or [])]
+        return inputs
+
+
+def _two_interleaving_maskers(run_in_parallel: bool):
+    return [
+        SlowSubstitutionGuardrail(
+            "jane.doe@example.com",
+            "<EMAIL_ADDRESS>",
+            0.02,
+            guardrail_name="mask-email",
+            event_hook="pre_mcp_call",
+            default_on=True,
+            run_in_parallel=run_in_parallel,
+        ),
+        SlowSubstitutionGuardrail(
+            "415-555-0132",
+            "<PHONE_NUMBER>",
+            0.04,
+            guardrail_name="mask-phone",
+            event_hook="pre_mcp_call",
+            default_on=True,
+            run_in_parallel=run_in_parallel,
+        ),
+    ]
+
+
+async def _arguments_sent_upstream(arguments: dict):
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    pre_hook_kwargs = {
+        "name": "search",
+        "arguments": arguments,
+        "server_name": "test-server",
+        "user_api_key_auth": UserAPIKeyAuth(api_key="sk-test", user_id="test-user"),
+    }
+    request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(pre_hook_kwargs)
+    modified_data = await proxy_logging_obj.pre_call_hook(
+        user_api_key_dict=pre_hook_kwargs["user_api_key_auth"],
+        data=proxy_logging_obj._convert_mcp_to_llm_format(request_obj, pre_hook_kwargs),
+        call_type="call_mcp_tool",
+    )
+    return proxy_logging_obj._convert_mcp_hook_response_to_kwargs(modified_data, pre_hook_kwargs)["arguments"]
+
+
+@pytest.mark.asyncio
+async def test_two_sequential_guardrails_both_masks_survive(restore_callbacks):
+    """The recommended config: each guardrail sees the previous one's output."""
+    litellm.callbacks = _two_interleaving_maskers(run_in_parallel=False)
+
+    sent = await _arguments_sent_upstream({"note": "mail jane.doe@example.com or call 415-555-0132"})
+
+    assert sent == {"note": "mail <EMAIL_ADDRESS> or call <PHONE_NUMBER>"}
+
+
+@pytest.mark.asyncio
+async def test_two_parallel_guardrails_on_separate_arguments_both_masks_survive(restore_callbacks):
+    """Concurrent rewrites of different leaves compose; neither is lost."""
+    litellm.callbacks = _two_interleaving_maskers(run_in_parallel=True)
+
+    sent = await _arguments_sent_upstream({"email": "jane.doe@example.com", "phone": "415-555-0132"})
+
+    assert sent == {"email": "<EMAIL_ADDRESS>", "phone": "<PHONE_NUMBER>"}
+
+
+@pytest.mark.asyncio
+async def test_two_parallel_guardrails_on_one_argument_block_instead_of_losing_a_mask(restore_callbacks):
+    """Unmergeable concurrent rewrites must fail closed, not ship one redaction.
+
+    Both guardrails derive a full replacement string from the same snapshot, so
+    writing either result would silently discard the other's redaction and leak
+    the value it was configured to mask.
+    """
+    litellm.callbacks = _two_interleaving_maskers(run_in_parallel=True)
+    original = "mail jane.doe@example.com or call 415-555-0132"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _arguments_sent_upstream({"note": original})
+
+    assert exc_info.value.status_code == 400
+    assert "note" in str(exc_info.value.detail)
 
 
 class MaskingGuardrail(CustomGuardrail):
