@@ -1080,6 +1080,34 @@ def _build_custom_pricing_entry(
     return entry
 
 
+def _model_has_known_pricing(model: str, custom_llm_provider: Optional[str]) -> bool:
+    """Return True if ``model`` already resolves to a priced entry in litellm.model_cost.
+
+    Per-request custom pricing must not overwrite the shared canonical
+    ``litellm.model_cost`` entry, otherwise a single request that supplies
+    ``input_cost_per_token`` (e.g. a BYOK deployment priced at 0) would re-price
+    the canonical model for the whole process and silently mis-bill all other
+    traffic. Known models get their per-request rates applied via the
+    ``custom_cost_per_token`` threading in the cost calculator instead, so the
+    registration is only needed for otherwise-unknown models. See issue #30081.
+    """
+    try:
+        existing_model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        return False
+
+    if not existing_model_info:
+        return False
+
+    return (
+        existing_model_info.get("input_cost_per_token") is not None
+        or existing_model_info.get("output_cost_per_token") is not None
+        or existing_model_info.get("input_cost_per_second") is not None
+    )
+
+
 @tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
@@ -1447,15 +1475,24 @@ def completion(  # type: ignore # noqa: PLR0915
         if (
             input_cost_per_token is not None and output_cost_per_token is not None
         ) or input_cost_per_second is not None:
-            litellm.register_model(
-                {
-                    f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=kwargs,
-                        model_info=model_info,
-                    )
-                }
-            )
+            if _model_has_known_pricing(
+                model=model, custom_llm_provider=custom_llm_provider
+            ):
+                verbose_logger.warning(
+                    f"Custom pricing for model='{model}' not registered: model already "
+                    f"has canonical pricing in litellm.model_cost. Per-request rates "
+                    f"will be applied via cost threading for this request only."
+                )
+            else:
+                litellm.register_model(
+                    {
+                        f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
+                            custom_llm_provider=custom_llm_provider,
+                            kwargs=kwargs,
+                            model_info=model_info,
+                        )
+                    }
+                )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {}  # type: ignore
         if (
@@ -4889,15 +4926,24 @@ def embedding(  # noqa: PLR0915
     if (
         input_cost_per_token is not None and output_cost_per_token is not None
     ) or input_cost_per_second is not None:
-        litellm.register_model(
-            {
-                f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
-                    custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
-                    model_info=kwargs.get("model_info"),
-                )
-            }
-        )
+        if _model_has_known_pricing(
+            model=model, custom_llm_provider=custom_llm_provider
+        ):
+            verbose_logger.warning(
+                f"Custom pricing for model='{model}' not registered: model already "
+                f"has canonical pricing in litellm.model_cost. Per-request rates "
+                f"will be applied via cost threading for this request only."
+            )
+        else:
+            litellm.register_model(
+                {
+                    f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
+                        custom_llm_provider=custom_llm_provider,
+                        kwargs=kwargs,
+                        model_info=kwargs.get("model_info"),
+                    )
+                }
+            )
 
     litellm_params_dict = get_litellm_params(**kwargs)
 
