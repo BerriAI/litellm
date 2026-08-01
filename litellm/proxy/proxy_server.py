@@ -301,6 +301,7 @@ from litellm.proxy.common_request_processing import (
     create_response,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -546,6 +547,7 @@ from litellm.proxy.utils import (
     _get_redoc_url,
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
+    evict_config_param,
     get_config_param,
     get_custom_url,
     get_error_message_str,
@@ -1150,6 +1152,8 @@ async def proxy_startup_event(app: FastAPI):
             await prisma_client.stop_db_health_watchdog_task()
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
+
+    await proxy_config.stop_config_sync_subscriber()
 
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
@@ -3836,6 +3840,7 @@ class ProxyConfig:
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
         self._last_hashicorp_vault_config: Optional[Dict[str, Any]] = None
         self.worker_registry: List["WorkerRegistryEntry"] = []
+        self.config_sync_subscriber: ConfigSyncSubscriber | None = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -6216,6 +6221,38 @@ class ProxyConfig:
 
         return still_desired_ids
 
+    def start_config_sync_subscriber(
+        self,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        redis_cache: Optional[RedisCache],
+    ) -> None:
+        if redis_cache is None or self.config_sync_subscriber is not None:
+            return
+
+        async def _resync_config_from_db() -> None:
+            await self.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+
+        async def _resync_credentials_from_db() -> None:
+            await self.get_credentials(prisma_client=prisma_client)
+
+        subscriber = ConfigSyncSubscriber(
+            redis_cache=redis_cache,
+            resync_callbacks=(_resync_config_from_db, _resync_credentials_from_db),
+        )
+        self.config_sync_subscriber = subscriber
+        subscriber.start()
+
+    async def stop_config_sync_subscriber(self) -> None:
+        subscriber = self.config_sync_subscriber
+        if subscriber is None:
+            return
+        self.config_sync_subscriber = None
+        try:
+            await subscriber.stop()
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error stopping config sync subscriber: {e}")
+
     async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
         """
         Use this to read non-llm objects from the db and initialize them
@@ -6507,7 +6544,7 @@ class ProxyConfig:
                         },
                     },
                 )
-                await invalidate_config_param("model_cost_map_reload_config")
+                await evict_config_param("model_cost_map_reload_config")
 
                 verbose_proxy_logger.info(
                     f"Model cost map reloaded successfully. Models count: {len(new_model_cost_map) if new_model_cost_map else 0}"
@@ -6602,7 +6639,7 @@ class ProxyConfig:
                         },
                     },
                 )
-                await invalidate_config_param("anthropic_beta_headers_reload_config")
+                await evict_config_param("anthropic_beta_headers_reload_config")
 
                 # Count providers in config
                 provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
@@ -8207,6 +8244,12 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
+
+            proxy_config.start_config_sync_subscriber(
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                redis_cache=redis_usage_cache,
+            )
 
         if store_model_in_db is not True:
             await proxy_config.init_mcp_servers_from_db()

@@ -38,6 +38,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.config_sync_pubsub import (
+    coordination_redis_cache,
+    publish_config_change,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
@@ -811,6 +815,9 @@ async def delete_team_models(
             if model_ids:
                 await tx.litellm_proxymodeltable.delete_many(where={"model_id": {"in": model_ids}})
                 deleted_model_ids.extend(model_ids)
+
+    if deleted_model_ids:
+        await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
 
     if llm_router is not None:
         for model_id in deleted_model_ids:
