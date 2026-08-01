@@ -6726,6 +6726,17 @@ def test_update_litellm_settings_ssrf_applies_documented_location():
         assert litellm.user_url_allowed_hosts == ["files.example.com"]
 
 
+def test_update_litellm_settings_ssrf_ignores_non_mapping():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch.object(litellm, "user_url_allowed_hosts", ["keep.example.com"]):
+        proxy_config._update_litellm_settings_ssrf(db_litellm_settings=None)
+
+        assert litellm.user_url_allowed_hosts == ["keep.example.com"]
+
+
 @pytest.mark.asyncio
 async def test_update_general_settings_wins_over_litellm_settings_for_ssrf_keys():
     """general_settings wins on conflict, matching the YAML load order in load_config."""
