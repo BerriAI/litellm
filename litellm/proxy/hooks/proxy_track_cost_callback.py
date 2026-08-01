@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, List, Optional, Union, cast
 
@@ -8,6 +9,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -106,23 +108,24 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata,
         )
 
-        existing_metadata: dict = request_data.get("metadata", None) or {}
-        existing_metadata.update(_metadata)
-
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
 
         existing_litellm_params = request_data.get("litellm_params", {})
-        existing_litellm_metadata = existing_litellm_params.get("metadata", {}) or {}
-
-        # Preserve tags from existing metadata
-        if existing_litellm_metadata.get("tags"):
-            existing_metadata["tags"] = existing_litellm_metadata.get("tags")
+        existing_metadata = _ProxyDBLogger._get_merged_failure_metadata(
+            request_data=request_data,
+            failure_metadata=_metadata,
+        )
 
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
         request_data["litellm_params"]["metadata"] = existing_metadata
+        if _ProxyDBLogger._should_write_failure_litellm_metadata(
+            request_data=request_data,
+            litellm_params=existing_litellm_params,
+        ):
+            request_data["litellm_params"]["litellm_metadata"] = dict(existing_metadata)
 
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:
@@ -174,6 +177,73 @@ class _ProxyDBLogger(CustomLogger):
             start_time=actual_start_time,
             end_time=datetime.now(),
             org_id=user_api_key_dict.org_id,
+        )
+
+    @staticmethod
+    def _get_merged_failure_metadata(
+        request_data: Mapping[str, object],
+        failure_metadata: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        merged_metadata = {}
+        existing_litellm_params = request_data.get("litellm_params", {}) or {}
+        trusted_metadata_key = _ProxyDBLogger._get_failure_metadata_variable_name(
+            request_data=request_data,
+        )
+        top_level_metadata = request_data.get(trusted_metadata_key, {}) or {}
+
+        def merge_metadata(
+            metadata: object,
+            *,
+            overwrite: bool = False,
+            overwrite_keys: frozenset[str] | None = None,
+            skip_user_api_key_fields: bool = False,
+        ) -> None:
+            if not isinstance(metadata, dict):
+                return
+            overwrite_keys = overwrite_keys or frozenset()
+            for key, value in metadata.items():
+                if skip_user_api_key_fields and (key == "user_api_key" or key.startswith("user_api_key_")):
+                    continue
+                if value in (None, "", {}):
+                    continue
+                if not overwrite and key not in overwrite_keys and key in merged_metadata:
+                    continue
+                merged_metadata[key] = value
+
+        merge_metadata(
+            top_level_metadata,
+            overwrite=True,
+            skip_user_api_key_fields=True,
+        )
+        merge_metadata(
+            existing_litellm_params.get("metadata", {}) or {},
+            overwrite_keys=frozenset(("tags",)),
+            skip_user_api_key_fields=True,
+        )
+        merge_metadata(
+            existing_litellm_params.get("litellm_metadata", {}) or {},
+            skip_user_api_key_fields=True,
+        )
+        merge_metadata(failure_metadata, overwrite=True)
+        return merged_metadata
+
+    @staticmethod
+    def _get_failure_metadata_variable_name(request_data: Mapping[str, object]) -> str:
+        proxy_server_request = request_data.get("proxy_server_request", {}) or {}
+        metadata_variable_name = proxy_server_request.get("metadata_variable_name")
+        if metadata_variable_name in ("metadata", "litellm_metadata"):
+            return metadata_variable_name
+        return get_metadata_variable_name_from_kwargs(request_data)
+
+    @staticmethod
+    def _should_write_failure_litellm_metadata(
+        request_data: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> bool:
+        return (
+            _ProxyDBLogger._get_failure_metadata_variable_name(request_data) == "litellm_metadata"
+            or isinstance(request_data.get("litellm_metadata"), dict)
+            or isinstance(litellm_params.get("litellm_metadata"), dict)
         )
 
     @log_db_metrics
