@@ -75,7 +75,14 @@ install-dev:
 bootstrap:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
-	cd ui/litellm-dashboard && npm ci --no-audit --no-fund
+	@cd ui/litellm-dashboard && \
+	dep_hash=$$(git hash-object package.json package-lock.json); \
+	stamp=node_modules/.bootstrap-stamp; \
+	if [ "$$(cat "$$stamp" 2>/dev/null)" = "$$dep_hash" ]; then \
+		echo "bootstrap: ui deps up to date, skipping npm ci"; \
+	else \
+		npm ci --no-audit --no-fund && echo "$$dep_hash" > "$$stamp"; \
+	fi
 	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
 	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
 		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
