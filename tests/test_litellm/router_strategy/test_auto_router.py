@@ -156,6 +156,22 @@ class TestExtractTextFromMessages:
         assert result == ""
 
 
+def _routes(*names):
+    routes = []
+    for name in names:
+        route = MagicMock()
+        route.name = name
+        routes.append(route)
+    return routes
+
+
+def _configure_candidates(router, group_to_model):
+    router.model_list = [
+        {"model_name": group, "litellm_params": {"model": model}} for group, model in group_to_model.items()
+    ]
+    router.model_name_to_deployment_indices = {group: [i] for i, group in enumerate(group_to_model)}
+
+
 @pytest.fixture
 def mock_router_instance():
     """Create a mock LiteLLM Router instance."""
@@ -318,21 +334,6 @@ class TestAutoRouter:
         assert result is None
 
     @patch("semantic_router.routers.SemanticRouter")
-    def test_init_defaults_savings_baseline_model(self, mock_semantic_router_class, mock_router_instance):
-        """Unconfigured deployments fall back to the flagship default, not an empty baseline."""
-        mock_semantic_router_class.from_json.return_value = mock_semantic_router_class
-
-        auto_router = AutoRouter(
-            model_name="test-auto-router",
-            auto_router_config_path="test/path/router.json",
-            default_model="gpt-4o-mini",
-            embedding_model="text-embedding-model",
-            litellm_router_instance=mock_router_instance,
-        )
-
-        assert auto_router.savings_baseline_model == AutoRouter.DEFAULT_SAVINGS_BASELINE_MODEL
-
-    @patch("semantic_router.routers.SemanticRouter")
     def test_init_honors_configured_savings_baseline_model(self, mock_semantic_router_class, mock_router_instance):
         """An operator-configured baseline overrides the flagship default."""
         mock_semantic_router_class.from_json.return_value = mock_semantic_router_class
@@ -383,3 +384,105 @@ class TestAutoRouter:
 
         assert result is not None
         assert result.savings_baseline_model == "claude-opus-5"
+
+
+class TestSavingsBaselineModel:
+    """The counterfactual the cost dashboard measures auto-router savings against.
+
+    Constructed without __init__ on purpose: resolving the baseline touches only the
+    router's own deployments, never semantic_router, so this runs wherever the rest of
+    the beta suite is skipped.
+    """
+
+    @staticmethod
+    def _auto_router(group_to_model: dict, route_names: list, default_model: str, configured=None) -> AutoRouter:
+        parent = MagicMock()
+        parent.model_list = [
+            {"model_name": group, "litellm_params": {"model": model}} for group, model in group_to_model.items()
+        ]
+        parent.model_name_to_deployment_indices = {group: [i] for i, group in enumerate(group_to_model)}
+
+        auto_router = AutoRouter.__new__(AutoRouter)
+        auto_router.loaded_routes = []
+        for name in route_names:
+            route = MagicMock()
+            route.name = name
+            auto_router.loaded_routes.append(route)
+        auto_router.default_model = default_model
+        auto_router.litellm_router_instance = parent
+        auto_router.configured_savings_baseline_model = configured
+        auto_router._derived_savings_baseline_model = None
+        auto_router._savings_baseline_derived = False
+        return auto_router
+
+    def test_route_names_resolve_through_the_parent_router_to_pricable_models(self):
+        """Routes name the router's own model groups, not models, so a group has to be
+        resolved to the model it actually calls before anything can be priced."""
+        auto_router = self._auto_router(
+            {"cheap-tier": "anthropic/claude-haiku-4-5", "mid-tier": "anthropic/claude-sonnet-5"},
+            ["cheap-tier", "mid-tier"],
+            "cheap-tier",
+        )
+        assert sorted(auto_router._candidate_models()) == [
+            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-sonnet-5",
+        ]
+
+    def test_baseline_is_the_priciest_model_this_router_could_have_picked(self):
+        """Without the router a deployment picks one model that can carry the hardest
+        request, so the counterfactual is this router's priciest candidate. A fixed
+        flagship credits savings against a model the operator would never have run: a
+        router choosing only between sonnet and haiku saved nobody the price of opus."""
+        sonnet_only = self._auto_router(
+            {"cheap-tier": "anthropic/claude-haiku-4-5", "mid-tier": "anthropic/claude-sonnet-5"},
+            ["cheap-tier", "mid-tier"],
+            "cheap-tier",
+        )
+        assert sonnet_only.savings_baseline_model == "anthropic/claude-sonnet-5"
+
+        with_flagship = self._auto_router(
+            {
+                "cheap-tier": "anthropic/claude-haiku-4-5",
+                "mid-tier": "anthropic/claude-sonnet-5",
+                "big-tier": "anthropic/claude-opus-5",
+            },
+            ["cheap-tier", "mid-tier", "big-tier"],
+            "cheap-tier",
+        )
+        assert with_flagship.savings_baseline_model == "anthropic/claude-opus-5"
+
+    def test_the_default_model_counts_as_a_candidate(self):
+        auto_router = self._auto_router(
+            {"cheap-tier": "anthropic/claude-haiku-4-5", "fallback": "anthropic/claude-opus-5"},
+            ["cheap-tier"],
+            "fallback",
+        )
+        assert auto_router.savings_baseline_model == "anthropic/claude-opus-5"
+
+    def test_an_explicit_baseline_overrides_the_derived_one(self):
+        auto_router = self._auto_router(
+            {"cheap-tier": "anthropic/claude-haiku-4-5"},
+            ["cheap-tier"],
+            "cheap-tier",
+            configured="claude-opus-5",
+        )
+        assert auto_router.savings_baseline_model == "claude-opus-5"
+
+    def test_nothing_priceable_disables_the_driver_rather_than_inventing_a_baseline(self):
+        """A missing number beats a fabricated one."""
+        auto_router = self._auto_router({}, ["not-a-real-model"], "also-not-real")
+        assert auto_router.savings_baseline_model is None
+
+    def test_the_derived_baseline_is_resolved_once(self):
+        """The parent router's deployments are still being assembled while this router
+        is constructed, so resolution is lazy; it must not re-derive per request."""
+        auto_router = self._auto_router(
+            {"cheap-tier": "anthropic/claude-haiku-4-5", "mid-tier": "anthropic/claude-sonnet-5"},
+            ["cheap-tier", "mid-tier"],
+            "cheap-tier",
+        )
+        assert auto_router.savings_baseline_model == "anthropic/claude-sonnet-5"
+
+        auto_router.litellm_router_instance.model_list = []
+        auto_router.litellm_router_instance.model_name_to_deployment_indices = {}
+        assert auto_router.savings_baseline_model == "anthropic/claude-sonnet-5"

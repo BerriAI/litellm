@@ -20,7 +20,6 @@ else:
 
 class AutoRouter(CustomLogger):
     DEFAULT_AUTO_SYNC_VALUE = "local"
-    DEFAULT_SAVINGS_BASELINE_MODEL = "claude-opus-5"
 
     def __init__(
         self,
@@ -42,7 +41,7 @@ class AutoRouter(CustomLogger):
             default_model: The default model to use if no route is found.
             embedding_model: The embedding model to use for the auto-router.
             litellm_router_instance: The instance of the LiteLLM Router.
-            savings_baseline_model: The counterfactual model the dashboard measures savings against; falls back to DEFAULT_SAVINGS_BASELINE_MODEL.
+            savings_baseline_model: Overrides the counterfactual model the dashboard measures savings against; derived from this router's own candidates when unset.
         """
         from semantic_router.routers import SemanticRouter
 
@@ -54,7 +53,76 @@ class AutoRouter(CustomLogger):
         self.default_model = default_model
         self.embedding_model: str = embedding_model
         self.litellm_router_instance: "Router" = litellm_router_instance
-        self.savings_baseline_model: str = savings_baseline_model or self.DEFAULT_SAVINGS_BASELINE_MODEL
+        self.configured_savings_baseline_model: str | None = savings_baseline_model
+        self._derived_savings_baseline_model: str | None = None
+        self._savings_baseline_derived = False
+
+    def _deployment_model(self, index: int) -> str | None:
+        """The model a deployment actually calls."""
+        params = self.litellm_router_instance.model_list[index].get("litellm_params")
+        return params.get("model") if isinstance(params, dict) else None
+
+    def _models_for_group(self, group_name: str) -> tuple[str, ...]:
+        """The models a route's model group actually calls, or the name itself when the
+        parent router has no deployment under it."""
+        indices = self.litellm_router_instance.model_name_to_deployment_indices.get(group_name)
+        if not indices:
+            return (group_name,)
+        return tuple(model for index in indices if (model := self._deployment_model(index)))
+
+    def _candidate_models(self) -> tuple[str, ...]:
+        """Every model this router can route to, as pricable model names.
+
+        Routes name the router's own model groups rather than models, so each is
+        resolved through the parent router's deployments before anything is priced.
+        """
+        group_names = frozenset(
+            name for name in (*(route.name for route in self.loaded_routes), self.default_model) if name
+        )
+        return tuple(model for group_name in group_names for model in self._models_for_group(group_name))
+
+    @staticmethod
+    def _priced_candidate(model: str) -> tuple[float, float, str] | None:
+        """``(output_rate, input_rate, model)``, or ``None`` when the model has no pricing."""
+        import litellm
+
+        try:
+            info = litellm.get_model_info(model=model)
+        except Exception as e:  # noqa: BLE001  # unmapped candidates simply cannot be the baseline
+            verbose_router_logger.debug("auto-router savings: no pricing for candidate %s (%s)", model, e)
+            return None
+        return (info.get("output_cost_per_token") or 0.0, info.get("input_cost_per_token") or 0.0, model)
+
+    def _most_expensive_candidate(self) -> str | None:
+        """The priciest candidate by output rate, input rate breaking the tie."""
+        priced = tuple(
+            candidate for model in self._candidate_models() if (candidate := self._priced_candidate(model)) is not None
+        )
+        if not priced:
+            verbose_router_logger.debug("auto-router savings: no priceable candidates; savings driver disabled")
+            return None
+        return max(priced)[2]
+
+    @property
+    def savings_baseline_model(self) -> str | None:
+        """The model this router's savings are measured against.
+
+        Without the router a deployment has to pick one model, and it has to be one that
+        can carry the hardest request, so the counterfactual is the priciest model this
+        router could have chosen. Deriving it from the router's own candidates keeps it
+        honest: a fixed flagship credits savings against a model the operator would
+        never have run, and drifts the moment the routes change.
+
+        Resolved lazily and cached, because the parent router's deployments are still
+        being assembled while this router is constructed. ``None`` when nothing can be
+        priced, which zeroes the driver rather than inventing a baseline.
+        """
+        if self.configured_savings_baseline_model:
+            return self.configured_savings_baseline_model
+        if not self._savings_baseline_derived:
+            self._derived_savings_baseline_model = self._most_expensive_candidate()
+            self._savings_baseline_derived = True
+        return self._derived_savings_baseline_model
 
     def _load_semantic_routing_routes(self) -> List[Route]:
         from semantic_router.routers import SemanticRouter
