@@ -79,7 +79,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
-from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
+from litellm.llms.anthropic.common_utils import (
+    normalize_anthropic_tool_use_id,
+    sanitize_tool_use_ids_in_anthropic_messages,
+)
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
 )
@@ -184,6 +187,58 @@ class AnthropicAdapter:
         #########################################################
         # Created Typed Request Body
         #########################################################
+        # Normalize tool_use / tool_result ids to Anthropic's `^[a-zA-Z0-9_-]+$`
+        # pattern BEFORE translating to OpenAI format. The response direction
+        # (translate_openai_response_to_anthropic) already normalizes ids via
+        # normalize_anthropic_tool_use_id, so a cross-provider client that
+        # echoes back the original id (e.g. Claude Code's `ToolSearch:15`) in
+        # tool_result.tool_use_id would otherwise produce an OpenAI tool message
+        # whose tool_call_id no longer matches the assistant tool_call id,
+        # causing OpenAI-compatible backends (e.g. Moonshot Kimi) to reject the
+        # request with an orphaned/mismatched tool_call_id error.
+        messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+
+        # Repair orphaned tool_use / server_tool_use blocks that have no
+        # matching tool_result before translating to OpenAI format. Clients
+        # that consume tool results internally (e.g. Claude Desktop's
+        # deferred-tool-loading ToolSearch) replay the assistant tool_use
+        # without a tool_result. The adapter faithfully translates the orphan
+        # to an OpenAI tool_call with no matching tool message, and
+        # OpenAI-compatible backends reject the request (400:
+        # "tool_call_ids did not have response messages"). Inject a synthetic
+        # tool_result so the translation emits a matching role:"tool" message.
+        answered = set()
+        for m in messages:
+            if isinstance(m, dict) and isinstance(m.get("content"), list):
+                for block in m["content"]:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        answered.add(block.get("tool_use_id"))
+        repaired = []
+        for m in messages:
+            repaired.append(m)
+            if not (isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("content"), list)):
+                continue
+            for block in m["content"]:
+                if isinstance(block, dict) and block.get("type") in (
+                    "tool_use",
+                    "server_tool_use",
+                ):
+                    tid = block.get("id")
+                    if tid and tid not in answered:
+                        repaired.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": tid,
+                                        "content": "(tool result unavailable)",
+                                    }
+                                ],
+                            }
+                        )
+        messages = repaired
+
         request_body = AnthropicMessagesRequest(model=model, messages=messages, **kwargs)
 
         (
@@ -497,6 +552,30 @@ class LiteLLMAnthropicMessagesAdapter:
                                         )
                                         self._add_cache_control_if_applicable(content, tool_result, model)
                                         tool_message_list.append(tool_result)  # type: ignore[arg-type]
+                        elif content.get("type") == "web_search_tool_result":
+                            # Anthropic-native web_search_tool_result blocks have
+                            # no direct equivalent in OpenAI's chat-completions
+                            # spec. Convert to a standard tool_result so the
+                            # block is not silently dropped (leaving the
+                            # assistant tool_call orphaned and causing 400s on
+                            # OpenAI-compatible backends like Moonshot Kimi).
+                            ws_content = content.get("content")
+                            if isinstance(ws_content, list):
+                                text = "\n".join(
+                                    "{} {}".format(p.get("title", ""), p.get("url", "")).strip()
+                                    if isinstance(p, dict)
+                                    else str(p)
+                                    for p in ws_content
+                                )
+                            else:
+                                text = str(ws_content) if ws_content is not None else ""
+                            tool_result = ChatCompletionToolMessage(
+                                role="tool",
+                                tool_call_id=content.get("tool_use_id", ""),
+                                content=text or "web search result",
+                            )
+                            self._add_cache_control_if_applicable(content, tool_result, model)
+                            tool_message_list.append(tool_result)  # type: ignore[arg-type]
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
