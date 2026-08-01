@@ -50,32 +50,39 @@ class StandardBuiltInToolCostTracking:
         """
         standard_built_in_tools_params = standard_built_in_tools_params or {}
 
-        # Handle web search
-        if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-            response_object=response_object, usage=usage
-        ):
-            return StandardBuiltInToolCostTracking._handle_web_search_cost(
+        web_search_cost = (
+            StandardBuiltInToolCostTracking._handle_web_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
                 standard_built_in_tools_params=standard_built_in_tools_params,
                 response_object=response_object,
             )
+            if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+                response_object=response_object, usage=usage
+            )
+            else 0.0
+        )
 
-        # Handle file search
-        if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response_object=response_object):
-            return StandardBuiltInToolCostTracking._handle_file_search_cost(
+        file_search_cost = (
+            StandardBuiltInToolCostTracking._handle_file_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 standard_built_in_tools_params=standard_built_in_tools_params,
             )
+            if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(
+                response_object=response_object
+            )
+            else 0.0
+        )
 
-        # Handle Azure assistant features
-        return StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+        azure_assistant_cost = StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
             model=model,
             custom_llm_provider=custom_llm_provider,
             standard_built_in_tools_params=standard_built_in_tools_params,
         )
+
+        return web_search_cost + file_search_cost + azure_assistant_cost
 
     @staticmethod
     def _handle_web_search_cost(
@@ -428,12 +435,11 @@ class StandardBuiltInToolCostTracking:
         Returns:
             True if the ResponsesAPIResponse includes one of the specified output types, False otherwise.
         """
-        output = response_object.output
-        for output_item in output:
-            _output_type: Optional[str] = getattr(output_item, "type", None)
-            if _output_type == output_type:
-                return True
-        return False
+        return any(
+            (output_item.get("type") if isinstance(output_item, dict) else getattr(output_item, "type", None))
+            == output_type
+            for output_item in response_object.output
+        )
 
     @staticmethod
     def _safe_get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Optional[ModelInfo]:

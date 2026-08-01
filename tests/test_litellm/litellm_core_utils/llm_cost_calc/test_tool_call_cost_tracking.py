@@ -604,3 +604,45 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
 
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+def test_web_search_and_file_search_costs_are_both_billed(local_model_cost_map):
+    """
+    A response that used both web search and file search must be billed for both.
+
+    Regression for the bug where get_cost_for_built_in_tools returned after the first
+    matching tool category, silently dropping the second tool's cost.
+    """
+    from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    model = "gpt-4o-search-preview"
+    response = ResponsesAPIResponse(
+        id="resp_123",
+        created_at=1234567890,
+        model=model,
+        object="response",
+        output=[
+            {"type": "web_search_call", "id": "ws_1", "status": "completed"},
+            {"type": "file_search_call", "id": "fs_1", "status": "completed"},
+        ],
+    )
+    standard_built_in_tools_params = StandardBuiltInToolsParams(
+        web_search_options=WebSearchOptions(search_context_size="high"),
+        file_search=FileSearchTool(type="file_search"),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+
+    expected_web_search_cost = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_high"
+    ]
+    expected_file_search_cost = OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
+    assert expected_web_search_cost > 0
+    assert expected_file_search_cost > 0
+    assert cost == pytest.approx(expected_web_search_cost + expected_file_search_cost)
