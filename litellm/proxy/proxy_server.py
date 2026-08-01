@@ -1041,6 +1041,8 @@ async def proxy_startup_event(app: FastAPI):
         redis_usage_cache=transaction_buffer_redis_cache,
     )
 
+    ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings=general_settings)
+
     ## SEMANTIC TOOL FILTER ##
     # Read litellm_settings from config for semantic filter initialization
     try:
@@ -7711,6 +7713,37 @@ class ProxyStartupEvent:
         cost_tracking()
 
         proxy_logging_obj.startup_event(llm_router=llm_router, redis_usage_cache=redis_usage_cache)
+
+    @staticmethod
+    def _warn_if_mock_testing_params_enabled(general_settings: dict) -> None:
+        """Announce, loudly, that any caller may inject synthetic failures."""
+        from litellm.proxy.route_llm_request import (
+            GATED_MOCK_PARAM_NAMES,
+            MOCK_TESTING_CONFIG_KEY,
+        )
+
+        if general_settings.get(MOCK_TESTING_CONFIG_KEY, False) is not True:
+            return
+
+        verbose_proxy_logger.warning(
+            "\n%s\n"
+            " DANGEROUS SETTING ENABLED\n"
+            " general_settings.%s = true\n"
+            "\n"
+            " Any caller with a valid key on this proxy can now inject synthetic\n"
+            " failures and latency into their own requests using these body params:\n"
+            "%s\n"
+            "\n"
+            " A request using them consumes a connection and a concurrency slot\n"
+            " without reaching a provider, and returns an error the caller chose.\n"
+            "\n"
+            " Intended for testing fallback chains. Do not leave enabled.\n"
+            "%s",
+            "=" * 72,
+            MOCK_TESTING_CONFIG_KEY,
+            "\n".join(f"   {name}" for name in GATED_MOCK_PARAM_NAMES),
+            "=" * 72,
+        )
 
     @staticmethod
     def _validate_redis_transaction_buffer_config(
