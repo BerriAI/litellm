@@ -33,7 +33,9 @@ class AliyunIQSSearchRequest(_AliyunIQSSearchRequestRequired, total=False):
     engineType: str  # Optional - Generic (default) / GenericAdvanced / LiteAdvanced / Deep
     timeRange: str  # Optional - OneDay / OneWeek / OneMonth / OneYear / NoLimit (default)
     category: str  # Optional - industry category (finance, law, medical, ...)
-    advancedParams: dict  # Optional - numResults (1-50), start/endPublishedDate, ...
+    advancedParams: (
+        dict  # mutable-ok: nested API payload object; Optional - numResults (1-50), start/endPublishedDate, ...
+    )
 
 
 class AliyunIQSSearchConfig(BaseSearchConfig):
@@ -45,11 +47,11 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: overrides BaseSearchConfig dict-shaped interface
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: overrides BaseSearchConfig dict-shaped interface
         """
         Validate environment and return headers.
         """
@@ -69,8 +71,8 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] = None,
+        optional_params: dict,  # mutable-ok: overrides BaseSearchConfig dict-shaped interface
+        data: dict | list[dict] = None,  # mutable-ok: overrides BaseSearchConfig dict-shaped interface
         **kwargs,
     ) -> str:
         """
@@ -86,10 +88,10 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: str | list[str],
-        optional_params: dict,
+        query: str | list[str],  # mutable-ok: overrides BaseSearchConfig dict-shaped interface
+        optional_params: dict,  # mutable-ok: overrides BaseSearchConfig dict-shaped interface
         **kwargs,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: returns httpx json payload dict
         """
         Transform Search request to Aliyun IQS UnifiedSearch API format.
 
@@ -108,19 +110,19 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
             # IQS only supports single string queries
             query = " ".join(query)
 
-        request_data: AliyunIQSSearchRequest = {
+        request_data: AliyunIQSSearchRequest = {  # mutable-ok: request payload built once, serialized by httpx json=
             "query": query,
             "engineType": optional_params.get("engineType", "Generic"),
         }
 
         # Transform Perplexity unified spec parameters to IQS format
         if "max_results" in optional_params:
-            request_data["advancedParams"] = {
+            request_data["advancedParams"] = {  # mutable-ok: nested payload dict
                 "numResults": optional_params["max_results"],
             }
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data = dict(request_data)  # mutable-ok: payload passed to httpx json= requires a real dict
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -155,8 +157,8 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
         response_json = raw_response.json()
 
         # Transform pageItems to SearchResult objects
-        results = []
-        for item in response_json.get("pageItems", []):
+        results = []  # mutable-ok: collected into pydantic SearchResponse(results=...)
+        for item in response_json.get("pageItems") or ():
             search_result = SearchResult(
                 title=item.get("title", ""),
                 url=item.get("link", ""),
