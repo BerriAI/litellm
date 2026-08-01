@@ -123,6 +123,7 @@ from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
     filter_team_based_models,
     filter_web_search_deployments,
+    model_group_pinned_fallbacks,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -4866,6 +4867,7 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_file
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["fallbacks"] = model_group_pinned_fallbacks()
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -5127,6 +5129,7 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["fallbacks"] = model_group_pinned_fallbacks()
             metadata_variable_name = _get_router_metadata_variable_name(function_name="_acreate_batch")
             self._update_kwargs_before_fallbacks(
                 model=model,
@@ -5343,6 +5346,7 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acancel_batch
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["fallbacks"] = model_group_pinned_fallbacks()
             metadata_variable_name = _get_router_metadata_variable_name(function_name="_acancel_batch")
             self._update_kwargs_before_fallbacks(
                 model=model,
