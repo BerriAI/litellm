@@ -4298,6 +4298,7 @@ def get_optional_params(
                 optional_params=optional_params,
                 model=_azure_detection_model,
                 drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                deployment_model=model,
             )
         else:
             verbose_logger.debug(
