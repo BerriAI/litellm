@@ -21,6 +21,7 @@ sys.path.insert(
 
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
+from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from tests.litellm_utils_tests.base_token_counter_test import BaseTokenCounterTest
 
 
@@ -110,6 +111,51 @@ class TestBedrockTokenCounter(BaseTokenCounterTest):
         assert (
             result.error is not True
         ), f"Token counting should not error: {result.error_message}"
+
+
+@pytest.mark.parametrize(
+    "model_to_use, expected_resolved_model",
+    [
+        (
+            "bedrock/global.anthropic.claude-opus-4-8",
+            "global.anthropic.claude-opus-4-8",
+        ),
+        (
+            "bedrock/eu.anthropic.claude-sonnet-4-6",
+            "eu.anthropic.claude-sonnet-4-6",
+        ),
+        (
+            "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_count_tokens_preserves_cross_region_inference_profile_prefix(
+    model_to_use, expected_resolved_model
+):
+    """The cross-region inference-profile prefix (global./us./eu./apac./...) must be
+    preserved in the model passed to the count-tokens handler. Stripping it down to the
+    bare foundation-model ID makes Bedrock reject inference-profile-only models with a 400
+    on the count-tokens route (issue #32683)."""
+    from unittest.mock import AsyncMock
+
+    counter = BedrockTokenCounter()
+
+    with patch.object(
+        BedrockCountTokensHandler,
+        "handle_count_tokens_request",
+        new=AsyncMock(return_value={"input_tokens": 7}),
+    ) as mock_handle:
+        await counter.count_tokens(
+            model_to_use=model_to_use,
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"aws_region_name": "eu-central-1"}},
+            request_model=model_to_use,
+        )
+
+    assert mock_handle.call_args.kwargs["resolved_model"] == expected_resolved_model
 
 
 class TestBedrockCountTokensEndpoint:

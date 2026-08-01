@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
+from litellm.llms.bedrock.common_utils import BedrockError, strip_bedrock_routing_prefix
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
@@ -67,8 +67,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         if system:
             request_data["system"] = system
 
-        # Get the resolved model (strip prefixes like bedrock/, converse/, etc.)
-        resolved_model = get_bedrock_base_model(model_to_use)
+        resolved_model = strip_bedrock_routing_prefix(model_to_use)
 
         try:
             handler = BedrockCountTokensHandler()
