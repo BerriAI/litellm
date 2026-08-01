@@ -19,9 +19,6 @@ from typing import (
     overload,
 )
 
-import os
-from urllib.parse import urlparse
-
 import httpx
 
 import litellm
@@ -412,15 +409,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         api_base. Those can understand cache_control, so it must survive there.
         Real OpenAI cannot, so it is still stripped for an openai.com host.
         """
-        if custom_llm_provider != "openai":
-            return False
-        resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-        if not resolved_api_base:
-            return False
-        hostname = urlparse(resolved_api_base).hostname
-        if hostname is None:
-            return False
-        return hostname != "openai.com" and not hostname.endswith(".openai.com")
+        from litellm.llms.openai.common_utils import (
+            should_preserve_cache_control_for_endpoint,
+        )
+
+        return should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base)
 
     def transform_request(
         self,
