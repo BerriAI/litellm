@@ -203,8 +203,8 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <SummaryCard
           label="Auto-router savings"
           value={usd(autorouterTotal)}
-          hint="vs. the router's baseline model"
-          info="What this traffic would have cost on the router's baseline model, minus what it actually cost. Switching models leaves the new one with a cold cache, so the cache-write it pays counts against the saving; a negative total means routing cost more than staying on the baseline would have."
+          hint="vs. the priciest model it could pick"
+          info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost."
         />
       </div>
 
