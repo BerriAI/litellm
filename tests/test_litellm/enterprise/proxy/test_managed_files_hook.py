@@ -138,6 +138,43 @@ async def test_should_pass_credentials_to_afile_retrieve():
 
 
 @pytest.mark.asyncio
+async def test_get_user_created_file_ids_skips_null_file_object():
+    """
+    Regression test for issue #35361: GET /v1/files 500s when a managed row
+    has a null file_object column. get_user_created_file_ids must skip those
+    rows and return the parseable ones instead of raising.
+    """
+    managed_files = _make_managed_files_instance()
+    user_api_key_dict = _make_user_api_key_dict()
+
+    valid_file = _make_file_object("file-valid-abc")
+    valid_row = MagicMock()
+    valid_row.unified_file_id = "litellm_proxy;valid"
+    valid_row.file_object = json.dumps(valid_file.model_dump())
+
+    null_row = MagicMock()
+    null_row.unified_file_id = "litellm_proxy;null-poller-row"
+    null_row.file_object = None
+
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[valid_row, null_row]
+    )
+
+    with patch(
+        "litellm_enterprise.proxy.hooks.managed_files.build_owner_filter",
+        return_value={"user_id": "test-user"},
+    ):
+        result = await managed_files.get_user_created_file_ids(
+            user_api_key_dict=user_api_key_dict,
+            model_object_ids=["model-deploy-xyz"],
+        )
+
+    assert len(result) == 1, (
+        f"Expected 1 result (null row skipped), got {len(result)}: {result}"
+    )
+    assert result[0].id == "file-valid-abc"
+
+@pytest.mark.asyncio
 async def test_should_fallback_when_no_router():
     """
     When llm_router is not available, afile_retrieve should still be called

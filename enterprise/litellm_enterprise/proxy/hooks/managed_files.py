@@ -382,7 +382,25 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "flat_model_file_ids": {"hasSome": model_object_ids},
             }
         )
-        return [OpenAIFileObject(**file_object.file_object) for file_object in file_ids]
+        result: list[OpenAIFileObject] = []
+        for row in file_ids:
+            if row.file_object is None:
+                verbose_logger.warning(
+                    f"Skipping managed file row {row.unified_file_id!r}: file_object is null"
+                )
+                continue
+            try:
+                raw = (
+                    json.loads(row.file_object)
+                    if isinstance(row.file_object, str)
+                    else row.file_object
+                )
+                result.append(OpenAIFileObject.model_validate(raw))
+            except Exception as e:
+                verbose_logger.warning(
+                    f"Skipping managed file row {row.unified_file_id!r}: failed to parse file_object: {e}"
+                )
+        return result
 
     async def check_managed_file_id_access(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth
