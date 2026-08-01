@@ -75,15 +75,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             litellm_params,
             headers,
         )
-        base_instructions = get_chatgpt_default_instructions()
-        existing_instructions = request.get("instructions")
-        if existing_instructions:
-            if base_instructions not in existing_instructions:
-                request["instructions"] = (
-                    f"{base_instructions}\n\n{existing_instructions}"
-                )
-        else:
-            request["instructions"] = base_instructions
+        request["instructions"] = self._merge_default_instructions(
+            base_instructions=get_chatgpt_default_instructions(),
+            existing_instructions=request.get("instructions"),
+        )
         request["store"] = False
         request["stream"] = True
         include = list(request.get("include") or [])
@@ -106,6 +101,19 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         }
 
         return {k: v for k, v in request.items() if k in allowed_keys}
+
+    @staticmethod
+    def _merge_default_instructions(
+        base_instructions: str,
+        existing_instructions: Optional[str],
+    ) -> str:
+        if not existing_instructions:
+            return base_instructions
+
+        if existing_instructions.startswith(base_instructions):
+            return existing_instructions
+
+        return f"{base_instructions}\n\n{existing_instructions}"
 
     def transform_response_api_response(
         self,
