@@ -2,7 +2,6 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-from collections.abc import Mapping
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -20,11 +19,7 @@ from litellm.proxy.management_endpoints.logging_exporter_validation import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
-from litellm.types.utils import (
-    CreateCredentialItem,
-    CredentialItem,
-    UpdateCredentialItem,
-)
+from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router = APIRouter()
 
@@ -287,54 +282,9 @@ def update_db_credential(
         merged_credential.credential_values.update(encrypted_params)
 
     if encrypted_credential.credential_info:
-        if is_logging_credential(db_credential.credential_info):
-            if merged_credential.credential_info is None:
-                merged_credential.credential_info = {}
-            _merge_credential_info(merged_credential.credential_info, encrypted_credential.credential_info)
-        else:
-            merged_credential.credential_info = encrypted_credential.credential_info
+        merged_credential.credential_info = encrypted_credential.credential_info
 
     return merged_credential
-
-
-def _merge_credential_info(
-    into: dict,  # mutable-ok: the merge target, updated in place for the DB write and the cache sync
-    patch: Mapping[str, object],
-) -> None:
-    """Merge ``patch`` into ``into`` in place, with surgical access subfields.
-
-    A top-level dict.update would let a patch like ``{access: {teams: [...]}}``
-    replace the entire stored ``access`` object, wiping ``access.global=true``
-    and ``access.orgs`` entries the caller never mentioned. ``access`` is merged
-    subfield-by-subfield instead, so a partial patch keeps the untouched
-    subfields intact. The DB write and the in-memory cache sync both call this
-    so the two stores can't drift.
-
-    An empty ``access`` object is a revocation, not a no-op merge: ``{"access": {}}``
-    is the natural spelling of "grant nobody", and merging it subfield-by-subfield
-    would leave every grant in place while the endpoint answered 200. Omit ``access``
-    entirely to leave the stored grants untouched.
-    """
-    patch_copy = dict(patch)
-    patch_access = patch_copy.pop("access", None)
-    into.update(patch_copy)
-    if patch_access is None:
-        return
-    existing_access = into.get("access")
-    if patch_access and isinstance(existing_access, dict) and isinstance(patch_access, dict):
-        existing_access.update(patch_access)
-    else:
-        into["access"] = patch_access
-
-
-def _patch_to_credential_item(patch: UpdateCredentialItem, credential_name: str) -> CredentialItem:
-    """Translate the partial PATCH body into the legacy CredentialItem shape
-    the downstream merge expects (non-None dicts)."""
-    return CredentialItem(
-        credential_name=patch.credential_name or credential_name,
-        credential_values=patch.credential_values or {},
-        credential_info=patch.credential_info or {},
-    )
 
 
 @router.patch(
@@ -345,7 +295,7 @@ def _patch_to_credential_item(patch: UpdateCredentialItem, credential_name: str)
 async def update_credential(
     request: Request,
     fastapi_response: Response,
-    credential: UpdateCredentialItem,
+    credential: CredentialItem,
     credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -366,7 +316,7 @@ async def update_credential(
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
         if is_logging_credential(db_credential.credential_info) or is_logging_credential(credential.credential_info):
             validate_credential_access(credential.credential_info)
-        merged_credential = update_db_credential(db_credential, _patch_to_credential_item(credential, credential_name))
+        merged_credential = update_db_credential(db_credential, credential)
         credential_object_jsonified = jsonify_object(merged_credential.model_dump())
         await credentials_repository.update_by_name(
             credential_name,
@@ -389,17 +339,16 @@ def _sync_in_memory_credential(
     *,
     old_name: str,
     merged: CredentialItem,
-    patch: UpdateCredentialItem,
+    patch: CredentialItem,
 ) -> None:
     """Mirror the DB write into ``litellm.credential_list``.
 
     Skips when the credential isn't resident in memory (e.g. created on
-    another scaled instance, restored from DB on the next reload). The
-    in-memory ``credential_info`` is merged subfield-by-subfield via
-    ``_merge_credential_info`` for every credential, matching the pre-PR
-    in-memory semantics: a partial patch can't clobber stored keys it didn't
-    touch (``custom_llm_provider`` on a provider credential, ``access``
-    subfields on a logging destination).
+    another scaled instance, restored from DB on the next reload).
+    ``credential_info`` is replaced exactly as the DB write replaces it, so the
+    routing-live copy and the stored row can't disagree; values merge, matching
+    the DB's ``update``. Diverging here would hide a lost field until the next
+    reload swapped the in-memory copy for the row that never had it.
     """
     existing_in_memory: CredentialItem | None = None
     for cred in litellm.credential_list:
@@ -412,9 +361,9 @@ def _sync_in_memory_credential(
     in_memory_values = dict(existing_in_memory.credential_values or {})
     if patch.credential_values:
         in_memory_values.update(patch.credential_values)
-    in_memory_info = dict(existing_in_memory.credential_info or {})
-    if patch.credential_info:
-        _merge_credential_info(in_memory_info, patch.credential_info)
+    in_memory_info = (
+        dict(patch.credential_info) if patch.credential_info else dict(existing_in_memory.credential_info or {})
+    )
     updated_in_memory = CredentialItem(
         credential_name=merged.credential_name,
         credential_values=in_memory_values,

@@ -266,7 +266,11 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const { data: credentialData, refetch: refetchCredentials } = useCredentials(canReadCredentialsRole(userRole));
   const { data: teamsData } = useTeams();
   const { data: orgsData } = useOrganizations();
-  const [editAccessFor, setEditAccessFor] = useState<{ name: string; access?: CredentialAccess } | null>(null);
+  const [editAccessFor, setEditAccessFor] = useState<{
+    name: string;
+    access?: CredentialAccess;
+    credentialInfo?: Record<string, unknown>;
+  } | null>(null);
   // access for the destination branch of the unified Add modal
   const [addAccess, setAddAccess] = useState<CredentialAccess>({});
   const addingDestination = selectedCallback != null && selectedCallback.startsWith(DESTINATION_OPTION_PREFIX);
@@ -301,6 +305,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         ? `${backendLabel(c.credential_info?.description)} · ${c.credential_info.host}`
         : backendLabel(c.credential_info?.description),
       access: c.credential_info?.access,
+      credentialInfo: c.credential_info as Record<string, unknown> | undefined,
       resolvedScope: resolveScope(c.credential_info?.access),
     }));
 
@@ -687,7 +692,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   setShowEditCallback(true);
                 }}
                 onEditAccess={(cb) =>
-                  cb.credentialName && setEditAccessFor({ name: cb.credentialName, access: cb.access })
+                  cb.credentialName &&
+                  setEditAccessFor({ name: cb.credentialName, access: cb.access, credentialInfo: cb.credentialInfo })
                 }
                 onDelete={(cb) => handleDeleteCallback(cb)}
                 onTest={async (cb) => {
@@ -704,6 +710,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   accessToken={accessToken}
                   credentialName={editAccessFor?.name ?? null}
                   access={editAccessFor?.access}
+                  credentialInfo={editAccessFor?.credentialInfo}
                   open={editAccessFor != null}
                   onClose={() => setEditAccessFor(null)}
                   onSaved={() => refetchCredentials()}

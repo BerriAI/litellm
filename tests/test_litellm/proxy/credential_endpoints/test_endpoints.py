@@ -26,166 +26,51 @@ def _admin():
     return UserAPIKeyAuth(api_key="k", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
-# --- partial-PATCH access merge (destinations keep untouched access subfields) ---
+# --- credential_info replace semantics, identical for every credential kind ---
 
-def test_update_db_credential_preserves_existing_info_on_partial_patch():
-    """A partial credential_info patch (e.g. only access from the Edit-access modal) must
-    merge into the stored info, not replace it -- otherwise the logging tag is dropped and
-    the destination vanishes from the registry after the next reload."""
-    from litellm.proxy.credential_endpoints.endpoints import update_db_credential
+@pytest.mark.parametrize(
+    "info, patch_info, expected",
+    [
+        (
+            {"custom_llm_provider": "openai", "stale": "keepout"},
+            {"custom_llm_provider": "azure"},
+            {"custom_llm_provider": "azure"},
+        ),
+        (
+            {"credential_type": "logging", "description": "arize", "access": {"global": True}},
+            {"credential_type": "logging", "description": "arize", "access": {"teams": ["t1"]}},
+            {"credential_type": "logging", "description": "arize", "access": {"teams": ["t1"]}},
+        ),
+    ],
+    ids=["provider", "logging-destination"],
+)
+def test_update_db_credential_replaces_info_wholesale(info, patch_info, expected):
+    """``credential_info`` is replaced, never merged, for every credential kind.
 
-    db = CredentialItem(
-        credential_name="dest",
-        credential_values={},
-        credential_info={
-            "credential_type": "logging",
-            "description": "langfuse_otel",
-            "host": "h",
-        },
-    )
-    patch = CredentialItem(
-        credential_name="dest",
-        credential_values={},
-        credential_info={"access": {"global": True}},
-    )
-
-    merged = update_db_credential(db, patch)
-
-    assert merged.credential_info == {
-        "credential_type": "logging",
-        "description": "langfuse_otel",
-        "host": "h",
-        "access": {"global": True},
-    }
-
-
-def test_update_db_credential_preserves_untouched_access_subfields():
-    """An access patch carrying only `teams` must NOT clobber existing
-    `global` / `orgs`: a top-level replace of the access object would silently
-    drop access.global=true and any access.orgs entries the patch never named.
+    The caller sends the whole object (the body model requires it), so a replace is
+    lossless and omitted keys are a deliberate removal. Special-casing logging
+    destinations with a subfield merge is what let a fragment reach the write path and
+    silently delete sibling metadata such as ``custom_llm_provider``.
     """
     from litellm.proxy.credential_endpoints.endpoints import update_db_credential
 
-    db = CredentialItem(
-        credential_name="dest",
-        credential_values={},
-        credential_info={
-            "credential_type": "logging",
-            "description": "langfuse_otel",
-            "host": "h",
-            "access": {
-                "global": True,
-                "orgs": ["org-1", "org-2"],
-                "teams": ["team-A"],
-            },
-        },
-    )
-    # A partial patch touching only access.teams; global/orgs are not sent.
-    patch = CredentialItem(
-        credential_name="dest",
-        credential_values={},
-        credential_info={"access": {"teams": ["team-A", "team-T"]}},
+    merged = update_db_credential(
+        CredentialItem(credential_name="c", credential_values={}, credential_info=info),
+        CredentialItem(credential_name="c", credential_values={}, credential_info=patch_info),
     )
 
-    merged = update_db_credential(db, patch)
-
-    # access.global and access.orgs survive untouched; access.teams is updated.
-    assert merged.credential_info["access"] == {
-        "global": True,
-        "orgs": ["org-1", "org-2"],
-        "teams": ["team-A", "team-T"],
-    }
+    assert merged.credential_info == expected
 
 
-def test_update_db_credential_treats_empty_access_as_a_revocation():
-    """`{"access": {}}` is the natural spelling of "grant nobody" and the endpoint
-    answers 200, so it must actually revoke. Merging it subfield-by-subfield is a
-    no-op that leaves every grant standing while reporting success -- a revocation
-    the admin believes happened and didn't.
+def test_sync_in_memory_credential_mirrors_the_db_row(monkeypatch):
+    """Regression: the routing-live copy must equal the row that was written.
+
+    The in-memory mirror used to merge ``credential_info`` while the DB write replaced
+    it, so a field dropped from the row stayed visible in ``litellm.credential_list``
+    and on ``GET /credentials`` -- the loss only surfaced on the next reload, long after
+    the request that caused it.
     """
-    from litellm.proxy.credential_endpoints.endpoints import update_db_credential
-
-    db = CredentialItem(
-        credential_name="dest",
-        credential_values={},
-        credential_info={
-            "credential_type": "logging",
-            "description": "langfuse_otel",
-            "access": {"global": True, "orgs": ["org-1"], "teams": ["team-A"]},
-        },
-    )
-    patch = CredentialItem(
-        credential_name="dest",
-        credential_values={},
-        credential_info={"access": {}},
-    )
-
-    merged = update_db_credential(db, patch)
-
-    assert merged.credential_info["access"] == {}
-    # the sibling metadata the patch never named is still untouched
-    assert merged.credential_info["description"] == "langfuse_otel"
-
-
-def test_update_db_credential_omitting_access_leaves_grants_alone():
-    """The counterpart to the empty-access revoke: omitting `access` entirely is how a
-    patch says "don't touch the grants", so it must not be read as a revocation.
-    """
-    from litellm.proxy.credential_endpoints.endpoints import update_db_credential
-
-    db = CredentialItem(
-        credential_name="dest",
-        credential_values={},
-        credential_info={
-            "credential_type": "logging",
-            "description": "langfuse_otel",
-            "access": {"global": True, "teams": ["team-A"]},
-        },
-    )
-    patch = CredentialItem(
-        credential_name="dest",
-        credential_values={},
-        credential_info={"host": "new-host"},
-    )
-
-    merged = update_db_credential(db, patch)
-
-    assert merged.credential_info["access"] == {"global": True, "teams": ["team-A"]}
-    assert merged.credential_info["host"] == "new-host"
-
-
-# --- provider credentials keep base replace semantics (merge is logging-only) ---
-
-def test_update_db_credential_replaces_info_for_provider_credential():
-    """The subfield merge is scoped to logging destinations. A provider credential
-    patch replaces credential_info wholesale (base behavior): omitted keys drop, so a
-    partial patch is a full replace, not a merge -- merging non-destination creds would
-    silently resurrect stale provider metadata the caller meant to remove."""
-    from litellm.proxy.credential_endpoints.endpoints import update_db_credential
-
-    db = CredentialItem(
-        credential_name="openai",
-        credential_values={},
-        credential_info={"custom_llm_provider": "openai", "stale": "keepout"},
-    )
-    patch = CredentialItem(
-        credential_name="openai",
-        credential_values={},
-        credential_info={"custom_llm_provider": "azure"},
-    )
-
-    merged = update_db_credential(db, patch)
-
-    assert merged.credential_info == {"custom_llm_provider": "azure"}
-
-
-def test_sync_in_memory_credential_merges_provider_info(monkeypatch):
-    """The in-memory mirror merges credential_info for every credential (pre-PR
-    parity). A partial provider PATCH (e.g. only description) must not drop
-    custom_llm_provider from litellm.credential_list; a wholesale replace made the
-    credential unresolvable (401) until the next scheduled DB reload."""
     from litellm.proxy.credential_endpoints.endpoints import _sync_in_memory_credential
-    from litellm.types.utils import UpdateCredentialItem
 
     existing = CredentialItem(
         credential_name="openai-prod",
@@ -193,7 +78,11 @@ def test_sync_in_memory_credential_merges_provider_info(monkeypatch):
         credential_info={"custom_llm_provider": "openai", "keepme": "important"},
     )
     monkeypatch.setattr(litellm, "credential_list", [existing])
-    patch = UpdateCredentialItem(credential_info={"description": "just a label"})
+    patch = CredentialItem(
+        credential_name="openai-prod",
+        credential_values={},
+        credential_info={"description": "just a label"},
+    )
     merged = CredentialItem(
         credential_name="openai-prod",
         credential_values={"api_key": "enc"},
@@ -203,11 +92,7 @@ def test_sync_in_memory_credential_merges_provider_info(monkeypatch):
     _sync_in_memory_credential(old_name="openai-prod", merged=merged, patch=patch)
 
     in_memory = next(c for c in litellm.credential_list if c.credential_name == "openai-prod")
-    assert in_memory.credential_info == {
-        "custom_llm_provider": "openai",
-        "keepme": "important",
-        "description": "just a label",
-    }
+    assert in_memory.credential_info == merged.credential_info
 
 
 # --- access-shape validation is scoped to logging destinations ---------------

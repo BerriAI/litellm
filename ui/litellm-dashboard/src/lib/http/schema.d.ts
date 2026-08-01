@@ -32401,27 +32401,6 @@ export interface components {
             blocked_users: string[];
         };
         /**
-         * UpdateCredentialItem
-         * @description PATCH body for ``/credentials/{name}``.
-         *
-         *     Both ``credential_values`` and ``credential_info`` are optional so the proxy
-         *     admin can patch one without sending the other (rotating values without
-         *     touching access, or adjusting access without re-sending secrets).
-         *     ``credential_name`` is optional because most patches don't rename.
-         */
-        UpdateCredentialItem: {
-            /** Credential Info */
-            credential_info?: {
-                [key: string]: unknown;
-            } | null;
-            /** Credential Name */
-            credential_name?: string | null;
-            /** Credential Values */
-            credential_values?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
          * UpdateCustomerRequest
          * @description Update a Customer, use this to update customer budgets etc
          */
@@ -38372,7 +38351,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpdateCredentialItem"];
+                "application/json": components["schemas"]["CredentialItem"];
             };
         };
         responses: {

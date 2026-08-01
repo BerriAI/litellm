@@ -10,6 +10,11 @@ interface EditLoggingCredentialModalProps {
   accessToken: string;
   credentialName: string | null;
   access?: CredentialAccess;
+  // The destination's stored credential_info. PATCH replaces credential_info
+  // wholesale, so the whole object is resent with only access swapped; sending
+  // access alone would drop credential_type/description and stop the row being
+  // a logging destination at all.
+  credentialInfo?: Record<string, unknown>;
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
@@ -23,6 +28,7 @@ const EditLoggingCredentialModal: React.FC<EditLoggingCredentialModalProps> = ({
   accessToken,
   credentialName,
   access,
+  credentialInfo,
   open,
   onClose,
   onSaved,
@@ -34,8 +40,7 @@ const EditLoggingCredentialModal: React.FC<EditLoggingCredentialModalProps> = ({
   const handleSave = async () => {
     if (!credentialName) return;
     const current = form.getFieldsValue().access ?? {};
-    // Always send the full access object: credential_info merges server-side, so a
-    // sparse patch could never clear a bucket. A global grant supersedes team/org.
+    // Always send the full access object; a global grant supersedes team/org.
     const next: CredentialAccess = current.global
       ? { global: true, teams: [], orgs: [] }
       : { global: false, teams: current.teams ?? [], orgs: current.orgs ?? [] };
@@ -43,7 +48,7 @@ const EditLoggingCredentialModal: React.FC<EditLoggingCredentialModalProps> = ({
       await credentialUpdateCall(accessToken, credentialName, {
         credential_name: credentialName,
         credential_values: {},
-        credential_info: { access: next },
+        credential_info: { ...(credentialInfo ?? {}), access: next },
       });
       NotificationsManager.success("Access updated");
       onSaved();

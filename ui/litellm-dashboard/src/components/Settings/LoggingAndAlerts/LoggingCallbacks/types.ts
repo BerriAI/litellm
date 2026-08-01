@@ -14,6 +14,9 @@ export interface AlertingObject {
   credentialName?: string;
   destinationLabel?: string;
   access?: CredentialAccess;
+  // The destination's whole stored credential_info. PATCH replaces
+  // credential_info wholesale, so an access edit has to resend all of it.
+  credentialInfo?: Record<string, unknown>;
   // The set of identities that route to this destination, resolved at render
   // time from credential_info.access. Display labels only -- ids are not
   // surfaced here. global=true bypasses the lists.

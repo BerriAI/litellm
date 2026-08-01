@@ -31,20 +31,6 @@ class CreateCredentialItem(CredentialBase):
         return values
 
 
-class UpdateCredentialItem(BaseModel):
-    """PATCH body for ``/credentials/{name}``.
-
-    Both ``credential_values`` and ``credential_info`` are optional so the proxy
-    admin can patch one without sending the other (rotating values without
-    touching access, or adjusting access without re-sending secrets).
-    ``credential_name`` is optional because most patches don't rename.
-    """
-
-    credential_name: str | None = None
-    credential_values: Mapping[str, object] | None = None
-    credential_info: Mapping[str, object] | None = None
-
-
 class CredentialAccess(BaseModel):
     """Destination-side access list on a logging credential.
 
