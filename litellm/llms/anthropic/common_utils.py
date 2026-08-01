@@ -1088,9 +1088,7 @@ def create_anthropic_model_list_response(model_ids: List[str]) -> dict:
     the stable label a gateway can offer for arbitrary upstream models.
     """
     created_at = (
-        datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z")
+        datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
     data = [
         {
