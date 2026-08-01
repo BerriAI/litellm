@@ -405,9 +405,28 @@ class TestDurationInSeconds(unittest.TestCase):
     def test_malformed_durations_raise(self):
         # Trailing characters after a valid unit must be rejected, not silently
         # dropped: "10mb" previously parsed as 10 minutes.
-        for bad in ["10mb", "5days", "30x", "abc", "10 m"]:
+        for bad in ["10mb", "1h30m", "1ms", "10dogs", "30x", "abc", "10 m"]:
             with self.assertRaises(ValueError):
                 duration_in_seconds(bad)
+
+    def test_existing_long_unit_spellings_remain_valid(self):
+        aliases = {
+            "30seconds": 30,
+            "15minutes": 900,
+            "6hours": 21600,
+            "3days": 259200,
+            "2weeks": 1209600,
+        }
+        for duration, expected in aliases.items():
+            with self.subTest(duration=duration):
+                self.assertEqual(duration_in_seconds(duration), expected)
+
+    def test_long_unit_spelling_sets_reset_interval(self):
+        now = datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("3days", now, "UTC"),
+            datetime(2023, 5, 18, 0, 0, 0, tzinfo=timezone.utc),
+        )
 
 
 if __name__ == "__main__":
