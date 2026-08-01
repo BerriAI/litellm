@@ -30,6 +30,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team,
     get_spend_by_team_and_customer,
+    team_model_exclusion_clause,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.table_repositories import SpendLogsRepository
@@ -992,6 +993,13 @@ async def get_global_spend_report(
         default=None,
         description="View spend for a specific customer_id. Example customer_id='1234. Can be used in conjunction with team_id as well.",
     ),
+    exclude_team_models: bool = fastapi.Query(
+        default=False,
+        description=(
+            "When True, exclude spend from team-owned (BYOK) model deployments. Spend from "
+            "deployments that have since been deleted cannot be classified and remains included"
+        ),
+    ),
 ):
     """
     Get Daily Spend per Team, based on specific startTime and endTime. Per team, view usage by each key, model
@@ -1042,11 +1050,14 @@ async def get_global_spend_report(
         if premium_user is not True:
             verbose_proxy_logger.debug("accessing /spend/report but not a premium user")
             raise ValueError("/spend/report endpoint " + CommonProxyErrors.not_premium_user.value)
+
+        exclusion_sql = team_model_exclusion_clause(exclude_team_models)
+
         if api_key is not None:
             verbose_proxy_logger.debug("Getting /spend for api_key: [set=%s]", api_key is not None)
             if api_key.startswith("sk-"):
                 api_key = hash_token(token=api_key)
-            sql_query = """
+            sql_query = f"""
                 WITH SpendByModelApiKey AS (
                     SELECT
                         sl.api_key,
@@ -1059,7 +1070,7 @@ async def get_global_spend_report(
                     WHERE
                         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
                         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-                        AND sl.api_key = $3
+                        AND sl.api_key = $3{exclusion_sql}
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1089,7 +1100,7 @@ async def get_global_spend_report(
             return db_response
         elif internal_user_id is not None:
             verbose_proxy_logger.debug("Getting /spend for internal_user_id: %s", internal_user_id)
-            sql_query = """
+            sql_query = f"""
                 WITH SpendByModelApiKey AS (
                     SELECT
                         sl.api_key,
@@ -1102,7 +1113,7 @@ async def get_global_spend_report(
                     WHERE
                         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
                         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-                        AND sl.user = $3
+                        AND sl.user = $3{exclusion_sql}
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1132,13 +1143,24 @@ async def get_global_spend_report(
             return db_response
         elif team_id is not None and customer_id is not None:
             return await get_spend_by_team_and_customer(
-                start_date_obj, end_date_obj, team_id, customer_id, prisma_client
+                start_date_obj,
+                end_date_obj,
+                team_id,
+                customer_id,
+                prisma_client,
+                exclude_team_models=exclude_team_models,
             )
         if group_by == "team":
-            return await get_spend_by_team(start_date_obj, end_date_obj, team_id, prisma_client)
+            return await get_spend_by_team(
+                start_date_obj,
+                end_date_obj,
+                team_id,
+                prisma_client,
+                exclude_team_models=exclude_team_models,
+            )
 
         elif group_by == "customer":
-            sql_query = """
+            sql_query = f"""
 
             WITH SpendByModelApiKey AS (
                 SELECT
@@ -1152,7 +1174,7 @@ async def get_global_spend_report(
                     "LiteLLM_SpendLogs" sl
                 WHERE
                     sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC'){exclusion_sql}
                 GROUP BY
                     date_trunc('day', sl."startTime"),
                     customer,
@@ -1196,7 +1218,7 @@ async def get_global_spend_report(
 
             return db_response
         elif group_by == "api_key":
-            sql_query = """
+            sql_query = f"""
                 WITH SpendByModelApiKey AS (
                     SELECT
                         sl.api_key,
@@ -1208,7 +1230,7 @@ async def get_global_spend_report(
                         "LiteLLM_SpendLogs" sl
                     WHERE
                         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-                        AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+                        AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC'){exclusion_sql}
                     GROUP BY
                         sl.api_key,
                         sl.model
