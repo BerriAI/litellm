@@ -7,13 +7,65 @@ import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 import litellm
+from litellm.endpoints.speech.speech_to_completion_bridge.transformation import (
+    SpeechToCompletionBridgeTransformationHandler,
+)
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.utils import get_supported_openai_params
+
+
+GEMINI_3_1_FLASH_TTS_MODEL = "gemini-3.1-flash-tts-preview"
+
+MULTI_SPEAKER_SPEECH_CONFIG = {
+    "multi_speaker_voice_config": {
+        "speaker_voice_configs": [
+            {
+                "speaker": "Ryan",
+                "voice_config": {
+                    "prebuilt_voice_config": {
+                        "voice_name": "Umbriel",
+                    },
+                },
+            },
+            {
+                "speaker": "Katie",
+                "voice_config": {
+                    "prebuilt_voice_config": {
+                        "voice_name": "Leda",
+                    },
+                },
+            },
+        ],
+    },
+    "language_code": "en-US",
+}
+
+NORMALIZED_MULTI_SPEAKER_SPEECH_CONFIG = {
+    "multiSpeakerVoiceConfig": {
+        "speakerVoiceConfigs": [
+            {
+                "speaker": "Ryan",
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": "Umbriel",
+                    },
+                },
+            },
+            {
+                "speaker": "Katie",
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": "Leda",
+                    },
+                },
+            },
+        ],
+    },
+    "languageCode": "en-US",
+}
 
 
 class TestGeminiTTSTransformation:
@@ -24,17 +76,16 @@ class TestGeminiTTSTransformation:
         config = GoogleAIStudioGeminiConfig()
 
         # Test TTS models (both preview and non-preview versions)
-        assert (
-            config.is_model_gemini_audio_model("gemini-2.5-flash-preview-tts") == True
-        )
-        assert config.is_model_gemini_audio_model("gemini-2.5-pro-preview-tts") == True
-        assert config.is_model_gemini_audio_model("gemini-2.5-flash-tts") == True
-        assert config.is_model_gemini_audio_model("gemini-2.5-pro-tts") == True
+        assert config.is_model_gemini_audio_model("gemini-2.5-flash-preview-tts")
+        assert config.is_model_gemini_audio_model("gemini-2.5-pro-preview-tts")
+        assert config.is_model_gemini_audio_model("gemini-2.5-flash-tts")
+        assert config.is_model_gemini_audio_model("gemini-2.5-pro-tts")
+        assert config.is_model_gemini_audio_model(GEMINI_3_1_FLASH_TTS_MODEL)
 
         # Test non-TTS models
-        assert config.is_model_gemini_audio_model("gemini-2.5-flash") == False
-        assert config.is_model_gemini_audio_model("gemini-2.5-pro") == False
-        assert config.is_model_gemini_audio_model("gpt-4o-audio-preview") == False
+        assert not config.is_model_gemini_audio_model("gemini-2.5-flash")
+        assert not config.is_model_gemini_audio_model("gemini-2.5-pro")
+        assert not config.is_model_gemini_audio_model("gpt-4o-audio-preview")
 
     def test_gemini_tts_supported_params(self):
         """Test that audio parameter is included for TTS models"""
@@ -71,10 +122,7 @@ class TestGeminiTTSTransformation:
         assert "speechConfig" in result
         assert "voiceConfig" in result["speechConfig"]
         assert "prebuiltVoiceConfig" in result["speechConfig"]["voiceConfig"]
-        assert (
-            result["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"]
-            == "Kore"
-        )
+        assert result["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
         # Check response modalities
         assert "responseModalities" in result
@@ -83,9 +131,7 @@ class TestGeminiTTSTransformation:
     def test_gemini_tts_audio_parameter_mapping_with_language_code(self):
         config = GoogleAIStudioGeminiConfig()
 
-        non_default_params = {
-            "audio": {"voice": "Kore", "format": "pcm16", "language_code": "en-US"}
-        }
+        non_default_params = {"audio": {"voice": "Kore", "format": "pcm16", "language_code": "en-US"}}
         optional_params = {}
 
         result = config.map_openai_params(
@@ -97,17 +143,12 @@ class TestGeminiTTSTransformation:
 
         assert "speechConfig" in result
         assert result["speechConfig"]["languageCode"] == "en-US"
-        assert (
-            result["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"]
-            == "Kore"
-        )
+        assert result["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
     def test_map_audio_params_language_code(self):
         config = GoogleAIStudioGeminiConfig()
 
-        result = config._map_audio_params(
-            {"voice": "Kore", "format": "pcm16", "language_code": "de-DE"}
-        )
+        result = config._map_audio_params({"voice": "Kore", "format": "pcm16", "language_code": "de-DE"})
 
         assert result["languageCode"] == "de-DE"
         assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
@@ -119,6 +160,29 @@ class TestGeminiTTSTransformation:
 
         assert "languageCode" not in result
         assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+    def test_gemini_tts_multi_speaker_audio_parameter_mapping(self):
+        """Test multi-speaker audio parameter mapping for Gemini 3.1 TTS models"""
+        config = GoogleAIStudioGeminiConfig()
+
+        non_default_params = {
+            "audio": {
+                "speech_config": MULTI_SPEAKER_SPEECH_CONFIG,
+                "format": "pcm16",
+            }
+        }
+        optional_params = {}
+
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=GEMINI_3_1_FLASH_TTS_MODEL,
+            drop_params=False,
+        )
+
+        assert result["speechConfig"] == NORMALIZED_MULTI_SPEAKER_SPEECH_CONFIG
+        assert result["responseModalities"] == ["AUDIO"]
+        assert "temperature" not in result
 
     def test_gemini_tts_audio_parameter_with_existing_modalities(self):
         """Test audio parameter mapping when modalities already exist"""
@@ -203,9 +267,7 @@ class TestGeminiTTSTransformation:
         }
         optional_params = {}
 
-        with pytest.raises(
-            ValueError, match="Unsupported audio format for Gemini TTS models"
-        ):
+        with pytest.raises(ValueError, match="Unsupported audio format for Gemini TTS models"):
             config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -244,6 +306,28 @@ def test_gemini_tts_completion_mock():
         assert response.choices[0].message.content is not None
 
 
+def test_gemini_tts_speech_bridge_accepts_multi_speaker_voice_dict():
+    handler = SpeechToCompletionBridgeTransformationHandler()
+
+    result = handler.transform_request(
+        model=f"vertex_ai/{GEMINI_3_1_FLASH_TTS_MODEL}",
+        input="Ryan: How are you doing today Katie?\nKatie: Not too bad.",
+        voice=MULTI_SPEAKER_SPEECH_CONFIG,
+        optional_params={"response_format": "mp3"},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=MagicMock(),
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert result["modalities"] == ["audio"]
+    assert result["audio"] == {
+        "speech_config": NORMALIZED_MULTI_SPEAKER_SPEECH_CONFIG,
+        "format": "pcm16",
+    }
+    assert "response_format" not in result
+
+
 class TestGeminiTTSSpeechConfigInRequestBody:
     """Test that speechConfig is properly included in the final request body.
 
@@ -260,11 +344,11 @@ class TestGeminiTTSSpeechConfigInRequestBody:
             ("gemini-2.5-flash-preview-tts", "vertex_ai"),
             ("gemini-2.5-flash-preview-tts", "gemini"),
             ("gemini-2.5-pro-tts", "vertex_ai"),
+            (GEMINI_3_1_FLASH_TTS_MODEL, "vertex_ai"),
+            (GEMINI_3_1_FLASH_TTS_MODEL, "gemini"),
         ],
     )
-    def test_speechconfig_in_generation_config_transform_request_body(
-        self, model, custom_llm_provider
-    ):
+    def test_speechconfig_in_generation_config_transform_request_body(self, model, custom_llm_provider):
         """Test that speechConfig is included in generationConfig after _transform_request_body()"""
         from litellm.llms.vertex_ai.gemini.transformation import (
             _transform_request_body,
@@ -272,9 +356,7 @@ class TestGeminiTTSSpeechConfigInRequestBody:
 
         # Simulate optional_params after map_openai_params() has run
         optional_params = {
-            "speechConfig": {
-                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
-            },
+            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
             "responseModalities": ["AUDIO"],
         }
 
@@ -297,12 +379,7 @@ class TestGeminiTTSSpeechConfigInRequestBody:
             f"speechConfig was filtered out of generationConfig for model={model}, provider={custom_llm_provider}. "
             "Ensure speechConfig is in the GenerationConfig TypedDict."
         )
-        assert (
-            generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"][
-                "voiceName"
-            ]
-            == "Kore"
-        )
+        assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
     @pytest.mark.parametrize(
         "model,custom_llm_provider",
@@ -310,6 +387,8 @@ class TestGeminiTTSSpeechConfigInRequestBody:
             ("gemini-2.5-flash-tts", "vertex_ai"),
             ("gemini-2.5-flash-tts", "gemini"),
             ("gemini-2.5-flash-preview-tts", "vertex_ai"),
+            (GEMINI_3_1_FLASH_TTS_MODEL, "vertex_ai"),
+            (GEMINI_3_1_FLASH_TTS_MODEL, "gemini"),
         ],
     )
     def test_speechconfig_end_to_end_mapping(self, model, custom_llm_provider):
@@ -356,17 +435,55 @@ class TestGeminiTTSSpeechConfigInRequestBody:
             f"speechConfig was filtered out during _transform_request_body() for model={model}, provider={custom_llm_provider}. "
             "This breaks Gemini TTS - speechConfig must be in GenerationConfig TypedDict."
         )
-        assert (
-            generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"][
-                "voiceName"
-            ]
-            == "Puck"
-        )
+        assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Puck"
 
         # Also verify responseModalities is present
         assert "responseModalities" in generation_config
         assert "AUDIO" in generation_config["responseModalities"]
 
+    @pytest.mark.parametrize(
+        "custom_llm_provider",
+        [
+            "vertex_ai",
+            "gemini",
+        ],
+    )
+    def test_multi_speaker_speechconfig_end_to_end_mapping(self, custom_llm_provider):
+        """Test full pipeline for Gemini 3.1 multi-speaker TTS speechConfig"""
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            VertexGeminiConfig,
+        )
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            _transform_request_body,
+        )
+
+        config = VertexGeminiConfig()
+
+        mapped_params = config.map_openai_params(
+            non_default_params={
+                "audio": {
+                    "speech_config": MULTI_SPEAKER_SPEECH_CONFIG,
+                    "format": "pcm16",
+                }
+            },
+            optional_params={},
+            model=GEMINI_3_1_FLASH_TTS_MODEL,
+            drop_params=False,
+        )
+
+        request_body = _transform_request_body(
+            messages=[{"role": "user", "content": "Ryan: Hi.\nKatie: Hello."}],
+            model=GEMINI_3_1_FLASH_TTS_MODEL,
+            optional_params=mapped_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params={},
+            cached_content=None,
+        )
+
+        generation_config = request_body["generationConfig"]
+        assert generation_config["speechConfig"] == NORMALIZED_MULTI_SPEAKER_SPEECH_CONFIG
+        assert generation_config["responseModalities"] == ["AUDIO"]
+        assert "temperature" not in generation_config
 
     @pytest.mark.parametrize(
         "model,custom_llm_provider",
@@ -386,9 +503,7 @@ class TestGeminiTTSSpeechConfigInRequestBody:
 
         config = VertexGeminiConfig()
 
-        non_default_params = {
-            "audio": {"voice": "Puck", "format": "pcm16", "language_code": "pt-BR"}
-        }
+        non_default_params = {"audio": {"voice": "Puck", "format": "pcm16", "language_code": "pt-BR"}}
         optional_params = {}
 
         mapped_params = config.map_openai_params(
@@ -411,12 +526,7 @@ class TestGeminiTTSSpeechConfigInRequestBody:
 
         generation_config = request_body["generationConfig"]
         assert generation_config["speechConfig"]["languageCode"] == "pt-BR"
-        assert (
-            generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"][
-                "voiceName"
-            ]
-            == "Puck"
-        )
+        assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Puck"
         assert "AUDIO" in generation_config["responseModalities"]
 
 

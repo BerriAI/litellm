@@ -4,7 +4,7 @@ Type definitions for Vertex AI Text-to-Speech API
 Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/synthesize
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from typing_extensions import TypedDict
 
@@ -18,6 +18,16 @@ class VertexTextToSpeechInput(TypedDict, total=False):
 
     text: Optional[str]
     ssml: Optional[str]
+    prompt: Optional[str]
+
+
+class VertexTextToSpeechSpeakerVoiceConfig(TypedDict):
+    speakerAlias: str
+    speakerId: str
+
+
+class VertexTextToSpeechMultiSpeakerVoiceConfig(TypedDict):
+    speakerVoiceConfigs: List[VertexTextToSpeechSpeakerVoiceConfig]
 
 
 class VertexTextToSpeechVoice(TypedDict, total=False):
@@ -31,6 +41,8 @@ class VertexTextToSpeechVoice(TypedDict, total=False):
 
     languageCode: str
     name: str
+    modelName: str
+    multiSpeakerVoiceConfig: VertexTextToSpeechMultiSpeakerVoiceConfig
 
 
 class VertexTextToSpeechAudioConfig(TypedDict, total=False):
@@ -44,6 +56,7 @@ class VertexTextToSpeechAudioConfig(TypedDict, total=False):
 
     audioEncoding: str
     speakingRate: str
+    sampleRateHertz: int
 
 
 class VertexTextToSpeechRequest(TypedDict, total=False):
