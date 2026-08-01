@@ -249,6 +249,34 @@ describe("UsageTab", () => {
     expect(readSeries(bars)[0]).toMatchObject({ "Auto-router": -0.05 });
   });
 
+  it("keeps the legend and the accumulation toggle in one place across both tabs", async () => {
+    // The subtitle is longer on Cumulative ("Running total saved") than on Per day
+    // ("Saved per day"). With a wrapping header the extra width pushed the legend and
+    // the toggle onto a second row, so they jumped whenever the tab changed.
+    const { getByRole, getByTestId, container } = renderWith(twoDays());
+
+    const controlsOn = () => {
+      const legend = getByTestId("chart-legend");
+      const controls = legend.parentElement as HTMLElement;
+      // the toggle lives in the same box as the legend, so neither can move alone
+      expect(controls.contains(getByRole("tablist"))).toBe(true);
+      return controls;
+    };
+
+    const cumulative = controlsOn();
+    expect(cumulative.className).toContain("shrink-0");
+
+    const header = cumulative.parentElement as HTMLElement;
+    expect(header.className).not.toContain("flex-wrap");
+
+    await userEvent.click(getByRole("tab", { name: "Per day" }));
+
+    // same container, same classes, after the subtitle changed length
+    expect(controlsOn()).toBe(cumulative);
+    expect((cumulative.parentElement as HTMLElement).className).not.toContain("flex-wrap");
+    expect(container.textContent).toContain("Saved per day");
+  });
+
   it("subtracts a losing auto-router route from the total and keeps it out of the donut", () => {
     // Switching models leaves the new one with a cold cache, so a route can cost more
     // than the baseline would have. A negative slice is meaningless in a donut, but the
