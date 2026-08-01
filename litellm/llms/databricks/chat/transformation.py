@@ -22,6 +22,7 @@ import httpx
 from pydantic import BaseModel
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
@@ -268,6 +269,24 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             "thinking",
         ]
 
+    @staticmethod
+    def _databricks_model_uses_anthropic_thinking_param(model: str) -> bool:
+        """
+        Per Databricks docs, Claude and Gemini 2.5 endpoints accept the
+        Anthropic-style `thinking={"type":"enabled","budget_tokens":N}` payload
+        and do NOT accept OpenAI's top-level `reasoning_effort`. Gemini 3+ and
+        GPT-5/GPT-OSS accept `reasoning_effort` natively and need no
+        translation.
+        """
+        from litellm.utils import _supports_factory
+
+        normalized = model.lower().replace(".", "-")
+        return _supports_factory(
+            model=normalized,
+            custom_llm_provider="databricks",
+            key="supports_anthropic_thinking_payload",
+        )
+
     def convert_anthropic_tool_to_databricks_tool(
         self, tool: Optional[AllAnthropicToolsValues]
     ) -> Optional[DatabricksTool]:
@@ -371,7 +390,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 "response_format", None
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
-        if "reasoning_effort" in non_default_params and "claude" in model:
+        if "reasoning_effort" in non_default_params and self._databricks_model_uses_anthropic_thinking_param(model):
             reasoning_effort_value = non_default_params.get("reasoning_effort")
             mapped_thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort_value,
@@ -379,12 +398,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 custom_llm_provider="databricks",
                 llm_provider="databricks",
             )
+            is_claude = "claude" in model.lower()
             if mapped_thinking is None:
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
             else:
+                is_adaptive = mapped_thinking.get("type") == "adaptive"
+                if is_adaptive and not is_claude:
+                    raise BadRequestError(
+                        message=(f"Adaptive thinking is only supported on Databricks Claude models, not {model!r}."),
+                        model=model,
+                        llm_provider="databricks",
+                    )
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig._is_adaptive_thinking_model(model, "databricks"):
+                # output_config + adaptive thinking is an Anthropic-only feature.
+                if is_claude and is_adaptive:
                     mapped_effort: Optional[str] = None
                     if isinstance(reasoning_effort_value, str):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort_value)

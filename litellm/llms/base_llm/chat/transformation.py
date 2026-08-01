@@ -14,7 +14,6 @@ from typing import (
     Tuple,
     Type,
     Union,
-    cast,
 )
 
 import httpx
@@ -124,7 +123,15 @@ class BaseConfig(ABC):
         if is_thinking_enabled and (
             "max_tokens" not in non_default_params and "max_completion_tokens" not in non_default_params
         ):
-            thinking_token_budget = cast(dict, optional_params["thinking"]).get("budget_tokens", None)
+            # `is_thinking_enabled` is True when `reasoning_effort` is set OR
+            # when `thinking` is set. Providers that pass `reasoning_effort`
+            # through natively (e.g. Databricks-Gemini-3+, Databricks-GPT-5)
+            # never populate an Anthropic-style `thinking` block, so guard
+            # against that case here.
+            thinking = optional_params.get("thinking")
+            if not isinstance(thinking, dict):
+                return
+            thinking_token_budget = thinking.get("budget_tokens", None)
             if thinking_token_budget is not None:
                 optional_params["max_tokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
 
