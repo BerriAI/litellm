@@ -119,3 +119,61 @@ def test_embeddings_pipeline_error(client, auth_as, embedding_pipeline_raises, p
         response = client.post(path, json=payload)
     assert response.status_code == 400
     assert response.content  # non-empty error body
+
+
+class _FakeLoggingObj:
+    """Minimal logging object carrying the routing state the router records."""
+
+    def __init__(self, model_id: str):
+        self.litellm_params = {"model_info": {"id": model_id}}
+        self.litellm_call_id = "test-call-id"
+        self.kwargs: dict = {}
+
+
+@pytest.fixture
+def embedding_pipeline_raises_after_routing(monkeypatch):
+    """base_process_llm_request selects a deployment (reassigning self.data to
+    the dict that holds litellm_logging_obj) and then fails, mirroring an
+    upstream 429 after routing. The real _handle_llm_api_exception must still
+    surface x-litellm-model-id from that routing state."""
+    router = MagicMock()
+    router.model_names = ["text-embedding-ada-002"]
+    router.get_deployment_by_model_group_name = MagicMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            post_call_failure_hook=AsyncMock(return_value=None),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
+        ),
+    )
+
+    async def _route_then_raise(self, *args, **kwargs):
+        self.data = {
+            "model": "text-embedding-ada-002",
+            "litellm_logging_obj": _FakeLoggingObj("deployment-xyz"),
+        }
+        raise ValueError("429 rate limit")
+
+    monkeypatch.setattr(
+        common_request_processing.ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        _route_then_raise,
+    )
+    yield
+
+
+@pytest.mark.parametrize("path", _EMBED_PATHS)
+def test_embeddings_error_preserves_model_id_header(
+    client, auth_as, embedding_pipeline_raises_after_routing, path
+):
+    """Regression: the embeddings error handler must reuse the processor that
+    ran the request so x-litellm-model-id survives on error responses. Building
+    a fresh processor from the stale outer ``data`` drops the routing state and
+    the header (the reported 429-without-model-id bug)."""
+    payload = {"model": "text-embedding-ada-002", "input": "boom"}
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 500
+    assert response.headers.get("x-litellm-model-id") == "deployment-xyz"
