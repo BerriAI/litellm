@@ -16,7 +16,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
@@ -39,6 +39,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
@@ -49,17 +50,17 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
-from litellm.types.proxy.management_endpoints.model_management_endpoints import (
-    UpdateUsefulLinksRequest,
-)
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
     validate_strategy_router_model_write,
+)
+from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
@@ -324,7 +325,7 @@ async def patch_model(
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         live_before_reload = live_model_ids_snapshot()
-        await clear_cache()
+        still_desired_ids = await clear_cache()
 
         ## CREATE AUDIT LOG ##
         asyncio.create_task(
@@ -344,6 +345,7 @@ async def patch_model(
             before=live_before_reload,
             written_models=[(model_id, getattr(updated_model, "model_info", None))],
             action="update",
+            still_desired=still_desired_ids,
         )
 
         return updated_model
@@ -429,7 +431,7 @@ async def _set_model_blocked_status(
         )
 
         live_before_reload = live_model_ids_snapshot()
-        await clear_cache()
+        still_desired_ids = await clear_cache()
 
         asyncio.create_task(
             create_object_audit_log(
@@ -450,6 +452,7 @@ async def _set_model_blocked_status(
             before=live_before_reload,
             written_models=[(data.model_id, getattr(updated_model, "model_info", None))],
             action=action,
+            still_desired=still_desired_ids,
         )
 
         return updated_model
@@ -841,8 +844,8 @@ async def _get_team_public_model_names(
 async def _remove_unbacked_team_models(
     model_params: Deployment,
     prisma_client: PrismaClient,
-    user_api_key_cache: Any,
-    proxy_logging_obj: Any,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
     llm_router: Router | None = None,
 ) -> None:
     """
@@ -902,7 +905,7 @@ async def _remove_unbacked_team_models(
     if existing_team_row is None:
         return
 
-    updated_team_row = await prisma_client.db.litellm_teamtable.update(
+    updated_team_row: LiteLLM_TeamTable = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": team_id},
         data={"models": [model for model in existing_team_row.models if model not in names_to_remove]},
         include={"object_permission": True},  # type: ignore
@@ -1355,6 +1358,7 @@ async def add_new_model(
             """
 
             live_before_reload = live_model_ids_snapshot()
+            still_desired_ids: frozenset[str] | None = None
             try:
                 _original_litellm_model_name = model_params.model_name
                 if model_params.model_info.team_id is None:
@@ -1369,7 +1373,9 @@ async def add_new_model(
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
                     )
-                await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+                still_desired_ids = await proxy_config.add_deployment(
+                    prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+                )
                 # don't let failed slack alert block the /model/new response
                 _alerting = general_settings.get("alerting", []) or []
                 if "slack" in _alerting:
@@ -1414,6 +1420,7 @@ async def add_new_model(
             before=live_before_reload,
             written_models=[(model_response.model_id, getattr(model_response, "model_info", None))],
             action="create",
+            still_desired=still_desired_ids,
         )
 
         return model_response
@@ -1542,7 +1549,7 @@ async def update_model(
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
             live_before_reload = live_model_ids_snapshot()
-            await clear_cache()
+            still_desired_ids = await clear_cache()
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
                 create_object_audit_log(
@@ -1569,6 +1576,7 @@ async def update_model(
                 before=live_before_reload,
                 written_models=[(_model_id, getattr(model_response, "model_info", None))],
                 action="update",
+                still_desired=still_desired_ids,
             )
 
             return model_response
@@ -1814,6 +1822,7 @@ def reload_serving_verdict(
     before: frozenset[str],
     written_models: Sequence[tuple[str, object]],
     written_must_serve: bool,
+    still_desired: frozenset[str] | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Judge a write-triggered reload by diffing the router's serving state instead of
     trusting any layer of the reload stack to report its own failure.
@@ -1828,10 +1837,14 @@ def reload_serving_verdict(
       this write and blaming it would block unrelated metadata fixes
     - not written but live before and gone now: collateral degradation of this pod
       caused by the reload this request triggered (a wholesale re-add failure, or a
-      newly introduced conflict), always reported
+      newly introduced conflict), reported only when the db still wants that id
+
+    ``still_desired`` is the db + config id set the reload just reconciled against. An
+    id absent from it was deleted on purpose, most often by another pod this one had not
+    yet polled, so the reload dropping it is the reconcile working rather than damage.
+    Without it (no reconcile ran) every drop is reported, which is the safe direction.
 
     Returns (written ids violating their obligation, collateral ids no longer served).
-    Best effort under concurrent admin writes: the snapshot spans only this request.
     """
     now = live_model_ids_snapshot()
     written_ids = frozenset(model_id for model_id, _ in written_models)
@@ -1843,7 +1856,8 @@ def reload_serving_verdict(
         )
     else:
         missing = tuple(model_id for model_id, _ in written_models if model_id in before and model_id not in now)
-    collateral = tuple(sorted(before - now - written_ids))
+    dropped = before - now - written_ids
+    collateral = tuple(sorted(dropped if still_desired is None else dropped & still_desired))
     return (missing, collateral)
 
 
@@ -1851,12 +1865,18 @@ def raise_if_reload_degraded_serving(
     before: frozenset[str],
     written_models: Sequence[tuple[str, object]],
     action: str,
+    still_desired: frozenset[str] | None = None,
 ) -> None:
     """The caller-visible error this pod's model-write endpoints owe their caller when
     the model they wrote is not being served after the reload they triggered. The DB
     write is durable either way and every other pod reloads on its own interval; this
     speaks only for the handling pod."""
-    missing, collateral = reload_serving_verdict(before=before, written_models=written_models, written_must_serve=True)
+    missing, collateral = reload_serving_verdict(
+        before=before,
+        written_models=written_models,
+        written_must_serve=True,
+        still_desired=still_desired,
+    )
     if not missing and not collateral:
         return
     missing_clause = (
@@ -1882,9 +1902,12 @@ def raise_if_reload_degraded_serving(
     )
 
 
-async def clear_cache():
+async def clear_cache() -> frozenset[str] | None:
     """
     Clear router caches and reload models.
+
+    Returns the db + config id set the reload reconciled against, or None when no
+    reload ran, so callers can pass it to raise_if_reload_degraded_serving.
     """
     from litellm.proxy.proxy_server import (
         llm_router,
@@ -1896,7 +1919,7 @@ async def clear_cache():
 
     if llm_router is None or prisma_client is None:
         verbose_proxy_logger.debug("llm_router or prisma_client is None, skipping cache clear")
-        return
+        return None
 
     try:
         # Only clear DB models, preserve config models
@@ -1943,10 +1966,14 @@ async def clear_cache():
             llm_router.quality_routers.pop(model_name, None)
 
         # Reload only DB models
-        await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+        still_desired_ids = await proxy_config.add_deployment(
+            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+        )
 
         verbose_proxy_logger.debug(
             f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models"
         )
+        return still_desired_ids
     except Exception as e:
         verbose_proxy_logger.exception(f"Failed to clear cache and reload models. Due to error - {str(e)}")
+        return None
