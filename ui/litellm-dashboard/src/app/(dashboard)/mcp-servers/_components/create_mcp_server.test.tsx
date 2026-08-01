@@ -355,6 +355,45 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials).toEqual({ auth_value: "my-secret-key" });
     });
 
+    it("creates a server with the raw Authorization auth type and its header value", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+
+      await user.type(getServerNameInput(), "Raw_Auth_Server");
+      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "Authorization (raw header)");
+
+      const authInput = await screen.findByPlaceholderText("Enter token or secret");
+      await user.type(authInput, "ApiKey upstream-key");
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-1",
+        server_name: "Raw_Auth_Server",
+        alias: "Raw_Auth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "authorization",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("authorization");
+      expect(payload.credentials).toEqual({ auth_value: "ApiKey upstream-key" });
+    });
+
     it("does not write the browser-authorized token into form.credentials for true_passthrough", async () => {
       await selectHttpTransport();
 

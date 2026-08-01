@@ -60,7 +60,13 @@ interface MCPServerEditProps {
   availableAccessGroups: string[];
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [
+  AUTH_TYPE.API_KEY,
+  AUTH_TYPE.BEARER_TOKEN,
+  AUTH_TYPE.TOKEN,
+  AUTH_TYPE.BASIC,
+  AUTH_TYPE.AUTHORIZATION,
+];
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   ...AUTH_TYPES_REQUIRING_AUTH_VALUE,
   AUTH_TYPE.OAUTH2,
@@ -1120,6 +1126,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     <Select.Option value="bearer_token">Bearer Token</Select.Option>
                     <Select.Option value="token">Token</Select.Option>
                     <Select.Option value="basic">Basic Auth</Select.Option>
+                    <Select.Option value="authorization">Authorization (raw header)</Select.Option>
                     <Select.Option value="oauth2">OAuth</Select.Option>
                     <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                     <Select.Option value="oauth2_id_jag">ID-JAG (Okta Cross App Access)</Select.Option>

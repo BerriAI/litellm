@@ -432,6 +432,41 @@ describe("MCPServerEdit (auth type switch)", () => {
     expect(payload.registration_url).toBeNull();
   });
 
+  it("saves the raw Authorization auth type with its header value", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "authorization",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, auth_type: "api_key" }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "Authorization (raw header)");
+
+    const authInput = await screen.findByPlaceholderText("Enter token or secret (leave blank to keep existing)");
+    await userEvent.setup({ delay: null }).type(authInput, "ApiKey upstream-key");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("authorization");
+    expect(payload.credentials).toEqual({ auth_value: "ApiKey upstream-key" });
+  });
+
   it("keeps oauth2 endpoint overrides when the auth type is unchanged", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
 
