@@ -257,3 +257,146 @@ def test_translate_responses_chunk_passthrough_chat_completion_chunk():
 
     assert result.choices[0].delta.content == "Hi! How can I help?"
     assert result.choices[0].finish_reason is None
+
+
+def test_tool_message_plain_string_passed_through_as_string():
+    """
+    Plain-string tool output must reach function_call_output.output as a string.
+
+    The Responses API spec documents function_call_output.output as a plain string.
+    Strict/enterprise backends reject the list-of-input_text form for simple text.
+    Regression guard for the fix to #34978.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    t = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "What is the capital of France?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "Paris"},
+    ]
+
+    items, _ = t.convert_chat_completion_messages_to_responses_api(messages)
+    tool_item = next(i for i in items if i.get("type") == "function_call_output")
+
+    assert isinstance(tool_item["output"], str), (
+        "Plain-string tool content must pass through as a string, not be wrapped in a list"
+    )
+    assert tool_item["output"] == "Paris"
+
+
+def test_tool_message_multimodal_list_still_converted():
+    """
+    Multimodal (list) tool output must still be converted to Responses API content items.
+    This ensures the #17507 fix is preserved for the multimodal case.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    t = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_2",
+            "content": [{"type": "text", "text": "result text"}],
+        },
+    ]
+
+    items, _ = t.convert_chat_completion_messages_to_responses_api(messages)
+    tool_item = next(i for i in items if i.get("type") == "function_call_output")
+
+    assert isinstance(tool_item["output"], list), (
+        "Multimodal list tool content must be converted to a list of Responses API items"
+    )
+
+
+def test_tool_message_none_content_becomes_empty_string():
+    """
+    A tool message with content=None must produce an empty string, not an empty
+    list. function_call_output.output is a plain string for text results, so the
+    empty case has to stay string-typed for strict backends.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    t = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_3",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_3", "content": None},
+    ]
+
+    items, _ = t.convert_chat_completion_messages_to_responses_api(messages)
+    tool_item = next(i for i in items if i.get("type") == "function_call_output")
+
+    assert tool_item["output"] == ""
+    assert isinstance(tool_item["output"], str)
+
+
+def test_tool_message_non_string_content_is_stringified():
+    """
+    Unexpected (non-str, non-list) tool content falls back to str(), keeping
+    function_call_output.output string-typed rather than wrapping it in a list.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    t = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_4",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_4", "content": 42},
+    ]
+
+    items, _ = t.convert_chat_completion_messages_to_responses_api(messages)
+    tool_item = next(i for i in items if i.get("type") == "function_call_output")
+
+    assert tool_item["output"] == "42"
+    assert isinstance(tool_item["output"], str)
