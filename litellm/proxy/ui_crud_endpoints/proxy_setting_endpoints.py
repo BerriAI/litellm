@@ -21,6 +21,7 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_SECRET_FIELDS,
     resolve_sso_config,
 )
+from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
     SSOConfigRepository,
@@ -961,6 +962,7 @@ async def update_sso_settings(
                     "param_value": json.dumps(filtered_env_vars, default=str),
                 },
             )
+            await invalidate_config_param("environment_variables")
     except Exception as e:
         raise HTTPException(
             status_code=500,

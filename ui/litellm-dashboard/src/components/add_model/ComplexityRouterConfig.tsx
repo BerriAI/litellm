@@ -44,6 +44,7 @@ export interface ComplexityRouterConfigValue {
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
   classifier_context_per_turn_chars?: number;
+  classifier_context_include_assistant_turns?: boolean;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;

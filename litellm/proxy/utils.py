@@ -31,6 +31,7 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    SPEND_LOG_WRITE_BATCH_MAX_BYTES,
 )
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -109,6 +110,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
     create_missing_views,
@@ -125,6 +127,7 @@ from litellm.proxy.db.prisma_client import (
     parse_iam_endpoint_from_url,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+from litellm.proxy.db.spend_log_batching import spend_log_write_batches
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -2964,9 +2967,14 @@ async def get_config_param(prisma_client: Any, param_name: str) -> Any | None:
     return row
 
 
+async def evict_config_param(param_name: str) -> None:
+    await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
+
+
 async def invalidate_config_param(param_name: str) -> None:
     """Evict from both cache layers; call after every LiteLLM_Config write."""
-    await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
+    await evict_config_param(param_name)
+    await publish_config_param_change(param_name)
 
 
 async def prefetch_config_params(prisma_client: Any, param_names: list[str]) -> None:
@@ -5458,11 +5466,15 @@ class ProxyUpdateSpend:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
                             batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
-                            await _create_spend_logs_with_poison_isolation(
-                                SpendLogsRepository(prisma_client),
-                                batch_with_dates,
-                                MAX_SPEND_LOG_ISOLATION_ATTEMPTS_PER_BATCH,
-                            )
+                            isolation_budget = MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
+                            for statement_rows in spend_log_write_batches(
+                                batch_with_dates, SPEND_LOG_WRITE_BATCH_MAX_BYTES
+                            ):
+                                isolation_budget = await _create_spend_logs_with_poison_isolation(
+                                    SpendLogsRepository(prisma_client),
+                                    statement_rows,
+                                    isolation_budget,
+                                )
                             verbose_proxy_logger.debug(f"Flushed {len(batch)} logs to the DB.")
                             # Explicitly clear batch memory
                             del batch, batch_with_dates
@@ -5745,13 +5757,13 @@ async def _monitor_spend_logs_queue(
             await asyncio.sleep(current_interval)
 
 
-MAX_SPEND_LOG_ISOLATION_ATTEMPTS_PER_BATCH = 256
+MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH = 256
 
 
 async def _create_spend_logs_with_poison_isolation(
     repo: SpendLogsRepository,
     rows: Sequence[Mapping[str, object]],
-    attempts_left: int,
+    failure_budget: int,
 ) -> int:
     """Write spend-log rows, isolating any row Postgres rejects on its data.
 
@@ -5764,32 +5776,26 @@ async def _create_spend_logs_with_poison_isolation(
     a ``DataError``, are re-raised unchanged so the caller's connection-retry
     path still runs.
 
-    ``attempts_left`` is a hard ceiling on the number of ``create_many`` calls
-    the isolation may issue for this batch, so an authenticated caller flooding
-    poisoned rows cannot amplify one failed bulk insert into unbounded failed
-    inserts and log lines. It is checked before any insert (so an exhausted
-    budget never even attempts a write), decremented once per ``create_many``
-    call, and threaded through the recursion so the whole bisection shares one
-    allowance; total inserts are therefore bounded by the initial value
-    regardless of how many rows are poisoned. When it runs out the still-failing
-    remainder is dropped wholesale (the pre-existing drop-the-batch behavior)
-    under one log line. Returns the budget left after this subtree.
+    ``failure_budget`` caps the *failed* inserts the isolation may issue, which
+    is the work an authenticated caller flooding poisoned rows can amplify. The
+    one insert a statement needs when nothing is poisoned is not charged, so a
+    caller can thread a single budget through every statement of a flush and
+    bound the whole flush's failed inserts and log lines by the initial value,
+    without a large healthy flush ever running out and losing rows. When the
+    budget is spent the still-failing remainder is dropped wholesale (the
+    pre-existing drop-the-batch behavior) under one log line, and a statement
+    reached afterwards is still attempted, so clean rows behind a poison flood
+    persist. Returns the budget left after this subtree.
     """
-    if attempts_left <= 0:
-        spend_log_error(
-            "Spend tracking - dropping %d spend log rows without per-row isolation; "
-            "isolation attempt budget exhausted for this flush",
-            len(rows),
-        )
-        return 0
     try:
         await repo.table.create_many(data=rows, skip_duplicates=True)
-        return attempts_left - 1
+        return failure_budget
     except Exception as e:
         if not PrismaDBExceptionHandler.is_prisma_data_error(e):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
             raise
+        budget_left = max(failure_budget - 1, 0)
         if len(rows) == 1:
             request_id = rows[0].get("request_id")
             spend_log_error(
@@ -5798,9 +5804,23 @@ async def _create_spend_logs_with_poison_isolation(
                 str(e),
                 exc=e,
             )
-            return attempts_left - 1
+            return budget_left
+        if budget_left <= 0:
+            spend_log_error(
+                "Spend tracking - dropping %d spend log rows without per-row isolation; "
+                "isolation failure budget exhausted for this flush",
+                len(rows),
+            )
+            return 0
         mid = len(rows) // 2
-        remaining = await _create_spend_logs_with_poison_isolation(repo, rows[:mid], attempts_left - 1)
+        remaining = await _create_spend_logs_with_poison_isolation(repo, rows[:mid], budget_left)
+        if remaining <= 0:
+            spend_log_error(
+                "Spend tracking - dropping %d spend log rows without per-row isolation; "
+                "isolation failure budget exhausted for this flush",
+                len(rows) - mid,
+            )
+            return 0
         return await _create_spend_logs_with_poison_isolation(repo, rows[mid:], remaining)
 
 

@@ -307,6 +307,15 @@ class TestModelRepository:
         client = MockPrismaClient()
         return ModelRepository(client)
 
+    def test_table_is_wrapped_for_config_sync(self, repo):
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
+
+        table = repo.table
+        assert isinstance(table, _PublishOnWriteActions)
+        assert table._actions is repo.prisma_client.db.litellm_proxymodeltable
+
     @pytest.mark.asyncio
     @patch(
         "litellm.repositories.model_repository.encrypt_value_helper",
@@ -1313,6 +1322,15 @@ class TestCredentialsRepository:
         client = MockPrismaClient()
         return CredentialsRepository(client)
 
+    def test_table_is_wrapped_for_config_sync(self, repo):
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
+
+        table = repo.table
+        assert isinstance(table, _PublishOnWriteActions)
+        assert table._actions is repo.prisma_client.db.litellm_credentialstable
+
     @pytest.mark.asyncio
     async def test_create(self, repo):
         record = await repo.create(
@@ -2210,6 +2228,9 @@ class TestConfigRepositoryDeepCopy:
 
 class TestPrismaTableRepository:
     def test_table_property_returns_named_delegate(self):
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
         from litellm.repositories.table_repositories import (
             AgentsRepository,
             PolicyRepository,
@@ -2219,9 +2240,11 @@ class TestPrismaTableRepository:
         agents = AgentsRepository(prisma_client)
         policy = PolicyRepository(prisma_client)
 
-        assert agents.table is prisma_client.db.litellm_agentstable
-        assert policy.table is prisma_client.db.litellm_policytable
-        assert agents.table is not policy.table
+        assert isinstance(agents.table, _PublishOnWriteActions)
+        assert isinstance(policy.table, _PublishOnWriteActions)
+        assert agents.table._actions is prisma_client.db.litellm_agentstable
+        assert policy.table._actions is prisma_client.db.litellm_policytable
+        assert agents.table._actions is not policy.table._actions
 
     def test_table_access_raises_without_db(self):
         from litellm.repositories.table_repositories import SpendLogsRepository
@@ -2230,8 +2253,28 @@ class TestPrismaTableRepository:
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = repo.table
 
+    CONFIG_SYNCED_TABLE_NAMES = frozenset(
+        {
+            "litellm_agentstable",
+            "litellm_cacheconfig",
+            "litellm_configoverrides",
+            "litellm_guardrailstable",
+            "litellm_managedvectorstoreindextable",
+            "litellm_managedvectorstorestable",
+            "litellm_mcpservertable",
+            "litellm_policyattachmenttable",
+            "litellm_policytable",
+            "litellm_prompttable",
+            "litellm_searchtoolstable",
+            "litellm_ssoconfig",
+        }
+    )
+
     def test_each_repository_binds_its_own_table_name(self):
         import litellm.repositories.table_repositories as tr
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
 
         prisma_client = MagicMock()
         repos = [
@@ -2248,7 +2291,14 @@ class TestPrismaTableRepository:
             assert name.startswith("litellm_")
             assert name not in seen, f"duplicate table_name {name}"
             seen.add(name)
-            assert repo_cls(prisma_client).table is getattr(prisma_client.db, name)
+            table = repo_cls(prisma_client).table
+            raw_actions = getattr(prisma_client.db, name)
+            if name in self.CONFIG_SYNCED_TABLE_NAMES:
+                assert isinstance(table, _PublishOnWriteActions), name
+                assert table._actions is raw_actions
+            else:
+                assert table is raw_actions, name
+        assert self.CONFIG_SYNCED_TABLE_NAMES <= seen
 
 
 def _json_path_equals(
