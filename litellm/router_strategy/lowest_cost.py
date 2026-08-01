@@ -28,7 +28,7 @@ class LowestCostLoggingHandler(CustomLogger):
             else:
                 model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                id = (kwargs["litellm_params"].get("model_info") or {}).get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
@@ -106,7 +106,7 @@ class LowestCostLoggingHandler(CustomLogger):
             else:
                 model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                id = (kwargs["litellm_params"].get("model_info") or {}).get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
