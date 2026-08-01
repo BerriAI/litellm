@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 class OnyxGuardrail(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
@@ -39,9 +39,9 @@ class OnyxGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Optional[float] = 10.0,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = 10.0,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -118,7 +118,7 @@ class OnyxGuardrail(CustomGuardrail):
                 payload = parsed.get("response", {})
             except Exception as e:
                 verbose_proxy_logger.error(
-                    f"Error in converting request_data to ModelResponse: {str(e)}",
+                    f"Error in converting request_data to ModelResponse: {e!s}",
                     extra={
                         "conversation_id": conversation_id,
                         "input_type": input_type,
@@ -133,13 +133,13 @@ class OnyxGuardrail(CustomGuardrail):
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                f"Error in apply_guardrail guard: {str(e)}",
+                f"Error in apply_guardrail guard: {e!s}",
                 extra={"conversation_id": conversation_id, "input_type": input_type},
             )
             return inputs
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.onyx import (
             OnyxGuardrailConfigModel,
         )

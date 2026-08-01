@@ -7,7 +7,7 @@ Vercel AI Gateway is OpenAI-compatible and supports embeddings via the /v1/embed
 Docs: https://vercel.com/docs/ai-gateway/openai-compat/embeddings
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -41,8 +41,8 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for Vercel AI Gateway API.
@@ -65,12 +65,12 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for Vercel AI Gateway Embedding API endpoint.
@@ -112,7 +112,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,

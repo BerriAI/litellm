@@ -4,7 +4,7 @@ Calls DuckDuckGo's Instant Answer API to search the web.
 DuckDuckGo API Reference: https://duckduckgo.com/api
 """
 
-from typing import Dict, List, Literal, Optional, TypedDict, Union
+from typing import Literal, TypedDict
 from urllib.parse import urlencode
 
 import httpx
@@ -56,11 +56,11 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         DuckDuckGo Instant Answer API does not require authentication.
@@ -71,9 +71,9 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -92,10 +92,10 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to DuckDuckGo API format.
 

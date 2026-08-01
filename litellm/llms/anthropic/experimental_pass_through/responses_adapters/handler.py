@@ -4,7 +4,8 @@ Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 Used when the target model is an OpenAI or Azure model.
 """
 
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union
+from collections.abc import AsyncIterator, Coroutine
+from typing import Any
 
 import litellm
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
@@ -22,28 +23,28 @@ _ADAPTER = LiteLLMAnthropicToResponsesAPIAdapter()
 def _build_responses_kwargs(
     *,
     max_tokens: int,
-    messages: List[Dict],
+    messages: list[dict],
     model: str,
-    context_management: Optional[Dict] = None,
-    metadata: Optional[Dict] = None,
-    output_config: Optional[Dict] = None,
-    stop_sequences: Optional[List[str]] = None,
-    stream: Optional[bool] = False,
-    system: Optional[str] = None,
-    temperature: Optional[float] = None,
-    thinking: Optional[Dict] = None,
-    tool_choice: Optional[Dict] = None,
-    tools: Optional[List[Dict]] = None,
-    top_k: Optional[int] = None,
-    top_p: Optional[float] = None,
-    output_format: Optional[Dict] = None,
-    extra_kwargs: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    context_management: dict | None = None,
+    metadata: dict | None = None,
+    output_config: dict | None = None,
+    stop_sequences: list[str] | None = None,
+    stream: bool | None = False,
+    system: str | None = None,
+    temperature: float | None = None,
+    thinking: dict | None = None,
+    tool_choice: dict | None = None,
+    tools: list[dict] | None = None,
+    top_k: int | None = None,
+    top_p: float | None = None,
+    output_format: dict | None = None,
+    extra_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     # Build a typed AnthropicMessagesRequest for the adapter
-    request_data: Dict[str, Any] = {
+    request_data: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
@@ -123,23 +124,23 @@ class LiteLLMMessagesToResponsesAPIHandler:
     @staticmethod
     async def async_anthropic_messages_handler(
         max_tokens: int,
-        messages: List[Dict],
+        messages: list[dict],
         model: str,
-        context_management: Optional[Dict] = None,
-        metadata: Optional[Dict] = None,
-        output_config: Optional[Dict] = None,
-        stop_sequences: Optional[List[str]] = None,
-        stream: Optional[bool] = False,
-        system: Optional[str] = None,
-        temperature: Optional[float] = None,
-        thinking: Optional[Dict] = None,
-        tool_choice: Optional[Dict] = None,
-        tools: Optional[List[Dict]] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        output_format: Optional[Dict] = None,
+        context_management: dict | None = None,
+        metadata: dict | None = None,
+        output_config: dict | None = None,
+        stop_sequences: list[str] | None = None,
+        stream: bool | None = False,
+        system: str | None = None,
+        temperature: float | None = None,
+        thinking: dict | None = None,
+        tool_choice: dict | None = None,
+        tools: list[dict] | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        output_format: dict | None = None,
         **kwargs,
-    ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+    ) -> AnthropicMessagesResponse | AsyncIterator:
         responses_kwargs = _build_responses_kwargs(
             max_tokens=max_tokens,
             messages=messages,
@@ -174,28 +175,28 @@ class LiteLLMMessagesToResponsesAPIHandler:
     @staticmethod
     def anthropic_messages_handler(
         max_tokens: int,
-        messages: List[Dict],
+        messages: list[dict],
         model: str,
-        context_management: Optional[Dict] = None,
-        metadata: Optional[Dict] = None,
-        output_config: Optional[Dict] = None,
-        stop_sequences: Optional[List[str]] = None,
-        stream: Optional[bool] = False,
-        system: Optional[str] = None,
-        temperature: Optional[float] = None,
-        thinking: Optional[Dict] = None,
-        tool_choice: Optional[Dict] = None,
-        tools: Optional[List[Dict]] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        output_format: Optional[Dict] = None,
+        context_management: dict | None = None,
+        metadata: dict | None = None,
+        output_config: dict | None = None,
+        stop_sequences: list[str] | None = None,
+        stream: bool | None = False,
+        system: str | None = None,
+        temperature: float | None = None,
+        thinking: dict | None = None,
+        tool_choice: dict | None = None,
+        tools: list[dict] | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        output_format: dict | None = None,
         _is_async: bool = False,
         **kwargs,
-    ) -> Union[
-        AnthropicMessagesResponse,
-        AsyncIterator[Any],
-        Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
-    ]:
+    ) -> (
+        AnthropicMessagesResponse
+        | AsyncIterator[Any]
+        | Coroutine[Any, Any, AnthropicMessagesResponse | AsyncIterator[Any]]
+    ):
         if _is_async:
             return LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
                 max_tokens=max_tokens,

@@ -15,12 +15,12 @@ Follows the same pattern as max_iterations_limiter.py.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.exceptions import RateLimitType
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
@@ -87,7 +87,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Before each LLM call, check if max_budget_per_session is set and
         whether accumulated spend exceeds the budget (429 if so).
@@ -171,7 +171,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 str(e),
             )
 
-    def _get_session_id(self, data: dict) -> Optional[str]:
+    def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""
         metadata = data.get("metadata") or {}
         session_id = metadata.get("session_id")
@@ -185,7 +185,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
         return None
 
-    def _get_max_budget_per_session(self, user_api_key_dict: UserAPIKeyAuth) -> Optional[float]:
+    def _get_max_budget_per_session(self, user_api_key_dict: UserAPIKeyAuth) -> float | None:
         """Extract max_budget_per_session from agent litellm_params."""
         agent_id = user_api_key_dict.agent_id
         if agent_id is None:

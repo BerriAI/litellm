@@ -5,8 +5,9 @@ LiteLLM SDK Functions for Creating and Searching Vector Stores
 import asyncio
 import builtins
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -35,7 +36,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 
 
 def mock_vector_store_search_response(
-    mock_results: Optional[List[VectorStoreSearchResult]] = None,
+    mock_results: list[VectorStoreSearchResult] | None = None,
 ):
     """Mock response for vector store search"""
     if mock_results is None:
@@ -59,7 +60,7 @@ def mock_vector_store_search_response(
 
 
 def mock_vector_store_create_response(
-    mock_response: Optional[VectorStoreCreateResponse] = None,
+    mock_response: VectorStoreCreateResponse | None = None,
 ):
     """Mock response for vector store create"""
     if mock_response is None:
@@ -88,19 +89,19 @@ def mock_vector_store_create_response(
 
 @client
 async def acreate(
-    name: Optional[str] = None,
-    file_ids: Optional[List[str]] = None,
-    expires_after: Optional[Dict] = None,
-    chunking_strategy: Optional[Dict] = None,
-    metadata: Optional[Dict[str, str]] = None,
+    name: str | None = None,
+    file_ids: list[str] | None = None,
+    expires_after: dict | None = None,
+    chunking_strategy: dict | None = None,
+    metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreCreateResponse:
     """
@@ -152,21 +153,21 @@ async def acreate(
 
 @client
 def create(
-    name: Optional[str] = None,
-    file_ids: Optional[List[str]] = None,
-    expires_after: Optional[Dict] = None,
-    chunking_strategy: Optional[Dict] = None,
-    metadata: Optional[Dict[str, str]] = None,
+    name: str | None = None,
+    file_ids: list[str] | None = None,
+    expires_after: dict | None = None,
+    chunking_strategy: dict | None = None,
+    metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+) -> VectorStoreCreateResponse | Coroutine[Any, Any, VectorStoreCreateResponse]:
     """
     Create a vector store.
 
@@ -183,7 +184,7 @@ def create(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("acreate", False) is True
 
         # get llm provider logic
@@ -266,19 +267,19 @@ def create(
 @client
 async def asearch(
     vector_store_id: str,
-    query: Union[str, List[str]],
-    filters: Optional[Dict] = None,
-    max_num_results: Optional[int] = None,
-    ranking_options: Optional[Dict] = None,
-    rewrite_query: Optional[bool] = None,
+    query: str | list[str],
+    filters: dict | None = None,
+    max_num_results: int | None = None,
+    ranking_options: dict | None = None,
+    rewrite_query: bool | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreSearchResponse:
     """
@@ -333,21 +334,21 @@ async def asearch(
 @client
 def search(
     vector_store_id: str,
-    query: Union[str, List[str]],
-    filters: Optional[Dict] = None,
-    max_num_results: Optional[int] = None,
-    ranking_options: Optional[Dict] = None,
-    rewrite_query: Optional[bool] = None,
+    query: str | list[str],
+    filters: dict | None = None,
+    max_num_results: int | None = None,
+    ranking_options: dict | None = None,
+    rewrite_query: bool | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreSearchResponse, Coroutine[Any, Any, VectorStoreSearchResponse]]:
+) -> VectorStoreSearchResponse | Coroutine[Any, Any, VectorStoreSearchResponse]:
     """
     Search a vector store for relevant chunks based on a query and file attributes filter.
 
@@ -365,7 +366,7 @@ def search(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("asearch", False) is True
 
         # pull credentials from registry if available
@@ -465,11 +466,11 @@ def search(
 @client
 async def aretrieve(
     vector_store_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreCreateResponse:
     """
@@ -517,13 +518,13 @@ async def aretrieve(
 @client
 def retrieve(
     vector_store_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+) -> VectorStoreCreateResponse | Coroutine[Any, Any, VectorStoreCreateResponse]:
     """
     Retrieve a vector store.
 
@@ -536,7 +537,7 @@ def retrieve(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aretrieve", False) is True
 
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -596,15 +597,15 @@ def retrieve(
 
 @client
 async def alist(
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    limit: Optional[int] = 20,
-    order: Optional[str] = "desc",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    after: str | None = None,
+    before: str | None = None,
+    limit: int | None = 20,
+    order: str | None = "desc",
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ):
     """
@@ -654,15 +655,15 @@ async def alist(
 
 @client
 def list(
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    limit: Optional[int] = 20,
-    order: Optional[str] = "desc",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    after: str | None = None,
+    before: str | None = None,
+    limit: int | None = 20,
+    order: str | None = "desc",
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ):
     """
@@ -680,7 +681,7 @@ def list(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("alist", False) is True
 
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -749,14 +750,14 @@ def list(
 @client
 async def aupdate(
     vector_store_id: str,
-    name: Optional[str] = None,
-    expires_after: Optional[Dict] = None,
-    metadata: Optional[Dict[str, str]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    name: str | None = None,
+    expires_after: dict | None = None,
+    metadata: dict[str, str] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreCreateResponse:
     """
@@ -807,16 +808,16 @@ async def aupdate(
 @client
 def update(
     vector_store_id: str,
-    name: Optional[str] = None,
-    expires_after: Optional[Dict] = None,
-    metadata: Optional[Dict[str, str]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    name: str | None = None,
+    expires_after: dict | None = None,
+    metadata: dict[str, str] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+) -> VectorStoreCreateResponse | Coroutine[Any, Any, VectorStoreCreateResponse]:
     """
     Update a vector store.
 
@@ -832,7 +833,7 @@ def update(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aupdate", False) is True
 
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -904,11 +905,11 @@ def update(
 @client
 async def adelete(
     vector_store_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ):
     """
@@ -956,11 +957,11 @@ async def adelete(
 @client
 def delete(
     vector_store_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ):
     """
@@ -975,7 +976,7 @@ def delete(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("adelete", False) is True
 
         litellm_params = GenericLiteLLMParams(**kwargs)

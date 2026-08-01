@@ -1,5 +1,3 @@
-from typing import List, Optional, Union
-
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import AllMessageValues, BaseLLMException
@@ -41,11 +39,11 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return {}
 
@@ -73,7 +71,7 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -107,7 +105,7 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
 
     def _build_embedding_usage(self, model: str, request_data: dict) -> Usage:
         input_data = request_data.get("inputs", [])
-        input_text_values: List[str] = []
+        input_text_values: list[str] = []
         for item in input_data:
             if isinstance(item, dict) and item.get("name") == "input_text":
                 data_values = item.get("data", [])
@@ -130,13 +128,11 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
             total_tokens=prompt_tokens,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return TritonError(message=error_message, status_code=status_code, headers=headers)
 
     @staticmethod
-    def split_embedding_by_shape(data: List[float], shape: List[int]) -> List[List[float]]:
+    def split_embedding_by_shape(data: list[float], shape: list[int]) -> list[list[float]]:
         if len(shape) != 2:
             raise ValueError("Shape must be of length 2.")
         embedding_size = shape[1]

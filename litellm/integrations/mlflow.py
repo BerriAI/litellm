@@ -1,6 +1,6 @@
 import json
 import threading
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -53,8 +53,10 @@ class MlflowLogger(CustomLogger):
 
     def _extract_and_set_chat_attributes(self, span, kwargs, response_obj):
         try:
-            from mlflow.tracing.utils import set_span_chat_messages  # type: ignore
-            from mlflow.tracing.utils import set_span_chat_tools  # type: ignore
+            from mlflow.tracing.utils import (
+                set_span_chat_messages,  # type: ignore
+                set_span_chat_tools,  # type: ignore
+            )
         except ImportError:
             return
 
@@ -185,7 +187,7 @@ class MlflowLogger(CustomLogger):
             "call_type": kwargs.get("call_type"),
             "model": kwargs.get("model"),
         }
-        standard_obj: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+        standard_obj: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
         if standard_obj:
             attributes.update(
                 {
@@ -215,7 +217,7 @@ class MlflowLogger(CustomLogger):
             )
         return attributes
 
-    def _get_span_type(self, call_type: Optional[str]) -> str:
+    def _get_span_type(self, call_type: str | None) -> str:
         from mlflow.entities import SpanType
 
         if call_type in ["completion", "acompletion"]:

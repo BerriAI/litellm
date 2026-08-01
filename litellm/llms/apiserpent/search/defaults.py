@@ -6,7 +6,7 @@ package-level defaults. See https://apiserpent.com/docs.
 """
 
 from dataclasses import asdict, dataclass
-from typing import Dict, Literal, Optional
+from typing import Literal
 
 SearchEngine = Literal["google", "bing", "yahoo", "ddg"]
 SafeSearch = Literal["off", "moderate", "strict"]
@@ -34,11 +34,11 @@ class APISerpentSearchParams:
     country: str = "us"
     num: int = 10
     format: ResponseFormat = "full"
-    pages: Optional[int] = None
-    freshness: Optional[Freshness] = None
-    safe: Optional[SafeSearch] = None
-    language: Optional[str] = None
-    pixel_position: Optional[bool] = None
+    pages: int | None = None
+    freshness: Freshness | None = None
+    safe: SafeSearch | None = None
+    language: str | None = None
+    pixel_position: bool | None = None
 
     def __post_init__(self) -> None:
         # num's deep-search floor (NUM_MIN_DEEP) is endpoint-specific and enforced
@@ -48,9 +48,9 @@ class APISerpentSearchParams:
         if self.pages is not None and not PAGES_MIN <= self.pages <= PAGES_MAX:
             raise ValueError(f"pages must be between {PAGES_MIN} and {PAGES_MAX}, got {self.pages}")
 
-    def to_request_params(self) -> Dict:
+    def to_request_params(self) -> dict:
         """Return non-None fields as request params, booleans lowercased."""
-        params: Dict = {}
+        params: dict = {}
         for key, value in asdict(self).items():
             if value is None:
                 continue

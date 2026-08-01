@@ -7,14 +7,14 @@ different managed resource types (files, vector stores, etc.).
 
 import base64
 import re
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, Literal
 
 PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS = ("azure", "azure_ai")
 
 
 def resolve_passthrough_managed_id_provider(
     custom_llm_provider: Any,
-) -> Optional[str]:
+) -> str | None:
     """Map a pass-through ``custom_llm_provider`` to the provider scope that
     namespaces passthrough managed object IDs, or ``None`` when the route is not
     an OpenAI/Azure pass-through and managed IDs must not apply.
@@ -42,7 +42,7 @@ def resolve_passthrough_managed_id_provider(
 def is_base64_encoded_unified_id(
     resource_id: str,
     prefix: str = "litellm_proxy:",
-) -> Union[str, Literal[False]]:
+) -> str | Literal[False]:
     """
     Check if a resource ID is a base64 encoded unified ID.
 
@@ -73,7 +73,7 @@ def is_base64_encoded_unified_id(
 
 def extract_target_model_names_from_unified_id(
     unified_id: str,
-) -> List[str]:
+) -> list[str]:
     """
     Extract target model names from a unified resource ID.
 
@@ -110,7 +110,7 @@ def extract_target_model_names_from_unified_id(
 
 def extract_resource_type_from_unified_id(
     unified_id: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Extract resource type from a unified resource ID.
 
@@ -146,7 +146,7 @@ def extract_resource_type_from_unified_id(
 
 def extract_unified_uuid_from_unified_id(
     unified_id: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Extract the UUID from a unified resource ID.
 
@@ -182,7 +182,7 @@ def extract_unified_uuid_from_unified_id(
 
 def extract_model_id_from_unified_id(
     unified_id: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Extract model ID from a unified resource ID.
 
@@ -224,7 +224,7 @@ def extract_model_id_from_unified_id(
 
 def extract_provider_resource_id_from_unified_id(
     unified_id: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Extract provider resource ID from a unified resource ID.
 
@@ -268,10 +268,10 @@ def extract_provider_resource_id_from_unified_id(
 def generate_unified_id_string(
     resource_type: str,
     unified_uuid: str,
-    target_model_names: List[str],
+    target_model_names: list[str],
     provider_resource_id: str,
     model_id: str,
-    additional_fields: Optional[dict] = None,
+    additional_fields: dict | None = None,
 ) -> str:
     """
     Generate a unified ID string (before base64 encoding).
@@ -327,7 +327,7 @@ def encode_unified_id(unified_id_string: str) -> str:
     return base64.urlsafe_b64encode(unified_id_string.encode()).decode().rstrip("=")
 
 
-def decode_unified_id(encoded_unified_id: str) -> Optional[str]:
+def decode_unified_id(encoded_unified_id: str) -> str | None:
     """
     Decode a base64 encoded unified ID.
 
@@ -355,7 +355,7 @@ def decode_unified_id(encoded_unified_id: str) -> Optional[str]:
 
 def parse_unified_id(
     unified_id: str,
-) -> Optional[dict]:
+) -> dict | None:
     """
     Parse a unified ID into its components.
 

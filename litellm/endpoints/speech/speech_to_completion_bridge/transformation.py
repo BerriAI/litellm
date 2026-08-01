@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional, Union, cast
+from typing import TYPE_CHECKING, cast
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 
@@ -13,7 +13,7 @@ class SpeechToCompletionBridgeTransformationHandler:
         self,
         model: str,
         input: str,
-        voice: Optional[Union[str, dict]],
+        voice: str | dict | None,
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

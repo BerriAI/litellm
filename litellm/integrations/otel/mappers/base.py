@@ -1,6 +1,6 @@
 """Mapper protocol and attribute value types."""
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from typing_extensions import Protocol, runtime_checkable
 

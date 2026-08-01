@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import Mapping
-from typing import Any, Coroutine, Optional, Tuple, Union
+from collections.abc import Coroutine, Mapping
+from typing import Any
 
 import httpx
 
@@ -43,7 +43,7 @@ class BedrockFilesHandler(BaseAWSLLM):
         s3_uri: str,
         configured_bucket_name: str,
         allow_legacy_cloud_file_ids: bool = False,
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Parse S3 URI to extract bucket name and object key.
 
@@ -70,8 +70,8 @@ class BedrockFilesHandler(BaseAWSLLM):
         self,
         file_content_request: FileContentRequest,
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
     ) -> HttpxBinaryResponseContent:
         """
         Download file content from S3 bucket for Bedrock files.
@@ -130,7 +130,7 @@ class BedrockFilesHandler(BaseAWSLLM):
             response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
             file_content = response["Body"].read()
         except Exception as e:
-            raise ValueError(f"Failed to download file from S3: {s3_uri}. Error: {str(e)}")
+            raise ValueError(f"Failed to download file from S3: {s3_uri}. Error: {e!s}")
 
         # Create mock HTTP response
         mock_response = httpx.Response(
@@ -146,11 +146,11 @@ class BedrockFilesHandler(BaseAWSLLM):
         self,
         _is_async: bool,
         file_content_request: FileContentRequest,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
         """
         Download file content from S3 bucket for Bedrock files.
         Supports both sync and async operations.

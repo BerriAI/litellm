@@ -1,11 +1,10 @@
 import os
-from typing import TYPE_CHECKING, Any, Optional
-
-from litellm._logging import verbose_logger
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -74,7 +73,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         mapped_params = {}
 
         for k, v in non_default_params.items():
-            if k not in optional_params.keys():
+            if k not in optional_params:
                 if k in supported_params:
                     # Map OpenAI parameters to Gemini format
                     if k == "n":
@@ -110,7 +109,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         }
         return aspect_ratio_map.get(size, "1:1")
 
-    def _resolve_vertex_project(self) -> Optional[str]:
+    def _resolve_vertex_project(self) -> str | None:
         return (
             getattr(self, "_vertex_project", None)
             or os.environ.get("VERTEXAI_PROJECT")
@@ -118,7 +117,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             or get_secret_str("VERTEXAI_PROJECT")
         )
 
-    def _resolve_vertex_location(self) -> Optional[str]:
+    def _resolve_vertex_location(self) -> str | None:
         return (
             getattr(self, "_vertex_location", None)
             or os.environ.get("VERTEXAI_LOCATION")
@@ -128,7 +127,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             or get_secret_str("VERTEX_LOCATION")
         )
 
-    def _resolve_vertex_credentials(self) -> Optional[str]:
+    def _resolve_vertex_credentials(self) -> str | None:
         return (
             getattr(self, "_vertex_credentials", None)
             or os.environ.get("VERTEXAI_CREDENTIALS")
@@ -139,12 +138,12 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for Vertex AI Gemini generateContent API
@@ -178,8 +177,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = headers or {}
 
@@ -284,8 +283,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Gemini image generation response to litellm ImageResponse format

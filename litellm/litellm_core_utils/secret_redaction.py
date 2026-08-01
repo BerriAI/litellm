@@ -7,7 +7,6 @@ secrets from strings without depending on the logging-configuration module.
 """
 
 import re
-from typing import List
 
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
 
@@ -15,7 +14,7 @@ _REDACTED = "REDACTED"
 
 
 def _build_secret_patterns() -> "re.Pattern[str]":
-    patterns: List[str] = [
+    patterns: list[str] = [
         # PEM private key / certificate blocks
         r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----",
         # GCP OAuth2 access tokens (ya29.*)

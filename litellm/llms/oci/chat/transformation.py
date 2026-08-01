@@ -10,16 +10,10 @@ implement the LiteLLM BaseConfig interface.  Heavy-lifting lives in:
 """
 
 import json
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Tuple,
-    Union,
 )
 
 import httpx
@@ -27,6 +21,7 @@ import httpx
 import litellm
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -71,7 +66,6 @@ from litellm.types.utils import (
     ModelResponseStream,
 )
 from litellm.utils import supports_reasoning
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -143,7 +137,7 @@ async def _aiter_sse_events(stream: AsyncIterator[str]) -> AsyncIterator[str]:
         yield stripped
 
 
-def _normalize_tool_choice(selected_params: Dict) -> None:
+def _normalize_tool_choice(selected_params: dict) -> None:
     tc = selected_params.get("toolChoice")
     if tc is None:
         return
@@ -190,7 +184,7 @@ def _normalize_tool_choice(selected_params: Dict) -> None:
     )
 
 
-def _normalize_response_format(selected_params: Dict, vendor: OCIVendors) -> None:
+def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> None:
     rf = selected_params.get("responseFormat")
     if not isinstance(rf, dict) or "type" not in rf:
         return
@@ -205,7 +199,7 @@ def _normalize_response_format(selected_params: Dict, vendor: OCIVendors) -> Non
 
     if vendor == OCIVendors.COHERE:
         # OCI Cohere has no JSON_SCHEMA type; a schema rides on JSON_OBJECT.
-        payload: Dict[str, Any] = {"type": "JSON_OBJECT"}
+        payload: dict[str, Any] = {"type": "JSON_OBJECT"}
         if json_schema is not None and json_schema.get("schema") is not None:
             payload["schema"] = json_schema["schema"]
         selected_params["responseFormat"] = payload
@@ -220,7 +214,7 @@ def _normalize_response_format(selected_params: Dict, vendor: OCIVendors) -> Non
         # OCI's ResponseJsonSchema accepts only name/description/schema/isStrict.
         # OpenAI sends `strict` instead of `isStrict`; forwarding it (or any
         # other extra key) makes OCI reject the whole request with HTTP 400.
-        oci_schema: Dict[str, Any] = {"name": json_schema.get("name") or "response"}
+        oci_schema: dict[str, Any] = {"name": json_schema.get("name") or "response"}
         if json_schema.get("description") is not None:
             oci_schema["description"] = json_schema["description"]
         if json_schema.get("schema") is not None:
@@ -319,7 +313,7 @@ class OCIChatConfig(BaseConfig):
         self.openai_to_oci_cohere_param_map["logprobs"] = False
         self.openai_to_oci_cohere_param_map["logit_bias"] = False
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         param_map = (
             self.openai_to_oci_cohere_param_map
             if get_vendor_from_model(model) == OCIVendors.COHERE
@@ -386,11 +380,11 @@ class OCIChatConfig(BaseConfig):
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, bytes]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes]:
         return sign_oci_request(
             headers=headers,
             optional_params=optional_params,
@@ -406,11 +400,11 @@ class OCIChatConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if not messages:
             raise OCIError(
@@ -444,21 +438,21 @@ class OCIChatConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         base = get_oci_base_url(optional_params, api_base or litellm.api_base)
         return f"{base}/{OCI_API_VERSION}/actions/chat"
 
-    def _get_optional_params(self, vendor: OCIVendors, optional_params: dict, model: str = "") -> Dict:
+    def _get_optional_params(self, vendor: OCIVendors, optional_params: dict, model: str = "") -> dict:
         param_map = (
             self.openai_to_oci_cohere_param_map if vendor == OCIVendors.COHERE else self.openai_to_oci_generic_param_map
         )
-        selected_params: Dict = {}
+        selected_params: dict = {}
 
         # OpenAI reasoning models on OCI (e.g. GPT-5 family) reject "maxTokens"
         # and require "maxCompletionTokens" per OCI's /20231130/Chat schema.
@@ -529,7 +523,7 @@ class OCIChatConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -609,12 +603,12 @@ class OCIChatConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         response_json = raw_response.json()
 
@@ -649,9 +643,9 @@ class OCIChatConfig(BaseConfig):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -688,9 +682,9 @@ class OCIChatConfig(BaseConfig):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.OCI, params={})
@@ -717,9 +711,7 @@ class OCIChatConfig(BaseConfig):
             logging_obj=logging_obj,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OCIError(status_code=status_code, message=error_message)
 
 
@@ -749,7 +741,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
         except json.JSONDecodeError as e:
             raise OCIError(
                 status_code=500,
-                message=f"Chunk cannot be parsed as JSON: {str(e)}",
+                message=f"Chunk cannot be parsed as JSON: {e!s}",
             )
 
         if dict_chunk.get("apiFormat") == "COHERE":
@@ -773,11 +765,11 @@ class OCIStreamWrapper(CustomStreamWrapper):
 
 
 __all__ = [
-    "OCIChatConfig",
-    "OCIStreamWrapper",
-    "OCIRequestWrapper",
     "OCI_API_VERSION",
     "STREAMING_TIMEOUT",
+    "OCIChatConfig",
+    "OCIRequestWrapper",
+    "OCIStreamWrapper",
     "get_vendor_from_model",
     "version",
 ]

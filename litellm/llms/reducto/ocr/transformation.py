@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import httpx
 
@@ -34,13 +34,13 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         from litellm.secret_managers.main import get_secret_str
 
         resolved_key = api_key or get_secret_str("REDUCTO_API_KEY")
@@ -57,10 +57,10 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         return "{}/parse".format((api_base or REDUCTO_API_BASE).rstrip("/"))
@@ -69,12 +69,12 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
         source_url = document.get("document_url") or document.get("image_url")
         if source_url is None:
             raise ValueError(
-                "Reducto expected OCR preprocessing to produce document_url or image_url for model={}".format(model)
+                f"Reducto expected OCR preprocessing to produce document_url or image_url for model={model}"
             )
         return source_url
 
     @staticmethod
-    def _resolve_credentials(api_key: Optional[str], api_base: Optional[str]) -> Tuple[str, str]:
+    def _resolve_credentials(api_key: str | None, api_base: str | None) -> tuple[str, str]:
         from litellm.secret_managers.main import get_secret_str
 
         resolved_key = api_key or get_secret_str("REDUCTO_API_KEY")
@@ -89,8 +89,8 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
         self,
         model: str,
         document: DocumentType,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
     ) -> str:
         source_url = self._get_source_url(document=document, model=model)
         file_id, raw_bytes, mime = extract_file_id_or_bytes(source_url, model=model)
@@ -108,8 +108,8 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
         self,
         model: str,
         document: DocumentType,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
     ) -> str:
         source_url = self._get_source_url(document=document, model=model)
         file_id, raw_bytes, mime = extract_file_id_or_bytes(source_url, model=model)
@@ -187,8 +187,8 @@ class ReductoParseLegacyConfig(_BaseReductoOCRConfig):
     def get_supported_ocr_params(self, model: str) -> list:
         return ["enhance"]
 
-    def _build_legacy_body(self, file_id: str, optional_params: dict) -> Dict[str, Any]:
-        body: Dict[str, Any] = {"document_url": file_id}
+    def _build_legacy_body(self, file_id: str, optional_params: dict) -> dict[str, Any]:
+        body: dict[str, Any] = {"document_url": file_id}
         enhance = optional_params.get("enhance")
         if enhance is not None:
             body["options"] = {"enhance": enhance}

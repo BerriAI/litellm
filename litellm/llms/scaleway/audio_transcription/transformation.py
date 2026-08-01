@@ -4,8 +4,6 @@ Support for Scaleway's OpenAI-compatible `/v1/audio/transcriptions` endpoint.
 API reference: https://www.scaleway.com/en/developers/api/generative-apis/#path-audio-create-an-audio-transcription
 """
 
-from typing import List, Optional, Union
-
 import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
@@ -27,7 +25,7 @@ class ScalewayAudioTranscriptionException(BaseLLMException):
 
 
 class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         return [
             "language",
             "prompt",
@@ -51,19 +49,17 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = "https://api.scaleway.ai/v1" if api_base is None else api_base.rstrip("/")
         return f"{api_base}/audio/transcriptions"
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return ScalewayAudioTranscriptionException(
             message=error_message,
             status_code=status_code,
@@ -74,11 +70,11 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("SCW_SECRET_KEY")

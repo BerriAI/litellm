@@ -3,7 +3,7 @@ Callbacks triggered on cooling down deployments
 """
 
 import copy
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,8 +21,8 @@ else:
 async def router_cooldown_event_callback(
     litellm_router_instance: LitellmRouter,
     deployment_id: str,
-    exception_status: Union[str, int],
-    cooldown_time: Optional[float],
+    exception_status: str | int,
+    cooldown_time: float | None,
 ):
     """
     Callback triggered when a deployment is put into cooldown by litellm
@@ -56,7 +56,7 @@ async def router_cooldown_event_callback(
         pass
 
     # get the prometheus logger from in memory loggers
-    prometheusLogger: Optional[PrometheusLogger] = _get_prometheus_logger_from_callbacks()
+    prometheusLogger: PrometheusLogger | None = _get_prometheus_logger_from_callbacks()
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(
@@ -77,7 +77,7 @@ async def router_cooldown_event_callback(
     return
 
 
-def _get_prometheus_logger_from_callbacks() -> Optional[PrometheusLogger]:
+def _get_prometheus_logger_from_callbacks() -> PrometheusLogger | None:
     """
     Checks if prometheus is a initalized callback, if yes returns it
     """

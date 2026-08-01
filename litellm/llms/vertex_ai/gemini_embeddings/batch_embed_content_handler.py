@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal
 
 import httpx
 
@@ -34,7 +34,7 @@ class GoogleBatchEmbeddings(VertexLLM):
     @staticmethod
     def _flatten_and_detect_file_refs(
         input: GeminiEmbeddingInput,
-    ) -> Tuple[List[str], bool]:
+    ) -> tuple[list[str], bool]:
         """Flatten nested input lists and detect file references."""
         input_list = [input] if isinstance(input, str) else input
         flat_elements = [
@@ -48,7 +48,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         input: GeminiEmbeddingInput,
         api_key: str,
         sync_handler: HTTPHandler,
-    ) -> Dict[str, Dict[str, str]]:
+    ) -> dict[str, dict[str, str]]:
         """
         Resolve Gemini file references (files/...) to get mime_type and uri.
 
@@ -61,7 +61,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             Dict mapping file name to {mime_type, uri}
         """
         input_list = [input] if isinstance(input, str) else input
-        resolved_files: Dict[str, Dict[str, str]] = {}
+        resolved_files: dict[str, dict[str, str]] = {}
 
         for element in input_list:
             if isinstance(element, str) and _is_file_reference(element):
@@ -85,7 +85,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         input: GeminiEmbeddingInput,
         api_key: str,
         async_handler: AsyncHTTPHandler,
-    ) -> Dict[str, Dict[str, str]]:
+    ) -> dict[str, dict[str, str]]:
         """
         Async version of _resolve_file_references.
 
@@ -98,7 +98,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             Dict mapping file name to {mime_type, uri}
         """
         input_list = [input] if isinstance(input, str) else input
-        resolved_files: Dict[str, Dict[str, str]] = {}
+        resolved_files: dict[str, dict[str, str]] = {}
 
         for element in input_list:
             if isinstance(element, str) and _is_file_reference(element):
@@ -126,16 +126,16 @@ class GoogleBatchEmbeddings(VertexLLM):
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
         logging_obj: Any,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         encoding=None,
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        aembedding: Optional[bool] = False,
+        aembedding: bool | None = False,
         timeout=300,
         client=None,
-        extra_headers: Optional[dict] = None,
+        extra_headers: dict | None = None,
     ) -> EmbeddingResponse:
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -279,18 +279,18 @@ class GoogleBatchEmbeddings(VertexLLM):
     async def async_batch_embeddings(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         url: str,
-        data: Optional[Union[VertexAIBatchEmbeddingsRequestBody, dict]],
+        data: VertexAIBatchEmbeddingsRequestBody | dict | None,
         model_response: EmbeddingResponse,
         input: GeminiEmbeddingInput,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
         headers={},
-        client: Optional[AsyncHTTPHandler] = None,
+        client: AsyncHTTPHandler | None = None,
         use_embed_content: bool = False,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        logging_obj: Optional[Any] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
+        logging_obj: Any | None = None,
     ) -> EmbeddingResponse:
         if client is None:
             _params = {}

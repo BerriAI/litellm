@@ -20,7 +20,7 @@ granularity of ``InFlightRequestsMiddleware``.
 import asyncio
 import os
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.in_flight_requests_middleware import (
@@ -40,7 +40,7 @@ class GracefulShutdownManager:
     """
 
     _is_shutting_down: bool = False
-    _shutdown_started_at: Optional[float] = None
+    _shutdown_started_at: float | None = None
     _drain_performed: bool = False
 
     @classmethod
@@ -86,9 +86,9 @@ class GracefulShutdownManager:
     @classmethod
     async def wait_for_drain(
         cls,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
         exclude_self: bool = False,
-        count_fn: Optional[Callable[[], int]] = None,
+        count_fn: Callable[[], int] | None = None,
         poll_interval: float = _DRAIN_POLL_INTERVAL,
         log_interval: float = _DRAIN_LOG_INTERVAL,
     ) -> int:

@@ -12,14 +12,11 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 import asyncio
 import datetime
 import uuid
+from collections.abc import AsyncIterator, Coroutine
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
-    Dict,
     Optional,
-    Union,
     cast,
 )
 
@@ -87,7 +84,7 @@ A2ACardResolver = LiteLLMA2ACardResolver
 
 
 def _set_usage_on_logging_obj(
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
     prompt_tokens: int,
     completion_tokens: int,
 ) -> None:
@@ -110,7 +107,7 @@ def _set_usage_on_logging_obj(
 
 
 def _set_agent_id_on_logging_obj(
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
     agent_id: str | None,
 ) -> None:
     """
@@ -156,7 +153,7 @@ def _set_litellm_params_on_logging_obj(
     logging_obj.model_call_details["litellm_params"] = {**existing, **cost_params}
 
 
-def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
+def _get_a2a_model_info(a2a_client: Any, kwargs: dict[str, Any]) -> str:
     """
     Extract agent info and set model/custom_llm_provider for cost tracking.
 
@@ -199,8 +196,8 @@ async def _send_message_via_completion_bridge(
     request: "SendMessageRequest",
     custom_llm_provider: str,
     api_base: str | None,
-    litellm_params: Dict[str, Any],
-    agent_extra_headers: Dict[str, str] | None = None,
+    litellm_params: dict[str, Any],
+    agent_extra_headers: dict[str, str] | None = None,
 ) -> LiteLLMSendMessageResponse:
     """
     Route a send_message through the LiteLLM completion bridge (e.g. LangGraph, Bedrock AgentCore).
@@ -370,9 +367,9 @@ async def asend_message(
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendMessageRequest"] = None,
     api_base: str | None = None,
-    litellm_params: Dict[str, Any] | None = None,
+    litellm_params: dict[str, Any] | None = None,
     agent_id: str | None = None,
-    agent_extra_headers: Dict[str, str] | None = None,
+    agent_extra_headers: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -453,7 +450,7 @@ async def asend_message(
         if api_base is None:
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
         trace_id = trace_id or str(uuid.uuid4())
-        extra_headers: Dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
+        extra_headers: dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
         # Overlay agent-level headers (agent headers take precedence over LiteLLM internal ones)
@@ -518,7 +515,7 @@ def send_message(
     a2a_client: "A2AClientType",
     request: "SendMessageRequest",
     **kwargs: Any,
-) -> Union[LiteLLMSendMessageResponse, Coroutine[Any, Any, LiteLLMSendMessageResponse]]:
+) -> LiteLLMSendMessageResponse | Coroutine[Any, Any, LiteLLMSendMessageResponse]:
     """
     Sync: Send a message to an A2A agent.
 
@@ -547,9 +544,9 @@ def _build_streaming_logging_obj(
     request: "SendStreamingMessageRequest",
     agent_name: str,
     agent_id: str | None,
-    litellm_params: Dict[str, Any] | None,
-    metadata: Dict[str, Any] | None,
-    proxy_server_request: Dict[str, Any] | None,
+    litellm_params: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+    proxy_server_request: dict[str, Any] | None,
 ) -> Logging:
     """Build logging object for streaming A2A requests."""
     start_time = datetime.datetime.now()
@@ -590,11 +587,11 @@ async def asend_message_streaming(
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendStreamingMessageRequest"] = None,
     api_base: str | None = None,
-    litellm_params: Dict[str, Any] | None = None,
+    litellm_params: dict[str, Any] | None = None,
     agent_id: str | None = None,
-    metadata: Dict[str, Any] | None = None,
-    proxy_server_request: Dict[str, Any] | None = None,
-    agent_extra_headers: Dict[str, str] | None = None,
+    metadata: dict[str, Any] | None = None,
+    proxy_server_request: dict[str, Any] | None = None,
+    agent_extra_headers: dict[str, str] | None = None,
     **kwargs: object,
 ) -> AsyncIterator[Any]:
     """
@@ -728,7 +725,7 @@ async def asend_message_streaming(
 async def create_a2a_client(
     base_url: str,
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
-    extra_headers: Dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
     streaming: bool = False,
 ) -> "A2AClientType":
     """
@@ -809,7 +806,7 @@ async def create_a2a_client(
 async def aget_agent_card(
     base_url: str,
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
-    extra_headers: Dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> "AgentCard":
     """
     Fetch the agent card from an A2A agent.

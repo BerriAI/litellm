@@ -12,7 +12,7 @@ MCP Spec Reference:
 
 import typing
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Union
+from typing import Any, NamedTuple, Optional, Protocol, Union
 
 if typing.TYPE_CHECKING:
     from fastapi import Request
@@ -55,7 +55,7 @@ except ImportError as _sampling_import_err:
 
 def _resolve_model_from_preferences(
     model_preferences: Optional["ModelPreferences"],
-    default_model: Optional[str] = None,
+    default_model: str | None = None,
 ) -> str:
     """
     Resolve an LLM model name from MCP ModelPreferences.
@@ -168,9 +168,9 @@ class _ScoredModel(NamedTuple):
 
 
 def _select_model_by_priority(
-    model_names: List[str],
+    model_names: list[str],
     model_preferences: "ModelPreferences",
-) -> Optional[str]:
+) -> str | None:
     """Score available models by MCP priority weights and return the best.
 
     Scoring strategy (per the MCP spec, priorities are 0-1 floats):
@@ -226,7 +226,7 @@ def _select_model_by_priority(
         return None
 
     # Min-max normalisation helpers
-    def _normalise(values: List[float], invert: bool = False) -> List[float]:
+    def _normalise(values: list[float], invert: bool = False) -> list[float]:
         """Normalise to [0, 1].  If *invert*, lower raw → higher score."""
         lo, hi = min(values), max(values)
         if hi == lo:
@@ -370,8 +370,8 @@ def _convert_single_content(
 
 
 def _convert_mcp_messages_to_openai(
-    messages: List["SamplingMessage"],
-    system_prompt: Optional[str] = None,
+    messages: list["SamplingMessage"],
+    system_prompt: str | None = None,
 ) -> "Sequence[Mapping[str, object]]":
     """
     Convert MCP SamplingMessage list to OpenAI messages format.
@@ -497,7 +497,7 @@ def _extract_tool_calls(
 
 def _extract_text_parts(
     content: "SamplingMessageContentBlock | Sequence[SamplingMessageContentBlock]",
-) -> Optional[str]:
+) -> str | None:
     """Extract text parts from mixed content."""
     items = content if isinstance(content, list) else [content]
     texts = []
@@ -534,7 +534,7 @@ def _extract_tool_results(
 
 
 def _convert_mcp_tools_to_openai(
-    tools: Optional[List["Tool"]],
+    tools: list["Tool"] | None,
 ) -> "Sequence[Mapping[str, object]] | None":
     """
     Convert MCP Tool definitions to OpenAI function calling format.
@@ -850,8 +850,8 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
 async def _run_budget_checks(
     model: str,
     user_api_key_auth: "UserAPIKeyAuth",
-    raw_headers: Optional[Dict[str, str]] = None,
-    client_ip: Optional[str] = None,
+    raw_headers: dict[str, str] | None = None,
+    client_ip: str | None = None,
 ) -> Optional["ErrorData"]:
     """Enforce key/team/user/org/global budget checks for sampling requests.
 
@@ -991,8 +991,8 @@ async def _run_budget_checks(
 
 
 def _build_sampling_request(
-    raw_headers: Optional[Dict[str, str]] = None,
-    client_ip: Optional[str] = None,
+    raw_headers: dict[str, str] | None = None,
+    client_ip: str | None = None,
 ) -> "Request":
     """Build a synthetic FastAPI Request for sampling sub-calls.
 
@@ -1057,7 +1057,7 @@ def _build_sampling_request(
     _server_host = "127.0.0.1"
     _server_port = 4000  # LiteLLM default
     try:
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
 
         _proxy_host: str | None = getattr(proxy_server, "server_host", None)
         _proxy_port: str | int | None = getattr(proxy_server, "server_port", None)
@@ -1094,14 +1094,14 @@ async def _build_completion_kwargs(
     params: "CreateMessageRequestParams",
     model: str,
     user_api_key_auth: "UserAPIKeyAuth",
-    raw_headers: Optional[Dict[str, str]],
-    client_ip: Optional[str],
-) -> Dict[str, Any]:
+    raw_headers: dict[str, str] | None,
+    client_ip: str | None,
+) -> dict[str, Any]:
     openai_messages = _convert_mcp_messages_to_openai(
         messages=params.messages,
         system_prompt=params.systemPrompt,
     )
-    completion_kwargs: Dict[str, Any] = {
+    completion_kwargs: dict[str, Any] = {
         "model": model,
         "messages": openai_messages,
         "max_tokens": params.maxTokens,
@@ -1135,7 +1135,7 @@ async def _build_completion_kwargs(
 
 
 async def _run_guardrails_and_call_llm(
-    completion_kwargs: Dict[str, Any],
+    completion_kwargs: dict[str, Any],
     user_api_key_auth: "UserAPIKeyAuth",
 ) -> Any:
     try:
@@ -1171,10 +1171,10 @@ async def _run_guardrails_and_call_llm(
 async def handle_sampling_create_message(
     context: "RequestContext[ClientSession, object]",
     params: "CreateMessageRequestParams",
-    default_model: Optional[str] = None,
+    default_model: str | None = None,
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
-    raw_headers: Optional[Dict[str, str]] = None,
-    client_ip: Optional[str] = None,
+    raw_headers: dict[str, str] | None = None,
+    client_ip: str | None = None,
 ) -> Union["CreateMessageResult", "CreateMessageResultWithTools", "ErrorData"]:
     """
     Handle an MCP sampling/createMessage request by routing through LiteLLM.
@@ -1292,5 +1292,5 @@ async def handle_sampling_create_message(
         verbose_logger.exception("MCP sampling handler failed: %s", e)
         return ErrorData(
             code=-1,
-            message=f"Sampling failed: {str(e)}",
+            message=f"Sampling failed: {e!s}",
         )

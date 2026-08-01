@@ -8,12 +8,12 @@ Has 4 methods:
     - async_get_cache
 """
 
+import heapq
 import json
 import sys
-import time
-import heapq
 import threading
-from typing import TYPE_CHECKING, Any, List, Optional
+import time
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
@@ -28,11 +28,10 @@ from .base_cache import BaseCache
 class InMemoryCache(BaseCache):
     def __init__(
         self,
-        max_size_in_memory: Optional[int] = 200,
-        default_ttl: Optional[
-            int
-        ] = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
-        max_size_per_item: Optional[int] = 1024,  # 1MB = 1024KB
+        max_size_in_memory: int | None = 200,
+        default_ttl: int
+        | None = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
+        max_size_per_item: int | None = 1024,  # 1MB = 1024KB
     ):
         """
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
@@ -146,9 +145,7 @@ class InMemoryCache(BaseCache):
         Check if ttl is set for a key
         """
         ttl_time = self.ttl_dict.get(key)
-        if ttl_time is None:  # if ttl is not set, allow override
-            return True
-        elif float(ttl_time) < time.time():  # if ttl is expired, allow override
+        if ttl_time is None or float(ttl_time) < time.time():  # if ttl is not set, allow override
             return True
         else:
             return False
@@ -184,7 +181,7 @@ class InMemoryCache(BaseCache):
             else:
                 self.set_cache(key=cache_key, value=cache_value)
 
-    async def async_set_cache_sadd(self, key, value: List, ttl: Optional[float]):
+    async def async_set_cache_sadd(self, key, value: list, ttl: float | None):
         """
         Add value to set
         """
@@ -247,8 +244,8 @@ class InMemoryCache(BaseCache):
         return self.increment_cache(key=key, value=value, **kwargs)
 
     async def async_increment_pipeline(
-        self, increment_list: List["RedisPipelineIncrementOperation"], **kwargs
-    ) -> Optional[List[float]]:
+        self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs
+    ) -> list[float] | None:
         results = []
         for increment in increment_list:
             result = await self.async_increment(increment["key"], increment["increment_value"], **kwargs)
@@ -266,13 +263,13 @@ class InMemoryCache(BaseCache):
     def delete_cache(self, key):
         self._remove_key(key)
 
-    async def async_get_ttl(self, key: str) -> Optional[int]:
+    async def async_get_ttl(self, key: str) -> int | None:
         """
         Get the remaining TTL of a key in in-memory cache
         """
         return self.ttl_dict.get(key, None)
 
-    async def async_get_oldest_n_keys(self, n: int) -> List[str]:
+    async def async_get_oldest_n_keys(self, n: int) -> list[str]:
         """
         Get the oldest n keys in the cache
         """

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional, Union, cast
+from typing import TYPE_CHECKING, Optional, cast
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
@@ -29,7 +29,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         self,
         openai_aclient: AsyncOpenAI,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
     ):
         """
         Helper to:
@@ -49,7 +49,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         self,
         openai_client: OpenAI,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
     ):
         """
         Helper to:
@@ -78,11 +78,11 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         timeout: float,
         max_retries: int,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         client=None,
         atranscription: bool = False,
-        provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+        provider_config: BaseAudioTranscriptionConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> TranscriptionResponse:
         """
@@ -167,8 +167,8 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         client=None,
         max_retries=None,
         shared_session: Optional["ClientSession"] = None,

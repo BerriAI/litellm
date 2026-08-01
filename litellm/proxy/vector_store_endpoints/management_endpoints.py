@@ -10,7 +10,7 @@ All /vector_store management endpoints
 
 import copy
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -58,7 +58,7 @@ _REDACT_LITELLM_PARAMS_MAX_DEPTH = 10
 # management responses), so the cache doesn't widen the disclosure surface.
 _EMBEDDING_CONFIG_CACHE_TTL = 60
 _EMBEDDING_CONFIG_CACHE_MAX_SIZE = 256
-_embedding_config_cache: Optional[InMemoryCache] = None
+_embedding_config_cache: InMemoryCache | None = None
 
 
 def _get_embedding_config_cache() -> InMemoryCache:
@@ -103,7 +103,7 @@ def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> An
         return json.dumps(_redact_sensitive_litellm_params(parsed, _depth + 1))
     if not isinstance(litellm_params, dict):
         return litellm_params
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for k, v in litellm_params.items():
         if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
             out[k] = REDACTED_BY_LITELM_STRING
@@ -141,7 +141,7 @@ async def _fetch_and_authorize_vector_store(
     return typed
 
 
-def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> Optional[Dict[str, Any]]:
+def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> dict[str, Any] | None:
     """
     Resolve embedding config from router's config-defined models.
 
@@ -177,7 +177,7 @@ def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> O
                 litellm_params = deployment.litellm_params
 
                 # Build embedding config from model params
-                embedding_config: Dict[str, Any] = {}
+                embedding_config: dict[str, Any] = {}
 
                 # Extract api_key
                 api_key = getattr(litellm_params, "api_key", None)
@@ -211,13 +211,13 @@ def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> O
                     )
                     return embedding_config
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error resolving embedding config from router for model {model_name}: {str(e)}")
+            verbose_proxy_logger.debug(f"Error resolving embedding config from router for model {model_name}: {e!s}")
             continue
 
     return None
 
 
-async def _resolve_embedding_config_from_db(embedding_model: str, prisma_client) -> Optional[Dict[str, Any]]:
+async def _resolve_embedding_config_from_db(embedding_model: str, prisma_client) -> dict[str, Any] | None:
     """
     Resolve embedding config from database model configuration.
 
@@ -299,13 +299,13 @@ async def _resolve_embedding_config_from_db(embedding_model: str, prisma_client)
                     )
                     return embedding_config
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error resolving embedding config for model {model_name}: {str(e)}")
+            verbose_proxy_logger.debug(f"Error resolving embedding config for model {model_name}: {e!s}")
             continue
 
     return None
 
 
-async def _resolve_embedding_config(embedding_model: str, prisma_client, llm_router=None) -> Optional[Dict[str, Any]]:
+async def _resolve_embedding_config(embedding_model: str, prisma_client, llm_router=None) -> dict[str, Any] | None:
     """
     Resolve embedding config from either router (config-defined) or database models.
 
@@ -387,13 +387,13 @@ async def create_vector_store_in_db(
     vector_store_id: str,
     custom_llm_provider: str,
     prisma_client,
-    vector_store_name: Optional[str] = None,
-    vector_store_description: Optional[str] = None,
-    vector_store_metadata: Optional[Dict] = None,
-    litellm_params: Optional[Dict] = None,
-    litellm_credential_name: Optional[str] = None,
-    team_id: Optional[str] = None,
-    user_id: Optional[str] = None,
+    vector_store_name: str | None = None,
+    vector_store_description: str | None = None,
+    vector_store_metadata: dict | None = None,
+    litellm_params: dict | None = None,
+    litellm_credential_name: str | None = None,
+    team_id: str | None = None,
+    user_id: str | None = None,
 ) -> LiteLLM_ManagedVectorStore:
     """
     Helper function to create a vector store in the database.
@@ -425,7 +425,7 @@ async def create_vector_store_in_db(
         )
 
     # Prepare data for database
-    data_to_create: Dict[str, Any] = {
+    data_to_create: dict[str, Any] = {
         "vector_store_id": vector_store_id,
         "custom_llm_provider": custom_llm_provider,
     }
@@ -512,7 +512,7 @@ async def new_vector_store(
 
         # Extract and validate metadata
         metadata = vector_store.get("vector_store_metadata")
-        validated_metadata: Optional[Dict] = None
+        validated_metadata: dict | None = None
         if metadata is not None and isinstance(metadata, dict):
             validated_metadata = metadata
 
@@ -542,7 +542,7 @@ async def new_vector_store(
             "vector_store": response_vs,
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating vector store: {str(e)}")
+        verbose_proxy_logger.exception(f"Error creating vector store: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -576,7 +576,7 @@ async def list_vector_stores(
 
     from litellm.proxy.proxy_server import prisma_client
 
-    vector_store_map: Dict[str, LiteLLM_ManagedVectorStore] = {}
+    vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
     db_vector_store_ids: set = set()
 
     try:
@@ -594,7 +594,7 @@ async def list_vector_stores(
         if litellm.vector_store_registry is not None:
             in_memory_vector_stores = copy.deepcopy(litellm.vector_store_registry.vector_stores)
 
-            vector_stores_to_delete_from_memory: List[str] = []
+            vector_stores_to_delete_from_memory: list[str] = []
 
             for vector_store in in_memory_vector_stores:
                 vector_store_id = vector_store.get("vector_store_id", None)
@@ -647,7 +647,7 @@ async def list_vector_stores(
 
         return response
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing vector stores: {str(e)}")
+        verbose_proxy_logger.exception(f"Error listing vector stores: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -727,7 +727,7 @@ async def delete_vector_store(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting vector store: {str(e)}")
+        verbose_proxy_logger.exception(f"Error deleting vector store: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -764,7 +764,7 @@ async def get_vector_store_info(
 
                 vector_store_metadata = vector_store.get("vector_store_metadata")
                 # Parse metadata if it's a JSON string
-                parsed_metadata: Optional[dict] = None
+                parsed_metadata: dict | None = None
                 if isinstance(vector_store_metadata, str):
                     parsed_metadata = json.loads(vector_store_metadata)
                 elif isinstance(vector_store_metadata, dict):
@@ -799,7 +799,7 @@ async def get_vector_store_info(
         # the catch-all below would otherwise rewrite them as 500.
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting vector store info: {str(e)}")
+        verbose_proxy_logger.exception(f"Error getting vector store info: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -888,5 +888,5 @@ async def update_vector_store(
         # as 500 with the original status code embedded in the detail.
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating vector store: {str(e)}")
+        verbose_proxy_logger.exception(f"Error updating vector store: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))

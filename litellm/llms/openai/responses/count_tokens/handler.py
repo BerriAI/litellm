@@ -5,7 +5,7 @@ Uses httpx for HTTP requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -26,13 +26,13 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
     async def handle_count_tokens_request(
         self,
         model: str,
-        input: Union[str, List[Any]],
+        input: str | list[Any],
         api_key: str,
-        api_base: Optional[str] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        instructions: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        instructions: str | None = None,
+    ) -> dict[str, Any]:
         """
         Handle a token counting request to OpenAI's Responses API.
 
@@ -88,14 +88,14 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         except OpenAIError:
             raise
         except httpx.HTTPStatusError as e:
-            verbose_logger.error(f"HTTP error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"HTTP error in CountTokens handler: {e!s}")
             raise OpenAIError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except (httpx.RequestError, json.JSONDecodeError, ValueError) as e:
-            verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"Error in CountTokens handler: {e!s}")
             raise OpenAIError(
                 status_code=500,
-                message=f"CountTokens processing error: {str(e)}",
+                message=f"CountTokens processing error: {e!s}",
             )

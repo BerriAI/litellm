@@ -6,7 +6,7 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -31,8 +31,8 @@ class PassThroughEndpointHandler(BaseTranslation):
     def _get_guardrail_settings(
         self,
         litellm_logging_obj: Optional["LiteLLMLoggingObj"],
-        guardrail_name: Optional[str],
-    ) -> Optional[PassThroughGuardrailSettings]:
+        guardrail_name: str | None,
+    ) -> PassThroughGuardrailSettings | None:
         """
         Get the guardrail settings for a specific guardrail from logging_obj.
         """
@@ -52,7 +52,7 @@ class PassThroughEndpointHandler(BaseTranslation):
     def _extract_text_for_guardrail(
         self,
         data: dict,
-        field_expressions: Optional[List[str]],
+        field_expressions: list[str] | None,
     ) -> str:
         """
         Extract text from data for guardrail processing.
@@ -130,8 +130,8 @@ class PassThroughEndpointHandler(BaseTranslation):
         response: Any,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process output response by applying guardrails to targeted fields.
@@ -192,10 +192,10 @@ class PassThroughEndpointHandler(BaseTranslation):
         return response
 
 
-_PROVIDER_HANDLERS: Dict[str, Type[BaseTranslation]] = {}
+_PROVIDER_HANDLERS: dict[str, type[BaseTranslation]] = {}
 
 
-def _get_provider_handlers() -> Dict[str, Type[BaseTranslation]]:
+def _get_provider_handlers() -> dict[str, type[BaseTranslation]]:
     global _PROVIDER_HANDLERS
     if not _PROVIDER_HANDLERS:
         from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
@@ -239,8 +239,8 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         response: Any,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         provider = (request_data or {}).get("custom_llm_provider")
         handler_cls = _get_provider_handlers().get(provider or "")
@@ -259,7 +259,7 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         )
 
     @staticmethod
-    def is_event_stream_response(provider: Optional[str], content_type: str) -> bool:
+    def is_event_stream_response(provider: str | None, content_type: str) -> bool:
         handler_cls = _get_provider_handlers().get(provider or "")
         detector = getattr(handler_cls, "is_event_stream_content_type", None)
         if detector is None:
@@ -267,7 +267,7 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         return detector(content_type)
 
     @staticmethod
-    def event_stream_media_type(provider: Optional[str]) -> Optional[str]:
+    def event_stream_media_type(provider: str | None) -> str | None:
         handler_cls = _get_provider_handlers().get(provider or "")
         getter = getattr(handler_cls, "event_stream_media_type", None)
         if getter is None:
@@ -275,12 +275,12 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         return getter()
 
     @staticmethod
-    def _resolve_event_stream_de_anonymizer(provider: Optional[str]):
+    def _resolve_event_stream_de_anonymizer(provider: str | None):
         handler_cls = _get_provider_handlers().get(provider or "")
         return getattr(handler_cls, "de_anonymize_event_stream", None)
 
     @staticmethod
-    def supports_event_stream_de_anonymization(provider: Optional[str], endpoint: Optional[str]) -> bool:
+    def supports_event_stream_de_anonymization(provider: str | None, endpoint: str | None) -> bool:
         handler_cls = _get_provider_handlers().get(provider or "")
         endpoint_check = getattr(handler_cls, "event_stream_endpoint_is_de_anonymizable", None)
         if endpoint_check is None:

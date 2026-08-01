@@ -5,24 +5,18 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 import asyncio
 import base64
 import os
+from collections.abc import Awaitable, Callable, Generator
 from typing import (
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    Generator,
-    List,
-    Optional,
-    Tuple,
     TypeVar,
-    Union,
 )
+
 import httpx
 from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 
-streamable_http_client: Optional[Any] = None
+streamable_http_client: Any | None = None
 try:
     import mcp.client.streamable_http as streamable_http_module  # type: ignore
 
@@ -40,6 +34,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
+
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
@@ -58,15 +53,15 @@ def to_basic_auth(auth_value: str) -> str:
     return base64.b64encode(auth_value.encode("utf-8")).decode()
 
 
-def _strip_header_whitespace(headers: Dict[str, str]) -> Dict[str, str]:
+def _strip_header_whitespace(headers: dict[str, str]) -> dict[str, str]:
     return {
         (key.strip() if isinstance(key, str) else key): (value.strip() if isinstance(value, str) else value)
         for key, value in headers.items()
     }
 
 
-def _first_non_cancelled_cause(exc: BaseException) -> Optional[BaseException]:
-    queue: List[BaseException] = [exc]
+def _first_non_cancelled_cause(exc: BaseException) -> BaseException | None:
+    queue: list[BaseException] = [exc]
     while queue:
         current = queue.pop(0)
         nested = getattr(current, "exceptions", None)
@@ -92,13 +87,13 @@ class MCPSigV4Auth(httpx.Auth):
 
     def __init__(
         self,
-        aws_access_key_id: Optional[str] = None,
-        aws_secret_access_key: Optional[str] = None,
-        aws_session_token: Optional[str] = None,
-        aws_region_name: Optional[str] = None,
-        aws_service_name: Optional[str] = None,
-        aws_role_name: Optional[str] = None,
-        aws_session_name: Optional[str] = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+        aws_session_token: str | None = None,
+        aws_region_name: str | None = None,
+        aws_service_name: str | None = None,
+        aws_role_name: str | None = None,
+        aws_session_name: str | None = None,
     ):
         try:
             from botocore.credentials import Credentials
@@ -140,10 +135,10 @@ class MCPSigV4Auth(httpx.Auth):
     @staticmethod
     def _assume_role(
         aws_role_name: str,
-        aws_session_name: Optional[str],
-        aws_access_key_id: Optional[str],
-        aws_secret_access_key: Optional[str],
-        aws_session_token: Optional[str],
+        aws_session_name: str | None,
+        aws_access_key_id: str | None,
+        aws_secret_access_key: str | None,
+        aws_session_token: str | None,
         aws_region_name: str,
     ):
         """Call STS AssumeRole and return temporary credentials."""
@@ -207,47 +202,47 @@ class MCPClient:
         server_url: str = "",
         transport_type: MCPTransportType = MCPTransport.http,
         auth_type: MCPAuthType = None,
-        auth_value: Optional[Union[str, Dict[str, str]]] = None,
-        timeout: Optional[float] = None,
-        stdio_config: Optional[MCPStdioConfig] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        ssl_verify: Optional[VerifyTypes] = None,
-        aws_auth: Optional[httpx.Auth] = None,
-        resolved_auth: Optional[httpx.Auth] = None,
-        sampling_callback: Optional[Callable] = None,
-        elicitation_callback: Optional[Callable] = None,
-        logging_callback: Optional[Callable] = None,
+        auth_value: str | dict[str, str] | None = None,
+        timeout: float | None = None,
+        stdio_config: MCPStdioConfig | None = None,
+        extra_headers: dict[str, str] | None = None,
+        ssl_verify: VerifyTypes | None = None,
+        aws_auth: httpx.Auth | None = None,
+        resolved_auth: httpx.Auth | None = None,
+        sampling_callback: Callable | None = None,
+        elicitation_callback: Callable | None = None,
+        logging_callback: Callable | None = None,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
         self.timeout: float = timeout if timeout is not None else MCP_CLIENT_TIMEOUT
-        self._mcp_auth_value: Optional[Union[str, Dict[str, str]]] = None
-        self.stdio_config: Optional[MCPStdioConfig] = stdio_config
-        self.extra_headers: Optional[Dict[str, str]] = extra_headers
-        self.ssl_verify: Optional[VerifyTypes] = ssl_verify
-        self._aws_auth: Optional[httpx.Auth] = aws_auth
+        self._mcp_auth_value: str | dict[str, str] | None = None
+        self.stdio_config: MCPStdioConfig | None = stdio_config
+        self.extra_headers: dict[str, str] | None = extra_headers
+        self.ssl_verify: VerifyTypes | None = ssl_verify
+        self._aws_auth: httpx.Auth | None = aws_auth
         # A pre-resolved httpx.Auth (e.g. from the v2 credential resolver) attached to the
         # upstream client's auth= slot, taking precedence over the SigV4 aws_auth.
-        self._resolved_auth: Optional[httpx.Auth] = resolved_auth
-        self._last_initialize_instructions: Optional[str] = None
-        self._sampling_callback: Optional[Callable] = sampling_callback
-        self._elicitation_callback: Optional[Callable] = elicitation_callback
-        self._logging_callback: Optional[Callable] = logging_callback
+        self._resolved_auth: httpx.Auth | None = resolved_auth
+        self._last_initialize_instructions: str | None = None
+        self._sampling_callback: Callable | None = sampling_callback
+        self._elicitation_callback: Callable | None = elicitation_callback
+        self._logging_callback: Callable | None = logging_callback
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
 
     def _create_transport_context(
         self,
-    ) -> Tuple[Any, Optional[httpx.AsyncClient]]:
+    ) -> tuple[Any, httpx.AsyncClient | None]:
         """
         Create the appropriate transport context based on transport type.
         Returns:
             Tuple of (transport_context, http_client).
             http_client is only set for HTTP transport and needs cleanup.
         """
-        http_client: Optional[httpx.AsyncClient] = None
+        http_client: httpx.AsyncClient | None = None
         if self.transport_type == MCPTransport.stdio:
             if not self.stdio_config:
                 raise ValueError("stdio_config is required for stdio transport")
@@ -285,7 +280,7 @@ class MCPClient:
         )
         return transport_ctx, http_client
 
-    def _get_safe_stdio_env(self, provided_env: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    def _get_safe_stdio_env(self, provided_env: dict[str, str] | None) -> dict[str, str] | None:
         """
         Return a safe environment for the stdio subprocess.
 
@@ -344,11 +339,11 @@ class MCPClient:
         user input (elicitation), or send log messages.
         """
         transport = await transport_ctx.__aenter__()
-        in_flight_error: Optional[BaseException] = None
+        in_flight_error: BaseException | None = None
         try:
             read_stream, write_stream = transport[0], transport[1]
             # Build session kwargs with optional callbacks
-            session_kwargs: Dict[str, Any] = {}
+            session_kwargs: dict[str, Any] = {}
             if self._sampling_callback is not None:
                 session_kwargs["sampling_callback"] = self._sampling_callback
             if self._elicitation_callback is not None:
@@ -393,7 +388,7 @@ class MCPClient:
         quiet_on_error demotes the failure line to debug for callers that own the exception
         (call_tool / list_tools under raise_on_error), so an expected pass-through re-auth does
         not emit a warning per call; every other caller keeps the operator-visible warning."""
-        http_client: Optional[httpx.AsyncClient] = None
+        http_client: httpx.AsyncClient | None = None
         try:
             self._last_initialize_instructions = None
             transport_ctx, http_client = self._create_transport_context()
@@ -409,7 +404,7 @@ class MCPClient:
                 except BaseException as e:
                     verbose_logger.debug(f"Error during http_client cleanup: {e}")
 
-    def update_auth_value(self, mcp_auth_value: Union[str, Dict[str, str]]):
+    def update_auth_value(self, mcp_auth_value: str | dict[str, str]):
         """
         Set the authentication header for the MCP client.
         """
@@ -462,9 +457,9 @@ class MCPClient:
 
         def factory(
             *,
-            headers: Optional[Dict[str, str]] = None,
-            timeout: Optional[httpx.Timeout] = None,
-            auth: Optional[httpx.Auth] = None,
+            headers: dict[str, str] | None = None,
+            timeout: httpx.Timeout | None = None,
+            auth: httpx.Auth | None = None,
         ) -> httpx.AsyncClient:
             """Create an httpx.AsyncClient with LiteLLM's SSL configuration."""
             # Get unified SSL configuration using the same logic as http_handler.py
@@ -485,7 +480,7 @@ class MCPClient:
 
         return factory
 
-    async def list_tools(self, raise_on_error: bool = False) -> List[MCPTool]:
+    async def list_tools(self, raise_on_error: bool = False) -> list[MCPTool]:
         """List available tools from the server.
 
         Args:
@@ -520,7 +515,7 @@ class MCPClient:
             _log(
                 f"MCP client list_tools failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {str(e)}, "
+                f"Error: {e!s}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
@@ -541,14 +536,14 @@ class MCPClient:
     def error_tool_result(exc: Exception) -> MCPCallToolResult:
         """The error result ``call_tool`` returns when it swallows a failure (no re-execution)."""
         return MCPCallToolResult(
-            content=[TextContent(type="text", text=f"{type(exc).__name__}: {str(exc)}")],
+            content=[TextContent(type="text", text=f"{type(exc).__name__}: {exc!s}")],
             isError=True,
         )
 
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
-        host_progress_callback: Optional[Callable] = None,
+        host_progress_callback: Callable | None = None,
         raise_on_error: bool = False,
     ) -> MCPCallToolResult:
         """
@@ -606,7 +601,7 @@ class MCPClient:
             _log(
                 f"MCP client call_tool failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {str(e)}, "
+                f"Error: {e!s}, "
                 f"Tool: {call_tool_request_params.name}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
@@ -622,7 +617,7 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
-    async def list_prompts(self) -> List[Prompt]:
+    async def list_prompts(self) -> list[Prompt]:
         """List available prompts from the server."""
         verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
 
@@ -645,7 +640,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client list_prompts failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {str(e)}, "
+                f"Error: {e!s}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
@@ -686,7 +681,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client get_prompt failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {str(e)}, "
+                f"Error: {e!s}, "
                 f"Prompt: {get_prompt_request_params.name}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
@@ -722,7 +717,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client list_resources failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {str(e)}, "
+                f"Error: {e!s}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
@@ -758,7 +753,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client list_resource_templates failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {str(e)}, "
+                f"Error: {e!s}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
@@ -796,7 +791,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client read_resource failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {str(e)}, "
+                f"Error: {e!s}, "
                 f"Url: {url}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"

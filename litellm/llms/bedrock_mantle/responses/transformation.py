@@ -15,7 +15,7 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import litellm
 from litellm._logging import verbose_logger
@@ -54,7 +54,7 @@ _CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE = "additional_tools"
 class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
     def __init__(
         self,
-        aws_signer: Optional[BaseAWSLLM] = None,
+        aws_signer: BaseAWSLLM | None = None,
         use_openai_path: bool = True,
     ):
         super().__init__()
@@ -67,7 +67,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         region = self._resolve_region({**litellm_params, "api_base": api_base})
@@ -85,7 +85,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         path = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
         return f"{base}{path}"
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
         bearer = self._resolve_bearer_token(litellm_params.api_key)
         if bearer:
@@ -101,10 +101,10 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return False
 
     @staticmethod
-    def _filter_unsupported_tools(tools: List[Any]) -> List[Any]:
+    def _filter_unsupported_tools(tools: list[Any]) -> list[Any]:
         """Keep only tool types Mantle's Responses API accepts."""
-        kept: List[Any] = []
-        dropped_types: List[str] = []
+        kept: list[Any] = []
+        dropped_types: list[str] = []
         for tool in tools:
             if not isinstance(tool, dict):
                 kept.append(tool)
@@ -215,7 +215,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         params = self._handle_unsupported_service_tier(
             super().map_openai_params(
                 response_api_optional_params=response_api_optional_params,

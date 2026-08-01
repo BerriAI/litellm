@@ -11,7 +11,7 @@ when you have a full MCP Tool from list_tools. Here we only have the call
 payload (name + arguments) so we just build the tool_call.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 from mcp.types import Tool as MCPTool
@@ -46,10 +46,10 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+        litellm_logging_obj: Any | None = None,
+    ) -> dict[str, Any]:
         mcp_tool_name = data.get("mcp_tool_name") or data.get("name")
         mcp_arguments = data.get("mcp_arguments") or data.get("arguments")
         mcp_tool_description = data.get("mcp_tool_description") or data.get("description")
@@ -99,9 +99,9 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         self,
         response: "CallToolResult",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         """Scan the text content of an MCP tool result and write masked text back.
 

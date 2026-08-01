@@ -2,8 +2,9 @@
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Union
 
 import httpx
 
@@ -28,17 +29,17 @@ from litellm.vector_store_files.utils import VectorStoreFileRequestUtils
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 VectorStoreFileAttributeValue = Union[str, int, float, bool]
-VectorStoreFileAttributes = Dict[str, VectorStoreFileAttributeValue]
+VectorStoreFileAttributes = dict[str, VectorStoreFileAttributeValue]
 
 
-def _ensure_provider(custom_llm_provider: Optional[str]) -> str:
+def _ensure_provider(custom_llm_provider: str | None) -> str:
     return custom_llm_provider or "openai"
 
 
 def _prepare_registry_credentials(
     *,
     vector_store_id: str,
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
 ) -> None:
     if litellm.vector_store_registry is None:
         return
@@ -55,13 +56,13 @@ async def acreate(
     *,
     vector_store_id: str,
     file_id: str,
-    attributes: Optional[VectorStoreFileAttributes] = None,
-    chunking_strategy: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    attributes: VectorStoreFileAttributes | None = None,
+    chunking_strategy: dict[str, Any] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileObject:
     local_vars = locals()
@@ -107,19 +108,19 @@ def create(
     *,
     vector_store_id: str,
     file_id: str,
-    attributes: Optional[VectorStoreFileAttributes] = None,
-    chunking_strategy: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    attributes: VectorStoreFileAttributes | None = None,
+    chunking_strategy: dict[str, Any] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreFileObject, Coroutine[Any, Any, VectorStoreFileObject]]:
+) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("acreate", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -181,15 +182,15 @@ def create(
 async def alist(
     *,
     vector_store_id: str,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    filter: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    after: str | None = None,
+    before: str | None = None,
+    filter: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileListResponse:
     local_vars = locals()
@@ -234,21 +235,21 @@ async def alist(
 def list(
     *,
     vector_store_id: str,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    filter: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    after: str | None = None,
+    before: str | None = None,
+    filter: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreFileListResponse, Coroutine[Any, Any, VectorStoreFileListResponse]]:
+) -> VectorStoreFileListResponse | Coroutine[Any, Any, VectorStoreFileListResponse]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("alist", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -307,9 +308,9 @@ async def aretrieve(
     *,
     vector_store_id: str,
     file_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileObject:
     local_vars = locals()
@@ -350,15 +351,15 @@ def retrieve(
     *,
     vector_store_id: str,
     file_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreFileObject, Coroutine[Any, Any, VectorStoreFileObject]]:
+) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("aretrieve", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -416,9 +417,9 @@ async def aretrieve_content(
     *,
     vector_store_id: str,
     file_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileContentResponse:
     local_vars = locals()
@@ -458,15 +459,15 @@ def retrieve_content(
     *,
     vector_store_id: str,
     file_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreFileContentResponse, Coroutine[Any, Any, VectorStoreFileContentResponse]]:
+) -> VectorStoreFileContentResponse | Coroutine[Any, Any, VectorStoreFileContentResponse]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("aretrieve_content", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -525,10 +526,10 @@ async def aupdate(
     vector_store_id: str,
     file_id: str,
     attributes: VectorStoreFileAttributes,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileObject:
     local_vars = locals()
@@ -571,16 +572,16 @@ def update(
     vector_store_id: str,
     file_id: str,
     attributes: VectorStoreFileAttributes,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreFileObject, Coroutine[Any, Any, VectorStoreFileObject]]:
+) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("aupdate", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -645,9 +646,9 @@ async def adelete(
     *,
     vector_store_id: str,
     file_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreFileDeleteResponse:
     local_vars = locals()
@@ -687,15 +688,15 @@ def delete(
     *,
     vector_store_id: str,
     file_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreFileDeleteResponse, Coroutine[Any, Any, VectorStoreFileDeleteResponse]]:
+) -> VectorStoreFileDeleteResponse | Coroutine[Any, Any, VectorStoreFileDeleteResponse]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("adelete", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)

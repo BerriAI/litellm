@@ -14,7 +14,6 @@ import secrets
 import sys
 import sysconfig
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 # termios / tty are Unix-only; fall back gracefully on Windows
 try:
@@ -39,7 +38,7 @@ from litellm.utils import check_valid_key
 # `models`       — default models written into the generated config
 # ---------------------------------------------------------------------------
 
-PROVIDERS: List[Dict] = [
+PROVIDERS: list[dict] = [
     {
         "id": "openai",
         "name": "OpenAI",
@@ -267,7 +266,7 @@ class SetupWizard:
     # ── provider selector ───────────────────────────────────────────────────
 
     @staticmethod
-    def _select_providers() -> List[Dict]:
+    def _select_providers() -> list[dict]:
         """Arrow-key multi-select. Falls back to number input if /dev/tty unavailable."""
         if not _HAS_RAW_TERMINAL:
             return SetupWizard._select_fallback()
@@ -297,7 +296,7 @@ class SetupWizard:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
     @staticmethod
-    def _render_selector(cursor: int, selected: Set[int], first_render: bool) -> int:
+    def _render_selector(cursor: int, selected: set[int], first_render: bool) -> int:
         """Draw or redraw the provider list. Returns the number of lines printed."""
         lines = [
             f"\n  {bold('Add your first model')}\n",
@@ -319,7 +318,7 @@ class SetupWizard:
         return content.count("\n")
 
     @staticmethod
-    def _select_interactive() -> List[Dict]:
+    def _select_interactive() -> list[dict]:
         cursor = 0
         selected: set[int] = set()
 
@@ -356,7 +355,7 @@ class SetupWizard:
         return [PROVIDERS[i] for i in sorted(selected)]
 
     @staticmethod
-    def _select_fallback() -> List[Dict]:
+    def _select_fallback() -> list[dict]:
         """Number-based fallback when raw terminal input is unavailable."""
         print()
         print(f"  {bold('Add your first model')}")
@@ -384,8 +383,8 @@ class SetupWizard:
     # ── key collection ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _collect_keys(providers: List[Dict]) -> Dict[str, str]:
-        env_vars: Dict[str, str] = {}
+    def _collect_keys(providers: list[dict]) -> dict[str, str]:
+        env_vars: dict[str, str] = {}
         print()
         print(_divider())
         print()
@@ -422,7 +421,7 @@ class SetupWizard:
         return env_vars
 
     @staticmethod
-    def _prompt_key(provider: Dict) -> str:
+    def _prompt_key(provider: dict) -> str:
         """Prompt for a provider's API key, with skip option. Returns the key or ''."""
         hint = grey(provider.get("key_hint", ""))
         while True:
@@ -434,12 +433,12 @@ class SetupWizard:
                 return ""
 
     @staticmethod
-    def _validate_and_report(provider: Dict, api_key: str) -> str:
+    def _validate_and_report(provider: dict, api_key: str) -> str:
         """
         Validate credentials using litellm.utils.check_valid_key and print result.
         Offers a re-entry loop on failure. Returns the final (possibly re-entered) key.
         """
-        test_model: Optional[str] = provider.get("test_model")
+        test_model: str | None = provider.get("test_model")
         if not test_model:
             return api_key  # Azure / Bedrock / Ollama — skip validation
 
@@ -489,8 +488,8 @@ class SetupWizard:
 
     @staticmethod
     def _build_config(
-        providers: List[Dict],
-        env_vars: Dict[str, str],
+        providers: list[dict],
+        env_vars: dict[str, str],
         master_key: str,
     ) -> str:
         env_copy = dict(env_vars)  # work on a copy — do not mutate caller's dict

@@ -1,13 +1,13 @@
 import json
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segments
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.url_utils import encode_url_path_segments
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -77,7 +77,7 @@ class BytezChatConfig(BaseConfig):
             "web_search_options": False,
         }
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         supported_params = []
         for key, value in self.openai_to_bytez_param_map.items():
             if value:
@@ -117,11 +117,11 @@ class BytezChatConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers.update(
             {
@@ -141,12 +141,12 @@ class BytezChatConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         encoded_model = encode_url_path_segments(model, field_name="model")
         return f"{API_BASE}/{encoded_model}"
@@ -154,7 +154,7 @@ class BytezChatConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -182,12 +182,12 @@ class BytezChatConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         json = raw_response.json()
 
@@ -254,9 +254,9 @@ class BytezChatConfig(BaseConfig):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -296,9 +296,9 @@ class BytezChatConfig(BaseConfig):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
@@ -328,9 +328,7 @@ class BytezChatConfig(BaseConfig):
         )
         return streaming_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BytezError(status_code=status_code, message=error_message)
 
 
@@ -338,7 +336,7 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
     def chunk_creator(self, chunk: Any):
         try:
             model_response = self.model_response_creator()
-            response_obj: Dict[str, Any] = {}
+            response_obj: dict[str, Any] = {}
 
             response_obj = {
                 "text": chunk,
@@ -346,7 +344,7 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
                 "finish_reason": "",
             }
 
-            completion_obj: Dict[str, Any] = {"content": chunk}
+            completion_obj: dict[str, Any] = {"content": chunk}
 
             return self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
@@ -377,7 +375,7 @@ open_ai_to_bytez_content_item_map = {
 }
 
 
-def adapt_messages_to_bytez_standard(messages: List[Dict]):
+def adapt_messages_to_bytez_standard(messages: list[dict]):
     messages = _adapt_string_only_content_to_lists(messages)
 
     new_messages = []
@@ -389,7 +387,7 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
         new_content = []
 
         for content_item in content:
-            type: Union[str, None] = content_item.get("type")
+            type: str | None = content_item.get("type")
 
             if not type:
                 raise Exception("Prop `type` is not a string")
@@ -403,7 +401,7 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
 
             value_name = content_item_map["value_name"]
 
-            value: Union[str, None] = content_item.get(value_name)
+            value: str | None = content_item.get(value_name)
 
             if not value:
                 raise Exception(f"Prop `{value_name}` is not a string")
@@ -418,7 +416,7 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
 # "content": "The cat ran so fast"
 # becomes
 # "content": [{"type": "text", "text": "The cat ran so fast"}]
-def _adapt_string_only_content_to_lists(messages: List[Dict]):
+def _adapt_string_only_content_to_lists(messages: list[dict]):
     new_messages = []
 
     for message in messages:
@@ -453,11 +451,11 @@ def _adapt_string_only_content_to_lists(messages: List[Dict]):
 
 
 # TODO get this from the api instead of doing it here, will require backend work
-def get_tokens_from_messages(messages: List[dict]):
+def get_tokens_from_messages(messages: list[dict]):
     total = 0
 
     for message in messages:
-        content: List[dict] = message["content"]
+        content: list[dict] = message["content"]
 
         for content_item in content:
             type = content_item["type"]

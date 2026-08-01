@@ -1,7 +1,5 @@
 """Support for OpenAI gpt-5 model family."""
 
-from typing import Optional, Union
-
 import litellm
 from litellm.utils import (
     _is_explicitly_disabled_factory,
@@ -12,8 +10,8 @@ from .gpt_transformation import OpenAIGPTConfig
 
 
 def _normalize_reasoning_effort_for_chat_completion(
-    value: Union[str, dict, None],
-) -> Optional[str]:
+    value: str | dict | None,
+) -> str | None:
     """Convert reasoning_effort to the string format expected by OpenAI chat completion API.
 
     The chat completion API expects a simple string: 'none', 'low', 'medium', 'high', or 'xhigh'.
@@ -28,7 +26,7 @@ def _normalize_reasoning_effort_for_chat_completion(
     return None
 
 
-def _get_effort_level(value: Union[str, dict, None]) -> Optional[str]:
+def _get_effort_level(value: str | dict | None) -> str | None:
     """Extract the effective effort level from reasoning_effort (string or dict).
 
     Use this for guards that compare effort level (e.g. xhigh validation, "none" checks).
@@ -268,30 +266,28 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
                             "gpt-5.1/5.2/5.4 only support logprobs, top_p, top_logprobs when "
-                            "reasoning_effort='none'. Current reasoning_effort='{}'. "
+                            f"reasoning_effort='none'. Current reasoning_effort='{effective_effort}'. "
                             "To drop unsupported params set `litellm.drop_params = True`"
-                        ).format(effective_effort),
+                        ),
                         status_code=400,
                     )
 
         if "temperature" in non_default_params:
-            temperature_value: Optional[float] = non_default_params.pop("temperature")
+            temperature_value: float | None = non_default_params.pop("temperature")
             if temperature_value is not None:
                 # models supporting reasoning_effort="none" also support flexible temperature
-                if supports_none and (effective_effort == "none" or effective_effort is None):
-                    optional_params["temperature"] = temperature_value
-                elif temperature_value == 1:
+                if supports_none and (effective_effort == "none" or effective_effort is None) or temperature_value == 1:
                     optional_params["temperature"] = temperature_value
                 elif litellm.drop_params or drop_params:
                     pass
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "gpt-5 models (including gpt-5-codex) don't support temperature={}. "
+                            f"gpt-5 models (including gpt-5-codex) don't support temperature={temperature_value}. "
                             "Only temperature=1 is supported. "
                             "For gpt-5.1, temperature is supported when reasoning_effort='none' (or not specified, as it defaults to 'none'). "
                             "To drop unsupported params set `litellm.drop_params = True`"
-                        ).format(temperature_value),
+                        ),
                         status_code=400,
                     )
         return super()._map_openai_params(

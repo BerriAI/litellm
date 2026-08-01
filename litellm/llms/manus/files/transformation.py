@@ -11,15 +11,15 @@ Reference: https://open.manus.im/docs/openai-compatibility#file-management
 """
 
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -66,8 +66,8 @@ class ManusFilesConfig(BaseFilesConfig):
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for Manus API.
@@ -92,7 +92,7 @@ class ManusFilesConfig(BaseFilesConfig):
         )
         return headers
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         """
         Return supported OpenAI file creation parameters for Manus.
         Manus supports the standard 'purpose' parameter.
@@ -114,12 +114,12 @@ class ManusFilesConfig(BaseFilesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for Manus Files API endpoint.
@@ -141,7 +141,7 @@ class ManusFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         """
         Return the appropriate error class for Manus API errors.
@@ -216,7 +216,7 @@ class ManusFilesConfig(BaseFilesConfig):
 
     def transform_create_file_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
@@ -279,8 +279,8 @@ class ManusFilesConfig(BaseFilesConfig):
                 status_details=response_json.get("status_details"),
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing Manus file response: {str(e)}")
-            raise ValueError(f"Error parsing Manus file response: {str(e)}")
+            verbose_logger.exception(f"Error parsing Manus file response: {e!s}")
+            raise ValueError(f"Error parsing Manus file response: {e!s}")
 
     def transform_retrieve_file_request(
         self,
@@ -342,7 +342,7 @@ class ManusFilesConfig(BaseFilesConfig):
 
     def transform_list_files_request(
         self,
-        purpose: Optional[str],
+        purpose: str | None,
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
@@ -364,13 +364,13 @@ class ManusFilesConfig(BaseFilesConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-    ) -> List[OpenAIFileObject]:
+    ) -> list[OpenAIFileObject]:
         """Transform list files response."""
         response_json = raw_response.json()
         files_data = response_json.get("data", [])
         return [self._parse_file_dict(f) for f in files_data]
 
-    def _parse_file_dict(self, file_dict: Dict[str, Any]) -> OpenAIFileObject:
+    def _parse_file_dict(self, file_dict: dict[str, Any]) -> OpenAIFileObject:
         """Parse a file dict into OpenAIFileObject."""
         created_at_str = file_dict.get("created_at", "")
         if created_at_str:

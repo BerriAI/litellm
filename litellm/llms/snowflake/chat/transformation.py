@@ -9,7 +9,7 @@ Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -67,7 +67,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         params = [
             "temperature",
             "max_tokens",
@@ -83,12 +83,12 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
         if _is_claude_model(model):
@@ -99,11 +99,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = super().validate_environment(
             headers=headers,
@@ -118,7 +118,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
 
-    def _transform_tools_to_anthropic(self, tools: List[Dict]) -> List[Dict]:
+    def _transform_tools_to_anthropic(self, tools: list[dict]) -> list[dict]:
         """
         Convert tools from OpenAI format to Anthropic format.
 
@@ -129,7 +129,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                anthropic_tool: Dict[str, Any] = {
+                anthropic_tool: dict[str, Any] = {
                     "name": func.get("name", ""),
                 }
                 if "description" in func:
@@ -146,7 +146,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 anthropic_tools.append(tool)
         return anthropic_tools
 
-    def _extract_system_and_messages(self, messages: List[AllMessageValues]) -> tuple[Optional[str], List[Dict]]:
+    def _extract_system_and_messages(self, messages: list[AllMessageValues]) -> tuple[str | None, list[dict]]:
         """
         Split messages into system prompt and conversation turns for Anthropic format.
 
@@ -154,8 +154,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         - assistant messages with tool_calls → tool_use content blocks
         - tool role messages → user role with tool_result content blocks
         """
-        system_parts: List[str] = []
-        conversation: List[Dict] = []
+        system_parts: list[str] = []
+        conversation: list[dict] = []
 
         for msg in messages:
             if isinstance(msg, dict):
@@ -173,7 +173,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             elif role == "assistant":
                 tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
                 if tool_calls:  # type: ignore[truthy-bool]
-                    content_blocks: List[Dict[str, Any]] = []
+                    content_blocks: list[dict[str, Any]] = []
                     if content:
                         content_blocks.append({"type": "text", "text": content})
                     for tc in tool_calls:  # type: ignore[attr-defined]
@@ -221,13 +221,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             else:
                 conversation.append({"role": role, "content": content})
 
-        system: Optional[str] = "\n\n".join(system_parts) if system_parts else None
+        system: str | None = "\n\n".join(system_parts) if system_parts else None
         return system, conversation
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -242,7 +242,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     def _transform_request_openai(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         stream: bool,
         extra_body: dict,
@@ -265,7 +265,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return body
 
-    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> Dict[str, Any]:
+    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> dict[str, Any]:
         """
         Convert tool_choice from OpenAI format to Anthropic format.
 
@@ -290,7 +290,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     def _transform_request_anthropic(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         stream: bool,
         extra_body: dict,
@@ -310,7 +310,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         model_name = model.removeprefix("snowflake/")
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model_name,
             "messages": conversation,
             "stream": stream,
@@ -333,12 +333,12 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         if _is_claude_model(model):
             return self._transform_response_anthropic(
@@ -353,7 +353,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse standard OpenAI chat completions response."""
         response_json = raw_response.json()
@@ -380,7 +380,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse Anthropic Messages response into OpenAI format."""
         response_json = raw_response.json()
@@ -449,7 +449,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         self,
         streaming_response: Any,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         return SnowflakeStreamingHandler(
             streaming_response=streaming_response,
@@ -470,7 +470,7 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         self,
         streaming_response: Any,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
         self._tool_index = 0

@@ -1,4 +1,5 @@
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -41,7 +42,7 @@ DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING = (
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "anthropic"
 
     @property
@@ -71,7 +72,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # "metadata",
         ]
 
-    def _remove_scope_from_cache_control(self, anthropic_messages_request: Dict) -> None:
+    def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
         """
         Remove `scope` field from cache_control blocks.
 
@@ -216,12 +217,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
         if not api_base.endswith("/v1/messages"):
@@ -232,12 +233,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
@@ -258,7 +259,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
-    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: Dict, custom_llm_provider: str) -> None:
+    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: dict, custom_llm_provider: str) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
@@ -311,7 +312,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_legacy_thinking_for_adaptive_model(
-        model: str, optional_params: Dict, custom_llm_provider: str
+        model: str, optional_params: dict, custom_llm_provider: str
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
         Caller-provided ``output_config.effort`` is never overridden.
@@ -345,7 +346,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: Dict, max_tokens: Optional[int], custom_llm_provider: str
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         """Translate the 4.6+ adaptive-thinking interface (``thinking.type=adaptive``
         and/or ``output_config.effort``) down to what an older Anthropic model
@@ -478,11 +479,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """
         No transformation is needed for Anthropic messages
 

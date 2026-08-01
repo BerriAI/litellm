@@ -8,8 +8,6 @@ encrypted_content for multi-turn stateless workflows.
 Docs: https://openrouter.ai/docs/api/reference/responses/overview
 """
 
-from typing import Optional
-
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -37,7 +35,7 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         headers: dict,
         model: str,
-        litellm_params: Optional[GenericLiteLLMParams],
+        litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = (
@@ -61,7 +59,7 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         api_base = (

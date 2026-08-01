@@ -8,7 +8,7 @@ API Reference: https://docs.bfl.ai/
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -50,7 +50,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
     This class only handles data transformation.
     """
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Return list of OpenAI params supported by Black Forest Labs.
 
@@ -140,18 +140,18 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for Black Forest Labs.
 
         BFL uses x-key header for authentication.
         """
-        final_api_key: Optional[str] = (
+        final_api_key: str | None = (
             api_key or get_secret_str("BFL_API_KEY") or get_secret_str("BLACK_FOREST_LABS_API_KEY")
         )
 
@@ -187,12 +187,12 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the Black Forest Labs API request.
@@ -217,7 +217,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         https://docs.bfl.ai/flux_models/flux_1_1_pro
         """
         # Build request body with prompt
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "prompt": prompt,
         }
 
@@ -257,8 +257,8 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Black Forest Labs response to OpenAI-compatible ImageResponse.
@@ -300,7 +300,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         return model_response
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers
     ) -> BlackForestLabsError:
         """Return the appropriate error class for Black Forest Labs."""
         return BlackForestLabsError(

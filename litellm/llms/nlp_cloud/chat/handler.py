@@ -1,5 +1,5 @@
 import json
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -27,7 +27,7 @@ def completion(
     litellm_params: dict,
     logger_fn=None,
     default_max_tokens_to_sample=None,
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
     headers={},
 ):
     headers = nlp_config.validate_environment(

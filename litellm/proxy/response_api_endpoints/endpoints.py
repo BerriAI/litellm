@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from typing import Any, AsyncIterator, Dict, Optional, cast
+from collections.abc import AsyncIterator
+from typing import Any, cast
 from uuid import uuid4
 
 import fastapi
@@ -220,7 +221,7 @@ async def responses_api(
                 )
 
                 managed_files_obj = cast(
-                    Optional[_PROXY_LiteLLMManagedFiles],
+                    _PROXY_LiteLLMManagedFiles | None,
                     proxy_logging_obj.get_proxy_hook("managed_files"),
                 )
 
@@ -250,7 +251,7 @@ async def responses_api(
                         )
                     except Exception as e:
                         verbose_proxy_logger.error(
-                            f"Failed to store background response in managed objects table: {str(e)}"
+                            f"Failed to store background response in managed objects table: {e!s}"
                         )
 
         return response
@@ -921,7 +922,7 @@ async def cancel_response(
 
 async def _read_ws_model_from_first_frame(
     websocket: WebSocket,
-) -> Optional[tuple]:
+) -> tuple | None:
     """Read the first WS frame and return (model, raw_message), or None on error.
 
     Sends an appropriate error frame and closes the socket before returning None.
@@ -989,7 +990,7 @@ async def _read_ws_model_from_first_frame(
     return model, first_message
 
 
-def _extract_model_from_first_ws_event(first_event: Any) -> Optional[str]:
+def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
     """Extract model from a response.create WS event, handling flat and nested formats.
 
     Flat:   {"type": "response.create", "model": "gpt-4o", ...}
@@ -1005,7 +1006,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
     request: Request,
     model: str,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_router: Optional[Any],
+    llm_router: Any | None,
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import (
         _enforce_key_and_fallback_model_access,
@@ -1048,7 +1049,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
     websocket: WebSocket,
-    model: Optional[str] = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
+    model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
     """
@@ -1087,14 +1088,14 @@ async def responses_websocket_endpoint(
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
-    first_message: Optional[str] = None
+    first_message: str | None = None
     if not model:
         result = await _read_ws_model_from_first_frame(websocket)
         if result is None:
             return
         model, first_message = result
 
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "model": model,
         "websocket": websocket,
     }
@@ -1103,7 +1104,7 @@ async def responses_websocket_endpoint(
 
     # Construct a synthetic Request for pre-call processing
     headers_list = list(websocket.scope.get("headers") or [])
-    scope: Dict[str, Any] = {
+    scope: dict[str, Any] = {
         "type": "http",
         "method": "POST",
         "path": "/v1/responses",

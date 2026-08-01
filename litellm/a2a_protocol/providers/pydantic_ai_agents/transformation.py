@@ -6,7 +6,8 @@ This module provides fake streaming by converting non-streaming responses into s
 """
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, Optional, cast
+from collections.abc import AsyncIterator
+from typing import Any, cast
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
@@ -48,7 +49,7 @@ class PydanticAITransformation:
             return obj
 
     @staticmethod
-    def _params_to_dict(params: Any) -> Dict[str, Any]:
+    def _params_to_dict(params: Any) -> dict[str, Any]:
         """
         Convert params to a dict, handling Pydantic models.
 
@@ -78,8 +79,8 @@ class PydanticAITransformation:
         request_id: str,
         max_attempts: int = 30,
         poll_interval: float = 0.5,
-        agent_extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        agent_extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Poll for task completion using tasks/get method.
 
@@ -134,8 +135,8 @@ class PydanticAITransformation:
         request_id: str,
         params: Any,
         timeout: float = 60.0,
-        agent_extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        agent_extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Send a request to Pydantic AI agent and return the raw task response.
 
@@ -218,8 +219,8 @@ class PydanticAITransformation:
         request_id: str,
         params: Any,
         timeout: float = 60.0,
-        agent_extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        agent_extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Send a non-streaming A2A request to Pydantic AI agent and wait for completion.
 
@@ -254,8 +255,8 @@ class PydanticAITransformation:
         request_id: str,
         params: Any,
         timeout: float = 60.0,
-        agent_extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        agent_extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Send a request to Pydantic AI agent and return the raw task response.
 
@@ -281,9 +282,9 @@ class PydanticAITransformation:
 
     @staticmethod
     def _transform_to_a2a_response(
-        response_data: Dict[str, Any],
+        response_data: dict[str, Any],
         request_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Transform Pydantic AI task response to standard A2A non-streaming format.
 
@@ -327,7 +328,7 @@ class PydanticAITransformation:
         }
 
     @staticmethod
-    def _extract_response_text(response_data: Dict[str, Any]) -> tuple[str, str, list]:
+    def _extract_response_text(response_data: dict[str, Any]) -> tuple[str, str, list]:
         """
         Extract response text from completed task response.
 
@@ -382,11 +383,11 @@ class PydanticAITransformation:
 
     @staticmethod
     async def fake_streaming_from_response(
-        response_data: Dict[str, Any],
+        response_data: dict[str, Any],
         request_id: str,
         chunk_size: int = 50,
         delay_ms: int = 10,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         Convert a non-streaming A2A response into fake streaming chunks.
 

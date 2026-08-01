@@ -8,14 +8,14 @@ caller automatically applies to all of them.
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 from litellm.constants import STREAM_SSE_DONE_STRING
 
 _MAX_CONTENT_INDEX = 1024
 
 
-def parse_sse_json_chunk(chunk: str) -> Optional[Dict[str, Any]]:
+def parse_sse_json_chunk(chunk: str) -> dict[str, Any] | None:
     """Parse a single raw SSE line into a JSON object dict.
 
     Returns ``None`` for empty lines, ``event:`` lines, ``[DONE]`` markers,
@@ -39,8 +39,8 @@ def parse_sse_json_chunk(chunk: str) -> Optional[Dict[str, Any]]:
 
 
 def record_output_item_chunk(
-    parsed_chunk: Dict[str, Any],
-    output_items: Dict[int, Dict[str, Any]],
+    parsed_chunk: dict[str, Any],
+    output_items: dict[int, dict[str, Any]],
 ) -> None:
     """Record an OUTPUT_ITEM_DONE chunk into ``output_items`` keyed by
     ``output_index`` (falling back to the next free slot when missing).
@@ -59,9 +59,9 @@ def record_output_item_chunk(
 
 
 def record_output_text_chunk(
-    parsed_chunk: Dict[str, Any],
-    output_items: Dict[int, Dict[str, Any]],
-    text_only_items: Dict[int, Dict[str, Any]],
+    parsed_chunk: dict[str, Any],
+    output_items: dict[int, dict[str, Any]],
+    text_only_items: dict[int, dict[str, Any]],
 ) -> None:
     """Record an OUTPUT_TEXT_DONE chunk as a synthetic message item in
     ``text_only_items``. Real OUTPUT_ITEM_DONE events already captured in

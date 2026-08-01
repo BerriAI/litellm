@@ -1,7 +1,6 @@
 import json
-from typing import Any, List, Tuple
-
 import os
+from typing import Any
 
 import httpx
 
@@ -35,7 +34,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_base: str | None,
         api_key: str | None,
         custom_llm_provider: str,
-    ) -> Tuple[str | None, str | None, str]:
+    ) -> tuple[str | None, str | None, str]:
         dynamic_api_base = (
             api_base
             or self.authenticator.get_api_base()
@@ -82,7 +81,7 @@ class GithubCopilotConfig(OpenAIConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -135,7 +134,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         return base_params
 
-    def _determine_initiator(self, messages: List[AllMessageValues]) -> str:
+    def _determine_initiator(self, messages: list[AllMessageValues]) -> str:
         """
         Determine if request is user or agent initiated based on message roles.
         Returns 'agent' if any message has role 'tool' or 'assistant', otherwise 'user'.
@@ -146,7 +145,7 @@ class GithubCopilotConfig(OpenAIConfig):
                 return "agent"
         return "user"
 
-    def _has_vision_content(self, messages: List[AllMessageValues]) -> bool:
+    def _has_vision_content(self, messages: list[AllMessageValues]) -> bool:
         """
         Check if any message contains vision content (images).
         Returns True if any message has content with vision-related types, otherwise False.
@@ -172,8 +171,8 @@ class GithubCopilotConfig(OpenAIConfig):
 
     @staticmethod
     def _parse_anthropic_native_content(
-        content_blocks: List[Any],
-    ) -> Tuple[str, List[ChatCompletionToolCallChunk], List[Any] | None]:
+        content_blocks: list[Any],
+    ) -> tuple[str, list[ChatCompletionToolCallChunk], list[Any] | None]:
         """
         Parse Anthropic-native content blocks into OpenAI-compatible fields.
 
@@ -219,8 +218,8 @@ class GithubCopilotConfig(OpenAIConfig):
             return response_json
 
         content = ""
-        tool_calls: List[ChatCompletionToolCallChunk] = []
-        thinking_blocks: List[Any] | None = None
+        tool_calls: list[ChatCompletionToolCallChunk] = []
+        thinking_blocks: list[Any] | None = None
         raw_content = response_json.get("content")
         if isinstance(raw_content, list):
             content, tool_calls, thinking_blocks = cls._parse_anthropic_native_content(raw_content)
@@ -275,7 +274,7 @@ class GithubCopilotConfig(OpenAIConfig):
         model_response: "ModelResponse",
         logging_obj: Any,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,

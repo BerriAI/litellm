@@ -20,7 +20,7 @@ import random
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import islice
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 from pydantic import BaseModel
 
@@ -1369,7 +1369,7 @@ class ComplexityRouter(CustomLogger):
         model: str,
         request_kwargs: dict,
         messages: list[dict[str, Any]] | None = None,
-        input: Union[str, list] | None = None,
+        input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:
         """
@@ -1461,7 +1461,7 @@ class ComplexityRouter(CustomLogger):
         model: str,
         request_kwargs: dict,
         messages: list[dict[str, Any]] | None = None,
-        input: Union[str, list] | None = None,
+        input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:
         """

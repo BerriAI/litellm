@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Type, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import litellm
 from litellm._logging import verbose_logger
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 else:
     _custom_logger_compatible_callbacks_literal = str
 
-_generic_api_logger_cache: Dict[str, GenericAPILogger] = {}
+_generic_api_logger_cache: dict[str, GenericAPILogger] = {}
 
 
 class LoggingCallbackManager:
@@ -37,7 +38,7 @@ class LoggingCallbackManager:
         except Exception:
             return False
 
-    def add_litellm_input_callback(self, callback: Union[CustomLogger, str, Callable]):
+    def add_litellm_input_callback(self, callback: CustomLogger | str | Callable):
         """
         Add a input callback to litellm.input_callback.
         Auto-routes async callbacks to litellm._async_input_callback.
@@ -47,13 +48,13 @@ class LoggingCallbackManager:
         else:
             self._safe_add_callback_to_list(callback=callback, parent_list=litellm.input_callback)
 
-    def add_litellm_service_callback(self, callback: Union[CustomLogger, str, Callable]):
+    def add_litellm_service_callback(self, callback: CustomLogger | str | Callable):
         """
         Add a service callback to litellm.service_callback
         """
         self._safe_add_callback_to_list(callback=callback, parent_list=litellm.service_callback)
 
-    def add_litellm_callback(self, callback: Union[CustomLogger, str, Callable]):
+    def add_litellm_callback(self, callback: CustomLogger | str | Callable):
         """
         Add a callback to litellm.callbacks
 
@@ -64,20 +65,23 @@ class LoggingCallbackManager:
             parent_list=litellm.callbacks,  # type: ignore
         )
 
-    def add_litellm_success_callback(self, callback: Union[CustomLogger, str, Callable]):
+    def add_litellm_success_callback(self, callback: CustomLogger | str | Callable):
         """
         Add a success callback to `litellm.success_callback`.
         Auto-routes async callbacks to litellm._async_success_callback.
         Special-cases 'dynamodb' and 'openmeter' as async callbacks.
         """
-        if isinstance(callback, str) and callback in ("dynamodb", "openmeter"):
-            self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_success_callback)
-        elif not isinstance(callback, str) and self._is_async_callable(callback):
+        if (
+            isinstance(callback, str)
+            and callback in ("dynamodb", "openmeter")
+            or not isinstance(callback, str)
+            and self._is_async_callable(callback)
+        ):
             self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_success_callback)
         else:
             self._safe_add_callback_to_list(callback=callback, parent_list=litellm.success_callback)
 
-    def add_litellm_failure_callback(self, callback: Union[CustomLogger, str, Callable]):
+    def add_litellm_failure_callback(self, callback: CustomLogger | str | Callable):
         """
         Add a failure callback to `litellm.failure_callback`.
         Auto-routes async callbacks to litellm._async_failure_callback.
@@ -87,13 +91,13 @@ class LoggingCallbackManager:
         else:
             self._safe_add_callback_to_list(callback=callback, parent_list=litellm.failure_callback)
 
-    def add_litellm_async_success_callback(self, callback: Union[CustomLogger, Callable, str]):
+    def add_litellm_async_success_callback(self, callback: CustomLogger | Callable | str):
         """
         Add a success callback to litellm._async_success_callback
         """
         self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_success_callback)
 
-    def add_litellm_async_failure_callback(self, callback: Union[CustomLogger, Callable, str]):
+    def add_litellm_async_failure_callback(self, callback: CustomLogger | Callable | str):
         """
         Add a failure callback to litellm._async_failure_callback
         """
@@ -135,7 +139,7 @@ class LoggingCallbackManager:
         for c in remove_list:
             callback_list.remove(c)
 
-    def _add_string_callback_to_list(self, callback: str, parent_list: List[Union[CustomLogger, Callable, str]]):
+    def _add_string_callback_to_list(self, callback: str, parent_list: list[CustomLogger | Callable | str]):
         """
         Add a string callback to a list, if the callback is already in the list, do not add it again.
         """
@@ -144,7 +148,7 @@ class LoggingCallbackManager:
         else:
             verbose_logger.debug(f"Callback {callback} already exists in {parent_list}, not adding again..")
 
-    def _check_callback_list_size(self, parent_list: List[Union[CustomLogger, Callable, str]]) -> bool:
+    def _check_callback_list_size(self, parent_list: list[CustomLogger | Callable | str]) -> bool:
         """
         Check if adding another callback would exceed MAX_CALLBACKS
         Returns True if safe to add, False if would exceed limit
@@ -159,7 +163,7 @@ class LoggingCallbackManager:
     @staticmethod
     def _add_custom_callback_generic_api_str(
         callback: str,
-    ) -> Union[GenericAPILogger, str]:
+    ) -> GenericAPILogger | str:
         """
         litellm_settings:
             success_callback: ["custom_callback_name"]
@@ -240,8 +244,8 @@ class LoggingCallbackManager:
 
     def _safe_add_callback_to_list(
         self,
-        callback: Union[CustomLogger, Callable, str],
-        parent_list: List[Union[CustomLogger, Callable, str]],
+        callback: CustomLogger | Callable | str,
+        parent_list: list[CustomLogger | Callable | str],
     ):
         """
         Safe add a callback to a list, if the callback is already in the list, do not add it again.
@@ -268,7 +272,7 @@ class LoggingCallbackManager:
         elif callable(callback):
             self._add_callback_function_to_list(callback=callback, parent_list=parent_list)
 
-    def _add_callback_function_to_list(self, callback: Callable, parent_list: List[Union[CustomLogger, Callable, str]]):
+    def _add_callback_function_to_list(self, callback: Callable, parent_list: list[CustomLogger | Callable | str]):
         """
         Add a callback function to a list, if the callback is already in the list, do not add it again.
         """
@@ -283,7 +287,7 @@ class LoggingCallbackManager:
     def _add_custom_logger_to_list(
         self,
         custom_logger: CustomLogger,
-        parent_list: List[Union[CustomLogger, Callable, str]],
+        parent_list: list[CustomLogger | Callable | str],
     ):
         """
         Add a custom logger to a list, if another instance of the same custom logger exists in the list, do not add it again.
@@ -332,7 +336,7 @@ class LoggingCallbackManager:
         litellm._async_failure_callback = []
         litellm.callbacks = []
 
-    def _get_all_callbacks(self) -> List[Union[CustomLogger, Callable, str]]:
+    def _get_all_callbacks(self) -> list[CustomLogger | Callable | str]:
         """
         Get all callbacks from litellm.callbacks, litellm.success_callback, litellm.failure_callback, litellm._async_success_callback, litellm._async_failure_callback
         """
@@ -360,7 +364,7 @@ class LoggingCallbackManager:
 
     def get_active_additional_logging_utils_from_custom_logger(
         self,
-    ) -> Set[AdditionalLoggingUtils]:
+    ) -> set[AdditionalLoggingUtils]:
         """
         Get all custom loggers that are instances of the given class type
 
@@ -371,13 +375,13 @@ class LoggingCallbackManager:
             Set[CustomLogger]: Set of custom loggers that are instances of the given class type
         """
         all_callbacks = self._get_all_callbacks()
-        matched_callbacks: Set[AdditionalLoggingUtils] = set()
+        matched_callbacks: set[AdditionalLoggingUtils] = set()
         for callback in all_callbacks:
             if isinstance(callback, CustomLogger) and isinstance(callback, AdditionalLoggingUtils):
                 matched_callbacks.add(callback)
         return matched_callbacks
 
-    def get_custom_loggers_for_type(self, callback_type: Type[CustomLogger]) -> List[CustomLogger]:
+    def get_custom_loggers_for_type(self, callback_type: type[CustomLogger]) -> list[CustomLogger]:
         """
         Get all custom loggers that are instances of the given class type
         """
@@ -388,7 +392,7 @@ class LoggingCallbackManager:
                 all_callbacks.append(callback)
         return all_callbacks
 
-    def callback_is_active(self, callback_type: Type[CustomLogger]) -> bool:
+    def callback_is_active(self, callback_type: type[CustomLogger]) -> bool:
         """
         Returns True if any of the active callbacks are of the given type
         """
@@ -432,7 +436,7 @@ class LoggingCallbackManager:
 
         return result
 
-    def _get_callback_string(self, callback: Union[CustomLogger, Callable, str]) -> str:
+    def _get_callback_string(self, callback: CustomLogger | Callable | str) -> str:
         from litellm.litellm_core_utils.custom_logger_registry import (
             CustomLoggerRegistry,
         )
@@ -451,7 +455,7 @@ class LoggingCallbackManager:
     def get_active_custom_logger_for_callback_name(
         self,
         callback_name: _custom_logger_compatible_callbacks_literal,
-    ) -> Optional[CustomLogger]:
+    ) -> CustomLogger | None:
         """
         Get the active custom logger for a given callback name
         """

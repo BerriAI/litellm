@@ -10,7 +10,8 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
       BedrockMantleAuthMixin in common_utils.
 """
 
-from typing import Iterator, AsyncIterator, Any, List, Optional, Tuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,8 +24,8 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
-from ..common_utils import mantle_base_segment
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+from ..common_utils import mantle_base_segment
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -37,7 +38,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         self._aws_signer = aws_signer or BaseAWSLLM()
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "bedrock_mantle"
 
     @classmethod
@@ -46,11 +47,11 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        api_base: str | None,
+        api_key: str | None,
+        litellm_params: GenericLiteLLMParams | None = None,
         model: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         region = (
             (litellm_params.aws_region_name if litellm_params else None)
             or get_secret_str("BEDROCK_MANTLE_REGION")
@@ -74,11 +75,11 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = super().validate_environment(
             headers=headers,
@@ -106,9 +107,9 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], Any],
+        streaming_response: Iterator[str] | AsyncIterator[str] | Any,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         from litellm.llms.openai.chat.gpt_transformation import (
             OpenAIChatCompletionStreamingHandler,

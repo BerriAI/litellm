@@ -5,39 +5,35 @@ Our unified API follows the OpenAI standard.
 More information on our website: https://endpoints.ai.cloud.ovh.net
 """
 
-from typing import Optional, Union, List
-
 import httpx
-from litellm.utils import ModelResponseStream
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.llms.ovhcloud.utils import OVHCloudException
+
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import ModelResponseStream
 
 
 class OVHCloudChatConfig(OpenAIGPTConfig):
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "ovhcloud"
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
         complete_url = f"{api_base}/chat/completions"
         return complete_url
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OVHCloudException(
             message=error_message,
             status_code=status_code,
@@ -57,7 +53,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

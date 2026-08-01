@@ -2,13 +2,13 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -55,11 +55,11 @@ class PurviewGuardrailBase:
         self.user_id_field = user_id_field
 
         # Token cache: (access_token, expires_at_epoch)
-        self._token_cache: Optional[Tuple[str, float]] = None
+        self._token_cache: tuple[str, float] | None = None
 
         # Protection scope cache: user_id -> (etag, scope_response, fetched_at)
         # Capped at 1000 entries (LRU eviction) to avoid unbounded growth.
-        self._scope_cache: OrderedDict[str, Tuple[str, Dict[str, Any], float]] = OrderedDict()
+        self._scope_cache: OrderedDict[str, tuple[str, dict[str, Any], float]] = OrderedDict()
         self._scope_cache_maxsize = 1000
         # Use a threading.Lock (not asyncio.Lock) because this lock is acquired
         # from both the proxy's main asyncio event loop and from short-lived
@@ -117,9 +117,9 @@ class PurviewGuardrailBase:
     async def _graph_post(
         self,
         url: str,
-        json_body: Dict[str, Any],
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        json_body: dict[str, Any],
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
         """POST to Graph API with bearer auth.
 
         Returns:
@@ -136,7 +136,7 @@ class PurviewGuardrailBase:
         verbose_proxy_logger.debug("Purview Graph POST %s", url)
         response = await self.async_handler.post(url=url, headers=headers, json=json_body)
         response.raise_for_status()
-        response_json: Dict[str, Any] = response.json()
+        response_json: dict[str, Any] = response.json()
         response_headers = dict(response.headers)
         verbose_proxy_logger.debug("Purview Graph response: %s", response_json)
         return response_json, response_headers
@@ -145,7 +145,7 @@ class PurviewGuardrailBase:
     # Protection scopes
     # ------------------------------------------------------------------
 
-    async def _compute_protection_scopes(self, user_id: str) -> Tuple[str, Dict[str, Any]]:
+    async def _compute_protection_scopes(self, user_id: str) -> tuple[str, dict[str, Any]]:
         """Call protectionScopes/compute and cache with ETag.
 
         Returns:
@@ -161,7 +161,7 @@ class PurviewGuardrailBase:
                 return cached[0], cached[1]
 
         url = f"{GRAPH_API_BASE}/users/{encoded_user_id}/dataSecurityAndGovernance/protectionScopes/compute"
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "activities": "uploadText,downloadText",
             "locations": [
                 {
@@ -198,8 +198,8 @@ class PurviewGuardrailBase:
         text: str,
         activity: str,
         etag: str,
-        correlation_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
         """Call processContent for DLP policy evaluation.
 
         Args:
@@ -211,7 +211,7 @@ class PurviewGuardrailBase:
         """
         encoded_user_id = self._encode_graph_user_id(user_id)
         url = f"{GRAPH_API_BASE}/users/{encoded_user_id}/dataSecurityAndGovernance/processContent"
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "contentToProcess": {
                 "contentEntries": [
                     {
@@ -244,7 +244,7 @@ class PurviewGuardrailBase:
             }
         }
 
-        extra_headers: Dict[str, str] = {}
+        extra_headers: dict[str, str] = {}
         if etag:
             extra_headers["If-None-Match"] = etag
 
@@ -261,7 +261,7 @@ class PurviewGuardrailBase:
     # User ID resolution
     # ------------------------------------------------------------------
 
-    def _resolve_user_id(self, data: Dict[str, Any], user_api_key_dict: Any) -> Optional[str]:
+    def _resolve_user_id(self, data: dict[str, Any], user_api_key_dict: Any) -> str | None:
         """Resolve the Entra user object ID from request data or auth context.
 
         Returns the strongest available identity walking down four sources, in
@@ -296,7 +296,7 @@ class PurviewGuardrailBase:
         return None
 
     @staticmethod
-    def _logging_kwargs_metadata(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    def _logging_kwargs_metadata(kwargs: dict[str, Any]) -> dict[str, Any]:
         """Metadata dict from ``model_call_details`` / logging kwargs."""
         litellm_params = kwargs.get("litellm_params") or {}
         if not isinstance(litellm_params, dict):
@@ -304,7 +304,7 @@ class PurviewGuardrailBase:
         md = litellm_params.get("metadata")
         return md if isinstance(md, dict) else {}
 
-    def _resolve_trusted_user_id(self, data: Dict[str, Any], user_api_key_dict: Any) -> Optional[str]:
+    def _resolve_trusted_user_id(self, data: dict[str, Any], user_api_key_dict: Any) -> str | None:
         """Resolve user ID from API-key/JWT-bound identity for blocking DLP.
 
         Uses only ``UserAPIKeyAuth.user_id`` (bound on the LiteLLM key or JWT).
@@ -325,7 +325,7 @@ class PurviewGuardrailBase:
 
         return None
 
-    def _resolve_user_id_from_logging_kwargs(self, kwargs: Dict[str, Any]) -> Optional[str]:
+    def _resolve_user_id_from_logging_kwargs(self, kwargs: dict[str, Any]) -> str | None:
         """Trusted-identity-only resolver for logging-only hooks.
 
         Uses only the proxy-injected ``user_api_key_user_id`` (populated from
@@ -348,7 +348,7 @@ class PurviewGuardrailBase:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _should_block(response: Dict[str, Any]) -> bool:
+    def _should_block(response: dict[str, Any]) -> bool:
         """Return True if any policyAction requires blocking."""
         for action in response.get("policyActions", []):
             odata_type = action.get("@odata.type", "")
@@ -383,7 +383,7 @@ class PurviewGuardrailBase:
         return False
 
     @staticmethod
-    def completion_prompt_to_str(prompt: Any) -> Optional[str]:
+    def completion_prompt_to_str(prompt: Any) -> str | None:
         """Normalize OpenAI ``/v1/completions`` ``prompt`` for text DLP.
 
         Supports string prompts and list-of-string prompts. List-of-token-id prompts
@@ -408,7 +408,7 @@ class PurviewGuardrailBase:
         return None
 
     @staticmethod
-    def _extract_tool_call_args_from_message(message: Any) -> List[str]:
+    def _extract_tool_call_args_from_message(message: Any) -> list[str]:
         """Return plaintext arguments strings from tool_calls and function_call fields.
 
         Covers both the request path (assistant messages in chat histories that
@@ -416,7 +416,7 @@ class PurviewGuardrailBase:
         tool calls returned in a ModelResponse).  Both dict-style and object-style
         representations are handled.
         """
-        args: List[str] = []
+        args: list[str] = []
 
         # tool_calls: [{"function": {"arguments": "..."}}]
         tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
@@ -444,7 +444,7 @@ class PurviewGuardrailBase:
 
         return args
 
-    def get_prompt_text_for_dlp(self, messages: List["AllMessageValues"]) -> Optional[str]:
+    def get_prompt_text_for_dlp(self, messages: list["AllMessageValues"]) -> str | None:
         """Concatenate text from every chat message (all roles) for pre-call DLP.
 
         Evaluates the same payload the model receives, not only the trailing user
@@ -459,9 +459,9 @@ class PurviewGuardrailBase:
         """
         if not messages:
             return None
-        parts: List[str] = []
+        parts: list[str] = []
         for msg in messages:
-            segments: List[str] = []
+            segments: list[str] = []
             content = convert_content_list_to_str(message=msg).strip()
             if content:
                 segments.append(content)

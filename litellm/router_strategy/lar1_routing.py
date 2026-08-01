@@ -10,7 +10,7 @@ LAR-1 metadata passed via request_kwargs["metadata"]["lar1"]
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -31,7 +31,7 @@ def _coerce_threshold(value: object, default: float) -> float:
 
 
 def lar1_thresholds_from_args(
-    routing_strategy_args: Optional[Mapping[str, object]] = None,
+    routing_strategy_args: Mapping[str, object] | None = None,
 ) -> dict[str, float]:
     args = routing_strategy_args or {}
     return {
@@ -43,7 +43,7 @@ def lar1_thresholds_from_args(
 
 def apply_lar1_routing_strategy(
     router: Router,
-    routing_strategy_args: Optional[Mapping[str, object]] = None,
+    routing_strategy_args: Mapping[str, object] | None = None,
 ) -> None:
     strategy = LAR1RoutingStrategy(
         router_instance=router,
@@ -53,7 +53,7 @@ def apply_lar1_routing_strategy(
     router.set_custom_routing_strategy(strategy)
 
 
-def _normalize_thresholds(thresholds: Optional[dict[str, float]]) -> dict[str, float]:
+def _normalize_thresholds(thresholds: dict[str, float] | None) -> dict[str, float]:
     merged = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     low = merged["low"]
     medium = merged["medium"]
@@ -80,8 +80,8 @@ def _parse_lar1_metadata(request_kwargs: dict) -> LAR1Metadata:
 class LAR1RoutingStrategy(CustomRoutingStrategyBase):
     def __init__(
         self,
-        router_instance: Optional[Router] = None,
-        thresholds: Optional[dict[str, float]] = None,
+        router_instance: Router | None = None,
+        thresholds: dict[str, float] | None = None,
     ):
         self._router = router_instance
         self.thresholds = _normalize_thresholds(thresholds)
@@ -89,10 +89,10 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
     async def async_get_available_deployment(
         self,
         model: str,
-        messages: Optional[list[dict[str, str]]] = None,
-        input: Optional[Union[str, list]] = None,
-        specific_deployment: Optional[bool] = False,
-        request_kwargs: Optional[dict] = None,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
+        request_kwargs: dict | None = None,
     ):
         if request_kwargs is None:
             request_kwargs = {}
@@ -156,7 +156,7 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         self,
         target_type: str,
         deployments: list[dict],
-    ) -> tuple[Optional[dict], bool]:
+    ) -> tuple[dict | None, bool]:
         if not deployments:
             return None, False
 

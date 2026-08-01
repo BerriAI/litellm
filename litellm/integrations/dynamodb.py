@@ -3,10 +3,10 @@
 
 import os
 import traceback
-from litellm._uuid import uuid
 from typing import Any
 
 import litellm
+from litellm._uuid import uuid
 
 
 class DyanmoDBLogger:
@@ -70,10 +70,9 @@ class DyanmoDBLogger:
             # Assuming log_data is a dictionary with log information
             response = table.put_item(Item=payload)
 
-            print_verbose(f"Response from DynamoDB:{str(response)}")
+            print_verbose(f"Response from DynamoDB:{response!s}")
 
             print_verbose(f"DynamoDB Layer Logging - final response object: {response_obj}")
             return response
         except Exception:
             print_verbose(f"DynamoDB Layer Error - {traceback.format_exc()}")
-            pass

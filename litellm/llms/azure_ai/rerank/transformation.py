@@ -2,8 +2,6 @@
 Translate between Cohere's `/rerank` format and Azure AI's `/rerank` format.
 """
 
-from typing import Optional
-
 import httpx
 
 import litellm
@@ -21,9 +19,9 @@ class AzureAIRerankConfig(CohereRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         if api_base is None:
             raise ValueError(
@@ -62,8 +60,8 @@ class AzureAIRerankConfig(CohereRerankConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("AZURE_AI_API_KEY") or litellm.azure_key
@@ -90,7 +88,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -109,7 +107,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         rerank_response._hidden_params["model"] = base_model
         return rerank_response
 
-    def _get_base_model(self, azure_model_group: Optional[str]) -> Optional[str]:
+    def _get_base_model(self, azure_model_group: str | None) -> str | None:
         if azure_model_group is None:
             return None
         if azure_model_group == "offer-cohere-rerank-mul-paygo":

@@ -7,7 +7,7 @@ Handles image edit requests for Bedrock stability models.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from pydantic import BaseModel
@@ -70,16 +70,16 @@ class BedrockImageEdit(BaseAWSLLM):
         self,
         model: str,
         image: list,
-        prompt: Optional[str],
+        prompt: str | None,
         model_response: ImageResponse,
         optional_params: dict,
         logging_obj: LitellmLogging,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
         aimage_edit: bool = False,
-        api_base: Optional[str] = None,
-        extra_headers: Optional[dict] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        api_key: Optional[str] = None,
+        api_base: str | None = None,
+        extra_headers: dict | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_key: str | None = None,
     ):
         prepared_request = self._prepare_request(
             model=model,
@@ -132,12 +132,12 @@ class BedrockImageEdit(BaseAWSLLM):
     async def async_image_edit(
         self,
         prepared_request: BedrockImageEditPreparedRequest,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
         model: str,
         logging_obj: LitellmLogging,
-        prompt: Optional[str],
+        prompt: str | None,
         model_response: ImageResponse,
-        client: Optional[AsyncHTTPHandler] = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:
         """
         Asynchronous handler for bedrock image edit
@@ -175,12 +175,12 @@ class BedrockImageEdit(BaseAWSLLM):
         self,
         model: str,
         image: list,
-        prompt: Optional[str],
+        prompt: str | None,
         optional_params: dict,
-        api_base: Optional[str],
-        extra_headers: Optional[dict],
+        api_base: str | None,
+        extra_headers: dict | None,
         logging_obj: LitellmLogging,
-        api_key: Optional[str],
+        api_key: str | None,
     ) -> BedrockImageEditPreparedRequest:
         """
         Prepare the request body, headers, and endpoint URL for the Bedrock Image Edit API
@@ -258,7 +258,7 @@ class BedrockImageEdit(BaseAWSLLM):
         self,
         model: str,
         image: list,
-        prompt: Optional[str],
+        prompt: str | None,
         optional_params: dict,
     ) -> dict:
         """
@@ -286,7 +286,7 @@ class BedrockImageEdit(BaseAWSLLM):
         model_response: ImageResponse,
         model: str,
         logging_obj: LitellmLogging,
-        prompt: Optional[str],
+        prompt: str | None,
         response: httpx.Response,
         data: dict,
     ) -> ImageResponse:

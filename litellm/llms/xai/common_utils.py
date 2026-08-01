@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 import httpx
 
 import litellm
@@ -13,7 +11,7 @@ class XAIModelInfo(BaseLLMModelInfo):
     def get_provider_info(
         self,
         model: str,
-    ) -> Optional[ProviderSpecificModelInfo]:
+    ) -> ProviderSpecificModelInfo | None:
         """
         Default values all models of this provider support.
         """
@@ -25,11 +23,11 @@ class XAIModelInfo(BaseLLMModelInfo):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -41,14 +39,14 @@ class XAIModelInfo(BaseLLMModelInfo):
         return headers
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         return api_base or get_secret_str("XAI_API_BASE") or "https://api.x.ai"
 
     @staticmethod
     def get_api_key(
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         legacy_generic_before_env: bool = False,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Resolve xAI API keys while preserving endpoint-specific legacy order.
 
@@ -64,10 +62,10 @@ class XAIModelInfo(BaseLLMModelInfo):
         return api_key or litellm.xai_key or get_secret_str("XAI_API_KEY")
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         return model.replace("xai/", "")
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = self.get_api_base(api_base)
         api_key = self.get_api_key(api_key)
         if api_base is None or api_key is None:

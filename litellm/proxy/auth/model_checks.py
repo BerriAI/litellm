@@ -1,7 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -34,7 +34,7 @@ def _check_wildcard_routing(model: str) -> bool:
     return False
 
 
-def get_provider_models(provider: str, litellm_params: Optional[LiteLLM_Params] = None) -> Optional[List[str]]:
+def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = None) -> list[str] | None:
     """
     Returns the list of known models by provider
     """
@@ -48,10 +48,10 @@ def get_provider_models(provider: str, litellm_params: Optional[LiteLLM_Params] 
 
 
 def _get_models_from_access_groups(
-    model_access_groups: Dict[str, List[str]],
-    all_models: List[str],
-    include_model_access_groups: Optional[bool] = False,
-) -> List[str]:
+    model_access_groups: dict[str, list[str]],
+    all_models: list[str],
+    include_model_access_groups: bool | None = False,
+) -> list[str]:
     idx_to_remove = []
     new_models = []
     for idx, model in enumerate(all_models):
@@ -69,7 +69,7 @@ def _get_models_from_access_groups(
 
 async def get_mcp_server_ids(
     user_api_key_dict: UserAPIKeyAuth,
-) -> List[str]:
+) -> list[str]:
     """
     Returns the list of MCP server ids for a given key by querying the object_permission table
     """
@@ -95,11 +95,11 @@ async def get_mcp_server_ids(
 
 def get_key_models(
     user_api_key_dict: UserAPIKeyAuth,
-    proxy_model_list: List[str],
-    model_access_groups: Dict[str, List[str]],
-    include_model_access_groups: Optional[bool] = False,
-    only_model_access_groups: Optional[bool] = False,
-) -> List[str]:
+    proxy_model_list: list[str],
+    model_access_groups: dict[str, list[str]],
+    include_model_access_groups: bool | None = False,
+    only_model_access_groups: bool | None = False,
+) -> list[str]:
     """
     Returns:
     - List of model name strings
@@ -108,7 +108,7 @@ def get_key_models(
     - If include_model_access_groups is True, it includes the 'keys' of the model_access_groups
       in the response - {"beta-models": ["gpt-4", "claude-v1"]} -> returns 'beta-models'
     """
-    all_models: List[str] = []
+    all_models: list[str] = []
     if len(user_api_key_dict.models) > 0:
         all_models = list(user_api_key_dict.models)  # copy to avoid mutating cached objects
         if SpecialModelNames.all_team_models.value in all_models:
@@ -132,23 +132,23 @@ def get_key_models(
     # deduplicate while preserving order
     all_models = list(dict.fromkeys(all_models))
 
-    verbose_proxy_logger.debug("ALL KEY MODELS - {}".format(len(all_models)))
+    verbose_proxy_logger.debug(f"ALL KEY MODELS - {len(all_models)}")
     return all_models
 
 
 def get_team_models(
-    team_models: List[str],
-    proxy_model_list: List[str],
-    model_access_groups: Dict[str, List[str]],
-    include_model_access_groups: Optional[bool] = False,
-) -> List[str]:
+    team_models: list[str],
+    proxy_model_list: list[str],
+    model_access_groups: dict[str, list[str]],
+    include_model_access_groups: bool | None = False,
+) -> list[str]:
     """
     Returns:
     - List of model name strings
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models_set: Set[str] = set()
+    all_models_set: set[str] = set()
     if len(team_models) > 0:
         all_models_set.update(team_models)
         if SpecialModelNames.all_team_models.value in all_models_set:
@@ -173,23 +173,23 @@ def get_team_models(
     # deduplicate while preserving order
     all_models = list(dict.fromkeys(all_models))
 
-    verbose_proxy_logger.debug("ALL TEAM MODELS - {}".format(len(all_models)))
+    verbose_proxy_logger.debug(f"ALL TEAM MODELS - {len(all_models)}")
     return all_models
 
 
 def get_complete_model_list(
-    key_models: List[str],
-    team_models: List[str],
-    proxy_model_list: List[str],
-    user_model: Optional[str],
-    infer_model_from_keys: Optional[bool],
-    return_wildcard_routes: Optional[bool] = False,
-    llm_router: Optional[Router] = None,
-    model_access_groups: Dict[str, List[str]] = {},
-    include_model_access_groups: Optional[bool] = False,
-    only_model_access_groups: Optional[bool] = False,
-    team_id: Optional[str] = None,
-) -> List[str]:
+    key_models: list[str],
+    team_models: list[str],
+    proxy_model_list: list[str],
+    user_model: str | None,
+    infer_model_from_keys: bool | None,
+    return_wildcard_routes: bool | None = False,
+    llm_router: Router | None = None,
+    model_access_groups: dict[str, list[str]] = {},
+    include_model_access_groups: bool | None = False,
+    only_model_access_groups: bool | None = False,
+    team_id: str | None = None,
+) -> list[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
     """
@@ -223,7 +223,7 @@ def get_complete_model_list(
             append_unique(valid_models)
 
     if only_model_access_groups:
-        model_access_groups_to_return: List[str] = []
+        model_access_groups_to_return: list[str] = []
         for model in unique_models:
             if model in model_access_groups:
                 model_access_groups_to_return.append(model)
@@ -242,8 +242,8 @@ def get_complete_model_list(
 
 
 def _hydrate_litellm_credential_name(
-    litellm_params: Optional[LiteLLM_Params],
-) -> Optional[LiteLLM_Params]:
+    litellm_params: LiteLLM_Params | None,
+) -> LiteLLM_Params | None:
     if litellm_params is None or litellm_params.litellm_credential_name is None:
         return litellm_params
 
@@ -259,7 +259,7 @@ def _hydrate_litellm_credential_name(
     return litellm_params
 
 
-def get_known_models_from_wildcard(wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None) -> List[str]:
+def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
     wildcard_model_to_expand = (
         litellm_params.model
         if wildcard_model == "*"
@@ -375,11 +375,11 @@ def expand_wildcard_deployments_for_model_info(
 
 
 def _get_wildcard_models(
-    unique_models: List[str],
-    return_wildcard_routes: Optional[bool] = False,
-    llm_router: Optional[Router] = None,
-    team_id: Optional[str] = None,
-) -> List[str]:
+    unique_models: list[str],
+    return_wildcard_routes: bool | None = False,
+    llm_router: Router | None = None,
+    team_id: str | None = None,
+) -> list[str]:
     models_to_remove = set()
     all_wildcard_models = []
     for model in unique_models:
@@ -422,9 +422,9 @@ def _get_wildcard_models(
 
 def get_all_fallbacks(
     model: str,
-    llm_router: Optional[Router] = None,
+    llm_router: Router | None = None,
     fallback_type: str = "general",
-) -> List[str]:
+) -> list[str]:
     """
     Get all fallbacks for a given model from the router's fallback configuration.
 

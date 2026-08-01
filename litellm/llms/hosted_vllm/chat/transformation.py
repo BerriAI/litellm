@@ -3,15 +3,10 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
 import json
+from collections.abc import Coroutine
 from typing import (
     Any,
-    Coroutine,
-    Dict,
-    List,
     Literal,
-    Optional,
-    Tuple,
-    Union,
     cast,
     overload,
 )
@@ -38,12 +33,12 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
-    def _convert_custom_tools_to_function_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         vLLM chat completions currently accepts only OpenAI function tools.
         Convert custom tools into function tools so request validation does not fail.
         """
-        converted_tools: List[Dict[str, Any]] = []
+        converted_tools: list[dict[str, Any]] = []
         for idx, tool in enumerate(tools):
             if not isinstance(tool, dict):
                 converted_tools.append(tool)
@@ -73,7 +68,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     "required": ["input"],
                 }
 
-            function_tool: Dict[str, Any] = {
+            function_tool: dict[str, Any] = {
                 "type": "function",
                 "function": {
                     "name": str(tool_name),
@@ -87,7 +82,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
 
         return converted_tools
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         params = super().get_supported_openai_params(model)
         params.extend(["reasoning_effort", "thinking"])
         return params
@@ -119,8 +114,8 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         return super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
         dynamic_api_key = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         return api_base, dynamic_api_key
@@ -157,20 +152,20 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """
         Support translating:
         - video files from file_id or file_data to video_url
@@ -235,7 +230,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):
-                    replaced_content_items: List[Tuple[int, ChatCompletionFileObject]] = []
+                    replaced_content_items: list[tuple[int, ChatCompletionFileObject]] = []
                     for idx, content_item in enumerate(message_content):
                         if content_item.get("type") == "file":
                             content_item = cast(ChatCompletionFileObject, content_item)

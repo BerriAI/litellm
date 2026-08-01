@@ -14,17 +14,17 @@ from __future__ import annotations
 
 import base64
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid4
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
+from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.rag.ingestion.file_parsers import extract_text_from_pdf
 from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
@@ -47,7 +47,7 @@ class BaseRAGIngestion(ABC):
     def __init__(
         self,
         ingest_options: RAGIngestOptions,
-        router: Optional["Router"] = None,
+        router: Router | None = None,
     ):
         self.ingest_options = ingest_options
         self.router = router
@@ -55,12 +55,12 @@ class BaseRAGIngestion(ABC):
 
         # Extract configs from options
         self.ocr_config = ingest_options.get("ocr")
-        self.chunking_strategy: Dict[str, Any] = cast(
-            Dict[str, Any],
+        self.chunking_strategy: dict[str, Any] = cast(
+            dict[str, Any],
             ingest_options.get("chunking_strategy") or {"type": "auto"},
         )
         self.embedding_config = ingest_options.get("embedding")
-        self.vector_store_config: Dict[str, Any] = cast(Dict[str, Any], ingest_options.get("vector_store") or {})
+        self.vector_store_config: dict[str, Any] = cast(dict[str, Any], ingest_options.get("vector_store") or {})
         self.ingest_name = ingest_options.get("name")
 
         # Load credentials from litellm_credential_name if provided in vector_store config
@@ -100,10 +100,10 @@ class BaseRAGIngestion(ABC):
 
     async def upload(
         self,
-        file_data: Optional[Tuple[str, bytes, str]] = None,
-        file_url: Optional[str] = None,
-        file_id: Optional[str] = None,
-    ) -> Tuple[Optional[str], Optional[bytes], Optional[str], Optional[str]]:
+        file_data: tuple[str, bytes, str] | None = None,
+        file_url: str | None = None,
+        file_id: str | None = None,
+    ) -> tuple[str | None, bytes | None, str | None, str | None]:
         """
         Upload / prepare file for ingestion.
 
@@ -135,9 +135,9 @@ class BaseRAGIngestion(ABC):
 
     async def ocr(
         self,
-        file_content: Optional[bytes],
-        content_type: Optional[str],
-    ) -> Optional[str]:
+        file_content: bytes | None,
+        content_type: str | None,
+    ) -> str | None:
         """
         Perform OCR on file content to extract text.
 
@@ -187,10 +187,10 @@ class BaseRAGIngestion(ABC):
 
     def chunk(
         self,
-        text: Optional[str],
-        file_content: Optional[bytes],
+        text: str | None,
+        file_content: bytes | None,
         ocr_was_used: bool,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Split text into chunks using RecursiveCharacterTextSplitter.
 
@@ -203,7 +203,7 @@ class BaseRAGIngestion(ABC):
             List of text chunks
         """
         # Get text to chunk
-        text_to_chunk: Optional[str] = None
+        text_to_chunk: str | None = None
         if text:
             text_to_chunk = text
         elif file_content and not ocr_was_used:
@@ -235,7 +235,7 @@ class BaseRAGIngestion(ABC):
         separators = splitter_args.get("separators", None)
 
         # Build splitter kwargs
-        splitter_kwargs: Dict[str, Any] = {
+        splitter_kwargs: dict[str, Any] = {
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
         }
@@ -247,8 +247,8 @@ class BaseRAGIngestion(ABC):
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         Generate embeddings for text chunks.
 
@@ -273,13 +273,13 @@ class BaseRAGIngestion(ABC):
     @abstractmethod
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
         existing_file_id: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Store content in vector store.
 
@@ -296,13 +296,12 @@ class BaseRAGIngestion(ABC):
         Returns:
             Tuple of (vector_store_id, file_id)
         """
-        pass
 
     async def ingest(
         self,
-        file_data: Optional[Tuple[str, bytes, str]] = None,
-        file_url: Optional[str] = None,
-        file_id: Optional[str] = None,
+        file_data: tuple[str, bytes, str] | None = None,
+        file_url: str | None = None,
+        file_id: str | None = None,
     ) -> RAGIngestResponse:
         """
         Execute the full ingestion pipeline.

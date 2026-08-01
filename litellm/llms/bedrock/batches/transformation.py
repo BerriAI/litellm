@@ -1,7 +1,7 @@
 import os
 import re
 import time
-from typing import Any, Dict, List, Literal, Optional, Union, cast
+from typing import Any, Literal, cast
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
@@ -67,7 +67,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         return LlmProviders.BEDROCK
 
     @classmethod
-    def _get_bare_model_name_from_s3_key(cls, object_key: str) -> Optional[str]:
+    def _get_bare_model_name_from_s3_key(cls, object_key: str) -> str | None:
         if not object_key.startswith(BEDROCK_MANAGED_S3_BATCH_PREFIX):
             return None
         model_part = object_key[len(BEDROCK_MANAGED_S3_BATCH_PREFIX) :]
@@ -77,7 +77,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         return model_part[: match.start()]
 
     @classmethod
-    def is_unmanaged_s3_batch_input_file_id(cls, input_file_id: Optional[str]) -> bool:
+    def is_unmanaged_s3_batch_input_file_id(cls, input_file_id: str | None) -> bool:
         """
         Returns True if `input_file_id` is a raw s3:// Bedrock batch input file (i.e. not a
         LiteLLM-managed unified file id) whose object key embeds the model name in the
@@ -105,11 +105,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate and prepare environment for Bedrock batch requests.
@@ -120,11 +120,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
     def get_complete_batch_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
-        optional_params: Dict,
-        litellm_params: Dict,
+        optional_params: dict,
+        litellm_params: dict,
         data: CreateBatchRequest,
     ) -> str:
         """
@@ -145,7 +145,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         create_batch_data: CreateBatchRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Transform the batch creation request to Bedrock format.
 
@@ -251,7 +251,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
     def transform_create_batch_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: Response,
         logging_obj: Any,
         litellm_params: dict,
@@ -269,7 +269,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         status_str: str = str(response_data.get("status", "Submitted"))
 
         # Map Bedrock status to OpenAI-compatible status
-        status_mapping: Dict[str, str] = {
+        status_mapping: dict[str, str] = {
             "Submitted": "validating",
             "Validating": "validating",
             "Scheduled": "in_progress",
@@ -324,14 +324,14 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         )
 
     @staticmethod
-    def _get_openai_compatible_batch_metadata(metadata: Any) -> Dict[str, str]:
+    def _get_openai_compatible_batch_metadata(metadata: Any) -> dict[str, str]:
         """
         OpenAI Batch metadata only accepts string values.
         """
         if not isinstance(metadata, dict):
             return {}
 
-        sanitized_metadata: Dict[str, str] = {}
+        sanitized_metadata: dict[str, str] = {}
         for key, value in metadata.items():
             if key == "standard_logging_guardrail_information" or value is None:
                 continue
@@ -349,7 +349,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         batch_id: str,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Transform batch retrieval request for Bedrock.
 
@@ -405,7 +405,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         """Helper to parse timestamps based on status."""
         import datetime
 
-        def parse_timestamp(ts_str: Optional[str]) -> Optional[int]:
+        def parse_timestamp(ts_str: str | None) -> int | None:
             if not ts_str:
                 return None
             try:
@@ -490,7 +490,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             )
 
         # Enrich metadata with useful Bedrock fields
-        enriched_metadata_raw: Dict[str, Any] = {
+        enriched_metadata_raw: dict[str, Any] = {
             "jobName": response_data.get("jobName"),
             "clientRequestToken": response_data.get("clientRequestToken"),
             "modelId": response_data.get("modelId"),
@@ -500,7 +500,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         }
         import json as _json
 
-        enriched_metadata: Dict[str, str] = {}
+        enriched_metadata: dict[str, str] = {}
         for _k, _v in enriched_metadata_raw.items():
             if _v is None:
                 continue
@@ -516,7 +516,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
     def transform_retrieve_batch_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: Response,
         logging_obj: Any,
         litellm_params: dict,
@@ -535,7 +535,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         status_str: str = str(response_data.get("status", "Submitted"))
 
         # Map Bedrock status to OpenAI-compatible status
-        status_mapping: Dict[str, str] = {
+        status_mapping: dict[str, str] = {
             "Submitted": "validating",
             "Validating": "validating",
             "Scheduled": "in_progress",
@@ -600,7 +600,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             metadata=enriched_metadata,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[Dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         """
         Get Bedrock-specific error class using common utility.
         """

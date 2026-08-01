@@ -4,7 +4,7 @@
 #
 # +-------------------------------------------------------------+
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -29,7 +29,7 @@ GUARDRAIL_TIMEOUT = 5
 
 class ZscalerAIGuard(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -37,12 +37,12 @@ class ZscalerAIGuard(CustomGuardrail):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        policy_id: Optional[int] = None,
-        send_user_api_key_alias: Optional[bool] = None,
-        send_user_api_key_user_id: Optional[bool] = None,
-        send_user_api_key_team_id: Optional[bool] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        policy_id: int | None = None,
+        send_user_api_key_alias: bool | None = None,
+        send_user_api_key_user_id: bool | None = None,
+        send_user_api_key_team_id: bool | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -80,7 +80,7 @@ class ZscalerAIGuard(CustomGuardrail):
         verbose_proxy_logger.debug("ZscalerAIGuard Initializing ...")
 
     @staticmethod
-    def _resolve_metadata_value(request_data: Optional[dict], key: str) -> Optional[str]:
+    def _resolve_metadata_value(request_data: dict | None, key: str) -> str | None:
         """
         Resolve metadata value from request_data, checking both metadata locations.
 
@@ -351,11 +351,11 @@ class ZscalerAIGuard(CustomGuardrail):
             return self._handle_response(response, direction)
         except Exception as e:
             verbose_proxy_logger.error(f"{e}. Blocking request.")
-            user_facing_error = self._create_user_facing_error(f"{str(e)}")
+            user_facing_error = self._create_user_facing_error(f"{e!s}")
             raise HTTPException(status_code=500, detail=user_facing_error)
 
     @staticmethod
-    def get_config_model() -> Optional[type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import (
             ZscalerAIGuardConfigModel,
         )

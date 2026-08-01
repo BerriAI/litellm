@@ -11,7 +11,6 @@ All /customer management endpoints
 
 #### END-USER/CUSTOMER MANAGEMENT ####
 from datetime import datetime, timedelta
-from typing import List, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -104,7 +103,7 @@ async def block_user(data: BlockUsers):
 
         return {"blocked_users": records}
     except Exception as e:
-        verbose_proxy_logger.error(f"An error occurred - {str(e)}")
+        verbose_proxy_logger.error(f"An error occurred - {e!s}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -167,7 +166,7 @@ async def unblock_user(data: BlockUsers):
     return {"blocked_users": litellm.blocked_user_list}
 
 
-def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
+def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
     """
     Return a new budget object if new budget params are passed.
     """
@@ -194,7 +193,7 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
 
 async def _handle_customer_object_permission_update(
     non_default_values: dict,
-    end_user_table_data_typed: Optional[LiteLLM_EndUserTable],
+    end_user_table_data_typed: LiteLLM_EndUserTable | None,
     update_end_user_table_data: dict,
     prisma_client,
 ) -> None:
@@ -338,13 +337,11 @@ async def new_end_user(
                 raise HTTPException(
                     status_code=422,
                     detail={
-                        "error": "Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={}, proxy_model_names={}".format(
-                            data.default_model, set(llm_router.get_model_names())
-                        )
+                        "error": f"Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={data.default_model}, proxy_model_names={set(llm_router.get_model_names())}"
                     },
                 )
 
-        new_end_user_obj: Dict = {}
+        new_end_user_obj: dict = {}
 
         ## CREATE BUDGET ## if set
         _new_budget = new_budget_request(data)
@@ -393,9 +390,7 @@ async def new_end_user(
         return _to_customer_response(end_user_record)
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - {}".format(
-                str(e)
-            )
+            f"litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - {e!s}"
         )
         if "Unique constraint failed on the fields: (`user_id`)" in str(e):
             raise ProxyException(
@@ -450,7 +445,7 @@ async def end_user_info(
 
         if user_info is None:
             raise ProxyException(
-                message="End User Id={} does not exist in db".format(end_user_id),
+                message=f"End User Id={end_user_id} does not exist in db",
                 type="not_found",
                 code=404,
                 param="end_user_id",
@@ -460,9 +455,7 @@ async def end_user_info(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occured - {}".format(
-                str(e)
-            )
+            f"litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occured - {e!s}"
         )
         raise handle_exception_on_proxy(e)
 
@@ -560,7 +553,7 @@ async def update_end_user(
 
         if end_user_table_data is None:
             raise ProxyException(
-                message="End User Id={} does not exist in db".format(data.user_id),
+                message=f"End User Id={data.user_id} does not exist in db",
                 type="not_found",
                 code=404,
                 param="user_id",
@@ -643,9 +636,7 @@ async def update_end_user(
         # update based on remaining passed in values
 
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.update_end_user(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.update_end_user(): Exception occured - {e!s}")
         raise handle_exception_on_proxy(e)
 
 
@@ -720,9 +711,7 @@ async def delete_end_user(
 
         # update based on remaining passed in values
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.delete_end_user(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.delete_end_user(): Exception occured - {e!s}")
         raise handle_exception_on_proxy(e)
 
 
@@ -730,7 +719,7 @@ async def delete_end_user(
     "/customer/list",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=List[CustomerResponse],
+    response_model=list[CustomerResponse],
 )
 @router.get(
     "/end_user/list",
@@ -741,7 +730,7 @@ async def delete_end_user(
 async def list_end_user(
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> List[CustomerResponse]:
+) -> list[CustomerResponse]:
     """
     [Admin-only] List all available customers
 
@@ -761,7 +750,7 @@ async def list_end_user(
         ):
             raise HTTPException(
                 status_code=401,
-                detail={"error": "Admin-only endpoint. Your user role={}".format(user_api_key_dict.user_role)},
+                detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
             )
 
         if prisma_client is None:
@@ -778,9 +767,7 @@ async def list_end_user(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {}".format(
-                str(e)
-            )
+            f"litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {e!s}"
         )
         raise handle_exception_on_proxy(e)
 
@@ -798,14 +785,14 @@ async def list_end_user(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_customer_daily_activity(
-    end_user_ids: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
+    end_user_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
     page: int = 1,
     page_size: int = 10,
-    exclude_end_user_ids: Optional[str] = None,
+    exclude_end_user_ids: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -817,7 +804,7 @@ async def get_customer_daily_activity(
     ):
         raise HTTPException(
             status_code=401,
-            detail={"error": "Admin-only endpoint. Your user role={}".format(user_api_key_dict.user_role)},
+            detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
         )
 
     from litellm.proxy.proxy_server import prisma_client
@@ -830,7 +817,7 @@ async def get_customer_daily_activity(
 
     # Parse comma-separated ids
     end_user_ids_list = end_user_ids.split(",") if end_user_ids else None
-    exclude_end_user_ids_list: Optional[List[str]] = None
+    exclude_end_user_ids_list: list[str] | None = None
     if exclude_end_user_ids:
         exclude_end_user_ids_list = exclude_end_user_ids.split(",") if exclude_end_user_ids else None
 

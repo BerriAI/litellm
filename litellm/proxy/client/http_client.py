@@ -1,13 +1,14 @@
 """HTTP client for making requests to the LiteLLM proxy server."""
 
-from typing import Any, Dict, Optional, Union
+from typing import Any
+
 import requests
 
 
 class HTTPClient:
     """HTTP client for making requests to the LiteLLM proxy server."""
 
-    def __init__(self, base_url: str, api_key: Optional[str] = None, timeout: int = 30):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 30):
         """Initialize the HTTP client.
 
         Args:
@@ -24,9 +25,9 @@ class HTTPClient:
         method: str,
         uri: str,
         *,
-        data: Optional[Union[Dict[str, Any], list, bytes]] = None,
-        json: Optional[Union[Dict[str, Any], list]] = None,
-        headers: Optional[Dict[str, str]] = None,
+        data: dict[str, Any] | list | bytes | None = None,
+        json: dict[str, Any] | list | None = None,
+        headers: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> Any:
         """Make an HTTP request to the LiteLLM proxy server.

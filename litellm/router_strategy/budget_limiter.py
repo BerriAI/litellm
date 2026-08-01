@@ -19,27 +19,27 @@ anthropic:
 """
 
 import asyncio
+import builtins
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErrors
-from litellm.types.utils import BudgetConfig
+from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
-from litellm.types.utils import GenericBudgetConfigType, StandardLoggingPayload
 
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 
@@ -54,7 +54,7 @@ class _LiteLLMParamsDictView:
 
     __slots__ = ("_params",)
 
-    def __init__(self, params: Dict[str, Any]):
+    def __init__(self, params: dict[str, Any]):
         self._params = params
 
     def __getattr__(self, key: str) -> Any:
@@ -84,10 +84,10 @@ class _LiteLLMParamsDictView:
     def __len__(self) -> int:
         return len(self._params)
 
-    def dict(self) -> Dict[str, Any]:
+    def dict(self) -> dict[str, Any]:
         return dict(self._params)
 
-    def model_dump(self) -> Dict[str, Any]:
+    def model_dump(self) -> builtins.dict[str, Any]:
         return dict(self._params)
 
 
@@ -95,15 +95,15 @@ class RouterBudgetLimiting(CustomLogger):
     def __init__(
         self,
         dual_cache: DualCache,
-        provider_budget_config: Optional[dict],
-        model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
+        provider_budget_config: dict | None,
+        model_list: list[DeploymentTypedDict | dict[str, Any]] | None = None,
     ):
         self.dual_cache = dual_cache
-        self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
+        self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
-        self.provider_budget_config: Optional[GenericBudgetConfigType] = provider_budget_config
-        self.deployment_budget_config: Optional[GenericBudgetConfigType] = None
-        self.tag_budget_config: Optional[GenericBudgetConfigType] = None
+        self.provider_budget_config: GenericBudgetConfigType | None = provider_budget_config
+        self.deployment_budget_config: GenericBudgetConfigType | None = None
+        self.tag_budget_config: GenericBudgetConfigType | None = None
         self._init_provider_budgets()
         self._init_deployment_budgets(model_list=model_list)
         self._init_tag_budgets()
@@ -115,11 +115,11 @@ class RouterBudgetLimiting(CustomLogger):
     async def async_filter_deployments(
         self,
         model: str,
-        healthy_deployments: List,
-        messages: Optional[List[AllMessageValues]],
-        request_kwargs: Optional[dict] = None,
-        parent_otel_span: Optional[Span] = None,  # type: ignore
-    ) -> List[dict]:
+        healthy_deployments: list,
+        messages: list[AllMessageValues] | None,
+        request_kwargs: dict | None = None,
+        parent_otel_span: Span | None = None,  # type: ignore
+    ) -> list[dict]:
         """
         Filter out deployments that have exceeded their provider budget limit.
 
@@ -138,7 +138,7 @@ class RouterBudgetLimiting(CustomLogger):
         if len(healthy_deployments) == 0:
             return healthy_deployments
 
-        potential_deployments: List[Dict] = []
+        potential_deployments: list[dict] = []
 
         (
             cache_keys,
@@ -156,10 +156,10 @@ class RouterBudgetLimiting(CustomLogger):
                 keys=cache_keys,
                 parent_otel_span=parent_otel_span,
             )
-            current_spends: List = _current_spends or [0.0] * len(cache_keys)
+            current_spends: list = _current_spends or [0.0] * len(cache_keys)
 
             # Map spends to their respective keys
-            spend_map: Dict[str, float] = {}
+            spend_map: dict[str, float] = {}
             for idx, key in enumerate(cache_keys):
                 spend_map[key] = float(current_spends[idx] or 0.0)
 
@@ -190,14 +190,14 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _filter_out_deployments_above_budget(
         self,
-        potential_deployments: List[Dict[str, Any]],
-        healthy_deployments: List[Dict[str, Any]],
-        provider_configs: Dict[str, GenericBudgetInfo],
-        deployment_configs: Dict[str, GenericBudgetInfo],
-        deployment_providers: List[Optional[str]],
-        spend_map: Dict[str, float],
-        request_tags: List[str],
-    ) -> Tuple[List[Dict[str, Any]], str]:
+        potential_deployments: list[dict[str, Any]],
+        healthy_deployments: list[dict[str, Any]],
+        provider_configs: dict[str, GenericBudgetInfo],
+        deployment_configs: dict[str, GenericBudgetInfo],
+        deployment_providers: list[str | None],
+        spend_map: dict[str, float],
+        request_tags: list[str],
+    ) -> tuple[list[dict[str, Any]], str]:
         """
         Filter out deployments that have exceeded their budget limit.
         Follow budget checks are run here:
@@ -274,13 +274,13 @@ class RouterBudgetLimiting(CustomLogger):
 
     async def _async_get_cache_keys_for_router_budget_limiting(
         self,
-        healthy_deployments: List[Dict[str, Any]],
-        request_kwargs: Optional[Dict] = None,
-    ) -> Tuple[
-        List[str],
-        Dict[str, GenericBudgetInfo],
-        Dict[str, GenericBudgetInfo],
-        List[Optional[str]],
+        healthy_deployments: list[dict[str, Any]],
+        request_kwargs: dict | None = None,
+    ) -> tuple[
+        list[str],
+        dict[str, GenericBudgetInfo],
+        dict[str, GenericBudgetInfo],
+        list[str | None],
     ]:
         """
         Returns list of cache keys to fetch from router cache for budget limiting and provider and deployment configs
@@ -292,13 +292,13 @@ class RouterBudgetLimiting(CustomLogger):
                 - Dict of deployment budget configs `deployment_configs`
                 - List of resolved providers aligned by deployment index `deployment_providers`
         """
-        cache_keys: List[str] = []
-        provider_configs: Dict[str, GenericBudgetInfo] = {}
-        deployment_configs: Dict[str, GenericBudgetInfo] = {}
-        deployment_providers: List[Optional[str]] = []
+        cache_keys: list[str] = []
+        provider_configs: dict[str, GenericBudgetInfo] = {}
+        deployment_configs: dict[str, GenericBudgetInfo] = {}
+        deployment_providers: list[str | None] = []
 
         # Resolve tags once before the loop (loop-invariant)
-        _request_tags: List[str] = []
+        _request_tags: list[str] = []
         if self.tag_budget_config:
             _request_tags = _get_tags_from_request_kwargs(
                 request_kwargs=request_kwargs,
@@ -401,7 +401,7 @@ class RouterBudgetLimiting(CustomLogger):
         # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
         if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
             return
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+        standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
 
@@ -514,7 +514,7 @@ class RouterBudgetLimiting(CustomLogger):
                     DEFAULT_REDIS_SYNC_INTERVAL
                 )  # Wait for DEFAULT_REDIS_SYNC_INTERVAL seconds before next sync
             except Exception as e:
-                verbose_router_logger.error(f"Error in periodic sync task: {str(e)}")
+                verbose_router_logger.error(f"Error in periodic sync task: {e!s}")
                 await asyncio.sleep(
                     DEFAULT_REDIS_SYNC_INTERVAL
                 )  # Still wait DEFAULT_REDIS_SYNC_INTERVAL seconds on error before retrying
@@ -545,7 +545,7 @@ class RouterBudgetLimiting(CustomLogger):
             self.redis_increment_operation_queue = []
 
         except Exception as e:
-            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {str(e)}")
+            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {e!s}")
 
     async def _sync_in_memory_spend_with_redis(self):
         """
@@ -600,27 +600,27 @@ class RouterBudgetLimiting(CustomLogger):
                         verbose_router_logger.debug(f"Updated in-memory cache for {key}: {value}")
 
         except Exception as e:
-            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {str(e)}")
+            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {e!s}")
 
     def _get_budget_config_for_deployment(
         self,
         model_id: str,
-    ) -> Optional[GenericBudgetInfo]:
+    ) -> GenericBudgetInfo | None:
         if self.deployment_budget_config is None:
             return None
         return self.deployment_budget_config.get(model_id, None)
 
-    def _get_budget_config_for_provider(self, provider: str) -> Optional[GenericBudgetInfo]:
+    def _get_budget_config_for_provider(self, provider: str) -> GenericBudgetInfo | None:
         if self.provider_budget_config is None:
             return None
         return self.provider_budget_config.get(provider, None)
 
-    def _get_budget_config_for_tag(self, tag: str) -> Optional[GenericBudgetInfo]:
+    def _get_budget_config_for_tag(self, tag: str) -> GenericBudgetInfo | None:
         if self.tag_budget_config is None:
             return None
         return self.tag_budget_config.get(tag, None)
 
-    def _get_llm_provider_for_deployment(self, deployment: Dict) -> Optional[str]:
+    def _get_llm_provider_for_deployment(self, deployment: dict) -> str | None:
         try:
             deployment_litellm_params = deployment.get("litellm_params") or {}
 
@@ -658,7 +658,7 @@ class RouterBudgetLimiting(CustomLogger):
                 budget_limit=budget_limit,
             )
 
-    async def _get_current_provider_spend(self, provider: str) -> Optional[float]:
+    async def _get_current_provider_spend(self, provider: str) -> float | None:
         """
         GET the current spend for a provider from cache
 
@@ -684,7 +684,7 @@ class RouterBudgetLimiting(CustomLogger):
             current_spend = await self.dual_cache.async_get_cache(spend_key)
         return float(current_spend) if current_spend is not None else 0.0
 
-    async def _get_current_provider_budget_reset_at(self, provider: str) -> Optional[str]:
+    async def _get_current_provider_budget_reset_at(self, provider: str) -> str | None:
         budget_config = self._get_budget_config_for_provider(provider)
         if budget_config is None:
             return None
@@ -710,7 +710,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         spend_key = f"provider_spend:{provider}:{budget_config.budget_duration}"
         start_time_key = f"provider_budget_start_time:{provider}"
-        ttl_seconds: Optional[int] = None
+        ttl_seconds: int | None = None
         if budget_config.budget_duration is not None:
             ttl_seconds = duration_in_seconds(budget_config.budget_duration)
 
@@ -725,8 +725,8 @@ class RouterBudgetLimiting(CustomLogger):
 
     @staticmethod
     def should_init_router_budget_limiter(
-        provider_budget_config: Optional[dict],
-        model_list: Optional[Union[List[DeploymentTypedDict], List[Dict[str, Any]]]] = None,
+        provider_budget_config: dict | None,
+        model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
     ):
         """
         Returns `True` if the router budget routing settings are set and RouterBudgetLimiting should be initialized
@@ -776,13 +776,13 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _init_deployment_budgets(
         self,
-        model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
+        model_list: list[DeploymentTypedDict | dict[str, Any]] | None = None,
     ):
         if model_list is None:
             return
         for _model in model_list:
             _litellm_params = _model.get("litellm_params", {})
-            _model_info: Dict = _model.get("model_info") or {}
+            _model_info: dict = _model.get("model_info") or {}
             _model_id = _model_info.get("id")
             _max_budget = _litellm_params.get("max_budget")
             _budget_duration = _litellm_params.get("budget_duration")
@@ -803,7 +803,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     def register_deployment_budget(
         self,
-        deployment: Union[Dict[str, Any], DeploymentTypedDict],
+        deployment: dict[str, Any] | DeploymentTypedDict,
     ) -> None:
         """
         Register or refresh deployment-level budget config for a runtime-added deployment.

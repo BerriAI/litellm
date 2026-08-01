@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -49,7 +49,7 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        request_body: Optional[dict] = None,
+        request_body: dict | None = None,
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
         if "predictLongRunning" in url_route:
@@ -253,7 +253,7 @@ class VertexPassthroughLoggingHandler:
 
         _json_response = httpx_response.json()
 
-        litellm_prediction_response: Union[ModelResponse, EmbeddingResponse, ImageResponse] = ModelResponse()
+        litellm_prediction_response: ModelResponse | EmbeddingResponse | ImageResponse = ModelResponse()
         if vertex_image_generation_class.is_image_generation_response(_json_response):
             litellm_prediction_response = vertex_image_generation_class.process_image_generation_response(
                 _json_response,
@@ -307,7 +307,7 @@ class VertexPassthroughLoggingHandler:
         }
 
     @staticmethod
-    def _extract_embed_content_input(request_body: Optional[dict], batch: bool) -> str:
+    def _extract_embed_content_input(request_body: dict | None, batch: bool) -> str:
         """Extract raw input text from an :embedContent or :batchEmbedContents request body for token counting."""
         if not request_body:
             return ""
@@ -327,11 +327,13 @@ class VertexPassthroughLoggingHandler:
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         kwargs: dict,
-        request_body: Optional[dict] = None,
+        request_body: dict | None = None,
     ) -> PassThroughEndpointLoggingTypedDict:
         """Handle Vertex :embedContent and :batchEmbedContents endpoint responses."""
         from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
             process_embed_content_response,
+        )
+        from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
             process_response as process_batch_embed_response,
         )
 
@@ -391,8 +393,8 @@ class VertexPassthroughLoggingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        all_chunks: List[str],
-        model: Optional[str],
+        all_chunks: list[str],
+        model: str | None,
         end_time: datetime,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -402,7 +404,7 @@ class VertexPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         model = model or VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
         complete_streaming_response = VertexPassthroughLoggingHandler._build_complete_streaming_response(
             all_chunks=all_chunks,
@@ -437,11 +439,11 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _build_complete_streaming_response(
-        all_chunks: List[str],
+        all_chunks: list[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
         url_route: str,
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    ) -> ModelResponse | TextCompletionResponse | None:
         parsed_chunks = []
         if "generateContent" in url_route or "streamGenerateContent" in url_route:
             vertex_iterator: Any = VertexModelResponseIterator(
@@ -505,14 +507,12 @@ class VertexPassthroughLoggingHandler:
             The extracted model name for use with LiteLLM
         """
         # Handle publishers/google/models/ format
-        if "publishers/" in vertex_model_path and "models/" in vertex_model_path:
-            # Extract everything after the last models/
-            parts = vertex_model_path.split("models/")
-            if len(parts) > 1:
-                return parts[-1]
-
-        # Handle projects/PROJECT_ID/locations/LOCATION/models/MODEL_ID format
-        elif "projects/" in vertex_model_path and "models/" in vertex_model_path:
+        if (
+            "publishers/" in vertex_model_path
+            and "models/" in vertex_model_path
+            or "projects/" in vertex_model_path
+            and "models/" in vertex_model_path
+        ):
             # Extract everything after the last models/
             parts = vertex_model_path.split("models/")
             if len(parts) > 1:
@@ -522,7 +522,7 @@ class VertexPassthroughLoggingHandler:
         return vertex_model_path
 
     @staticmethod
-    def _get_vertex_publisher_or_api_spec_from_url(url: str) -> Optional[str]:
+    def _get_vertex_publisher_or_api_spec_from_url(url: str) -> str | None:
         # Check for specific Vertex AI partner publishers
         if "/publishers/mistralai/" in url:
             return "mistralai"
@@ -576,7 +576,7 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _create_vertex_response_logging_payload_for_generate_content(
-        litellm_model_response: Union[ModelResponse, TextCompletionResponse],
+        litellm_model_response: ModelResponse | TextCompletionResponse,
         model: str,
         kwargs: dict,
         start_time: datetime,
@@ -759,7 +759,7 @@ class VertexPassthroughLoggingHandler:
                     index=0,
                     message={
                         "role": "assistant",
-                        "content": f"Error creating batch prediction job: {str(e)}",
+                        "content": f"Error creating batch prediction job: {e!s}",
                         "tool_calls": None,
                         "function_call": None,
                         "provider_specific_fields": {

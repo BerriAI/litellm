@@ -1,10 +1,13 @@
+import builtins
+from typing import Any
+
 import requests
-from typing import List, Dict, Any, Optional, Union
-from .exceptions import UnauthorizedError, NotFoundError
+
+from .exceptions import NotFoundError, UnauthorizedError
 
 
 class ModelsManagementClient:
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
+    def __init__(self, base_url: str, api_key: str | None = None):
         """
         Initialize the ModelsManagementClient.
 
@@ -15,7 +18,7 @@ class ModelsManagementClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
@@ -27,7 +30,7 @@ class ModelsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def list(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
+    def list(self, return_request: bool = False) -> list[dict[str, Any]] | requests.Request:
         """
         Get the list of models supported by the server.
 
@@ -63,10 +66,10 @@ class ModelsManagementClient:
     def new(
         self,
         model_name: str,
-        model_params: Dict[str, Any],
-        model_info: Optional[Dict[str, Any]] = None,
+        model_params: dict[str, Any],
+        model_info: dict[str, Any] | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Add a new model to the proxy.
 
@@ -109,7 +112,7 @@ class ModelsManagementClient:
                 raise UnauthorizedError(e)
             raise
 
-    def delete(self, model_id: str, return_request: bool = False) -> Union[Dict[str, Any], requests.Request]:
+    def delete(self, model_id: str, return_request: bool = False) -> dict[str, Any] | requests.Request:
         """
         Delete a model from the proxy.
 
@@ -149,10 +152,10 @@ class ModelsManagementClient:
 
     def get(
         self,
-        model_id: Optional[str] = None,
-        model_name: Optional[str] = None,
+        model_id: str | None = None,
+        model_name: str | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Get information about a specific model by its ID or name.
 
@@ -182,7 +185,7 @@ class ModelsManagementClient:
 
         # Get all models and filter
         models = self.info()
-        assert isinstance(models, List)
+        assert isinstance(models, list)
 
         # Find the matching model
         for model in models:
@@ -205,7 +208,7 @@ class ModelsManagementClient:
             )
         )
 
-    def info(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
+    def info(self, return_request: bool = False) -> builtins.list[dict[str, Any]] | requests.Request:
         """
         Get detailed information about all models from the server.
 
@@ -240,10 +243,10 @@ class ModelsManagementClient:
     def update(
         self,
         model_id: str,
-        model_params: Dict[str, Any],
-        model_info: Optional[Dict[str, Any]] = None,
+        model_params: dict[str, Any],
+        model_info: dict[str, Any] | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Update an existing model's configuration.
 

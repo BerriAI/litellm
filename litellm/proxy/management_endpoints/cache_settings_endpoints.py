@@ -10,8 +10,9 @@ POST /cache/settings - Save cache settings to database
 
 import asyncio
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -238,7 +239,7 @@ def _merge_over_saved(incoming: Mapping[str, Any], saved: Mapping[str, Any]) -> 
     return merged
 
 
-def _redact_settings(settings: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def _redact_settings(settings: Mapping[str, Any] | None) -> dict[str, Any]:
     """Replace every value in a settings map with a fixed marker.
 
     Cache config carries Redis credentials (passwords, connection strings).
@@ -267,10 +268,10 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 async def _emit_cache_settings_audit_log(
     *,
     action: AUDIT_ACTIONS,
-    before_settings: Optional[Mapping[str, Any]],
-    after_settings: Optional[Mapping[str, Any]],
+    before_settings: Mapping[str, Any] | None,
+    after_settings: Mapping[str, Any] | None,
     user_api_key_dict: UserAPIKeyAuth,
-    litellm_changed_by: Optional[str],
+    litellm_changed_by: str | None,
 ) -> None:
     """Emit an audit-log row for a /cache/settings mutation.
 
@@ -312,17 +313,17 @@ class CacheSettingsManager:
     Tracks last cache params to avoid unnecessary reinitialization.
     """
 
-    _last_cache_params: Optional[Dict[str, Any]] = None
+    _last_cache_params: dict[str, Any] | None = None
 
     @staticmethod
-    def _cache_params_equal(params1: Dict[str, Any], params2: Dict[str, Any]) -> bool:
+    def _cache_params_equal(params1: dict[str, Any], params2: dict[str, Any]) -> bool:
         """
         Compare two cache parameter dictionaries for equality.
         Normalizes values and filters out UI-only fields.
         """
 
         # Normalize by removing None values and UI-only fields
-        def normalize(params: Dict[str, Any]) -> Dict[str, Any]:
+        def normalize(params: dict[str, Any]) -> dict[str, Any]:
             normalized = {}
             for k, v in params.items():
                 if k == "redis_type":  # Skip UI-only field
@@ -385,13 +386,11 @@ class CacheSettingsManager:
                 verbose_proxy_logger.info("Cache settings initialized from database")
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.management_endpoints.cache_settings_endpoints.py::CacheSettingsManager::init_cache_settings_in_db - {}".format(
-                    str(e)
-                )
+                f"litellm.proxy.management_endpoints.cache_settings_endpoints.py::CacheSettingsManager::init_cache_settings_in_db - {e!s}"
             )
 
     @staticmethod
-    def update_cache_params(cache_params: Dict[str, Any]):
+    def update_cache_params(cache_params: dict[str, Any]):
         """
         Update the last cache params after initialization.
         Called after cache settings are updated via the API.
@@ -400,23 +399,23 @@ class CacheSettingsManager:
 
 
 class CacheSettingsResponse(BaseModel):
-    fields: List[CacheSettingsField] = Field(description="List of all configurable cache settings with metadata")
-    current_values: Dict[str, Any] = Field(description="Current values of cache settings")
-    redis_type_descriptions: Dict[str, str] = Field(description="Descriptions for each Redis type option")
+    fields: list[CacheSettingsField] = Field(description="List of all configurable cache settings with metadata")
+    current_values: dict[str, Any] = Field(description="Current values of cache settings")
+    redis_type_descriptions: dict[str, str] = Field(description="Descriptions for each Redis type option")
 
 
 class CacheTestRequest(BaseModel):
-    cache_settings: Dict[str, Any] = Field(description="Cache settings to test connection with")
+    cache_settings: dict[str, Any] = Field(description="Cache settings to test connection with")
 
 
 class CacheTestResponse(BaseModel):
     status: str = Field(description="Connection status: 'success' or 'failed'")
     message: str = Field(description="Connection result message")
-    error: Optional[str] = Field(default=None, description="Error message if connection failed")
+    error: str | None = Field(default=None, description="Error message if connection failed")
 
 
 class CacheSettingsUpdateRequest(BaseModel):
-    cache_settings: Dict[str, Any] = Field(description="Cache settings to save")
+    cache_settings: dict[str, Any] = Field(description="Cache settings to save")
 
 
 @router.get(
@@ -481,8 +480,8 @@ async def get_cache_settings(
             redis_type_descriptions=REDIS_TYPE_DESCRIPTIONS,
         )
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching cache settings: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching cache settings: {str(e)}")
+        verbose_proxy_logger.error(f"Error fetching cache settings: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error fetching cache settings: {e!s}")
 
 
 @router.post(
@@ -540,10 +539,10 @@ async def test_cache_connection(
         return CacheTestResponse(**result)
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error testing cache connection: {str(e)}")
+        verbose_proxy_logger.error(f"Error testing cache connection: {e!s}")
         return CacheTestResponse(
             status="failed",
-            message=f"Cache connection test failed: {str(e)}",
+            message=f"Cache connection test failed: {e!s}",
             error=str(e),
         )
 
@@ -556,7 +555,7 @@ async def test_cache_connection(
 async def update_cache_settings(
     request: CacheSettingsUpdateRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
@@ -591,7 +590,7 @@ async def update_cache_settings(
         # Read the stored row first: its decrypted values back any credential the
         # caller echoed back redacted, and its key set drives the audit diff.
         existing_row = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
-        before_settings: Optional[Dict[str, Any]] = None
+        before_settings: dict[str, Any] | None = None
         saved_settings: dict[str, Any] = {}
         if existing_row is not None and existing_row.cache_settings:
             before_settings = _parse_stored_settings(existing_row.cache_settings)
@@ -653,5 +652,5 @@ async def update_cache_settings(
             "settings": _redact_credentials(cache_settings),
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating cache settings: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error updating cache settings: {str(e)}")
+        verbose_proxy_logger.error(f"Error updating cache settings: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error updating cache settings: {e!s}")

@@ -4,7 +4,7 @@ Now supports selecting a tag via `config["tag"]`; falls back to branch ("main").
 """
 
 import base64
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import quote
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -22,7 +22,7 @@ class GitLabClient:
     - Directory listing via the repository tree API
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize the GitLab client.
 
@@ -76,12 +76,12 @@ class GitLabClient:
     # Core helpers
     # ------------------------
 
-    def _file_raw_url(self, file_path: str, *, ref: Optional[str] = None) -> str:
+    def _file_raw_url(self, file_path: str, *, ref: str | None = None) -> str:
         file_enc = quote(file_path, safe="")
         ref_q = quote(ref or self.ref, safe="")
         return f"{self.base_url}/projects/{self._project_enc}/repository/files/{file_enc}/raw?ref={ref_q}"
 
-    def _file_json_url(self, file_path: str, *, ref: Optional[str] = None) -> str:
+    def _file_json_url(self, file_path: str, *, ref: str | None = None) -> str:
         file_enc = quote(file_path, safe="")
         ref_q = quote(ref or self.ref, safe="")
         return f"{self.base_url}/projects/{self._project_enc}/repository/files/{file_enc}?ref={ref_q}"
@@ -91,7 +91,7 @@ class GitLabClient:
         directory_path: str = "",
         recursive: bool = False,
         *,
-        ref: Optional[str] = None,
+        ref: str | None = None,
     ) -> str:
         path_q = f"&path={quote(directory_path, safe='')}" if directory_path else ""
         rec_q = "&recursive=true" if recursive else ""
@@ -108,7 +108,7 @@ class GitLabClient:
             raise ValueError("ref must be a non-empty string")
         self.ref = ref
 
-    def get_file_content(self, file_path: str, *, ref: Optional[str] = None) -> Optional[str]:
+    def get_file_content(self, file_path: str, *, ref: str | None = None) -> str | None:
         """
         Fetch the content of a file from the GitLab repository at the given ref
         (tag, branch, or commit SHA). If `ref` is None, uses self.ref.
@@ -149,7 +149,7 @@ class GitLabClient:
                 raise Exception("Authentication failed. Check your GitLab token and auth_method.")
             raise Exception(f"Failed to fetch file '{file_path}': {e}")
 
-    def _get_file_content_via_json(self, file_path: str, *, ref: Optional[str] = None) -> Optional[str]:
+    def _get_file_content_via_json(self, file_path: str, *, ref: str | None = None) -> str | None:
         """
         Fallback for get_file_content(): use the JSON file API which returns base64 content.
         """
@@ -186,8 +186,8 @@ class GitLabClient:
         file_extension: str = ".prompt",
         recursive: bool = False,
         *,
-        ref: Optional[str] = None,
-    ) -> List[str]:
+        ref: str | None = None,
+    ) -> list[str]:
         """
         List files in a directory with a specific extension using the repository tree API.
 
@@ -209,7 +209,7 @@ class GitLabClient:
             resp.raise_for_status()
 
             data = resp.json() or []
-            files: List[str] = []
+            files: list[str] = []
             for item in data:
                 if item.get("type") == "blob":
                     file_path = item.get("path", "")
@@ -229,7 +229,7 @@ class GitLabClient:
                 raise Exception("Authentication failed. Check your GitLab token and auth_method.")
             raise Exception(f"Failed to list files in '{directory_path}': {e}")
 
-    def get_repository_info(self) -> Dict[str, Any]:
+    def get_repository_info(self) -> dict[str, Any]:
         """Get information about the project/repository."""
         url = f"{self.base_url}/projects/{self._project_enc}"
         try:
@@ -247,7 +247,7 @@ class GitLabClient:
         except Exception:
             return False
 
-    def get_branches(self) -> List[Dict[str, Any]]:
+    def get_branches(self) -> list[dict[str, Any]]:
         """Get list of branches in the repository."""
         url = f"{self.base_url}/projects/{self._project_enc}/repository/branches"
         try:
@@ -258,7 +258,7 @@ class GitLabClient:
         except Exception as e:
             raise Exception(f"Failed to get branches: {e}")
 
-    def get_file_metadata(self, file_path: str, *, ref: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_file_metadata(self, file_path: str, *, ref: str | None = None) -> dict[str, Any] | None:
         """
         Get minimal metadata about a file via RAW endpoint headers at a given ref.
 

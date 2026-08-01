@@ -5,7 +5,7 @@ If the ddtrace package is not installed, the tracer will be a no-op.
 """
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from litellm.secret_managers.main import get_secret_bool
 
@@ -64,7 +64,7 @@ def _should_use_dd_profiler():
 
 # Initialize tracer
 should_use_dd_tracer = _should_use_dd_tracer()
-tracer: Union[NullTracer, DD_TRACER] = NullTracer()
+tracer: NullTracer | DD_TRACER = NullTracer()
 # We need to ensure tracer is never None and always has the required methods
 if should_use_dd_tracer:
     try:
@@ -78,7 +78,7 @@ else:
     tracer = NullTracer()
 
 
-def get_active_span() -> Optional[Any]:
+def get_active_span() -> Any | None:
     """
     Return the active Datadog span, checking current span first and then root span.
     """

@@ -24,8 +24,9 @@ The two wire shapes:
   ``Task`` result is a bare object without ``kind``.
 """
 
+from collections.abc import Callable
 from types import ModuleType
-from typing import Callable, Literal, Union
+from typing import Literal, Union
 
 from pydantic import BaseModel
 

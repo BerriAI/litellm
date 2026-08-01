@@ -2,10 +2,11 @@ import asyncio
 import importlib
 import importlib.util
 import os
-from typing import Any, Callable, Literal, Optional, get_type_hints
+from collections.abc import Callable
+from typing import Any, Literal, get_type_hints
 
 
-def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
+def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
     module_name = value
     instance_name = None
     try:
@@ -64,7 +65,7 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         raise e
 
 
-def _load_instance_from_remote_storage(remote_url: str, config_file_path: Optional[str] = None) -> Any:
+def _load_instance_from_remote_storage(remote_url: str, config_file_path: str | None = None) -> Any:
     """
     Load custom logger instance from S3 or GCS URL.
 
@@ -175,7 +176,7 @@ def _load_instance_from_remote_storage(remote_url: str, config_file_path: Option
         return instance
 
     except Exception as e:
-        raise ImportError(f"Failed to load custom logger from {remote_url}: {str(e)}") from e
+        raise ImportError(f"Failed to load custom logger from {remote_url}: {e!s}") from e
 
 
 async def _download_gcs_file_wrapper(bucket_name: str, object_key: str, local_file_path: str) -> bool:
@@ -189,13 +190,13 @@ async def _download_gcs_file_wrapper(bucket_name: str, object_key: str, local_fi
     except Exception as e:
         from litellm._logging import verbose_proxy_logger
 
-        verbose_proxy_logger.error(f"Error downloading from GCS: {str(e)}")
+        verbose_proxy_logger.error(f"Error downloading from GCS: {e!s}")
         return False
 
 
 def validate_custom_validate_return_type(
-    fn: Optional[Callable[..., Any]],
-) -> Optional[Callable[..., Literal[True]]]:
+    fn: Callable[..., Any] | None,
+) -> Callable[..., Literal[True]] | None:
     if fn is None:
         return None
 

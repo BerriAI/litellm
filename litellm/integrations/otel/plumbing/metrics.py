@@ -8,9 +8,10 @@ identical metrics. The attribute cardinality filter is reused from v1 by import
 (no duplication of the valid-name set or its validation).
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, FrozenSet, Mapping, Optional, TypeAlias
+from typing import Any, Final, TypeAlias
 
 from opentelemetry.metrics import Histogram, Meter
 
@@ -181,11 +182,11 @@ class GenAIMetricRecorder:
     survives.
     """
 
-    def __init__(self, metrics: GenAIMetrics, callback_name: Optional[str] = None) -> None:
+    def __init__(self, metrics: GenAIMetrics, callback_name: str | None = None) -> None:
         self._metrics = metrics
         self._callback_name = callback_name
-        self._include: Optional[FrozenSet[str]] = None
-        self._exclude: Optional[FrozenSet[str]] = None
+        self._include: frozenset[str] | None = None
+        self._exclude: frozenset[str] | None = None
         self._filter_resolved = False
 
     def record(

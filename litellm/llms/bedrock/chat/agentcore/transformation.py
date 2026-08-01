@@ -6,7 +6,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 
 import json
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from urllib.parse import quote
 
 import httpx
@@ -17,9 +17,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock_agentcore import (
     AgentCoreMessage,
@@ -53,7 +53,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Bedrock AgentCore has 0 OpenAI compatible params
         """
@@ -73,12 +73,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -116,11 +116,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
         # Set Accept header required by MCP servers on AgentCore
         # Per MCP spec (Streamable HTTP transport): client MUST include Accept header
         # listing both application/json and text/event-stream as supported content types
@@ -186,11 +186,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return session_id
 
         # Generate a session ID with 33+ characters
-        generated_id = f"litellm-session-{str(uuid.uuid4())}"
+        generated_id = f"litellm-session-{uuid.uuid4()!s}"
         verbose_logger.debug(f"Generated new session ID: {generated_id}")
         return generated_id
 
-    def _get_runtime_user_id(self, optional_params: dict) -> Optional[str]:
+    def _get_runtime_user_id(self, optional_params: dict) -> str | None:
         """
         Get runtime user ID if provided
         """
@@ -202,7 +202,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -288,7 +288,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return bool(value)
         return False
 
-    def _extract_sse_json(self, line: str) -> Optional[Dict]:
+    def _extract_sse_json(self, line: str) -> dict | None:
         """Extract and parse JSON from an SSE data line."""
         if not line.startswith("data:"):
             return None
@@ -305,7 +305,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             verbose_logger.debug(f"Skipping non-JSON line: {line[:100]}")
             return None
 
-    def _extract_usage_from_event(self, event_data: Dict) -> Optional[AgentCoreUsage]:
+    def _extract_usage_from_event(self, event_data: dict) -> AgentCoreUsage | None:
         """Extract usage information from event metadata."""
         event_payload = event_data.get("event")
         if not event_payload:
@@ -317,7 +317,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
         return None
 
-    def _extract_content_delta(self, event_data: Dict) -> Optional[str]:
+    def _extract_content_delta(self, event_data: dict) -> str | None:
         """Extract text content from contentBlockDelta event."""
         event_payload = event_data.get("event")
         if not event_payload:
@@ -341,7 +341,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
         return "".join(block["text"] for block in content_list if isinstance(block, dict) and "text" in block)
 
-    def _calculate_usage(self, model: str, messages: List[AllMessageValues], content: str) -> Optional[Usage]:
+    def _calculate_usage(self, model: str, messages: list[AllMessageValues], content: str) -> Usage | None:
         """
         Calculate token usage using LiteLLM's token counter.
 
@@ -370,7 +370,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 total_tokens=total_tokens,
             )
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {str(e)}")
+            verbose_logger.warning(f"Failed to calculate token usage: {e!s}")
             return None
 
     def _parse_json_response(self, response_json: dict) -> AgentCoreParsedResponse:
@@ -483,9 +483,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Returns:
             AgentCoreParsedResponse: Parsed response with content, usage, and message
         """
-        final_message: Optional[AgentCoreMessage] = None
-        usage_data: Optional[AgentCoreUsage] = None
-        content_blocks: List[str] = []
+        final_message: AgentCoreMessage | None = None
+        usage_data: AgentCoreUsage | None = None
+        content_blocks: list[str] = []
 
         for line in response_text.strip().split("\n"):
             line = line.strip()
@@ -636,9 +636,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, "AsyncHTTPHandler"]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "CustomStreamWrapper":
         """
         Simplified sync streaming - returns a generator that yields ModelResponse chunks.
@@ -850,8 +850,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         data: dict,
         messages: list,
         client: Optional["AsyncHTTPHandler"] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "CustomStreamWrapper":
         """
         Simplified async streaming - returns an async generator that yields ModelResponse chunks.
@@ -970,12 +970,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform the AgentCore response to LiteLLM ModelResponse format.
@@ -1023,9 +1023,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Bedrock AgentCore response: {str(e)}")
+            verbose_logger.error(f"Error processing Bedrock AgentCore response: {e!s}")
             raise BedrockError(
-                message=f"Error processing response: {str(e)}",
+                message=f"Error processing response: {e!s}",
                 status_code=raw_response.status_code,
             )
 
@@ -1033,24 +1033,22 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message)
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         # AgentCore supports true streaming - don't buffer
         return False

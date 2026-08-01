@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Any, Dict, FrozenSet, List, cast, get_type_hints
+from typing import Any, cast, get_type_hints
 
 from litellm.types.llms.anthropic import AnthropicMessagesRequestOptionalParams
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -8,7 +8,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 
 
 @lru_cache(maxsize=1)
-def _anthropic_messages_optional_param_keys() -> FrozenSet[str]:
+def _anthropic_messages_optional_param_keys() -> frozenset[str]:
     """
     Valid AnthropicMessagesRequestOptionalParams keys.
 
@@ -22,7 +22,7 @@ def _anthropic_messages_optional_param_keys() -> FrozenSet[str]:
 class AnthropicMessagesRequestUtils:
     @staticmethod
     def get_requested_anthropic_messages_optional_param(
-        params: Dict[str, Any],
+        params: dict[str, Any],
         *,
         model: str | None = None,
         drop_params: bool = False,
@@ -56,7 +56,7 @@ class AnthropicMessagesRequestUtils:
 
 def mock_response(
     model: str,
-    messages: List[Dict],
+    messages: list[dict],
     max_tokens: int,
     mock_response: str = "Hi! My name is Claude.",
     **kwargs,

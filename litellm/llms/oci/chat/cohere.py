@@ -8,7 +8,7 @@ response parsing, and streaming chunk parsing for models served with
 
 import datetime
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 from pydantic import ValidationError
@@ -42,8 +42,8 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
-from litellm.types.utils import Usage
 
 
 def _extract_text_content(content: Any) -> str:
@@ -60,8 +60,8 @@ def _extract_text_content(content: Any) -> str:
 
 
 def adapt_messages_to_cohere_standard(
-    messages: List[AllMessageValues],
-) -> List[CohereMessage]:
+    messages: list[AllMessageValues],
+) -> list[CohereMessage]:
     """Build a Cohere ``chatHistory`` list from an OpenAI-format message array.
 
     - All messages except the *last user message* are included. The caller pulls
@@ -78,7 +78,7 @@ def adapt_messages_to_cohere_standard(
     """
     # First pass: build tool_call_id → CohereToolCall so tool-result messages can
     # reference the originating call by name and parameters.
-    tool_call_lookup: Dict[str, CohereToolCall] = {}
+    tool_call_lookup: dict[str, CohereToolCall] = {}
     for msg in messages:
         if msg.get("role") == "assistant":
             tool_calls_raw: Any = msg.get("tool_calls") or []
@@ -86,7 +86,7 @@ def adapt_messages_to_cohere_standard(
                 tc_id = tc.get("id", "")
                 raw_args: Any = tc.get("function", {}).get("arguments", "{}")
                 try:
-                    params: Dict[str, Any] = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    params: dict[str, Any] = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except json.JSONDecodeError:
                     params = {}
                 tool_call_lookup[tc_id] = CohereToolCall(
@@ -102,19 +102,19 @@ def adapt_messages_to_cohere_standard(
         messages if last_user_index is None else [m for i, m in enumerate(messages) if i != last_user_index]
     )
 
-    chat_history: List[CohereMessage] = []
+    chat_history: list[CohereMessage] = []
     for msg in history_source:
         role = msg.get("role")
         content = _extract_text_content(msg.get("content"))
 
-        tool_calls: Optional[List[CohereToolCall]] = None
+        tool_calls: list[CohereToolCall] | None = None
         if role == "assistant" and msg.get("tool_calls"):  # type: ignore[union-attr,typeddict-item]
             tool_calls = []
             for tc in msg["tool_calls"]:  # pyright: ignore[reportOptionalIterable]  # truthiness check above rules out None
                 raw_arguments: Any = tc.get("function", {}).get("arguments", {})
                 if isinstance(raw_arguments, str):
                     try:
-                        arguments: Dict[str, Any] = json.loads(raw_arguments)
+                        arguments: dict[str, Any] = json.loads(raw_arguments)
                     except json.JSONDecodeError:
                         arguments = {}
                 else:
@@ -151,8 +151,8 @@ def adapt_messages_to_cohere_standard(
 
 
 def adapt_tool_definitions_to_cohere_standard(
-    tools: List[Dict[str, Any]],
-) -> List[CohereTool]:
+    tools: list[dict[str, Any]],
+) -> list[CohereTool]:
     """Adapt OpenAI-format tool definitions to the OCI Cohere format.
 
     - Resolves ``$ref``/``$defs`` and ``anyOf`` patterns that OCI rejects.
@@ -201,7 +201,7 @@ def handle_cohere_response(
         cohere_response = CohereChatResult(**json_response)
     except (TypeError, ValidationError) as e:
         raise OCIError(
-            message=f"Response cannot be casted to CohereChatResult: {str(e)}",
+            message=f"Response cannot be casted to CohereChatResult: {e!s}",
             status_code=raw_response.status_code,
         )
 
@@ -211,7 +211,7 @@ def handle_cohere_response(
     response_text = cohere_response.chatResponse.text
     finish_reason = _normalize_oci_finish_reason(cohere_response.chatResponse.finishReason)
 
-    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_calls: list[dict[str, Any]] | None = None
     if cohere_response.chatResponse.toolCalls:
         tool_calls = [
             {
@@ -225,14 +225,14 @@ def handle_cohere_response(
             for i, tc in enumerate(cohere_response.chatResponse.toolCalls)
         ]
 
-    content: Optional[str] = response_text if response_text else None
+    content: str | None = response_text if response_text else None
 
     # Only include ``tool_calls`` in the message dict when actually present.
     # Passing an explicit ``None`` would let downstream consumers that key off
     # ``"tool_calls" in message`` (rather than truthiness) incorrectly conclude
     # that tool calls were attempted. Matches the generic handler's behaviour,
     # which only sets ``message.tool_calls`` when tool calls are present.
-    message: Dict[str, Any] = {"role": "assistant", "content": content}
+    message: dict[str, Any] = {"role": "assistant", "content": content}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
 
@@ -283,7 +283,7 @@ def handle_cohere_stream_chunk(
     except (TypeError, ValidationError) as e:
         raise OCIError(
             status_code=500,
-            message=f"Chunk cannot be parsed as CohereStreamChunk: {str(e)}",
+            message=f"Chunk cannot be parsed as CohereStreamChunk: {e!s}",
         )
 
     if typed_chunk.index is None:
@@ -305,7 +305,7 @@ def handle_cohere_stream_chunk(
     # confirmed that text deltas were already emitted earlier — otherwise
     # (e.g. a degenerate stream that delivers the whole response in a
     # single SSE event), passing it through is the only chance to surface it.
-    text: Optional[str] = None if (is_terminal_consolidation and prior_text_emitted) else typed_chunk.text
+    text: str | None = None if (is_terminal_consolidation and prior_text_emitted) else typed_chunk.text
 
     # Tool calls on the terminal consolidation chunk (whether from
     # `typed_chunk.toolCalls` or from `chatHistory`) typically restate what
@@ -317,7 +317,7 @@ def handle_cohere_stream_chunk(
     # passing them through is the only chance to surface them.
     cohere_tool_calls = None if (is_terminal_consolidation and prior_tool_calls_emitted) else typed_chunk.toolCalls
 
-    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_calls: list[dict[str, Any]] | None = None
     if cohere_tool_calls:
         tool_calls = [
             {

@@ -9,7 +9,7 @@ API Reference: https://docs.bfl.ai/
 
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from httpx._types import RequestFiles
@@ -51,7 +51,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
     This class only handles data transformation.
     """
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Return list of OpenAI params supported by Black Forest Labs.
 
@@ -78,13 +78,13 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """
         Map OpenAI parameters to Black Forest Labs parameters.
 
         BFL-specific params are passed through directly.
         """
-        optional_params: Dict[str, Any] = {}
+        optional_params: dict[str, Any] = {}
 
         # Pass through BFL-specific params
         bfl_params = [
@@ -124,16 +124,16 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for Black Forest Labs.
 
         BFL uses x-key header for authentication.
         """
-        final_api_key: Optional[str] = (
+        final_api_key: str | None = (
             api_key or get_secret_str("BFL_API_KEY") or get_secret_str("BLACK_FOREST_LABS_API_KEY")
         )
 
@@ -175,7 +175,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -230,12 +230,12 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> tuple[dict, RequestFiles]:
         """
         Transform OpenAI-style request to Black Forest Labs request format.
 
@@ -246,7 +246,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         b64_image = base64.b64encode(image_bytes).decode("utf-8")
 
         # Build request body
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "prompt": prompt,
             "input_image": b64_image,
         }
@@ -314,7 +314,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         )
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers
     ) -> BlackForestLabsError:
         """Return the appropriate error class for Black Forest Labs."""
         return BlackForestLabsError(

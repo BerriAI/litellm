@@ -10,4 +10,4 @@ guardrail_translation_mappings = {
     CallTypes.atranscription: OpenAIAudioTranscriptionHandler,
 }
 
-__all__ = ["guardrail_translation_mappings", "OpenAIAudioTranscriptionHandler"]
+__all__ = ["OpenAIAudioTranscriptionHandler", "guardrail_translation_mappings"]

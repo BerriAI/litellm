@@ -11,7 +11,6 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import json
 import os
 from importlib.resources import files
-from typing import Dict, List, Optional
 
 import httpx
 
@@ -166,9 +165,9 @@ class ModelCostMapSourceInfo:
     """Tracks the source of the currently loaded model cost map."""
 
     source: str = "local"  # "local" or "remote"
-    url: Optional[str] = None
+    url: str | None = None
     is_env_forced: bool = False
-    fallback_reason: Optional[str] = None
+    fallback_reason: str | None = None
 
 
 # Module-level singleton tracking the source of the current cost map
@@ -204,11 +203,11 @@ def _expand_model_aliases(model_cost: dict) -> dict:
     If an alias collides with an existing canonical entry the alias is
     skipped and a warning is logged.
     """
-    aliases_to_add: Dict[str, dict] = {}
-    keys_with_aliases: List[str] = []
+    aliases_to_add: dict[str, dict] = {}
+    keys_with_aliases: list[str] = []
 
     for model_name, model_info in model_cost.items():
-        aliases: Optional[list] = model_info.get("aliases")
+        aliases: list | None = model_info.get("aliases")
         if aliases is None:
             continue
         keys_with_aliases.append(model_name)
@@ -293,7 +292,7 @@ def get_model_cost_map(url: str) -> dict:
             str(e),
         )
         _cost_map_source_info.source = "local"
-        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {str(e)}"
+        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {e!s}"
         return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
 
     # Validate using cached count (cheap int comparison, no file I/O)

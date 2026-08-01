@@ -1,4 +1,5 @@
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 import httpx
 
@@ -29,12 +30,12 @@ from ...openai.chat.gpt_transformation import (
 
 class XAIChatConfig(OpenAIGPTConfig):
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "xai"
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE  # type: ignore
         dynamic_api_key = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
@@ -43,11 +44,11 @@ class XAIChatConfig(OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         from litellm.llms.xai.oauth import (
             XAIOAuthAuthenticator,
@@ -81,12 +82,12 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
 
@@ -148,11 +149,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         return base_openai_params
 
     def _supports_stop_reason(self, model: str) -> bool:
-        if "grok-3-mini" in model:
-            return False
-        elif "grok-4" in model:
-            return False
-        elif "grok-code-fast" in model:
+        if "grok-3-mini" in model or "grok-4" in model or "grok-code-fast" in model:
             return False
         return True
 
@@ -194,9 +191,9 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         return XAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
@@ -207,7 +204,7 @@ class XAIChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -238,12 +235,12 @@ class XAIChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform the response from the XAI API.
@@ -288,7 +285,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def _fold_reasoning_tokens_into_completion(
-        target: Union[ModelResponse, Usage, Dict[str, Any], None],
+        target: ModelResponse | Usage | dict[str, Any] | None,
     ) -> None:
         """Reconcile xAI Usage to the OpenAI invariant.
 
@@ -305,7 +302,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             return
 
         if isinstance(target, ModelResponse):
-            usage: Union[Usage, Dict[str, Any], None] = getattr(target, "usage", None)
+            usage: Usage | dict[str, Any] | None = getattr(target, "usage", None)
         else:
             usage = target
         if usage is None:
@@ -376,7 +373,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def _normalize_openai_compatible_usage_totals(
-        usage: Union[Usage, Dict[str, Any], None],
+        usage: Usage | dict[str, Any] | None,
     ) -> None:
         if usage is None:
             return

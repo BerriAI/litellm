@@ -1,16 +1,17 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .bitbucket_prompt_manager import BitBucketPromptManager
-    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    from .bitbucket_prompt_manager import BitBucketPromptManager
 
 from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 
 from .bitbucket_prompt_manager import BitBucketPromptManager
 
 # Global instances
-global_bitbucket_config: Optional[dict] = None
+global_bitbucket_config: dict | None = None
 
 
 def set_global_bitbucket_config(config: dict) -> None:
@@ -57,6 +58,6 @@ prompt_initializer_registry = {
 # Export public API
 __all__ = [
     "BitBucketPromptManager",
-    "set_global_bitbucket_config",
     "global_bitbucket_config",
+    "set_global_bitbucket_config",
 ]
