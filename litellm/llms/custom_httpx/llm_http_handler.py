@@ -6184,10 +6184,12 @@ class BaseLLMHTTPHandler:
         import websockets
         from websockets.asyncio.client import ClientConnection
 
-        litellm_params = GenericLiteLLMParams(
-            api_base=api_base,
-            api_key=api_key,
-            **kwargs,
+        litellm_params = GenericLiteLLMParams.model_validate(
+            {
+                "api_base": api_base,
+                "api_key": api_key,
+                **kwargs,
+            }
         )
         headers = responses_api_provider_config.validate_environment(
             headers={},

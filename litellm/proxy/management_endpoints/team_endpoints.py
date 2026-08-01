@@ -131,6 +131,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkUpdateTeamMemberPermissionsRequest,
     BulkUpdateTeamMemberPermissionsResponse,
     GetTeamMemberPermissionsResponse,
+    TeamIdSearchMatch,
     TeamListItem,
     TeamListResponse,
     TeamMemberAddResult,
@@ -3973,6 +3974,7 @@ async def _build_team_list_where_conditions(
     user_id: Optional[str],
     use_deleted_table: bool,
     search: Optional[str] = None,
+    search_team_id_match: TeamIdSearchMatch = "exact",
     org_admin_org_ids: Optional[List[str]] = None,
     user_api_key_cache: Optional[Any] = None,
     proxy_logging_obj: Optional[Any] = None,
@@ -3996,7 +3998,7 @@ async def _build_team_list_where_conditions(
 
     if search:
         where_conditions["OR"] = [
-            {"team_id": search},
+            ({"team_id": {"startsWith": search}} if search_team_id_match == "prefix" else {"team_id": search}),
             {"team_alias": {"contains": search, "mode": "insensitive"}},
         ]
 
@@ -4230,8 +4232,14 @@ async def list_team_v2(
     ),
     search: Optional[str] = fastapi.Query(
         default=None,
-        description="Combined search: matches teams whose 'team_id' equals the value OR whose 'team_alias' contains it (case-insensitive).",
+        description="Combined search: matches teams whose 'team_id' matches the value OR whose 'team_alias' contains it (case-insensitive).",
     ),
+    search_team_id_match: Annotated[
+        TeamIdSearchMatch,
+        fastapi.Query(
+            description="How 'search' matches 'team_id': 'exact' (default) or 'prefix' for a case-sensitive prefix match."
+        ),
+    ] = "exact",
     page: int = fastapi.Query(default=1, description="Page number for pagination", ge=1),
     page_size: int = fastapi.Query(default=10, description="Number of teams per page", ge=1, le=100),
     sort_by: Optional[str] = fastapi.Query(
@@ -4308,6 +4316,7 @@ async def list_team_v2(
         user_id=user_id,
         use_deleted_table=use_deleted_table,
         search=search,
+        search_team_id_match=search_team_id_match,
         org_admin_org_ids=org_admin_org_ids,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
