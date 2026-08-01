@@ -1282,6 +1282,18 @@ OPENAI_FINISH_REASONS = [
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60))  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
+# `response_format={"type": "json_object"}` carries no schema, so it cannot be
+# expressed through a provider's strict structured-output API. The synthetic
+# `json_tool_call` tool covers it instead, taking a permissive schema with one
+# required object field: without a required field the model is free to call the
+# tool with `{}`, which is what an empty `properties` schema produces on some
+# models. The field is unwrapped from the tool arguments on the way out, so the
+# caller still receives the bare JSON object they asked for.
+RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY = "result"
+RESPONSE_FORMAT_TOOL_JSON_OBJECT_DESCRIPTION = (
+    "Deliver your final answer as a JSON object in '{key}'. Use whatever keys best represent the answer. "
+    "Use this tool whenever you are answering the user directly instead of calling another tool."
+).format(key=RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY)
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION = "2019-07-07"

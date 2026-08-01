@@ -14,6 +14,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    RESPONSE_FORMAT_TOOL_JSON_OBJECT_DESCRIPTION,
+    RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import (
@@ -716,13 +718,21 @@ class AmazonConverseConfig(BaseConfig):
         """
 
         if json_schema is None:
-            # Anthropic raises a 400 BadRequest error if properties is passed as None
-            # see usage with additionalProperties (Example 5) https://github.com/anthropics/anthropic-cookbook/blob/main/tool_use/extracting_structured_json.ipynb
+            # `json_object` with no schema. The schema needs one *required* field:
+            # an open schema with empty `properties` lets the model satisfy the
+            # call with `{}`, which it does on some models (Claude Sonnet 4.5,
+            # Amazon Nova). The wrapper is unwrapped in `_filter_json_mode_tools`.
             _input_schema = {
                 "type": "object",
-                "additionalProperties": True,
-                "properties": {},
+                "properties": {
+                    RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY: {
+                        "type": "object",
+                        "additionalProperties": True,
+                    }
+                },
+                "required": [RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY],
             }
+            description = description or RESPONSE_FORMAT_TOOL_JSON_OBJECT_DESCRIPTION
         else:
             # Use the schema as-is for Bedrock
             # Bedrock requires the tool schema to be of type "object" and doesn't need unwrapping
@@ -1036,30 +1046,53 @@ class AmazonConverseConfig(BaseConfig):
                 description=description,
             )
             optional_params["outputConfig"] = output_config
-        elif json_schema is not None:
-            # Fallback: translate to a synthetic tool call
+        elif json_schema is None and not litellm.utils.supports_function_calling(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        ):
+            # `json_object` has no schema to translate and the synthetic tool below
+            # is not an option either, so the parameter genuinely cannot be honoured.
+            verbose_logger.warning(
+                "Bedrock has no equivalent for `response_format={'type': 'json_object'}` on model=%s, which does "
+                "not support tool use, and is ignoring it. Pass a `json_schema` response_format instead.",
+                model,
+            )
+        else:
+            # Translate to a synthetic tool call.
             # https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+            # `json_object` (no schema) comes through here too, on a permissive
+            # wrapper schema; `json_object_unwrap_key` tells the response side to
+            # unwrap it. A caller-supplied schema is never unwrapped, since its
+            # own top-level key would be indistinguishable from the wrapper.
             _tool = self._create_json_tool_call_for_response_format(
                 json_schema=json_schema,
                 description=description,
             )
             optional_params = self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
+            if json_schema is None:
+                optional_params["json_object_unwrap_key"] = RESPONSE_FORMAT_TOOL_JSON_OBJECT_KEY
 
+            # Pinning the synthetic tool would leave the caller's own tools
+            # unreachable, so when `json_object` is combined with tools the model
+            # is required to call *some* tool instead: a real one when it needs
+            # one, `json_tool_call` when it is answering. Without that, models are
+            # free to answer in prose and the JSON promise is broken. A
+            # caller-supplied schema keeps pinning the tool, as it did before,
+            # since that exact shape is the point of the request.
+            json_object_with_caller_tools = json_schema is None and bool(non_default_params.get("tools"))
             if (
                 litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
                 and not is_thinking_enabled
             ):
-                optional_params["tool_choice"] = ToolChoiceValuesBlock(
-                    tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
-                )
+                if not json_object_with_caller_tools:
+                    optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                        tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
+                    )
+                elif non_default_params.get("tool_choice") is None:
+                    # Read from non_default_params so an explicit caller choice wins
+                    # regardless of the order params are mapped in.
+                    optional_params["tool_choice"] = ToolChoiceValuesBlock(any={})
             if non_default_params.get("stream", False) is True:
                 optional_params["fake_stream"] = True
-        # else: response_format=json_object with no schema.
-        # Don't inject the synthetic json_tool_call tool here. When no
-        # schema is given, _create_json_tool_call_for_response_format
-        # produces an empty schema (properties: {}), and the model
-        # returns {} instead of the requested JSON. The model already
-        # returns JSON when the prompt asks for it.
 
         optional_params["json_mode"] = True
         return optional_params
@@ -1240,6 +1273,7 @@ class AmazonConverseConfig(BaseConfig):
         supported_config_params = list(self.get_config_blocks().keys())
         total_supported_params = supported_converse_params + supported_tool_call_params + supported_config_params
         inference_params.pop("json_mode", None)  # used for handling json_schema
+        inference_params.pop("json_object_unwrap_key", None)  # consumed in _filter_json_mode_tools
 
         # Anthropic-only ``output_config`` (snake_case) — re-attached to
         # ``additionalModelRequestFields`` for Anthropic models below. The
@@ -1621,6 +1655,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+
         ## TRANSFORMATION ##
 
         _data: CommonRequestObject = self._transform_request_helper(
@@ -2013,10 +2048,32 @@ class AmazonConverseConfig(BaseConfig):
         return json_str
 
     @staticmethod
+    def _unwrap_json_object_result(json_str: str, unwrap_key: str | None) -> str:
+        """Strip the wrapper field the schema-less ``json_object`` tool asks for.
+
+        Only called when the request had no caller-supplied schema, so the key is
+        known to be ours rather than something the caller asked the model for.
+        The value has to be an object: ``json_object`` promises the caller a JSON
+        object, and returning a bare scalar from inside the wrapper would not be one.
+        """
+        if not unwrap_key:
+            return json_str
+        try:
+            parsed = json.loads(json_str)
+        except json.JSONDecodeError:
+            return json_str
+        if isinstance(parsed, dict):
+            inner = parsed.get(unwrap_key)
+            if isinstance(inner, dict):
+                return json.dumps(inner)
+        return json_str
+
+    @staticmethod
     def _filter_json_mode_tools(
         json_mode: Optional[bool],
         tools: List[ChatCompletionToolCallChunk],
         chat_completion_message: ChatCompletionResponseMessage,
+        json_object_unwrap_key: str | None = None,
     ) -> Optional[List[ChatCompletionToolCallChunk]]:
         """
         When json_mode is True, Bedrock may return the internal `json_tool_call`
@@ -2041,6 +2098,9 @@ class AmazonConverseConfig(BaseConfig):
             json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
             if json_mode_content_str is not None:
                 json_mode_content_str = AmazonConverseConfig._unwrap_bedrock_properties(json_mode_content_str)
+                json_mode_content_str = AmazonConverseConfig._unwrap_json_object_result(
+                    json_mode_content_str, json_object_unwrap_key
+                )
                 chat_completion_message["content"] = json_mode_content_str
             return None
 
@@ -2051,6 +2111,7 @@ class AmazonConverseConfig(BaseConfig):
         json_mode_args = tools[first_idx]["function"].get("arguments")
         if json_mode_args is not None:
             json_mode_args = AmazonConverseConfig._unwrap_bedrock_properties(json_mode_args)
+            json_mode_args = AmazonConverseConfig._unwrap_json_object_result(json_mode_args, json_object_unwrap_key)
             existing = chat_completion_message.get("content") or ""
             chat_completion_message["content"] = existing + json_mode_args if existing else json_mode_args
 
@@ -2175,6 +2236,7 @@ class AmazonConverseConfig(BaseConfig):
             json_mode=json_mode,
             tools=tools,
             chat_completion_message=chat_completion_message,
+            json_object_unwrap_key=optional_params.get("json_object_unwrap_key"),
         )
         if filtered_tools:
             chat_completion_message["tool_calls"] = filtered_tools

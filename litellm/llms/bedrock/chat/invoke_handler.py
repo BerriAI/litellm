@@ -168,6 +168,7 @@ async def make_call(
     logging_obj: Logging,
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
+    json_object_unwrap_key: str | None = None,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
     stream_chunk_size: Optional[int] = None,
 ):
@@ -206,7 +207,9 @@ async def make_call(
                 messages=messages,
                 encoding=litellm.encoding,
             )  # type: ignore
-            completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            completion_stream: Any = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode, json_object_unwrap_key=json_object_unwrap_key
+            )
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
@@ -755,9 +758,15 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses
-    def __init__(self, model_response, json_mode: Optional[bool] = False):
+    def __init__(
+        self,
+        model_response,
+        json_mode: bool | None = False,
+        json_object_unwrap_key: str | None = None,
+    ):
         self.model_response = model_response
         self.json_mode = json_mode
+        self.json_object_unwrap_key = json_object_unwrap_key
         self.is_done = False
 
     # Sync iterator
@@ -786,7 +795,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         if self.json_mode is True and tool_calls is not None:
             message = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
             if message is not None:
-                text = message.content or ""
+                text = converse_config._unwrap_json_object_result(message.content or "", self.json_object_unwrap_key)
                 tool_use = None
         elif tool_calls is not None and len(tool_calls) > 0:
             tool_use = tool_calls[0]
