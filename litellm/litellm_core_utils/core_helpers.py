@@ -164,17 +164,33 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
+SPEND_TRACKING_DEPLOYMENT_IDENTITY_KEYS = (
+    "model_info",
+    "model_group",
+    "deployment",
+    "deployment_model_name",
+)
+
+
 def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'.
+    and spend-tracking values are in 'metadata'.
+
+    The router always writes the selected deployment's identity (model_info.id,
+    model_group, deployment name) into `metadata`, but spend logging reads from
+    `litellm_metadata` whenever a request carries one (e.g. caller-supplied tags).
+    Without copying these over, the same deployment logs a blank `model_id` and a
+    provider-prefix-stripped `model` for requests that include `litellm_metadata`.
     """
-    potential_spend_tracking_metadata_substring = "user_api_key"
     for key, value in metadata.items():
-        if potential_spend_tracking_metadata_substring in key:
+        if "user_api_key" in key:
             litellm_metadata[key] = value
+    for key in SPEND_TRACKING_DEPLOYMENT_IDENTITY_KEYS:
+        if key not in litellm_metadata and key in metadata:
+            litellm_metadata[key] = metadata[key]
     return litellm_metadata
 
 

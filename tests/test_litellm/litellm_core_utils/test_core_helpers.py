@@ -4,11 +4,79 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
     map_finish_reason,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
 )
+
+
+def _spend_log_identity(kwargs: dict) -> dict:
+    """Mirror how spend logging derives model / model_id from request kwargs."""
+    metadata = get_litellm_metadata_from_kwargs(kwargs)
+    return {
+        "model": reconstruct_model_name(
+            kwargs.get("model") or "", kwargs.get("custom_llm_provider"), metadata or {}
+        ),
+        "model_id": metadata.get("model_info", {}).get("id", ""),
+        "model_group": metadata.get("model_group", ""),
+    }
+
+
+def test_spend_log_deployment_identity_consistent_with_litellm_metadata():
+    """Regression for #35472: an openai/ passthrough deployment must log the same
+    model / model_id whether or not the request also carries litellm_metadata.
+
+    The router writes the deployment identity into `metadata`, but spend logging
+    reads `litellm_metadata` when present, so those keys must be carried over."""
+    router_metadata = {
+        "deployment": "openai/anthropic/claude-sonnet-5",
+        "model_info": {"id": "9da5dfc9-2223-4f77-b3c9-f9100d9cb2a0"},
+        "model_group": "my-model",
+        "user_api_key_hash": "abc",
+    }
+
+    without_litellm_metadata = _spend_log_identity(
+        {
+            "model": "anthropic/claude-sonnet-5",
+            "custom_llm_provider": "openai",
+            "litellm_params": {"metadata": dict(router_metadata)},
+        }
+    )
+    with_litellm_metadata = _spend_log_identity(
+        {
+            "model": "anthropic/claude-sonnet-5",
+            "custom_llm_provider": "openai",
+            "litellm_params": {
+                "metadata": dict(router_metadata),
+                "litellm_metadata": {"tags": ["t1"]},
+            },
+        }
+    )
+
+    expected = {
+        "model": "openai/anthropic/claude-sonnet-5",
+        "model_id": "9da5dfc9-2223-4f77-b3c9-f9100d9cb2a0",
+        "model_group": "my-model",
+    }
+    assert without_litellm_metadata == expected
+    assert with_litellm_metadata == expected
+
+
+def test_get_litellm_metadata_from_kwargs_does_not_overwrite_existing_identity():
+    """Caller-supplied identity keys in litellm_metadata must win over metadata."""
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"model_group": "router-group", "deployment": "router-dep"},
+            "litellm_metadata": {"model_group": "caller-group"},
+        }
+    }
+
+    metadata = get_litellm_metadata_from_kwargs(kwargs)
+
+    assert metadata["model_group"] == "caller-group"
+    assert metadata["deployment"] == "router-dep"
 
 
 class TestGetOrCreateMetadataBucket:
