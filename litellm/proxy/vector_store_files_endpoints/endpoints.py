@@ -35,6 +35,7 @@ def _update_request_data_with_managed_file_id(
     file_id: str,
     request: Request,
     llm_router: Optional["Router"] = None,
+    team_id: Optional[str] = None,
 ) -> tuple[Dict, Optional[str]]:
     """
     Update request data with model routing information from managed file ID.
@@ -53,6 +54,8 @@ def _update_request_data_with_managed_file_id(
         file_id: File ID (can be managed/encoded or regular)
         request: FastAPI request object
         llm_router: LiteLLM router for credential lookup (required for managed files)
+        team_id: Optional team id of the caller, so a team's model_aliases
+            resolve on this routing path too
 
     Returns:
         Tuple of (updated request data, original_managed_file_id)
@@ -100,7 +103,9 @@ def _update_request_data_with_managed_file_id(
 
                 # Get credentials for the model
                 if llm_router:
-                    credentials = llm_router.get_deployment_credentials_with_provider(model_id=routing_model)
+                    credentials = llm_router.get_deployment_credentials_with_provider(
+                        model_id=routing_model, team_id=team_id
+                    )
                     if credentials:
                         prepare_data_with_credentials(
                             data=data,
@@ -132,6 +137,7 @@ def _update_request_data_with_managed_file_id(
         llm_router=llm_router,
         data=data,
         check_file_id_encoding=True,
+        team_id=team_id,
     )
 
     if should_route:
@@ -261,6 +267,7 @@ async def _update_request_data_with_model_routing_hint(
             llm_router=llm_router,
             data=data,
             check_file_id_encoding=False,
+            team_id=caller_team_id,
         )
 
     if should_route and credentials is not None:
@@ -502,7 +509,11 @@ async def vector_store_file_create(
     original_managed_file_id = None
     if "file_id" in data:
         data, original_managed_file_id = _update_request_data_with_managed_file_id(
-            data=data, file_id=data["file_id"], request=request, llm_router=llm_router
+            data=data,
+            file_id=data["file_id"],
+            request=request,
+            llm_router=llm_router,
+            team_id=user_api_key_dict.team_id,
         )
 
     # Then handle managed vector store IDs
@@ -700,7 +711,11 @@ async def vector_store_file_retrieve(
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+        data=data,
+        file_id=file_id,
+        request=request,
+        llm_router=llm_router,
+        team_id=user_api_key_dict.team_id,
     )
 
     # Then handle managed vector store IDs
@@ -802,7 +817,11 @@ async def vector_store_file_content(
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+        data=data,
+        file_id=file_id,
+        request=request,
+        llm_router=llm_router,
+        team_id=user_api_key_dict.team_id,
     )
 
     # Then handle managed vector store IDs
@@ -904,7 +923,11 @@ async def vector_store_file_update(
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+        data=data,
+        file_id=file_id,
+        request=request,
+        llm_router=llm_router,
+        team_id=user_api_key_dict.team_id,
     )
 
     # Then handle managed vector store IDs
@@ -1006,7 +1029,11 @@ async def vector_store_file_delete(
 
     # Handle managed file IDs first
     data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+        data=data,
+        file_id=file_id,
+        request=request,
+        llm_router=llm_router,
+        team_id=user_api_key_dict.team_id,
     )
 
     # Then handle managed vector store IDs

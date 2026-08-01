@@ -3051,3 +3051,87 @@ def test_list_files_key_allowed_openai_model_still_resolves_team_credentials(
         mocker, monkeypatch, _team_openai_plus_global_anthropic_router(), ["team-gpt"]
     )
     assert captured_kwargs.get("api_key") == "team-openai-key"
+
+
+def test_create_file_model_param_resolves_team_public_model_name(
+    mocker: MockerFixture, monkeypatch
+):
+    """
+    Regression: POST /v1/files with x-litellm-model set to a team's public model
+    name (the identifier team model_aliases/model_alias_map rewrite requests to,
+    e.g. "my-alias" -> "team-a-openai-deployment") must resolve that
+    team-scoped deployment's credentials on this model-pinned path, the
+    same way it already resolves on /v1/chat/completions. Before this fix,
+    get_credentials_for_model() never received team_id, so
+    Router.get_deployment_credentials_with_provider() could only match global
+    deployments and this 400'd with "Model '<alias>' not found in model_list."
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "team-a-openai-deployment",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "team-a-openai-key",
+                },
+                "model_info": {
+                    "id": "team-a-openai-deployment",
+                    "team_id": "team-a",
+                    "team_public_model_name": "my-alias",
+                },
+            },
+        ]
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_acreate_file(**kwargs):
+        captured_kwargs.update(kwargs)
+        return OpenAIFileObject(
+            id="file-team-alias-123",
+            object="file",
+            bytes=2,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(litellm, "acreate_file", _mock_acreate_file)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        team_id="team-a",
+        team_models=["my-alias"],
+    )
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", b"{}", "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={
+                "Authorization": "Bearer test-key",
+                "x-litellm-model": "my-alias",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs.get("api_key") == "team-a-openai-key"
+    assert captured_kwargs.get("custom_llm_provider") == "openai"
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()

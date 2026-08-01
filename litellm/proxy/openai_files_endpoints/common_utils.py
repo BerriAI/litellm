@@ -259,6 +259,7 @@ def get_credentials_for_model(
     llm_router,  # Router instance
     model_id: str,
     operation_context: str = "file operation",
+    team_id: Optional[str] = None,
 ):
     """
     Retrieve API credentials for a model from the LLM Router.
@@ -267,6 +268,10 @@ def get_credentials_for_model(
         llm_router: LiteLLM Router instance
         model_id: Model name or deployment ID
         operation_context: Description for error messages (e.g., "file upload", "batch creation")
+        team_id: Optional team id of the caller. Passed through to
+            ``Router.get_deployment_credentials_with_provider`` so a team's
+            ``model_aliases`` resolve on this (model-pinned) path the same way
+            they already do on ``/v1/chat/completions``.
 
     Returns:
         Dictionary with credentials (api_key, api_base, custom_llm_provider, etc.)
@@ -282,7 +287,7 @@ def get_credentials_for_model(
             detail={"error": "Router not initialized. Cannot use model-based routing."},
         )
 
-    credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
 
     if credentials is None:
         raise HTTPException(
@@ -466,6 +471,7 @@ def handle_model_based_routing(
     llm_router,  # Router instance
     data: dict,
     check_file_id_encoding: bool = True,
+    team_id: Optional[str] = None,
 ) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
     """
     Orchestrate model-based credential routing for file operations.
@@ -476,6 +482,9 @@ def handle_model_based_routing(
         llm_router: LiteLLM Router instance
         data: Request data dictionary
         check_file_id_encoding: Whether to check for embedded model in file_id
+        team_id: Optional team id of the caller, forwarded to
+            ``get_credentials_for_model`` so team ``model_aliases`` resolve
+            here the same way they do on ``/v1/chat/completions``.
 
     Returns:
         Tuple of (should_use_model_routing, model_used, original_file_id, credentials)
@@ -499,6 +508,7 @@ def handle_model_based_routing(
             llm_router=llm_router,
             model_id=model_from_id,
             operation_context=f"file operation (file created with model '{model_from_id}')",
+            team_id=team_id,
         )
         original_file_id = get_original_file_id(file_id)
         return True, model_from_id, original_file_id, credentials
@@ -509,6 +519,7 @@ def handle_model_based_routing(
             llm_router=llm_router,
             model_id=model_from_param,
             operation_context="file operation",
+            team_id=team_id,
         )
         return True, model_from_param, None, credentials
 
