@@ -304,6 +304,7 @@ async def test_proxy_streaming_serves_1_0_envelopes():
             user_api_key_dict=user_api_key_dict,
         )
 
+        assert response.media_type == "text/event-stream"
         lines: List[Dict[str, Any]] = []
         async for raw_line in response.body_iterator:
             line = (
@@ -312,7 +313,7 @@ async def test_proxy_streaming_serves_1_0_envelopes():
                 else str(raw_line).strip()
             )
             if line:
-                lines.append(json.loads(line))
+                lines.append(json.loads(line.removeprefix("data:").strip()))
 
     assert lines, "expected at least one streamed JSON-RPC event"
     message_events = [
