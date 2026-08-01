@@ -16,6 +16,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
     cast,
@@ -210,6 +211,39 @@ def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
             for c in message_content:
                 if c.get("type") == "image_url" or c.get("type") == "input_audio":
                     return True
+    return False
+
+
+IMAGE_CONTENT_BLOCK_TYPES: frozenset[str] = frozenset({"image_url", "image", "input_image"})
+
+
+def _content_blocks_contain_image(content: object) -> bool:
+    if not isinstance(content, list):
+        return False
+    blocks = cast(List[Mapping[str, object]], content)  # cast-ok: content blocks are mappings when present
+    return any(isinstance(block, dict) and block.get("type") in IMAGE_CONTENT_BLOCK_TYPES for block in blocks)
+
+
+def request_contains_image_content(
+    messages: Optional[Sequence[Mapping[str, object]]] = None,
+    input: Union[str, Sequence[object], None] = None,
+) -> bool:
+    """
+    Whether a request carries image input, across both API surfaces.
+
+    Chat Completions send image blocks inside `messages[*].content` (`image_url`, or
+    `image` for provider-native shapes); the Responses API sends `input` items that are
+    either `input_image` blocks themselves or messages holding such blocks.
+    """
+    if messages is not None:
+        return any(_content_blocks_contain_image(message.get("content")) for message in messages)
+    if isinstance(input, list):
+        items = cast(List[Mapping[str, object]], input)  # cast-ok: responses input items are mappings
+        return any(
+            isinstance(item, dict)
+            and (item.get("type") in IMAGE_CONTENT_BLOCK_TYPES or _content_blocks_contain_image(item.get("content")))
+            for item in items
+        )
     return False
 
 
