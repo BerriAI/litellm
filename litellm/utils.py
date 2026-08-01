@@ -2674,6 +2674,26 @@ def _get_builtin_model_info_for_registration(model: str) -> Optional[ModelInfo]:
     return None
 
 
+_custom_model_cost_registrations: dict[str, dict] = {}  # mutable-ok: registry replayed after cost map reloads
+
+
+def install_model_cost_map(new_model_cost_map: dict) -> None:  # mutable-ok: map becomes litellm.model_cost
+    """
+    Replace ``litellm.model_cost`` with a freshly fetched cost map, then restore
+    every custom entry previously added via ``register_model`` (deployment-level
+    ``model_info`` from the router, user pricing overrides, etc.).
+
+    Without the re-registration step, a cost map reload silently wipes custom
+    model metadata: ``/model_group/info`` loses token limits and pre-call checks
+    fail with "LLM Provider NOT provided" for models not in the built-in map.
+    """
+    litellm.model_cost = new_model_cost_map
+    _invalidate_model_cost_lowercase_map()
+    litellm.add_known_models(model_cost_map=new_model_cost_map)
+    if _custom_model_cost_registrations:
+        register_model(model_cost=dict(_custom_model_cost_registrations))
+
+
 def register_model(model_cost: Union[str, dict]):
     """
     Register new / Override existing models (and their pricing) to specific providers.
@@ -2708,6 +2728,7 @@ def register_model(model_cost: Union[str, dict]):
         ## get model info ##
         provider = value.get("litellm_provider", "")
         _key_str = str(key)
+        _custom_model_cost_registrations[_key_str] = dict(value)
         if provider in _skip_get_model_info_providers or any(
             _key_str.startswith(f"{p}/") for p in _skip_get_model_info_providers
         ):

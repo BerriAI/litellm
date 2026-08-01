@@ -6574,3 +6574,101 @@ def test_model_info_is_active_for_environment_matrix(monkeypatch):
     monkeypatch.delenv("LITELLM_ENVIRONMENT")
     with pytest.raises(ValueError, match="LITELLM_ENVIRONMENT"):
         model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})
+
+
+def test_model_group_info_survives_model_cost_map_reload():
+    """Regression: a model cost map reload (scheduled or via /reload/model_cost_map)
+    replaced litellm.model_cost wholesale, wiping the model_info entries the router
+    registered for custom models at startup. /model_group/info then returned
+    max_input_tokens=None / max_output_tokens=None for those model groups even
+    though the values were set in the config."""
+    import uuid
+
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+    from litellm.utils import (
+        _custom_model_cost_registrations,
+        _invalidate_model_cost_lowercase_map,
+        install_model_cost_map,
+    )
+
+    backend_model = f"dashscope/reload-survival-{uuid.uuid4().hex[:12]}"
+    original_model_cost = litellm.model_cost
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "reload-survival-alias",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_base": "https://custom-gateway.example.com/v1",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"max_input_tokens": 1048576, "max_output_tokens": 8192},
+            }
+        ],
+    )
+    deployment_id = router.model_list[0]["model_info"]["id"]
+    try:
+        install_model_cost_map(GetModelCostMap.load_local_model_cost_map())
+
+        info = router.get_model_group_info("reload-survival-alias")
+        assert info is not None
+        assert info.max_input_tokens == 1048576
+        assert info.max_output_tokens == 8192
+    finally:
+        for key in (backend_model, deployment_id):
+            _custom_model_cost_registrations.pop(key, None)
+            original_model_cost.pop(key, None)
+        litellm.model_cost = original_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_pre_call_checks_do_not_raise_for_unmapped_custom_model():
+    """Regression: with enable_pre_call_checks=True, a deployment whose backend model
+    was missing from litellm.model_cost (e.g. after a cost map reload wiped the
+    router's registrations) made _pre_call_checks resolve the provider from the
+    model group alias, raising BadRequestError('LLM Provider NOT provided') for
+    every request to that alias."""
+    import uuid
+
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+    from litellm.utils import (
+        _custom_model_cost_registrations,
+        _invalidate_model_cost_lowercase_map,
+    )
+
+    backend_model = f"hosted_vllm/precall-unmapped-{uuid.uuid4().hex[:12]}"
+    original_model_cost = litellm.model_cost
+    original_drop_params = litellm.drop_params
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "precall-unmapped-alias",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_base": "https://my-vllm.example.com/v1",
+                    "api_key": "none",
+                },
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    deployment_id = router.model_list[0]["model_info"]["id"]
+    try:
+        litellm.drop_params = False
+        litellm.model_cost = GetModelCostMap.load_local_model_cost_map()
+        _invalidate_model_cost_lowercase_map()
+
+        returned = router._pre_call_checks(
+            model="precall-unmapped-alias",
+            healthy_deployments=list(router.model_list),
+            messages=[{"role": "user", "content": "hello"}],
+            request_kwargs={},
+        )
+        assert len(returned) == 1
+    finally:
+        litellm.drop_params = original_drop_params
+        for key in (backend_model, deployment_id):
+            _custom_model_cost_registrations.pop(key, None)
+            original_model_cost.pop(key, None)
+        litellm.model_cost = original_model_cost
+        _invalidate_model_cost_lowercase_map()
