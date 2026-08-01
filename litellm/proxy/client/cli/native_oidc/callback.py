@@ -30,6 +30,10 @@ DEFAULT_CALLBACK_PATH = "/oauth/callback"
 # ever shown. The stable OAuth error code is preferred over the description.
 MAX_ERROR_DESCRIPTION_LENGTH = 200
 
+# Per-connection read budget. Generous for a browser on loopback, short enough
+# that a peer holding a connection open cannot stall the login for long.
+READ_TIMEOUT_SECONDS = 5
+
 _SUCCESS_PAGE = (
     b"<!doctype html><html><head><title>LiteLLM</title></head><body>"
     b"<h1>Login complete</h1><p>You can close this window and return to the terminal.</p>"
@@ -66,6 +70,12 @@ def _single_value(params: Mapping[str, Sequence[str]], name: str) -> str | None:
 
 class _CallbackHandler(BaseHTTPRequestHandler):
     server_version = "LiteLLMCLI/1.0"
+
+    # Bounds every accepted connection. The listener serves one request at a
+    # time, so without this a peer that connects and then sends nothing blocks
+    # the handler indefinitely -- past the login deadline, which is only
+    # re-checked between requests -- and the real browser callback is never read.
+    timeout = READ_TIMEOUT_SECONDS
 
     def log_message(self, format: str, *args) -> None:
         """Suppress request logging.

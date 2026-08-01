@@ -7,6 +7,7 @@ pair, the authorization code arriving over loopback, and the token response.
 import base64
 import hashlib
 import json
+import socket
 import threading
 import time
 from http.client import HTTPConnection
@@ -200,6 +201,27 @@ class TestCallbackListener:
             assert listener._server.result is None
             with pytest.raises(NativeOIDCError, match="timed out"):
                 listener.wait_for_code(timeout=0.1)
+
+    def test_connections_carry_a_bounded_read_budget(self):
+        # StreamRequestHandler defaults this to None, which is what lets a peer
+        # that connects and sends nothing block the handler forever. Only a
+        # finite, positive budget prevents that; the exact value is a tuning call.
+        assert 0 < callback._CallbackHandler.timeout < 60
+
+    def test_a_silent_connection_does_not_stall_the_listener(self, monkeypatch):
+        # Shortened purely to keep the suite fast -- the budget itself is
+        # asserted above. This covers that the socket honours it at all.
+        monkeypatch.setattr(callback._CallbackHandler, "timeout", 0.2)
+        with LoopbackCallbackListener(expected_state="expected") as listener:
+            silent = socket.create_connection((listener.host, listener.port), timeout=5)
+            try:
+                listener._server.handle_request()
+                assert listener._server.result is None
+                # The real callback is still served afterwards.
+                assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=real&state=expected") == 200
+                assert listener.wait_for_code(timeout=0.1) == "real"
+            finally:
+                silent.close()
 
     def test_a_forged_callback_does_not_prevent_the_real_one(self):
         with LoopbackCallbackListener(expected_state="expected") as listener:
