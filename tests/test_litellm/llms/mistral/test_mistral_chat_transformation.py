@@ -809,3 +809,149 @@ class TestMistralStripsOutputOnlyFields:
             )
 
         assert "reasoning_content" not in result[-1]
+
+
+class TestMistralMultiCompletionResponse:
+    """Regression tests for issue #34228: Mistral hosted tools (image_generation,
+    connectors) return ``object: "chat.multi_completion"`` with plural
+    ``choices[].messages``, which used to crash the converter with KeyError: 'message'."""
+
+    @staticmethod
+    def _payload() -> dict:
+        return {
+            "id": "chatcmpl-multi-123",
+            "object": "chat.multi_completion",
+            "created": 1677652288,
+            "model": "mistral-medium-latest",
+            "usage": {"prompt_tokens": 716, "completion_tokens": 355, "total_tokens": 1071, "request_count": 2},
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "index": 0,
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "tool-call-1",
+                                    "type": "function",
+                                    "function": {"name": "generate_image", "arguments": '{"prompt": "a sunset"}'},
+                                    "index": 0,
+                                    "metadata": {"tool_type": "image", "integration_id": "img-1"},
+                                }
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "index": 1,
+                            "tool_call_id": "tool-call-1",
+                            "content": '{"url": "https://cdn.example/image.jpg"}',
+                            "metadata": {"tool_call_result": {"type": "success"}},
+                        },
+                        {
+                            "role": "assistant",
+                            "index": 2,
+                            "content": [
+                                {"type": "text", "text": "Here is your image:"},
+                                {"type": "image_url", "image_url": "https://cdn.example/image.jpg"},
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+    def test_completion_parses_hosted_image_generation_response(self, respx_mock, monkeypatch):
+        import litellm
+
+        monkeypatch.setenv("MISTRAL_API_KEY", "fake-mistral-api-key-12345")
+        litellm.disable_aiohttp_transport = True
+        respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(json=self._payload())
+
+        response = litellm.completion(
+            model="mistral/mistral-medium-latest",
+            messages=[{"role": "user", "content": "Generate an image of a sunset over the ocean."}],
+            tools=[{"type": "image_generation"}],
+        )
+
+        message = response.choices[0].message
+        assert message.content == "Here is your image:"
+        assert message.tool_calls is None
+        assert message.images == [
+            {"type": "image_url", "image_url": {"url": "https://cdn.example/image.jpg"}, "index": 0}
+        ]
+        assert response.choices[0].finish_reason == "stop"
+        assert response.object == "chat.completion"
+        assert response.usage.prompt_tokens == 716
+        assert response.usage.total_tokens == 1071
+
+    def test_flatten_surfaces_only_unanswered_tool_calls(self):
+        answered = {
+            "id": "answered-1",
+            "type": "function",
+            "function": {"name": "generate_image", "arguments": "{}"},
+        }
+        unanswered = {
+            "id": "pending-1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+        flattened = MistralConfig._handle_multi_completion_response(
+            {
+                "object": "chat.multi_completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "messages": [
+                            {"role": "assistant", "content": None, "tool_calls": [answered, unanswered]},
+                            {"role": "tool", "tool_call_id": "answered-1", "content": '{"url": "https://x"}'},
+                        ],
+                    }
+                ],
+            }
+        )
+        message = flattened["choices"][0]["message"]
+        assert message["tool_calls"] == [unanswered]
+        assert message["content"] is None
+        assert flattened["object"] == "chat.completion"
+        assert "messages" not in flattened["choices"][0]
+
+    def test_flatten_concatenates_assistant_text_across_turns(self):
+        flattened = MistralConfig._handle_multi_completion_response(
+            {
+                "object": "chat.multi_completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "messages": [
+                            {"role": "assistant", "content": "Searching now."},
+                            {"role": "tool", "tool_call_id": "t1", "content": "result"},
+                            {
+                                "role": "assistant",
+                                "content": [
+                                    {"type": "text", "text": "Done."},
+                                    {"type": "image_url", "image_url": {"url": "https://cdn.example/a.png"}},
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+        message = flattened["choices"][0]["message"]
+        assert message["content"] == "Searching now.\nDone."
+        assert message["images"] == [
+            {"type": "image_url", "image_url": {"url": "https://cdn.example/a.png"}, "index": 0}
+        ]
+
+    def test_standard_chat_completion_response_untouched(self):
+        payload = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        }
+        assert MistralConfig._handle_multi_completion_response(payload) is payload
