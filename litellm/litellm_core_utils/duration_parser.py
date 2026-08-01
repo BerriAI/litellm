@@ -21,7 +21,7 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "monthly": "30d",
 }
 
-_DURATION_UNIT_ALIASES: Final[dict[str, str]] = {
+_DURATION_UNIT_ALIASES: Final[dict[str, str]] = {  # mutable-ok: constant lookup table
     "s": "s",
     "sec": "s",
     "secs": "s",
