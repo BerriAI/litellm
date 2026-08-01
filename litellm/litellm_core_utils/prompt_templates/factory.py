@@ -3761,8 +3761,18 @@ def _convert_to_bedrock_tool_call_invoke(
                         _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
-        raise Exception(
-            "Unable to convert openai tool calls={} to bedrock tool calls. Received error={}".format(tool_calls, str(e))
+        # A malformed tool call is invalid client input, not a transient
+        # provider/network failure. Raising a bare Exception here would be
+        # mapped to APIConnectionError (500) by exception_type(), which the
+        # router treats as retryable — so a deterministic, pre-network failure
+        # would be retried through the whole fallback chain instead of being
+        # returned to the caller as a 400.
+        raise litellm.BadRequestError(
+            message="Unable to convert openai tool calls={} to bedrock tool calls. Received error={}".format(
+                tool_calls, str(e)
+            ),
+            model=model or "",
+            llm_provider="bedrock",
         )
 
 

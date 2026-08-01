@@ -2396,6 +2396,36 @@ def test_bedrock_tool_call_invoke_multiple_normal_tools():
     assert result[1]["toolUse"]["toolUseId"] == "call_2"
 
 
+def test_bedrock_tool_call_invoke_truncated_arguments_raises_bad_request():
+    """
+    Truncated tool call arguments are invalid client input, so they must raise a
+    non-retryable BadRequestError (400) rather than a bare Exception.
+
+    A bare Exception is mapped to APIConnectionError (500) by exception_type(),
+    which litellm._should_retry() treats as retryable. Because this failure
+    happens during request transformation — before any network I/O — retrying it
+    can never succeed, so the router would walk the retry/fallback chain against
+    a deterministic failure.
+    """
+    tool_calls = [
+        {
+            "id": "tooluse_MAh2QLVjBRkvi5QJkLQ08V",
+            "type": "function",
+            "function": {
+                "name": "replace_note_content",
+                # Truncated JSON: no closing brace.
+                "arguments": '{"note_id": "999af35c-4061-4ece-8581-7d43fc988ba4", "title": "WG-example"',
+            },
+        }
+    ]
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _convert_to_bedrock_tool_call_invoke(tool_calls, model="anthropic.claude-3-sonnet-20240229-v1:0")
+
+    assert exc_info.value.status_code == 400
+    assert litellm._should_retry(exc_info.value.status_code) is False
+
+
 # ========================================================================
 # Tool result deduplication tests (Case D in sanitize_messages_for_tool_calling)
 # ========================================================================
