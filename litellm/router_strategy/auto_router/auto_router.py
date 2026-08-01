@@ -2,6 +2,7 @@
 Auto-Routing Strategy that works with a Semantic Router Config
 """
 
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_router_logger
@@ -54,8 +55,6 @@ class AutoRouter(CustomLogger):
         self.embedding_model: str = embedding_model
         self.litellm_router_instance: "Router" = litellm_router_instance
         self.configured_savings_baseline_model: str | None = savings_baseline_model
-        self._derived_savings_baseline_model: str | None = None
-        self._savings_baseline_derived = False
 
     @staticmethod
     def _canonical_model(model: str, custom_llm_provider: str | None) -> str | None:
@@ -136,6 +135,14 @@ class AutoRouter(CustomLogger):
             return None
         return max(priced)[2]
 
+    @cached_property
+    def _derived_savings_baseline_model(self) -> str | None:
+        """Resolved on first use, not at construction, because the parent router's
+        deployments are still being assembled while this router is built. Caching
+        through `cached_property` keeps "derived to nothing" distinct from "not derived
+        yet" without a second flag to hold them apart."""
+        return self._most_expensive_candidate()
+
     @property
     def savings_baseline_model(self) -> str | None:
         """The model this router's savings are measured against.
@@ -146,16 +153,10 @@ class AutoRouter(CustomLogger):
         honest: a fixed flagship credits savings against a model the operator would
         never have run, and drifts the moment the routes change.
 
-        Resolved lazily and cached, because the parent router's deployments are still
-        being assembled while this router is constructed. ``None`` when nothing can be
-        priced, which zeroes the driver rather than inventing a baseline.
+        ``None`` when nothing can be priced, which zeroes the driver rather than
+        inventing a baseline.
         """
-        if self.configured_savings_baseline_model:
-            return self.configured_savings_baseline_model
-        if not self._savings_baseline_derived:
-            self._derived_savings_baseline_model = self._most_expensive_candidate()
-            self._savings_baseline_derived = True
-        return self._derived_savings_baseline_model
+        return self.configured_savings_baseline_model or self._derived_savings_baseline_model
 
     def _load_semantic_routing_routes(self) -> List[Route]:
         from semantic_router.routers import SemanticRouter

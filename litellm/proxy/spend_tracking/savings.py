@@ -115,6 +115,9 @@ def _baseline_usage(usage: Usage) -> Usage:
         total_tokens=usage.total_tokens,
         completion_tokens_details=usage.completion_tokens_details,
         prompt_tokens_details=PromptTokensDetailsWrapper(
+            # The tokens this request paid to write are moved into the cached count and
+            # the creation charge is dropped: on one model that cache was already warm,
+            # so the baseline would have read them rather than paying to create them.
             cached_tokens=cache_read + cache_creation,
             cache_creation_tokens=0,
             text_tokens=max(usage.prompt_tokens - cache_read - cache_creation, 0),

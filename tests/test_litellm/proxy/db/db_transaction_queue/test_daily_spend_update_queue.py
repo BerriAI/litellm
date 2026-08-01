@@ -16,6 +16,8 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     SpendUpdateQueueItem,
 )
+from typing import get_args
+
 from litellm.proxy._types import BaseDailySpendTransaction
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
@@ -542,8 +544,14 @@ async def test_every_optional_daily_metric_aggregates(daily_spend_update_queue):
     paths, so the driver reads as zero on the dashboard however much it saved.
     """
     test_key = "user1_2023-01-01_key123_claude-haiku-4-5_anthropic"
+    def _numeric(annotation):
+        # additive metrics may be declared NotRequired[float] for rows queued by a pod
+        # running the previous release, so unwrap before matching
+        args = get_args(annotation)
+        return (args[0] if args else annotation) in (int, float)
+
     numeric_fields = [
-        name for name, annotation in BaseDailySpendTransaction.__annotations__.items() if annotation in (int, float)
+        name for name, annotation in BaseDailySpendTransaction.__annotations__.items() if _numeric(annotation)
     ]
     assert "autorouter_savings_spend" in numeric_fields
     increments = {field: index + 1 for index, field in enumerate(numeric_fields)}

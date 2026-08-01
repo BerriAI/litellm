@@ -412,8 +412,6 @@ class TestSavingsBaselineModel:
         auto_router.default_model = default_model
         auto_router.litellm_router_instance = parent
         auto_router.configured_savings_baseline_model = configured
-        auto_router._derived_savings_baseline_model = None
-        auto_router._savings_baseline_derived = False
         return auto_router
 
     def test_route_names_resolve_through_the_parent_router_to_pricable_models(self):
