@@ -944,14 +944,20 @@ def _resolve_batch_file_owner_auth(db_batch_object, requester_api_key_dict):
     return requester_api_key_dict
 
 
-def _redact_unconverted_batch_output_file_ids(response, verbose_proxy_logger) -> None:
-    """Fail closed: never return a raw provider output/error file ID.
+def _redact_unconverted_batch_output_file_ids(response, verbose_proxy_logger, managed_files_obj) -> None:
+    """Fail closed: never return a raw provider input/output/error file ID.
 
-    Any ID that could not be rewritten to a managed unified ID (hook missing,
-    model metadata unresolved, or registration raised) is dropped so it can't be
-    replayed against /v1/files to bypass the managed-file ownership check.
+    Only meaningful when the managed-files hook is active. Without it there is no
+    managed-file ownership check to bypass, and the raw ID is exactly what
+    non-managed deployments have always returned and use to fetch results, so
+    redacting there would be a breaking change rather than a security fix. When
+    the hook is active, any ID that could not be rewritten to a managed unified
+    ID (model metadata unresolved or registration raised) is dropped so it can't
+    be replayed against /v1/files to bypass the ownership check.
     """
-    for file_attr in ("output_file_id", "error_file_id"):
+    if managed_files_obj is None:
+        return
+    for file_attr in ("input_file_id", "output_file_id", "error_file_id"):
         file_id = getattr(response, file_attr, None)
         if file_id and not _is_base64_encoded_unified_file_id(file_id):
             setattr(response, file_attr, None)
@@ -989,7 +995,9 @@ async def ensure_batch_response_managed_file_ids(
         verbose_proxy_logger=verbose_proxy_logger,
     )
 
-    _redact_unconverted_batch_output_file_ids(response, verbose_proxy_logger)
+    await resolve_output_file_ids_to_unified(response, prisma_client)
+
+    _redact_unconverted_batch_output_file_ids(response, verbose_proxy_logger, managed_files_obj)
 
 
 async def _register_raw_batch_output_file_ids(
@@ -1159,6 +1167,7 @@ async def update_batch_in_database(
             verbose_proxy_logger=verbose_proxy_logger,
             user_api_key_dict=user_api_key_dict,
             db_batch_object=db_batch_object,
+            unified_batch_id=unified_batch_id,
         )
 
         # Only update if status has changed (when db_batch_object is provided)
