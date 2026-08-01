@@ -1123,6 +1123,37 @@ class TestNativeWebSocketGuardrails:
         assert await handler._mask_response_completed(event) == event
 
     @pytest.mark.asyncio
+    async def test_completed_event_with_non_list_output_passes_through(self):
+        """Regression test: a "response.output" that is a truthy non-iterable
+        value (malformed upstream payload) must be skipped, not raise -- an
+        unhandled exception here terminates the whole backend_to_client loop,
+        not just this one event."""
+        from unittest.mock import MagicMock
+
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        class Guardrail:
+            def get_presidio_settings_from_request_data(self, request_data):
+                return None
+
+            def _unmask_pii_text(self, text, pii_tokens):
+                return text
+
+        event = json.dumps({"type": "response.completed", "response": {"output": 42}})
+        guardrail = Guardrail()
+        handler = ResponsesWebSocketStreaming(
+            websocket=MagicMock(),
+            backend_ws=MagicMock(),
+            logging_obj=MagicMock(),
+            request_data={"metadata": {"pii_tokens": {"<TOKEN_1>": "secret"}}},
+            guardrail_callbacks=[guardrail],
+            output_guardrail_callbacks=[guardrail],
+        )
+
+        assert handler._unmask_response_event(event) == event
+        assert await handler._mask_response_completed(event) == event
+
+    @pytest.mark.asyncio
     async def test_output_masking_suppresses_delta_without_calling_presidio(self):
         import json
         from unittest.mock import AsyncMock, MagicMock

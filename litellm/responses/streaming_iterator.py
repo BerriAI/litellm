@@ -1684,7 +1684,10 @@ class ResponsesWebSocketStreaming:
             response_obj = evt_obj.get("response")
             if not isinstance(response_obj, dict):
                 return response_str
-            for output_item in response_obj.get("output") or []:
+            output = response_obj.get("output") or []
+            if not isinstance(output, list):
+                return response_str
+            for output_item in output:
                 if not isinstance(output_item, dict):
                     continue
                 content = output_item.get("content") or []
@@ -1739,7 +1742,10 @@ class ResponsesWebSocketStreaming:
             response_obj = evt_obj.get("response")
             if not isinstance(response_obj, dict):
                 continue
-            for output_item in response_obj.get("output") or []:
+            output = response_obj.get("output") or []
+            if not isinstance(output, list):
+                continue
+            for output_item in output:
                 if not isinstance(output_item, dict):
                     continue
                 arguments = output_item.get("arguments")
