@@ -270,6 +270,22 @@ def supports_response_json_schema(model: str) -> bool:
     return bool(gemini_2_plus_pattern.search(model_lower))
 
 
+def should_use_response_json_schema(model: str) -> bool:
+    """
+    Resolve which Vertex/Gemini structured-output channel to use for a json_schema response_format.
+
+    Defaults to responseJsonSchema for models that support it, but `litellm.vertex_ai_use_response_json_schema`
+    (e.g. `litellm_settings: vertex_ai_use_response_json_schema: false` on the proxy) forces the channel:
+    `False` sends the natively converted `responseSchema` (flattened nullable unions, hoisted constraints,
+    `propertyOrdering`), `True` sends the client schema verbatim as `responseJsonSchema`
+    """
+    override = litellm.vertex_ai_use_response_json_schema
+    if override is not None:
+        return override
+
+    return supports_response_json_schema(model)
+
+
 from typing import Literal, Optional
 
 all_gemini_url_modes = Literal["chat", "embedding", "batch_embedding", "image_generation", "count_tokens"]

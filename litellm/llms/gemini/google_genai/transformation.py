@@ -14,7 +14,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import (
     _build_vertex_schema,
-    supports_response_json_schema,
+    should_use_response_json_schema,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.router import GenericLiteLLMParams
@@ -317,7 +317,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         if not isinstance(value, dict):
             return
 
-        if supports_response_json_schema(model):
+        if should_use_response_json_schema(model):
             if json_schema_key is not None:
                 generate_content_config_dict.pop(schema_key)
                 return

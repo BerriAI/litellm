@@ -426,6 +426,35 @@ def test_transform_generate_content_request_flattens_response_schema_1_5():
     assert items["properties"]["title"]["type"].lower() == "string"
 
 
+def test_transform_generate_content_request_response_json_schema_opt_out(monkeypatch):
+    """With ``litellm.vertex_ai_use_response_json_schema = False``, a Gemini 2.x request keeps the
+    natively converted ``responseSchema`` instead of being promoted to ``responseJsonSchema``."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", False)
+    config = GoogleGenAIConfig()
+
+    schema = {
+        "type": "object",
+        "properties": {"barcode": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+        "required": ["barcode"],
+    }
+
+    result = config.transform_generate_content_request(
+        model="gemini-2.5-flash",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        tools=None,
+        generate_content_config_dict={"responseSchema": schema},
+        system_instruction=None,
+    )
+
+    gen_config = result["generationConfig"]
+    assert "responseJsonSchema" not in gen_config
+    normalized = gen_config["responseSchema"]
+    assert normalized["propertyOrdering"] == ["barcode"]
+    assert normalized["properties"]["barcode"]["anyOf"] == [{"type": "string", "nullable": True}]
+
+
 def test_transform_generate_content_request_passes_through_response_json_schema():
     """If the caller already used ``responseJsonSchema``, it should be
     preserved (Gemini 2.0+ accepts standard JSON Schema as-is)."""
