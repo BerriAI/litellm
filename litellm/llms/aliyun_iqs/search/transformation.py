@@ -5,6 +5,7 @@ Aliyun IQS (Information Query Service) UnifiedSearch API Reference:
 https://help.aliyun.com/zh/document_detail/2883041.html
 """
 
+from types import MappingProxyType
 from typing import TypedDict
 
 import httpx
@@ -120,9 +121,7 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
             # merge with caller-supplied advancedParams instead of replacing,
             # so native filters (date ranges, ...) survive
             request_data["advancedParams"] = {  # mutable-ok: nested payload dict
-                **optional_params.get(
-                    "advancedParams", {}
-                ),  # mutable-ok: empty default, immediately spread into payload
+                **optional_params.get("advancedParams", MappingProxyType({})),
                 "numResults": optional_params["max_results"],
             }
 
