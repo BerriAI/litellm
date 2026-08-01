@@ -118,11 +118,6 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
     logging_entries = decrypted.get("logging")
 
     if logging_entries is not None:
-        # Same predicate the request path uses, so an empty logging slot reports
-        # no callbacks instead of falling through to the deprecated shape that a
-        # request would already be ignoring. A non-list value is a row that fails
-        # at request time; reporting nothing beats reporting a config that never
-        # fires.
         resolved = TeamCallbackMetadata()
         for entry in logging_entries if isinstance(logging_entries, list) else ():
             if not isinstance(entry, dict):
