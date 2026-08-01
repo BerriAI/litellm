@@ -131,8 +131,8 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
 
-        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
-            **self.logging_obj.model_call_details.get("litellm_params", {})
+        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams.model_validate(
+            dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
         )
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
         self.sent_first_thinking_block = False

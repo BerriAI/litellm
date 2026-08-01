@@ -3137,7 +3137,7 @@ class SSOAuthenticationHandler:
             _default_team_params = deepcopy(litellm.default_team_params)
             _new_team_request = team_request.model_dump()
             _new_team_request.update(_default_team_params)
-            team_request = NewTeamRequest(**_new_team_request)
+            team_request = NewTeamRequest.model_validate(_new_team_request)
         return team_request
 
     @staticmethod
@@ -3271,14 +3271,6 @@ class SSOAuthenticationHandler:
 
         # User might not be already created on first generation of key
         # But if it is, we want their models preferences
-        default_ui_key_values: Dict[str, Any] = {
-            "duration": LITELLM_UI_SESSION_DURATION,
-            "key_max_budget": litellm.max_ui_session_budget,
-            "aliases": {},
-            "config": {},
-            "spend": 0,
-            "team_id": "litellm-dashboard",
-        }
         user_defined_values: Optional[SSOUserDefinedValues] = None
 
         if user_custom_sso is not None:
@@ -3338,10 +3330,20 @@ class SSOAuthenticationHandler:
 
         verbose_proxy_logger.info(f"user_defined_values for creating ui key: {user_defined_values}")
 
-        default_ui_key_values.update(user_defined_values)
-        default_ui_key_values["request_type"] = "key"
         response = await generate_key_helper_fn(
-            **default_ui_key_values,  # type: ignore
+            request_type="key",
+            duration=LITELLM_UI_SESSION_DURATION,
+            key_max_budget=litellm.max_ui_session_budget,
+            aliases={},
+            config={},
+            spend=0,
+            team_id="litellm-dashboard",
+            models=user_defined_values["models"],
+            user_id=user_defined_values["user_id"],
+            user_email=user_defined_values["user_email"],
+            user_role=user_defined_values["user_role"],
+            max_budget=user_defined_values["max_budget"],
+            budget_duration=user_defined_values["budget_duration"],
             table_name="key",
         )
 

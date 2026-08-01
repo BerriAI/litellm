@@ -18,6 +18,7 @@ vi.mock("@/components/networking", () => ({
   getTeamPermissionsCall: vi.fn(),
   organizationInfoCall: vi.fn(),
   getRouterSettingsCall: vi.fn().mockResolvedValue({ fields: [] }),
+  getPassThroughEndpointsCall: vi.fn(),
 }));
 
 vi.mock("@/components/utils/dataUtils", () => ({
@@ -1140,6 +1141,56 @@ describe("TeamInfoView", () => {
       expect(within(dropdown).getByText("Other")).toBeInTheDocument();
       expect(within(dropdown).getByTitle("always-on")).toBeInTheDocument();
       expect(within(dropdown).getByTitle("opt-in")).toBeInTheDocument();
+    });
+  });
+
+  describe("allowed pass through routes", () => {
+    beforeEach(() => {
+      testQueryClient.clear();
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      vi.mocked(networking.getPassThroughEndpointsCall).mockResolvedValue({
+        endpoints: [{ path: "/bedrock-passthrough", methods: ["POST"] }],
+      });
+    });
+
+    it("should show a route picked from the dropdown in the field and save it", async () => {
+      const user = userEvent.setup({ delay: null });
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const routesLabel = await screen.findByText("Allowed Pass Through Routes");
+      const routesFormItem = routesLabel.closest(".ant-form-item") as HTMLElement;
+
+      await user.click(within(routesFormItem).getByRole("combobox"));
+
+      const option = await screen.findByTitle("POST /bedrock-passthrough");
+      await user.click(option);
+
+      await waitFor(() => {
+        expect(within(routesFormItem).getByText(/\/bedrock-passthrough/)).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.objectContaining({
+            team_id: "123",
+            metadata: expect.objectContaining({
+              allowed_passthrough_routes: ["/bedrock-passthrough"],
+            }),
+          }),
+        );
+      });
     });
   });
 });

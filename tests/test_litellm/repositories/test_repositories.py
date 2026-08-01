@@ -1923,6 +1923,28 @@ class TestUserRepositoryExtended:
         )
         assert updated.user_email == "new@example.com"
 
+    @pytest.mark.asyncio
+    async def test_find_by_id_decodes_only_the_json_encoded_columns(self, repo):
+        repo._prisma_client.db.litellm_usertable._records["user-json"] = {
+            "user_id": "user-json",
+            "user_email": "json@example.com",
+            "user_role": '{"not": "json"}',
+            "teams": [],
+            "models": [],
+            "metadata": '{"department": "engineering"}',
+            "model_spend": '{"gpt-4": 10.5}',
+            "model_max_budget": '{"gpt-4": 100.0}',
+        }
+
+        user = await repo.find_by_id("user-json")
+
+        assert user is not None
+        assert user.metadata == {"department": "engineering"}
+        assert user.model_spend == {"gpt-4": 10.5}
+        assert user.model_max_budget == {"gpt-4": 100.0}
+        assert user.user_email == "json@example.com"
+        assert user.user_role == '{"not": "json"}'
+
 
 class TestProjectRepositoryExtended:
     @pytest.fixture

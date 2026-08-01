@@ -839,7 +839,7 @@ class TestUpdateModel:
             ),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
-                new=AsyncMock(return_value=True),
+                new=AsyncMock(return_value=None),
             ) as mock_clear_cache,
         ):
             await update_model(
@@ -3223,7 +3223,7 @@ class TestPatchModelBlockedAuthGate:
             ),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
-                new=AsyncMock(return_value=True),
+                new=AsyncMock(return_value=None),
             ),
         ):
             result = await patch_model(
@@ -3312,6 +3312,72 @@ class TestWriteSurfacesReloadDrop:
         with pytest.raises(ProxyException, match="m-collateral"):
             raise_if_reload_degraded_serving(
                 before=frozenset({"m-live", "m-collateral"}), written_models=[("m-live", None)], action="update"
+            )
+
+    def test_a_model_the_db_no_longer_has_is_not_collateral(self, monkeypatch):
+        """Another pod deleting a model is not this pod's reload breaking.
+
+        A pod that has not yet polled the delete still lists the id when the write
+        snapshots `before`; the reload it triggers then evicts the id because the db no
+        longer has it. That eviction is the reconcile working, so it must not fail the
+        write. `still_desired` is the db + config set the reload reconciled against, so
+        an id missing from it drops out of the collateral diff.
+
+        The cases below, in order: an id the db no longer wants is not collateral and the
+        write succeeds; an id the db still wants that stopped serving is real degradation
+        and still raises, so a genuinely broken reload is caught; and with no reconcile at
+        all the desired set is unknown, so every drop is reported.
+        """
+        import litellm
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            raise_if_reload_degraded_serving,
+            reload_serving_verdict,
+        )
+
+        live_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": "m-live", "db_model": True},
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", live_router)
+
+        _, collateral = reload_serving_verdict(
+            before=frozenset({"m-live", "m-deleted-elsewhere"}),
+            written_models=[("m-live", None)],
+            written_must_serve=True,
+            still_desired=frozenset({"m-live"}),
+        )
+        assert collateral == ()
+
+        assert (
+            raise_if_reload_degraded_serving(
+                before=frozenset({"m-live", "m-deleted-elsewhere"}),
+                written_models=[("m-live", None)],
+                action="create",
+                still_desired=frozenset({"m-live"}),
+            )
+            is None
+        )
+
+        with pytest.raises(ProxyException, match="m-should-be-serving"):
+            raise_if_reload_degraded_serving(
+                before=frozenset({"m-live", "m-should-be-serving"}),
+                written_models=[("m-live", None)],
+                action="create",
+                still_desired=frozenset({"m-live", "m-should-be-serving"}),
+            )
+
+        with pytest.raises(ProxyException, match="m-deleted-elsewhere"):
+            raise_if_reload_degraded_serving(
+                before=frozenset({"m-live", "m-deleted-elsewhere"}),
+                written_models=[("m-live", None)],
+                action="create",
+                still_desired=None,
             )
 
 
