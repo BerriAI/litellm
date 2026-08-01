@@ -216,10 +216,13 @@ gateway:
     httpGet: { path: /health/liveliness, port: http }
     initialDelaySeconds: 10
     periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 6
   readinessProbe:
     httpGet: { path: /health/readiness, port: http }
     initialDelaySeconds: 5
     periodSeconds: 10
+    timeoutSeconds: 10
   hpa:
     enabled: true
     minReplicas: 1
@@ -309,10 +312,13 @@ backend:
     httpGet: { path: /health/liveliness, port: http }
     initialDelaySeconds: 10
     periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 6
   readinessProbe:
     httpGet: { path: /health/readiness, port: http }
     initialDelaySeconds: 5
     periodSeconds: 10
+    timeoutSeconds: 10
   hpa:
     enabled: true
     minReplicas: 1
