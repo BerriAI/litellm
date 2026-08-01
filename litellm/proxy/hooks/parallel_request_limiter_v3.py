@@ -148,7 +148,13 @@ for i = 1, descriptor_count do
         current_counter = tonumber(redis.call('GET', counter_key) or 0)
     end
 
-    if current_counter + increment > limit then
+    local blocked
+    if increment > 0 then
+        blocked = current_counter + increment > limit
+    else
+        blocked = current_counter >= limit
+    end
+    if blocked then
         return { 1, i, current_counter, limit }
     end
 
@@ -1341,7 +1347,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else:
                 limit_value = rate_limit.get("tokens_per_unit")
                 inc_amount = int(increment_amounts.get("tokens", 0) or 0)
-            if limit_value is None or inc_amount <= 0:
+            if limit_value is None or inc_amount < 0:
                 continue
             counter_key = self.create_rate_limit_keys(descriptor_key, descriptor_value, rlt)
             # Counter-key TTL and window_size are conceptually distinct
@@ -1534,7 +1540,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     or 0
                 )
             )
-            if current_counter + meta["increment"] > meta["current_limit"]:
+            over_limit = (
+                current_counter + meta["increment"] > meta["current_limit"]
+                if meta["increment"] > 0
+                else current_counter >= meta["current_limit"]
+            )
+            if over_limit:
                 return RateLimitResponse(
                     overall_code="OVER_LIMIT",
                     statuses=[
@@ -1596,7 +1607,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         shared primitive.
         """
         tpm_descriptors: List[RateLimitDescriptor] = [
-            d for d in descriptors if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+            RateLimitDescriptor(
+                key=d["key"],
+                value=d["value"],
+                rate_limit=RateLimitDescriptorRateLimitObject(
+                    tokens_per_unit=(d.get("rate_limit") or {}).get("tokens_per_unit"),
+                    window_size=(d.get("rate_limit") or {}).get("window_size"),
+                ),
+            )
+            for d in descriptors
+            if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
         ]
         if not tpm_descriptors:
             return RateLimitResponse(overall_code="OK", statuses=[])
