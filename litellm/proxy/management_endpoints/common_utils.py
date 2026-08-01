@@ -1,4 +1,5 @@
 import math
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from fastapi import HTTPException, status
@@ -76,27 +77,52 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
+def _passthrough_routes_differ(requested: object, existing: Sequence[str] | None) -> bool:
+    """True when `requested` asks for a different route set than what is stored.
+
+    Anything that isn't a list/tuple of route strings counts as a change, so
+    malformed payloads fall through to the 403 instead of silently passing the
+    gate (or blowing up on an unhashable element).
+    """
+    if requested is None:
+        return False
+    if not isinstance(requested, (list, tuple)):
+        return True
+    if any(not isinstance(route, str) for route in requested):
+        return True
+    return frozenset(requested) != frozenset(existing or ())
+
+
 def _check_passthrough_routes_caller_permission(
     data: BaseModel,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     entity: str = "key",
+    existing_routes: Sequence[str] | None = None,
 ) -> None:
     """
-    Only proxy admins may set `allowed_passthrough_routes` (top-level or under
-    `metadata`) — it short-circuits the role-based route gate, so keys and teams
-    must be gated identically.
+    Only proxy admins may CHANGE `allowed_passthrough_routes` (top-level or
+    under `metadata`) — it short-circuits the role-based route gate, so keys and
+    teams must be gated identically.
+
+    Re-sending the stored routes unchanged is a no-op rather than a 403: an
+    update writes `metadata` wholesale, so clients have to echo the stored value
+    back or an unrelated edit would wipe it. Without `existing_routes` the gate
+    stays strict (any non-empty value is a change), which is what create paths
+    want.
     """
     # view-only admins excluded by design; blocked upstream from writes anyway
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    if getattr(data, "allowed_passthrough_routes", None):
+    if _passthrough_routes_differ(getattr(data, "allowed_passthrough_routes", None), existing_routes):
         raise HTTPException(
             status_code=403,
             detail={"error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."},
         )
     metadata = getattr(data, "metadata", None)
-    if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
+    if isinstance(metadata, dict) and _passthrough_routes_differ(
+        metadata.get("allowed_passthrough_routes"), existing_routes
+    ):
         raise HTTPException(
             status_code=403,
             detail={"error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."},

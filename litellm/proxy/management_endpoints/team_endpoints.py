@@ -15,6 +15,7 @@ import math
 import traceback
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from enum import Enum
 from typing import (
     Annotated,
     Dict,
@@ -83,6 +84,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _cache_team_object,
+    _model_matches_any_wildcard_pattern_in_list,
     allowed_route_check_inside_route,
     can_org_access_model,
     get_org_object,
@@ -315,10 +317,68 @@ async def _refresh_cached_team(
     )
 
 
+class TeamAccessGrant(str, Enum):
+    """Which authority let a caller through `_verify_team_access`.
+
+    Callers that gate finer-grained actions (budget ceiling, model list) need to
+    know this: a team admin is bounded by what a proxy admin already granted the
+    team, while proxy/org admins hold the grant itself.
+    """
+
+    PROXY_ADMIN = "proxy_admin"
+    ORG_ADMIN = "org_admin"
+    TEAM_ADMIN = "team_admin"
+
+
+async def _is_org_admin_for_team_or_false(
+    team_obj: LiteLLM_TeamTable,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """`_is_user_org_admin_for_team`, but a failed lookup means "no".
+
+    The underlying call raises when the caller's user row can't be read. Every
+    caller of this uses the answer to hand out authority, so degrading to "not
+    an org admin" is fail-closed: it can only withhold authority, never grant
+    it, and it keeps a lookup failure from 500-ing a request the caller is
+    otherwise allowed to make.
+    """
+    if not team_obj.organization_id:
+        return False
+    try:
+        return await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Could not resolve org-admin status for user=%s on team=%s, treating as non-org-admin. Error: %s",
+            user_api_key_dict.user_id,
+            team_obj.team_id,
+            e,
+        )
+        return False
+
+
+async def _escalate_team_admin_grant_for_org_admin(
+    team_access: TeamAccessGrant,
+    team_obj: LiteLLM_TeamTable,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> TeamAccessGrant:
+    """Upgrade a TEAM_ADMIN grant to ORG_ADMIN when the caller is both.
+
+    `_verify_team_access` answers the cheap team-membership question first and
+    stops there, so a team's own org admin (usually the team's creator) comes
+    back as TEAM_ADMIN. Callers that gate on the grant have to resolve the
+    stronger authority before refusing them.
+    """
+    if team_access is not TeamAccessGrant.TEAM_ADMIN:
+        return team_access
+    if await _is_org_admin_for_team_or_false(team_obj=team_obj, user_api_key_dict=user_api_key_dict):
+        return TeamAccessGrant.ORG_ADMIN
+    return team_access
+
+
 async def _verify_team_access(
     team_obj: LiteLLM_TeamTable,
     user_api_key_dict: UserAPIKeyAuth,
-) -> None:
+) -> TeamAccessGrant:
     """
     Verify the caller is authorized to manage the given team.
 
@@ -327,16 +387,17 @@ async def _verify_team_access(
     - Caller is an org admin for the team's organization, OR
     - Caller is a team admin of this team
 
-    Raises HTTPException(403) otherwise.
+    Returns the authority that granted access. Raises HTTPException(403)
+    otherwise.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return
+        return TeamAccessGrant.PROXY_ADMIN
 
     if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return
+        return TeamAccessGrant.TEAM_ADMIN
 
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return
+    if await _is_org_admin_for_team_or_false(team_obj=team_obj, user_api_key_dict=user_api_key_dict):
+        return TeamAccessGrant.ORG_ADMIN
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -998,19 +1059,19 @@ async def _check_user_team_limits(
 
 def _check_team_budget_update_authority(
     data: UpdateTeamRequest,
-    user_api_key_dict: UserAPIKeyAuth,
+    team_access: TeamAccessGrant,
     existing_team_max_budget: Optional[float],
 ) -> None:
     """
-    Restrict who can grow a standalone team's spend ceiling on /team/update.
+    Restrict who can grow a team's spend ceiling on /team/update.
 
-    A team admin (already authorized via _verify_team_access) may keep or lower
-    the team budget, but only a proxy admin may grow it - by raising max_budget
+    A team admin may keep or lower the team budget, but only a proxy admin (or
+    the org admin who owns the team's org) may grow it - by raising max_budget
     above the team's current value or by removing the cap (setting it to None).
     Setting a finite budget on a team that has no cap is a restriction and is
-    allowed. Org-scoped teams are governed by _check_org_team_limits().
+    allowed. Org-scoped teams are additionally capped by _check_org_team_limits().
     """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+    if team_access is not TeamAccessGrant.TEAM_ADMIN:
         return
     if existing_team_max_budget is None:
         return
@@ -1029,6 +1090,65 @@ def _check_team_budget_update_authority(
             status_code=403,
             detail={
                 "error": f"Only a proxy admin can raise a team's max_budget. Team's current max_budget={existing_team_max_budget}, requested={data.max_budget}."
+            },
+        )
+
+
+def _model_list_grants_every_model(models: Sequence[str]) -> bool:
+    """Whether a team.models value reaches every deployment on the proxy.
+
+    Mirrors the auth path (`_can_object_call_model`): an empty list, a bare
+    "*", and the all-proxy-models sentinel are all unrestricted.
+    """
+    return len(models) == 0 or "*" in models or SpecialModelNames.all_proxy_models.value in models
+
+
+def _check_team_models_update_authority(
+    data: UpdateTeamRequest,
+    team_access: TeamAccessGrant,
+    existing_team_models: Sequence[str],
+) -> None:
+    """
+    Restrict who can widen a team's allowed-model list on /team/update.
+
+    A team admin may drop models the team already has, but only a proxy admin
+    (or the org admin who owns the team's org) can grant a team access to a
+    model it cannot already reach. Reachability follows the auth path, so a team
+    holding "openai/*" may be narrowed to "openai/gpt-4o", and a team that
+    already reaches every model can be narrowed to anything.
+    """
+    if team_access is not TeamAccessGrant.TEAM_ADMIN:
+        return
+    if data.models is None:
+        return
+    if _model_list_grants_every_model(existing_team_models):
+        return
+
+    if _model_list_grants_every_model(data.models):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    "Only a proxy admin can grant a team access to every proxy model. Team's current "
+                    f"models={sorted(set(existing_team_models))}."
+                )
+            },
+        )
+
+    added_models = tuple(
+        model
+        for model in data.models
+        if model not in existing_team_models
+        and not _model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=list(existing_team_models))
+    )
+    if added_models:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    f"Only a proxy admin can add models to a team. Models the team cannot already reach: "
+                    f"{sorted(set(added_models))}. Team's current models={sorted(set(existing_team_models))}."
+                )
             },
         )
 
@@ -1851,12 +1971,32 @@ async def update_team(
             )
 
         # Verify caller has access to manage this team
-        await _verify_team_access(
-            team_obj=LiteLLM_TeamTable.model_validate(existing_team_row.model_dump()),
+        existing_team_obj = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
+        team_access = await _escalate_team_admin_grant_for_org_admin(
+            team_access=await _verify_team_access(
+                team_obj=existing_team_obj,
+                user_api_key_dict=user_api_key_dict,
+            ),
+            team_obj=existing_team_obj,
             user_api_key_dict=user_api_key_dict,
         )
 
-        _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
+        stored_passthrough_routes = existing_metadata.get("allowed_passthrough_routes")
+        _check_passthrough_routes_caller_permission(
+            data,
+            user_api_key_dict,
+            entity="team",
+            existing_routes=(
+                stored_passthrough_routes if isinstance(stored_passthrough_routes, (list, tuple)) else None
+            ),
+        )
+
+        _check_team_models_update_authority(
+            data=data,
+            team_access=team_access,
+            existing_team_models=existing_team_row.models or [],
+        )
 
         if data.soft_budget is not None:
             max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget
@@ -1945,14 +2085,11 @@ async def update_team(
                     prisma_client=prisma_client,
                 )
 
-        # Only a proxy admin may grow a standalone team's spend ceiling.
-        # Org-scoped teams are validated by _check_org_team_limits() above.
-        if org_id_to_check is None:
-            _check_team_budget_update_authority(
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                existing_team_max_budget=existing_team_row.max_budget,
-            )
+        _check_team_budget_update_authority(
+            data=data,
+            team_access=team_access,
+            existing_team_max_budget=existing_team_row.max_budget,
+        )
 
         updated_kv = data.json(exclude_unset=True)
 

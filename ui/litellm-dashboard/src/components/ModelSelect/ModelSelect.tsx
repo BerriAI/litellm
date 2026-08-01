@@ -29,6 +29,7 @@ export interface ModelSelectProps {
     showAllTeamModelsOption?: boolean;
     showAllProxyModelsOverride?: boolean;
     includeSpecialOptions?: boolean;
+    restrictToCurrentTeamModels?: boolean;
   };
   context: "team" | "organization" | "user" | "global";
   dataTestId?: string;
@@ -45,6 +46,28 @@ type FilterContextArgs = {
   options?: ModelSelectProps["options"];
 };
 
+/**
+ * The team's own models, when the caller may only narrow that list (a team
+ * admin can drop a model but not grant a new one — /team/update rejects it).
+ * Returns null when the restriction doesn't apply, including when the team
+ * already reaches every model, since nothing can widen it further.
+ */
+const keepOnlyCurrentTeamModels = (
+  selectedTeam: Team | undefined,
+  options: ModelSelectProps["options"],
+  allProxyModels: string[],
+): string[] | null => {
+  if (!options?.restrictToCurrentTeamModels) return null;
+  const teamModels = selectedTeam?.models ?? [];
+  if (teamModels.length === 0) return null;
+  if (teamModels.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) || teamModels.includes("*")) return null;
+  const wildcardPrefixes = teamModels.filter((m) => m.endsWith("/*")).map((m) => m.slice(0, -1));
+  const reachableProxyModels = allProxyModels.filter((model) =>
+    wildcardPrefixes.some((prefix) => model.startsWith(prefix)),
+  );
+  return Array.from(new Set([...teamModels, ...reachableProxyModels]));
+};
+
 const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextArgs) => string[]> = {
   user: ({ allProxyModels, userModels, options }) => {
     if (!userModels) return [];
@@ -52,7 +75,10 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
     return [];
   },
 
-  team: ({ allProxyModels, selectedOrganization, userModels }) => {
+  team: ({ allProxyModels, selectedTeam, selectedOrganization, userModels, options }) => {
+    const currentTeamModels = keepOnlyCurrentTeamModels(selectedTeam, options, allProxyModels);
+    if (currentTeamModels) return currentTeamModels;
+
     if (selectedOrganization) {
       if (
         selectedOrganization.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
@@ -107,7 +133,8 @@ export const ModelSelect = (props: ModelSelectProps) => {
     organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
     organization?.models.length === 0;
   const shouldShowAllProxyModels =
-    showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
+    keepOnlyCurrentTeamModels(team, options, []) === null &&
+    (showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global");
 
   if (isLoading) {
     return <Skeleton.Input active block />;
