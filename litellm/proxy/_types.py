@@ -517,6 +517,11 @@ class LiteLLMRoutes(enum.Enum):
         "/guardrails/apply_guardrail",
     ]
 
+    model_info_routes = [
+        "/model/info",
+        "/v1/model/info",
+    ]
+
     llm_api_routes = (
         openai_routes
         + anthropic_routes
@@ -527,6 +532,7 @@ class LiteLLMRoutes(enum.Enum):
         + mcp_inference_routes
         + litellm_native_routes
         + agent_routes
+        + model_info_routes
     )
     info_routes = [
         "/key/info",
@@ -653,8 +659,8 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/all_tag_names",
     ]
 
-    public_routes = set(
-        [
+    public_routes = frozenset(
+        (
             "/routes",
             "/",
             "/health/liveliness",
@@ -669,7 +675,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/mcp_hub",
             "/public/skill_hub",
             "/public/litellm_model_cost_map",
-        ]
+        )
     )
 
     # Retained for backwards compatibility with JWT auth configs that reference
