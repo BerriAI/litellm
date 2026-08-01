@@ -2,7 +2,7 @@ import asyncio
 import contextvars
 import json
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, overload
+from typing import Coroutine, Dict, List, Literal, Optional, Union, overload
 
 import litellm
 from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL
@@ -40,8 +40,8 @@ async def avideo_generation(
     custom_llm_provider=None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> VideoObject:
@@ -57,9 +57,9 @@ async def avideo_generation(
     - `user` (Optional[str]): A unique identifier representing your end-user
     - `timeout` (int): Request timeout in seconds
     - `custom_llm_provider` (Optional[str]): The LLM provider to use
-    - `extra_headers` (Optional[Dict[str, str]]): Additional headers
-    - `extra_query` (Optional[Dict[str, str]]): Additional query parameters
-    - `extra_body` (Optional[Dict[str, object]]): Additional body parameters
+    - `extra_headers` (Optional[Dict[str, Any]]): Additional headers
+    - `extra_query` (Optional[Dict[str, Any]]): Additional query parameters
+    - `extra_body` (Optional[Dict[str, Any]]): Additional body parameters
     - `kwargs` (dict): Additional keyword arguments
 
     Returns:
@@ -126,13 +126,13 @@ def video_generation(
     user: Optional[str] = None,
     timeout: int = 600,
     custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     *,
     avideo_generation: Literal[True],
     **kwargs: object,
-) -> Coroutine[None, None, VideoObject]:
+) -> Coroutine[object, object, VideoObject]:
     ...
 
 
@@ -146,8 +146,8 @@ def video_generation(
     user: Optional[str] = None,
     timeout: int = 600,
     custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     *,
     avideo_generation: Literal[False] = False,
@@ -170,13 +170,13 @@ def video_generation(
     custom_llm_provider=None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> Union[
     VideoObject,
-    Coroutine[None, None, VideoObject],
+    Coroutine[object, object, VideoObject],
 ]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
@@ -277,13 +277,13 @@ def video_content(
     variant: Optional[str] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> Union[
     bytes,
-    Coroutine[None, None, bytes],
+    Coroutine[object, object, bytes],
 ]:
     """
     Download video content from OpenAI's video API.
@@ -295,9 +295,9 @@ def video_content(
         timeout (Optional[float]): The timeout for the request in seconds.
         custom_llm_provider (Optional[str]): The LLM provider to use. If not provided, will be auto-detected.
         variant (Optional[str]): Which downloadable asset to return. Defaults to the MP4 video.
-        extra_headers (Optional[Dict[str, str]]): Additional headers to include in the request.
-        extra_query (Optional[Dict[str, str]]): Additional query parameters.
-        extra_body (Optional[Dict[str, object]]): Additional body parameters.
+        extra_headers (Optional[Dict[str, Any]]): Additional headers to include in the request.
+        extra_query (Optional[Dict[str, Any]]): Additional query parameters.
+        extra_body (Optional[Dict[str, Any]]): Additional body parameters.
 
     Returns:
         bytes: The raw video content as bytes.
@@ -390,8 +390,8 @@ async def avideo_content(
     variant: Optional[str] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> bytes:
@@ -402,9 +402,9 @@ async def avideo_content(
     - `video_id` (str): The identifier of the video whose content to download
     - `timeout` (Optional[float]): The timeout for the request in seconds
     - `custom_llm_provider` (Optional[str]): The LLM provider to use
-    - `extra_headers` (Optional[Dict[str, str]]): Additional headers
-    - `extra_query` (Optional[Dict[str, str]]): Additional query parameters
-    - `extra_body` (Optional[Dict[str, object]]): Additional body parameters
+    - `extra_headers` (Optional[Dict[str, Any]]): Additional headers
+    - `extra_query` (Optional[Dict[str, Any]]): Additional query parameters
+    - `extra_body` (Optional[Dict[str, Any]]): Additional body parameters
     - `kwargs` (dict): Additional keyword arguments
 
     Returns:
@@ -461,8 +461,8 @@ async def avideo_remix(
     custom_llm_provider=None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> VideoObject:
@@ -474,9 +474,9 @@ async def avideo_remix(
     - `prompt` (str): Updated text prompt that directs the remix generation
     - `timeout` (int): Request timeout in seconds
     - `custom_llm_provider` (Optional[str]): The LLM provider to use
-    - `extra_headers` (Optional[Dict[str, str]]): Additional headers
-    - `extra_query` (Optional[Dict[str, str]]): Additional query parameters
-    - `extra_body` (Optional[Dict[str, object]]): Additional body parameters
+    - `extra_headers` (Optional[Dict[str, Any]]): Additional headers
+    - `extra_query` (Optional[Dict[str, Any]]): Additional query parameters
+    - `extra_body` (Optional[Dict[str, Any]]): Additional body parameters
     - `kwargs` (dict): Additional keyword arguments
 
     Returns:
@@ -528,13 +528,13 @@ def video_remix(
     prompt: str,
     timeout: int = 600,
     custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     *,
     avideo_remix: Literal[True],
     **kwargs: object,
-) -> Coroutine[None, None, VideoObject]:
+) -> Coroutine[object, object, VideoObject]:
     ...
 
 
@@ -544,8 +544,8 @@ def video_remix(
     prompt: str,
     timeout: int = 600,
     custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     *,
     avideo_remix: Literal[False] = False,
@@ -564,13 +564,13 @@ def video_remix(
     custom_llm_provider=None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> Union[
     VideoObject,
-    Coroutine[None, None, VideoObject],
+    Coroutine[object, object, VideoObject],
 ]:
     """
     Maps the https://api.openai.com/v1/videos/{video_id}/remix endpoint.
@@ -668,8 +668,8 @@ async def avideo_list(
     custom_llm_provider=None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> List[VideoObject]:
@@ -683,9 +683,9 @@ async def avideo_list(
     - `api_key` (Optional[str]): The API key to use for authentication
     - `timeout` (int): Request timeout in seconds
     - `custom_llm_provider` (Optional[str]): The LLM provider to use
-    - `extra_headers` (Optional[Dict[str, str]]): Additional headers
-    - `extra_query` (Optional[Dict[str, str]]): Additional query parameters
-    - `extra_body` (Optional[Dict[str, object]]): Additional body parameters
+    - `extra_headers` (Optional[Dict[str, Any]]): Additional headers
+    - `extra_query` (Optional[Dict[str, Any]]): Additional query parameters
+    - `extra_body` (Optional[Dict[str, Any]]): Additional body parameters
     - `kwargs` (dict): Additional keyword arguments
 
     Returns:
@@ -744,13 +744,13 @@ def video_list(
     order: Optional[str] = None,
     timeout: int = 600,
     custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     *,
     avideo_list: Literal[True],
     **kwargs: object,
-) -> Coroutine[None, None, List[VideoObject]]:
+) -> Coroutine[object, object, List[VideoObject]]:
     ...
 
 
@@ -761,8 +761,8 @@ def video_list(
     order: Optional[str] = None,
     timeout: int = 600,
     custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     *,
     avideo_list: Literal[False] = False,
@@ -782,13 +782,13 @@ def video_list(
     custom_llm_provider=None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> Union[
     List[VideoObject],
-    Coroutine[None, None, List[VideoObject]],
+    Coroutine[object, object, List[VideoObject]],
 ]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
@@ -882,8 +882,8 @@ async def avideo_status(
     custom_llm_provider=None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> VideoObject:
@@ -895,9 +895,9 @@ async def avideo_status(
     - `model` (Optional[str]): The model to use. If not provided, will be auto-detected
     - `timeout` (int): Request timeout in seconds
     - `custom_llm_provider` (Optional[str]): The LLM provider to use
-    - `extra_headers` (Optional[Dict[str, str]]): Additional headers
-    - `extra_query` (Optional[Dict[str, str]]): Additional query parameters
-    - `extra_body` (Optional[Dict[str, object]]): Additional body parameters
+    - `extra_headers` (Optional[Dict[str, Any]]): Additional headers
+    - `extra_query` (Optional[Dict[str, Any]]): Additional query parameters
+    - `extra_body` (Optional[Dict[str, Any]]): Additional body parameters
     - `kwargs` (dict): Additional keyword arguments
 
     Returns:
@@ -947,13 +947,13 @@ def video_status(
     video_id: str,
     timeout: int = 600,
     custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     *,
     avideo_status: Literal[True],
     **kwargs: object,
-) -> Coroutine[None, None, VideoObject]:
+) -> Coroutine[object, object, VideoObject]:
     ...
 
 # Overload for when avideo_status=False (returns VideoObject)
@@ -962,8 +962,8 @@ def video_status(
     video_id: str,
     timeout: int = 600,
     custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     *,
     avideo_status: Literal[False] = False,
@@ -981,13 +981,13 @@ def video_status(
     custom_llm_provider=None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> Union[
     VideoObject,
-    Coroutine[None, None, VideoObject],
+    Coroutine[object, object, VideoObject],
 ]:
     """
     Retrieve video status from OpenAI's video API.
@@ -996,9 +996,9 @@ def video_status(
         video_id (str): The identifier of the video whose status to retrieve.
         timeout (int): The timeout for the request in seconds.
         custom_llm_provider (Optional[str]): The LLM provider to use. If not provided, will be auto-detected.
-        extra_headers (Optional[Dict[str, str]]): Additional headers to include in the request.
-        extra_query (Optional[Dict[str, str]]): Additional query parameters.
-        extra_body (Optional[Dict[str, object]]): Additional body parameters.
+        extra_headers (Optional[Dict[str, Any]]): Additional headers to include in the request.
+        extra_query (Optional[Dict[str, Any]]): Additional query parameters.
+        extra_body (Optional[Dict[str, Any]]): Additional body parameters.
 
     Returns:
         VideoObject: The video status information.
@@ -1097,11 +1097,11 @@ def video_status(
 @client
 async def avideo_create_character(
     name: str,
-    video: Any,
+    video: FileTypes,
     timeout=600,
     custom_llm_provider=None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> CharacterObject:
@@ -1152,14 +1152,14 @@ async def avideo_create_character(
 @client
 def video_create_character(
     name: str,
-    video: Any,
+    video: FileTypes,
     timeout=600,
     custom_llm_provider=None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
-) -> Union[CharacterObject, Coroutine[None, None, CharacterObject]]:
+) -> Union[CharacterObject, Coroutine[object, object, CharacterObject]]:
     """
     Create a character from an uploaded video file.
     Maps to POST /v1/videos/characters
@@ -1230,8 +1230,8 @@ async def avideo_get_character(
     character_id: str,
     timeout=600,
     custom_llm_provider=None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> CharacterObject:
@@ -1280,11 +1280,11 @@ def video_get_character(
     character_id: str,
     timeout=600,
     custom_llm_provider=None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
-) -> Union[CharacterObject, Coroutine[None, None, CharacterObject]]:
+) -> Union[CharacterObject, Coroutine[object, object, CharacterObject]]:
     """
     Retrieve a character by ID.
     Maps to GET /v1/videos/characters/{character_id}
@@ -1355,8 +1355,8 @@ async def avideo_edit(
     prompt: str,
     timeout=600,
     custom_llm_provider=None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> VideoObject:
@@ -1407,11 +1407,11 @@ def video_edit(
     prompt: str,
     timeout=600,
     custom_llm_provider=None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
-) -> Union[VideoObject, Coroutine[None, None, VideoObject]]:
+) -> Union[VideoObject, Coroutine[object, object, VideoObject]]:
     """
     Create a video edit job.
     Maps to POST /v1/videos/edits
@@ -1486,8 +1486,8 @@ async def avideo_extension(
     seconds: str,
     timeout=600,
     custom_llm_provider=None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
 ) -> VideoObject:
@@ -1540,11 +1540,11 @@ def video_extension(
     seconds: str,
     timeout=600,
     custom_llm_provider=None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_query: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, object]] = None,
+    extra_query: Optional[Dict[str, object]] = None,
     extra_body: Optional[Dict[str, object]] = None,
     **kwargs,
-) -> Union[VideoObject, Coroutine[None, None, VideoObject]]:
+) -> Union[VideoObject, Coroutine[object, object, VideoObject]]:
     """
     Create a video extension.
     Maps to POST /v1/videos/extensions

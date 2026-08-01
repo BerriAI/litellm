@@ -4,9 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import quote
 
 import httpx
-from httpx._types import FileContent as HttpxFileContent
-from httpx._types import FileTypes as HttpxFileTypes
-from httpx._types import RequestFiles
+from httpx._types import FileContent, FileTypes, RequestFiles
 
 import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -130,7 +128,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         # Handle input_reference parameter if provided
         _input_reference = video_create_optional_request_params.get("input_reference")
         data_without_files = {k: v for k, v in request_dict.items() if k not in ["input_reference"]}
-        files_list: List[Tuple[str, HttpxFileTypes]] = []
+        files_list: List[Tuple[str, FileTypes]] = []
 
         # Handle input_reference parameter
         if _input_reference is not None:
@@ -234,7 +232,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: Optional[Dict[str, object]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video remix request for OpenAI API.
@@ -249,7 +247,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         url = f"{api_base.rstrip('/')}/{encoded_video_id}/remix"
 
         # Prepare the request data
-        data: dict[str, object] = {"prompt": prompt}
+        data = {"prompt": prompt}
 
         # Add any extra body parameters
         if extra_body:
@@ -274,6 +272,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         Transform the OpenAI video remix response.
         """
+        # Transform the response data
         video_obj = VideoObject.model_validate(raw_response.json())
 
         if custom_llm_provider and video_obj.id:
@@ -301,7 +300,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         after: Optional[str] = None,
         limit: Optional[int] = None,
         order: Optional[str] = None,
-        extra_query: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video list request for OpenAI API.
@@ -313,7 +312,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         url = api_base
 
         # Prepare query parameters
-        params: dict[str, str] = {}
+        params = {}
         if after is not None:
             # Decode the wrapped video ID back to the original provider ID
             params["after"] = extract_original_video_id(after)
@@ -401,6 +400,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         Transform the OpenAI video delete response.
         """
+        # Transform the response data
         video_obj = VideoObject.model_validate(raw_response.json())
 
         return video_obj
@@ -436,6 +436,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         Transform the OpenAI video retrieve response.
         """
+        # Transform the response data
         video_obj = VideoObject.model_validate(raw_response.json())
 
         if custom_llm_provider and video_obj.id:
@@ -457,13 +458,13 @@ class OpenAIVideoConfig(BaseVideoConfig):
     def transform_video_create_character_request(
         self,
         name: str,
-        video: HttpxFileContent,
+        video: FileContent,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[str, list]:
         url = f"{api_base.rstrip('/')}/characters"
-        files_list: List[Tuple[str, HttpxFileTypes]] = [("name", (None, name))]
+        files_list: List[Tuple[str, FileTypes]] = [("name", (None, name))]
         self._add_video_to_files(files_list, video, "video")
         return url, files_list
 
@@ -570,8 +571,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def _add_video_to_files(
         self,
-        files_list: List[Tuple[str, HttpxFileTypes]],
-        video: HttpxFileContent,
+        files_list: List[Tuple[str, FileTypes]],
+        video: FileContent,
         field_name: str,
     ) -> None:
         """
@@ -585,7 +586,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         content_type = self._get_video_content_type(video=video, filename=filename)
         files_list.append((field_name, (filename, video, content_type)))
 
-    def _get_video_content_type(self, video: HttpxFileContent, filename: str) -> str:
+    def _get_video_content_type(self, video: FileContent, filename: str) -> str:
         guessed_content_type, _ = mimetypes.guess_type(filename)
         if guessed_content_type and guessed_content_type.startswith("video/"):
             return guessed_content_type
