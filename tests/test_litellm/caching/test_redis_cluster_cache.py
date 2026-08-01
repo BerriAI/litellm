@@ -1,10 +1,9 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -119,6 +118,64 @@ def test_cache_init_creates_redis_cache_without_cluster_config(
     cache = Cache(type="redis")
     assert isinstance(cache.cache, RedisCache)
     assert not isinstance(cache.cache, RedisClusterCache)
+
+
+@pytest.mark.asyncio
+@patch("litellm._redis.get_redis_connection_pool", return_value=None)
+@patch("litellm._redis.get_redis_client")
+@patch("litellm.caching.redis_cache.RedisCache._setup_health_pings")
+async def test_redis_cluster_disconnect_handles_missing_connection_pool(
+    _mock_health, mock_get_client, mock_get_pool
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/31206.
+
+    Redis cluster mode does not use async_redis_conn_pool, so shutdown should
+    skip pool disconnect instead of raising AttributeError on None.
+    """
+    mock_sync_client = MagicMock()
+    mock_get_client.return_value = mock_sync_client
+
+    cache = RedisClusterCache(startup_nodes=[{"host": "localhost", "port": 6379}])
+
+    await cache.disconnect()
+
+    mock_get_pool.assert_called_once()
+    mock_sync_client.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("litellm._redis.get_redis_connection_pool", return_value=None)
+@patch("litellm._redis.get_redis_client")
+@patch("litellm.caching.redis_cache.RedisCache._setup_health_pings")
+async def test_redis_cluster_disconnect_closes_async_client_when_initialized(
+    _mock_health, mock_get_client, _mock_get_pool
+):
+    """Redis cluster shutdown should close the async client if one exists."""
+    mock_sync_client = MagicMock()
+    mock_get_client.return_value = mock_sync_client
+
+    cache = RedisClusterCache(startup_nodes=[{"host": "localhost", "port": 6379}])
+    mock_async_client = AsyncMock()
+    cache.redis_async_client = mock_async_client
+
+    await cache.disconnect()
+
+    mock_async_client.aclose.assert_awaited_once()
+    mock_sync_client.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_redis_disconnect_still_errors_when_non_cluster_pool_missing():
+    """Do not silently mask a missing pool for non-cluster Redis configs."""
+    cache = object.__new__(RedisCache)
+    cache.async_redis_conn_pool = None
+    cache.redis_kwargs = {}
+    cache.redis_client = MagicMock()
+    cache.redis_async_client = None
+
+    with pytest.raises(RuntimeError, match="Redis connection pool is not initialized"):
+        await cache.disconnect()
 
 
 @pytest.mark.parametrize(

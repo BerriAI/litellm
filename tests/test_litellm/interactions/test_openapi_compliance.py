@@ -159,13 +159,13 @@ class TestResponseCompliance:
         # schema no longer carries `steps`. Keep this aligned with the live spec.
         schema = spec_dict["components"]["schemas"]["Interaction"]
 
-        # Output fields (readOnly).
+        # Output fields (readOnly). The live Interaction schema no longer
+        # exposes a top-level `role`; role remains part of Turn/content payloads.
         output_fields = [
             "id",
             "status",
             "created",
             "updated",
-            "role",
             "steps",
             "usage",
         ]
