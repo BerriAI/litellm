@@ -8,12 +8,15 @@ writes from other pods, so trusting it allows budget bypass in multi-pod
 deployments. This module reseeds from the authoritative DB instead.
 
 A per-counter singleflight lock collapses concurrent reseeds on the same pod
-to one DB query per cold-cache window. The lock dict is bounded LRU to cap
-memory in long-lived deployments.
+to one DB query per cold-cache window. The lock registry retains active locks
+and bounds idle entries with LRU eviction in long-lived deployments.
 """
 
 import asyncio
 from collections import OrderedDict
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, ClassVar, Optional
 
@@ -36,6 +39,12 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
+@dataclass
+class _CounterLock:
+    lock: asyncio.Lock
+    users: int = 0
+
+
 class SpendCounterReseed:
     """
     Reseeds spend counters from the authoritative DB and warms the cache,
@@ -53,23 +62,60 @@ class SpendCounterReseed:
     and get_tag_objects_batch(); callers pass those values as fallback_spend.
     """
 
-    _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
+    _locks: ClassVar["OrderedDict[str, _CounterLock]"] = OrderedDict()
     _registry_lock: ClassVar[Optional[asyncio.Lock]] = None
 
     @staticmethod
-    async def _get_lock(counter_key: str) -> asyncio.Lock:
+    def _get_registry_lock() -> asyncio.Lock:
         if SpendCounterReseed._registry_lock is None:
             SpendCounterReseed._registry_lock = asyncio.Lock()
-        async with SpendCounterReseed._registry_lock:
-            lock = SpendCounterReseed._locks.get(counter_key)
-            if lock is not None:
-                SpendCounterReseed._locks.move_to_end(counter_key)
-                return lock
-            lock = asyncio.Lock()
-            SpendCounterReseed._locks[counter_key] = lock
-            if len(SpendCounterReseed._locks) > SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE:
-                SpendCounterReseed._locks.popitem(last=False)
-            return lock
+        return SpendCounterReseed._registry_lock
+
+    @staticmethod
+    def _get_or_create_lock(counter_key: str) -> _CounterLock:
+        counter_lock = SpendCounterReseed._locks.get(counter_key)
+        if counter_lock is None:
+            counter_lock = _CounterLock(lock=asyncio.Lock())
+            SpendCounterReseed._locks[counter_key] = counter_lock
+        SpendCounterReseed._locks.move_to_end(counter_key)
+        return counter_lock
+
+    @staticmethod
+    def _prune_idle_locks() -> None:
+        while len(SpendCounterReseed._locks) > SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE:
+            idle_key = next(
+                (
+                    key
+                    for key, counter_lock in SpendCounterReseed._locks.items()
+                    if counter_lock.users == 0 and not counter_lock.lock.locked()
+                ),
+                None,
+            )
+            if idle_key is None:
+                return
+            SpendCounterReseed._locks.pop(idle_key)
+
+    @staticmethod
+    async def _get_lock(counter_key: str) -> asyncio.Lock:
+        async with SpendCounterReseed._get_registry_lock():
+            counter_lock = SpendCounterReseed._get_or_create_lock(counter_key)
+            SpendCounterReseed._prune_idle_locks()
+            return counter_lock.lock
+
+    @staticmethod
+    @asynccontextmanager
+    async def _counter_lock(counter_key: str) -> AsyncIterator[None]:
+        async with SpendCounterReseed._get_registry_lock():
+            counter_lock = SpendCounterReseed._get_or_create_lock(counter_key)
+            counter_lock.users += 1
+        try:
+            lock = await SpendCounterReseed._get_lock(counter_key)
+            async with lock:
+                yield
+        finally:
+            async with SpendCounterReseed._get_registry_lock():
+                counter_lock.users -= 1
+                SpendCounterReseed._prune_idle_locks()
 
     @staticmethod
     async def from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> Optional[float]:
@@ -152,8 +198,7 @@ class SpendCounterReseed:
         Returns the spend value (including 0.0 from a fresh budget reset)
         when the DB read succeeds, or None when the DB is unavailable.
         """
-        lock = await SpendCounterReseed._get_lock(counter_key)
-        async with lock:
+        async with SpendCounterReseed._counter_lock(counter_key):
             # Re-check after acquiring the lock. Skip in-memory on a clean
             # Redis miss - in-memory is per-pod-stale.
             redis_clean_miss = False
@@ -197,7 +242,15 @@ class SpendCounterReseed:
                         value=current_value,
                     )
                 else:
-                    await spend_counter_cache.async_increment_cache(key=counter_key, value=db_spend, refresh_ttl=True)
+                    cached = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                    if cached is not None:
+                        current_value = float(cached)
+                    else:
+                        current_value = await spend_counter_cache.async_increment_cache(
+                            key=counter_key,
+                            value=db_spend,
+                            refresh_ttl=True,
+                        )
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced: failed to warm counter %s",
@@ -262,8 +315,7 @@ class SpendCounterReseed:
         entity_id: str,
         window_start: datetime,
     ) -> Optional[float]:
-        lock = await SpendCounterReseed._get_lock(counter_key)
-        async with lock:
+        async with SpendCounterReseed._counter_lock(counter_key):
             redis_clean_miss = False
             if spend_counter_cache.redis_cache is not None:
                 try:

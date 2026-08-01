@@ -8058,6 +8058,189 @@ async def test_get_current_spend_uses_db_zero_over_stale_fallback():
 
 
 @pytest.mark.asyncio
+async def test_cold_reseed_serializes_with_direct_counter_repair():
+    """A repair cannot write between a cold reseed's DB read and seed."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+
+    counter_key = "spend:team:team-repair-race"
+    db_spend = 100.0
+    db_read_started = asyncio.Event()
+    release_db_read = asyncio.Event()
+
+    async def from_db(*_args, **_kwargs):
+        db_read_started.set()
+        await release_db_read.wait()
+        return db_spend
+
+    import litellm.proxy.proxy_server as ps
+
+    original_counter_cache = ps.spend_counter_cache
+    original_prisma_client = ps.prisma_client
+    ps.spend_counter_cache = DualCache()
+    ps.prisma_client = MagicMock()
+    try:
+        with patch.object(SpendCounterReseed, "from_db", side_effect=from_db):
+            cold_reseed = asyncio.create_task(
+                SpendCounterReseed.coalesced(
+                    prisma_client=ps.prisma_client,
+                    spend_counter_cache=ps.spend_counter_cache,
+                    counter_key=counter_key,
+                )
+            )
+            await db_read_started.wait()
+            repair = asyncio.create_task(
+                ps._repair_stale_spend_counter(
+                    counter_key=counter_key,
+                    db_spend=db_spend,
+                )
+            )
+            await asyncio.sleep(0)
+            release_db_read.set()
+            await asyncio.gather(cold_reseed, repair)
+
+        assert ps.spend_counter_cache.in_memory_cache.get_cache(
+            key=counter_key
+        ) == pytest.approx(db_spend)
+    finally:
+        ps.spend_counter_cache = original_counter_cache
+        ps.prisma_client = original_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_cold_reseed_serializes_with_reservation_reconciliation_and_increment():
+    """Reconciliation reseeds and request increments retain the DB floor."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+
+    counter_key = "spend:team:team-reservation-race"
+    db_spend = 100.0
+    request_cost = 3.5
+    db_read_started = asyncio.Event()
+    reconciliation_db_read = asyncio.Event()
+    release_db_read = asyncio.Event()
+    db_read_count = 0
+
+    async def from_db(*_args, **_kwargs):
+        nonlocal db_read_count
+        db_read_count += 1
+        if db_read_count == 1:
+            db_read_started.set()
+            await release_db_read.wait()
+        else:
+            reconciliation_db_read.set()
+        return db_spend
+
+    budget_reservation = {
+        "reserved_cost": 1.0,
+        "entries": [
+            {
+                "counter_key": counter_key,
+                "reserved_cost": 1.0,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    import litellm.proxy.proxy_server as ps
+
+    original_counter_cache = ps.spend_counter_cache
+    original_prisma_client = ps.prisma_client
+    ps.spend_counter_cache = DualCache()
+    ps.prisma_client = MagicMock()
+    try:
+        with patch.object(SpendCounterReseed, "from_db", side_effect=from_db):
+            cold_reseed = asyncio.create_task(
+                SpendCounterReseed.coalesced(
+                    prisma_client=ps.prisma_client,
+                    spend_counter_cache=ps.spend_counter_cache,
+                    counter_key=counter_key,
+                )
+            )
+            await db_read_started.wait()
+            reconciliation = asyncio.create_task(
+                ps.increment_spend_counters(
+                    token=None,
+                    team_id=None,
+                    user_id=None,
+                    response_cost=0.5,
+                    budget_reservation=budget_reservation,
+                )
+            )
+            await reconciliation_db_read.wait()
+            request_increment = asyncio.create_task(
+                ps._increment_spend_counter_cache(
+                    counter_key=counter_key,
+                    increment=request_cost,
+                )
+            )
+            await asyncio.sleep(0)
+            release_db_read.set()
+            await asyncio.gather(cold_reseed, reconciliation, request_increment)
+
+        assert budget_reservation["finalized"] is True
+        assert ps.spend_counter_cache.in_memory_cache.get_cache(
+            key=counter_key
+        ) == pytest.approx(db_spend + request_cost)
+    finally:
+        ps.spend_counter_cache = original_counter_cache
+        ps.prisma_client = original_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_request_increment_waits_for_cold_reseed_and_preserves_db_floor():
+    """A request increment after a cold counter miss starts from DB spend."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+
+    counter_key = "spend:team:team-increment-race"
+    db_spend = 100.0
+    request_cost = 3.5
+    db_read_started = asyncio.Event()
+    release_db_read = asyncio.Event()
+
+    async def from_db(*_args, **_kwargs):
+        db_read_started.set()
+        await release_db_read.wait()
+        return db_spend
+
+    import litellm.proxy.proxy_server as ps
+
+    original_counter_cache = ps.spend_counter_cache
+    original_prisma_client = ps.prisma_client
+    ps.spend_counter_cache = DualCache()
+    ps.prisma_client = MagicMock()
+    try:
+        with patch.object(SpendCounterReseed, "from_db", side_effect=from_db):
+            cold_reseed = asyncio.create_task(
+                SpendCounterReseed.coalesced(
+                    prisma_client=ps.prisma_client,
+                    spend_counter_cache=ps.spend_counter_cache,
+                    counter_key=counter_key,
+                )
+            )
+            await db_read_started.wait()
+            request_increment = asyncio.create_task(
+                ps._increment_spend_counter_cache(
+                    counter_key=counter_key,
+                    increment=request_cost,
+                )
+            )
+            await asyncio.sleep(0)
+            assert request_increment.done() is False
+            release_db_read.set()
+            await asyncio.gather(cold_reseed, request_increment)
+
+        assert ps.spend_counter_cache.in_memory_cache.get_cache(
+            key=counter_key
+        ) == pytest.approx(db_spend + request_cost)
+    finally:
+        ps.spend_counter_cache = original_counter_cache
+        ps.prisma_client = original_prisma_client
+
+
+@pytest.mark.asyncio
 async def test_concurrent_read_and_write_paths_share_one_db_query():
     """
     The read path (`get_current_spend`) and the write path
@@ -8184,6 +8367,91 @@ async def test_reseed_locks_dict_is_bounded():
         scr.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = orig_module_max
         SpendCounterReseed._locks.clear()
         SpendCounterReseed._locks.update(orig_locks)
+
+
+@pytest.mark.asyncio
+async def test_active_reseed_lock_survives_registry_pressure(monkeypatch):
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+    import litellm.proxy.db.spend_counter_reseed as scr
+
+    target_key = "spend:key:active-lock"
+    original_locks = SpendCounterReseed._locks.copy()
+    SpendCounterReseed._locks.clear()
+    monkeypatch.setattr(scr, "SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 2)
+    holder_entered = asyncio.Event()
+    release_holder = asyncio.Event()
+    second_entered = asyncio.Event()
+
+    async def hold_target_lock():
+        async with SpendCounterReseed._counter_lock(target_key):
+            holder_entered.set()
+            await release_holder.wait()
+
+    async def acquire_target_lock():
+        async with SpendCounterReseed._counter_lock(target_key):
+            second_entered.set()
+
+    holder = asyncio.create_task(hold_target_lock())
+    second = None
+    try:
+        await holder_entered.wait()
+        first_lock = await SpendCounterReseed._get_lock(target_key)
+        for index in range(3):
+            await SpendCounterReseed._get_lock(f"spend:key:pressure-{index}")
+        second_lock = await SpendCounterReseed._get_lock(target_key)
+
+        assert second_lock is first_lock
+        second = asyncio.create_task(acquire_target_lock())
+        await asyncio.sleep(0)
+        assert second_entered.is_set() is False
+    finally:
+        release_holder.set()
+        await holder
+        if second is not None:
+            await second
+        SpendCounterReseed._locks.clear()
+        SpendCounterReseed._locks.update(original_locks)
+
+    assert second_entered.is_set() is True
+
+
+@pytest.mark.asyncio
+async def test_reseed_registry_exceeds_limit_only_while_locks_are_active(monkeypatch):
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+    import litellm.proxy.db.spend_counter_reseed as scr
+
+    original_locks = SpendCounterReseed._locks.copy()
+    SpendCounterReseed._locks.clear()
+    monkeypatch.setattr(scr, "SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 1)
+    first_entered = asyncio.Event()
+    second_entered = asyncio.Event()
+    release_locks = asyncio.Event()
+    remaining_lock_count: int | None = None
+
+    async def hold_lock(counter_key: str, entered: asyncio.Event):
+        async with SpendCounterReseed._counter_lock(counter_key):
+            entered.set()
+            await release_locks.wait()
+
+    first = asyncio.create_task(hold_lock("spend:key:first", first_entered))
+    second = None
+    try:
+        await first_entered.wait()
+        second = asyncio.create_task(hold_lock("spend:key:second", second_entered))
+        await second_entered.wait()
+
+        assert len(SpendCounterReseed._locks) == 2
+    finally:
+        release_locks.set()
+        await first
+        if second is not None:
+            await second
+        remaining_lock_count = len(SpendCounterReseed._locks)
+        SpendCounterReseed._locks.clear()
+        SpendCounterReseed._locks.update(original_locks)
+
+    assert remaining_lock_count is not None
+    assert remaining_lock_count <= 1
 
 
 @pytest.mark.asyncio
