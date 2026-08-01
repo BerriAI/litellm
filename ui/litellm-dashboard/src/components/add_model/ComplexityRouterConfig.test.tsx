@@ -147,6 +147,57 @@ describe("ComplexityRouterConfig", () => {
     expect(within(perTurnCharsSection).getByDisplayValue("200")).toBeInTheDocument();
   });
 
+  it("should show the assistant-turns switch with its configured value when classifier_type is llm", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 750 },
+      classifier_context_include_assistant_turns: true,
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    expect(screen.getByText("Include Assistant Turns")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).toBeChecked();
+  });
+
+  it("should render the assistant-turns switch off when it is not set", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).not.toBeChecked();
+  });
+
+  it("should hide the assistant-turns switch when classifier_type is heuristic", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByText("Include Assistant Turns")).not.toBeInTheDocument();
+  });
+
+  it("should call onChange when the assistant-turns switch is toggled", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("switch", { name: "Include Assistant Turns" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ classifier_context_include_assistant_turns: true }),
+    );
+  });
+
   it("should hide classifier context fields when classifier_type is heuristic", () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
