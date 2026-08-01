@@ -124,6 +124,28 @@ def test_get_usage_from_response_body_missing_is_zero():
     )
 
 
+def test_get_usage_from_response_body_responses_api_input_output_tokens():
+    usage = bu._get_batch_job_usage_from_response_body(
+        {"usage": {"input_tokens": 33, "output_tokens": 57, "total_tokens": 90}}
+    )
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        33,
+        57,
+        90,
+    )
+
+
+def test_get_usage_from_response_body_responses_api_without_total_tokens():
+    usage = bu._get_batch_job_usage_from_response_body(
+        {"usage": {"input_tokens": 12, "output_tokens": 8}}
+    )
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        12,
+        8,
+        20,
+    )
+
+
 # =========================================================================== #
 # _get_file_content_as_dictionary  (JSONL parsing)
 # =========================================================================== #
