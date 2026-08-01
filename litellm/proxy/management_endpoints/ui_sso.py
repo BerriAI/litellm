@@ -148,6 +148,10 @@ _CLI_SSO_FLOW_CACHE_KEY_PREFIX = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:flow"
 _CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX = f"{_CLI_SSO_FLOW_CACHE_KEY_PREFIX}:start_rate_limit"
 _CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS = 60
 _CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS = 30
+_CLI_SSO_REDIS_UNAVAILABLE_DETAIL = (
+    "CLI login requires the proxy's configured Redis cache, which is currently unreachable. "
+    "Retry once Redis is healthy."
+)
 _CLI_SSO_USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _CLI_SSO_LOGIN_ID_RE = re.compile(r"^cli-[A-Za-z0-9_-]{12,124}$")
 _CLI_SSO_USER_CODE_RE = re.compile(rf"^[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}-[{_CLI_SSO_USER_CODE_ALPHABET}]{{4}}$")
@@ -235,11 +239,18 @@ def _check_cli_sso_start_rate_limit(
     rate_limit_cache_key = _get_cli_sso_start_rate_limit_cache_key(
         request=request, use_x_forwarded_for=use_x_forwarded_for
     )
-    current_attempts = cache.increment_cache(
-        key=rate_limit_cache_key,
-        value=1,
-        ttl=_CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS,
-    )
+    try:
+        current_attempts = cache.increment_cache(
+            key=rate_limit_cache_key,
+            value=1,
+            ttl=_CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "CLI SSO start rate limit check failed because the configured Redis cache is unreachable: %s",
+            str(e),
+        )
+        raise HTTPException(status_code=503, detail=_CLI_SSO_REDIS_UNAVAILABLE_DETAIL) from e
     if current_attempts > _CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS:
         raise HTTPException(
             status_code=429,
@@ -291,10 +302,23 @@ def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dic
 def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
     cache_key = _get_cli_sso_flow_cache_key(login_id)
     redis_cache = cache.redis_cache
-    if redis_cache is not None:
-        redis_cache.set_cache(key=cache_key, value=json.dumps(flow), ttl=CLI_SSO_SESSION_TTL_SECONDS)
-    else:
+    if redis_cache is None:
         cache.set_cache(key=cache_key, value=flow, ttl=CLI_SSO_SESSION_TTL_SECONDS)
+        return
+    try:
+        redis_cache.set_cache(
+            key=cache_key,
+            value=json.dumps(flow),
+            ttl=CLI_SSO_SESSION_TTL_SECONDS,
+            raise_on_error=True,
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "CLI SSO login session for login_id=%s could not be written to the configured Redis cache: %s",
+            login_id,
+            str(e),
+        )
+        raise HTTPException(status_code=503, detail=_CLI_SSO_REDIS_UNAVAILABLE_DETAIL) from e
 
 
 def _verify_cli_sso_poll_secret(flow: dict, poll_secret: Optional[str]) -> bool:
