@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from litellm.models.model import LiteLLM_ProxyModelTable
+from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -22,7 +23,10 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     @property
     def table(self) -> Any:
-        return self.prisma_client.db.litellm_proxymodeltable
+        return wrap_table_actions_for_config_sync(
+            actions=self.prisma_client.db.litellm_proxymodeltable,
+            table_name="litellm_proxymodeltable",
+        )
 
     @property
     def model_class(self) -> type[LiteLLM_ProxyModelTable]:

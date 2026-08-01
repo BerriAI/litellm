@@ -151,3 +151,51 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
     expect(result.classifier_context_per_turn_chars).toBeUndefined();
   });
 });
+
+const STORED_ASSISTANT_CTX = {
+  tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+  classifier_type: "llm",
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_context_include_assistant_turns: true,
+};
+
+describe("buildUpdatedComplexityRouterConfig assistant turns", () => {
+  const formBase = {
+    tiers: STORED_ASSISTANT_CTX.tiers,
+    classifier_type: "llm" as const,
+    classifier_llm_config: STORED_ASSISTANT_CTX.classifier_llm_config,
+  };
+
+  it("round-trips an untouched edit without changing the value", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_ASSISTANT_CTX, {
+      ...formBase,
+      classifier_context_include_assistant_turns: true,
+    });
+    expect(result.classifier_context_include_assistant_turns).toBe(true);
+  });
+
+  it("persists turning assistant turns back off", () => {
+    // The off case is the one a preserved-config fallback would silently lose, since false and
+    // "absent" look alike to a truthiness check.
+    const result = buildUpdatedComplexityRouterConfig(STORED_ASSISTANT_CTX, {
+      ...formBase,
+      classifier_context_include_assistant_turns: false,
+    });
+    expect(result.classifier_context_include_assistant_turns).toBe(false);
+  });
+
+  it("omits it when classifier_type is heuristic even if a value lingers in state", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_ASSISTANT_CTX, {
+      tiers: STORED_ASSISTANT_CTX.tiers,
+      classifier_type: "heuristic" as const,
+      classifier_context_include_assistant_turns: true,
+    });
+    expect(result.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+
+  it("does not resurrect a stale stored value once the form's own value is unset", () => {
+    // A MANAGED key: the form wins over the stored config, never falls back to it.
+    const result = buildUpdatedComplexityRouterConfig(STORED_ASSISTANT_CTX, formBase);
+    expect(result.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+});

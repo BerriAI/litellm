@@ -3,6 +3,7 @@ import importlib
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import urllib.parse as urlparse
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import click
 import httpx
 from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
@@ -90,6 +92,72 @@ def _build_db_connection_url_params(
     if extra_params:
         params.update(extra_params)
     return params
+
+
+class DatabaseTimeoutSettings(BaseModel):
+    """The `general_settings` keys that bound how long a statement may hold locks.
+
+    Validated at the boundary so a mistyped value fails at startup with a clear
+    pydantic error instead of a TypeError deep inside URL assembly.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    database_statement_timeout: float | None = None
+    database_lock_timeout: float | None = None
+
+
+def _pg_options_with_timeouts(
+    existing_options: str,
+    statement_timeout: float | None,
+    lock_timeout: float | None,
+) -> str:
+    """Return the Postgres ``options`` value carrying the configured timeouts.
+
+    Prisma has no URL parameter for `statement_timeout` / `lock_timeout`; they are
+    server settings delivered through the standard libpq ``options`` parameter as
+    ``-c <name>=<value>``. Values arrive in seconds (matching the sibling
+    ``database_*_timeout`` settings) and are emitted as integer milliseconds,
+    which is the unit Postgres assumes for a unit-less value.
+
+    Both settings are bounds on how long a single statement may hold its locks.
+    Without them a batch that outlives the Prisma client's HTTP read timeout keeps
+    running server side, holding row locks for as long as the database takes,
+    while the client has already given up; every later flush queues behind it.
+    The query engine's own transaction timeout cannot end that wait, because it
+    cannot interrupt a statement that is already executing.
+
+    Any ``options`` the operator already pinned on the URL is preserved, and a
+    setting they pinned there wins over the configured one. Postgres applies the
+    last occurrence of a setting, so a pinned one is honoured by not appending
+    ours at all; it is matched in every spelling the backend accepts
+    (``-c name=``, ``-cname=``, ``--name=``). The result is applied to
+    ``DATABASE_URL`` only, never ``DIRECT_URL``: that one serves migrations,
+    which legitimately run long and must not be cancelled mid-way.
+    """
+    configured = tuple(
+        f"-c {name}={int(seconds * 1000)}"
+        for name, seconds in (
+            ("statement_timeout", statement_timeout),
+            ("lock_timeout", lock_timeout),
+        )
+        if seconds is not None and not re.search(rf"(?:-c\s*|--){re.escape(name)}=", existing_options)
+    )
+    return " ".join(part for part in (existing_options, *configured) if part)
+
+
+def _url_query_value(url: str | None, key: str) -> str:
+    """Return a single query-param value already present on ``url``, else ""."""
+    if not isinstance(url, str) or url == "":
+        return ""
+    return next(iter(urlparse.parse_qs(urlparse.urlparse(url).query).get(key) or ()), "")
+
+
+def _with_query_value(url: str, key: str, value: str) -> str:
+    """Return ``url`` with a single query param replaced by ``value``."""
+    parsed = urlparse.urlparse(url)
+    pairs = tuple((k, v) for k, v in urlparse.parse_qsl(parsed.query) if k != key) + ((key, value),)
+    return urlparse.urlunparse(parsed._replace(query=urlparse.urlencode(pairs)))
 
 
 def append_query_params(url: str | None, params: dict) -> str:
@@ -1008,6 +1076,8 @@ def run_server(
         db_socket_timeout: int | float | None = None
         db_disable_prepared_statements: bool = False
         db_extra_connection_params: dict | None = None
+        db_statement_timeout: float | None = None
+        db_lock_timeout: float | None = None
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
@@ -1118,6 +1188,9 @@ def run_server(
             else:
                 db_disable_prepared_statements = bool(_disable_prepared_statements)
             db_extra_connection_params = general_settings.get("database_extra_connection_params")
+            db_timeouts = DatabaseTimeoutSettings.model_validate(general_settings)
+            db_statement_timeout = db_timeouts.database_statement_timeout
+            db_lock_timeout = db_timeouts.database_lock_timeout
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is
@@ -1177,8 +1250,19 @@ def run_server(
                 )
                 if os.getenv("DATABASE_URL", None) is not None:
                     database_url = get_secret("DATABASE_URL", default_value=None)
+                    resolved_url: str | None = str(database_url) if database_url else None
+                    pg_options: str = _pg_options_with_timeouts(
+                        _url_query_value(resolved_url, "options"),
+                        db_statement_timeout,
+                        db_lock_timeout,
+                    )
+                    writer_url = (
+                        _with_query_value(resolved_url, "options", pg_options)
+                        if resolved_url and pg_options
+                        else resolved_url
+                    )
                     modified_url = append_query_params(
-                        str(database_url) if database_url else None,
+                        writer_url,
                         connection_url_params,
                     )
                     os.environ["DATABASE_URL"] = modified_url

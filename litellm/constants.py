@@ -357,6 +357,15 @@ NON_LLM_CONNECTION_TIMEOUT = int(
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
 MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
+# One entry per distinct AWS credential-argument set. Per-user cost attribution passes the attributed
+# identity as aws_session_name, so this bounds how many attributed identities keep a cached STS session.
+BEDROCK_IAM_CACHE_MAX_ENTRIES = 1000
+# Single-flight lock stripes over that cache. Only keys landing on the same stripe wait for each
+# other, so a burst of distinct identities still resolves its credentials in parallel.
+BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES = 64
+# Retire a cached STS credential this many seconds before AWS expires it, so a request that reads it
+# still has a usable credential for the whole call.
+STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS = 60
 BEDROCK_MIN_THINKING_BUDGET_TOKENS = int(os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024))
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024
@@ -1461,6 +1470,7 @@ SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
 TOOL_SPEND_TOP_TOOLS = 100
 SPEND_LOG_PARTITION_INTERVAL = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
 SPEND_LOG_PARTITION_PRECREATE_AHEAD = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
+SPEND_LOG_WRITE_BATCH_MAX_BYTES = max(1, int(os.getenv("SPEND_LOG_WRITE_BATCH_MAX_BYTES", 2_000_000)))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = int(os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000))
