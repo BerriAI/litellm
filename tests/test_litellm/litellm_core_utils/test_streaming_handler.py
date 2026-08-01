@@ -404,6 +404,134 @@ def test_multi_chunk_reasoning_and_content(
     assert initialized_custom_stream_wrapper.sent_last_thinking_block is True
 
 
+def _reasoning_delta_chunk(
+    content: Optional[str], reasoning_content: Optional[str]
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chunk-id",
+        object="chat.completion.chunk",
+        created=1741037890,
+        model="glm-5.2",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content, reasoning_content=reasoning_content),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def _merge_reasoning_delta(
+    wrapper: CustomStreamWrapper,
+    content: Optional[str],
+    reasoning_content: Optional[str],
+) -> Optional[str]:
+    response = _reasoning_delta_chunk(content, reasoning_content)
+    wrapper._optional_combine_thinking_block_in_choices(response)
+    assert not hasattr(response.choices[0].delta, "reasoning_content")
+    return response.choices[0].delta.content
+
+
+def test_interleaved_reasoning_reopens_think_block(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    initialized_custom_stream_wrapper.merge_reasoning_content_in_choices = True
+    deltas_and_expected = [
+        ((None, "plan A"), "<think>plan A"),
+        ((None, " more"), " more"),
+        (("answer part 1", None), "</think>answer part 1"),
+        ((None, "plan B"), "<think>plan B"),
+        (("answer part 2", None), "</think>answer part 2"),
+    ]
+    merged = tuple(
+        _merge_reasoning_delta(initialized_custom_stream_wrapper, content, reasoning)
+        for (content, reasoning), _ in deltas_and_expected
+    )
+    assert merged == tuple(expected for _, expected in deltas_and_expected)
+    assert (
+        "".join(m for m in merged if m)
+        == "<think>plan A more</think>answer part 1<think>plan B</think>answer part 2"
+    )
+    assert initialized_custom_stream_wrapper.sent_last_thinking_block is True
+
+
+def test_mixed_reasoning_and_content_delta_preserves_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    initialized_custom_stream_wrapper.merge_reasoning_content_in_choices = True
+    first = _merge_reasoning_delta(
+        initialized_custom_stream_wrapper, None, "thinking"
+    )
+    mixed = _merge_reasoning_delta(
+        initialized_custom_stream_wrapper, "answer", " final thought"
+    )
+    assert first == "<think>thinking"
+    assert mixed == " final thought</think>answer"
+
+
+def test_mixed_first_delta_wraps_reasoning_and_keeps_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    initialized_custom_stream_wrapper.merge_reasoning_content_in_choices = True
+    merged = _merge_reasoning_delta(initialized_custom_stream_wrapper, "hi", "think")
+    assert merged == "<think>think</think>hi"
+    assert initialized_custom_stream_wrapper.sent_first_thinking_block is True
+    assert initialized_custom_stream_wrapper.sent_last_thinking_block is True
+
+
+def test_stream_end_mid_reasoning_emits_think_close(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    initialized_custom_stream_wrapper.merge_reasoning_content_in_choices = True
+    opening = _merge_reasoning_delta(
+        initialized_custom_stream_wrapper, None, "half-finished thought"
+    )
+    assert opening == "<think>half-finished thought"
+
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    final_chunk = ModelResponseStream(
+        id="chunk-id",
+        object="chat.completion.chunk",
+        created=1741037891,
+        model="glm-5.2",
+        choices=[
+            StreamingChoices(index=0, delta=Delta(content=None), finish_reason=None)
+        ],
+    )
+    result = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj={"content": ""},
+        model_response=final_chunk,
+        response_obj={},
+    )
+    assert result is not None
+    assert result.choices[0].delta.content == "</think>"
+    assert result.choices[0].finish_reason == "stop"
+    assert initialized_custom_stream_wrapper.sent_last_thinking_block is True
+
+
+def test_finish_reason_handler_closes_open_think_block(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    initialized_custom_stream_wrapper.merge_reasoning_content_in_choices = True
+    _merge_reasoning_delta(initialized_custom_stream_wrapper, None, "dangling thought")
+
+    final_chunk = initialized_custom_stream_wrapper.finish_reason_handler()
+    assert final_chunk.choices[0].delta.content == "</think>"
+    assert final_chunk.choices[0].finish_reason == "stop"
+
+
+def test_finish_chunk_stays_empty_when_think_block_closed(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    initialized_custom_stream_wrapper.merge_reasoning_content_in_choices = True
+    _merge_reasoning_delta(initialized_custom_stream_wrapper, None, "reasoning")
+    _merge_reasoning_delta(initialized_custom_stream_wrapper, "answer", None)
+
+    final_chunk = initialized_custom_stream_wrapper.finish_reason_handler()
+    assert final_chunk.choices[0].delta.content is None
+
+
 def test_strip_sse_data_from_chunk():
     """Test the static method that strips 'data: ' prefix from SSE chunks"""
     # Test with string inputs
