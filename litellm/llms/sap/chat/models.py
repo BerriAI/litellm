@@ -39,6 +39,16 @@ class ImageContent(BaseModel):
     image_url: ImageURLContent
 
 
+class FileContentData(BaseModel):
+    file_data: str
+    filename: str | None = None
+
+
+class FileContent(BaseModel):
+    type_: Literal["file"] = Field(default="file", alias="type")
+    file: FileContentData
+
+
 class FunctionObj(BaseModel):
     name: str
     arguments: str
@@ -95,7 +105,13 @@ class SAPMessage(BaseModel):
 
 class SAPUserMessage(BaseModel):
     role: Literal["user"] = "user"
-    content: Union[str, TextContent, ImageContent, list[Union[TextContent, ImageContent]]]
+    content: Union[
+        str,
+        TextContent,
+        ImageContent,
+        FileContent,
+        list[Union[TextContent, ImageContent, FileContent]],
+    ]
 
 
 class SAPAssistantMessage(BaseModel):
