@@ -8,17 +8,23 @@ import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import _is_proxy_admin_request
 
-# Router-internal mock_testing_* flag names — kept in sync with
-# ``litellm.types.router.MockRouterTestingParams`` by the test
-# ``test_mock_testing_kwarg_names_matches_dataclass``. Hardcoding (rather
-# than deriving via ``dataclasses.fields(MockRouterTestingParams)`` at
+# Client-supplied params that make the router or the call path fabricate a
+# failure or a delay instead of calling the provider. The ``mock_testing_*``
+# names are kept in sync with ``litellm.types.router.MockRouterTestingParams``
+# by ``test_gated_mock_params_cover_mock_router_testing_params``. Hardcoding
+# (rather than deriving via ``dataclasses.fields(MockRouterTestingParams)`` at
 # import time) avoids a cyclic import: ``litellm.types.router`` imports
 # back into proxy modules before this module finishes loading.
-_MOCK_TESTING_KWARG_NAMES: tuple = (
+GATED_MOCK_PARAM_NAMES: tuple[str, ...] = (
     "mock_testing_fallbacks",
     "mock_testing_context_fallbacks",
     "mock_testing_content_policy_fallbacks",
+    "mock_testing_rate_limit_error",
+    "mock_timeout",
+    "mock_delay",
 )
+
+MOCK_TESTING_CONFIG_KEY = "dangerously_allow_mock_testing_request_params"
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -167,6 +173,41 @@ def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, obj
         route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
         param=required_param,
     )
+
+
+class MockTestingParamsDisabledError(HTTPException):
+    def __init__(self, params: tuple[str, ...]):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+                "error": (
+                    f"Mock testing request params are disabled on this proxy: {', '.join(params)}. "
+                    f"An admin can enable them by setting `general_settings.{MOCK_TESTING_CONFIG_KEY}: true` "
+                    "in config.yaml. This setting cannot be changed from the Admin UI or the API."
+                )
+            },
+        )
+
+
+def raise_if_mock_testing_params_disallowed(data: Mapping[str, object], *, allowed: bool) -> None:
+    """Reject client-supplied mock testing params unless an admin opted in.
+
+    Rejecting (rather than silently dropping) keeps a request that asked for a
+    synthetic failure from returning a normal success, which reads as a passing
+    fallback test that never ran.
+    """
+    if allowed:
+        return
+    present = tuple(name for name in GATED_MOCK_PARAM_NAMES if name in data)
+    if present:
+        raise MockTestingParamsDisabledError(params=present)
+
+
+def mock_testing_params_allowed() -> bool:
+    """Read the opt-in from the running proxy's ``general_settings``."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    return proxy_server.general_settings.get(MOCK_TESTING_CONFIG_KEY, False) is True
 
 
 def get_team_id_from_data(data: dict) -> Optional[str]:
@@ -381,12 +422,7 @@ async def route_request(
 
     await add_shared_session_to_data(data)
 
-    # Strip router-internal mock_testing_* flags. Combined with an
-    # unauthorized fallback in ``router_settings_override`` they let a
-    # caller deterministically execute requests against restricted
-    # models. VERIA-44.
-    for _key in _MOCK_TESTING_KWARG_NAMES:
-        data.pop(_key, None)
+    raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
     data.pop("enable_tag_filtering", None)
 

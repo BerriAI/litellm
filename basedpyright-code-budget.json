@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 31903
+    "limit": 31256
   },
   "reportArgumentType": {
     "limit": 2645
@@ -24,7 +24,7 @@
     "limit": 42
   },
   "reportExplicitAny": {
-    "limit": 10214
+    "limit": 10208
   },
   "reportFunctionMemberAccess": {
     "limit": 11
@@ -33,7 +33,7 @@
     "limit": 227
   },
   "reportIncompatibleMethodOverride": {
-    "limit": 78
+    "limit": 77
   },
   "reportIncompatibleVariableOverride": {
     "limit": 12
@@ -99,7 +99,7 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45366
+    "limit": 45357
   },
   "reportUnknownLambdaType": {
     "limit": 113

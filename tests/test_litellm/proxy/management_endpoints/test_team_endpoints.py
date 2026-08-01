@@ -3627,9 +3627,9 @@ async def test_list_team_v2_with_invalid_status():
 @pytest.mark.asyncio
 async def test_list_team_v2_search_builds_or_clause():
     """
-    `search` should be passed as a Prisma OR across team_id (exact) and
-    team_alias (case-insensitive contains), so the UI can hit a single
-    backend filter with either a UUID or a name fragment.
+    `search` should be passed as a Prisma OR across an exact team_id match and a
+    case-insensitive team_alias contains, so the UI needs one backend filter.
+    Exact id matching is the documented default and must not change.
     """
     from unittest.mock import AsyncMock, Mock, patch
 
@@ -3667,6 +3667,54 @@ async def test_list_team_v2_search_builds_or_clause():
             "OR": [
                 {"team_id": "platform"},
                 {"team_alias": {"contains": "platform", "mode": "insensitive"}},
+            ]
+        }
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_search_team_id_match_prefix():
+    """
+    Opting into `search_team_id_match="prefix"` should widen the team_id side of
+    the search OR to an index-friendly prefix match, so the first characters of a
+    team id quoted in a proxy error find the team.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
+
+        await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            organization_id=None,
+            team_id=None,
+            team_alias=None,
+            search="66c432fa",
+            search_team_id_match="prefix",
+            user_api_key_dict=mock_admin,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        find_many_kwargs = mock_db.litellm_teamtable.find_many.call_args.kwargs
+        assert find_many_kwargs["where"] == {
+            "OR": [
+                {"team_id": {"startsWith": "66c432fa"}},
+                {"team_alias": {"contains": "66c432fa", "mode": "insensitive"}},
             ]
         }
 
@@ -3724,6 +3772,7 @@ async def test_list_team_v2_search_composes_with_user_id_filter():
             team_id=None,
             team_alias=None,
             search="team_a",
+            search_team_id_match="prefix",
             user_api_key_dict=mock_user_api_key_dict,
             page=1,
             page_size=10,
@@ -3733,7 +3782,7 @@ async def test_list_team_v2_search_composes_with_user_id_filter():
         find_many_kwargs = mock_db.litellm_teamtable.find_many.call_args.kwargs
         where = find_many_kwargs["where"]
         assert where["OR"] == [
-            {"team_id": "team_a"},
+            {"team_id": {"startsWith": "team_a"}},
             {"team_alias": {"contains": "team_a", "mode": "insensitive"}},
         ]
         assert where["team_id"] == {"in": ["team_a", "team_b"]}
