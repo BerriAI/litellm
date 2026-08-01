@@ -1019,6 +1019,42 @@ def test_hosted_vllm_embedding(monkeypatch):
         assert json_data["model"] == "jina-embeddings-v3"
 
 
+def test_cloudflare_embedding_dispatch(monkeypatch):
+    monkeypatch.setattr(litellm, "cloudflare_api_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+    with patch(
+        "litellm.main.base_llm_http_handler.embedding",
+        return_value=litellm.EmbeddingResponse(),
+    ) as mock_embedding:
+        embedding(
+            model="cloudflare/@cf/baai/bge-large-en-v1.5",
+            input=["Hello world"],
+            api_key="cf-key",
+            api_base="https://example.com/ai/v1",
+            caching=False,
+        )
+
+    dispatch = mock_embedding.call_args.kwargs
+    assert dispatch["custom_llm_provider"] == "cloudflare"
+    assert dispatch["api_key"] == "cf-key"
+    assert dispatch["api_base"] == "https://example.com/ai/v1"
+
+
+def test_cloudflare_embedding_dispatch_requires_api_key(monkeypatch):
+    monkeypatch.setattr(litellm, "cloudflare_api_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.delenv("CLOUDFLARE_API_KEY", raising=False)
+
+    with pytest.raises(litellm.APIConnectionError, match="Missing Cloudflare API Key"):
+        embedding(
+            model="cloudflare/@cf/baai/bge-large-en-v1.5",
+            input=["Hello world"],
+            caching=False,
+        )
+
+
 def test_llamafile_embedding(monkeypatch):
     monkeypatch.setenv("LLAMAFILE_API_BASE", "http://localhost:8080/v1")
     from litellm.llms.custom_httpx.http_handler import HTTPHandler

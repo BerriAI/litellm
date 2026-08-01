@@ -37,7 +37,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         stream: Optional[bool] = None,
     ) -> str:
         return super().get_complete_url(
-            api_base=self._resolve_api_base(api_base),
+            api_base=self.resolve_api_base(api_base),
             api_key=api_key,
             model=model,
             optional_params=optional_params,
@@ -46,7 +46,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         )
 
     @staticmethod
-    def _resolve_api_base(api_base: Optional[str]) -> str:
+    def resolve_api_base(api_base: Optional[str]) -> str:
         if not api_base:
             account_id = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))
             if account_id is None:
