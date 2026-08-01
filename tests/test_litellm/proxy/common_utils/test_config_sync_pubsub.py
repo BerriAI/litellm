@@ -56,10 +56,11 @@ _EXPECTED_RESYNC_APPLIED_CONFIG_PARAM_NAMES = frozenset(
         "general_settings",
         "litellm_settings",
         "model_cost_map_reload_config",
+        "router_settings",
     }
 )
 
-_STARTUP_ONLY_CONFIG_PARAM_NAMES = ("environment_variables", "router_settings")
+_STARTUP_ONLY_CONFIG_PARAM_NAMES = ("environment_variables",)
 
 
 class _RecordingRedisClient(Redis):
@@ -716,13 +717,14 @@ async def _publish_calls_for_invalidated_param(param_name: str) -> List[Tuple[st
     return client.published
 
 
-async def test_invalidate_config_param_publishes_params_a_resync_applies() -> None:
-    published = await _publish_calls_for_invalidated_param("general_settings")
+@pytest.mark.parametrize("param_name", sorted(_EXPECTED_RESYNC_APPLIED_CONFIG_PARAM_NAMES))
+async def test_invalidate_config_param_publishes_params_a_resync_applies(param_name: str) -> None:
+    published = await _publish_calls_for_invalidated_param(param_name)
 
     assert len(published) == 1
     channel, message = published[0]
     assert channel == CONFIG_SYNC_CHANNEL
-    assert json.loads(message) == {"object_type": "general_settings"}
+    assert json.loads(message) == {"object_type": param_name}
 
 
 @pytest.mark.parametrize("param_name", _STARTUP_ONLY_CONFIG_PARAM_NAMES)

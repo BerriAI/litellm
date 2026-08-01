@@ -2059,6 +2059,42 @@ async def test_ProxyConfig__add_router_settings_from_db_config_none_router_noop(
 
 
 # ---------------------------------------------------------------------------
+# ProxyConfig.add_deployment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    fake_router = MagicMock()
+    fake_router.get_model_list = MagicMock(return_value=[])
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_config.find_first = AsyncMock(
+        return_value=SimpleNamespace(param_value={"routing_strategy": "latency-based-routing"})
+    )
+
+    async def fake_get_config(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(pc, "get_config", fake_get_config)
+    monkeypatch.setattr(pc, "_get_models_from_db", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", AsyncMock())
+    monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
+    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "proxy_config", pc)
+
+    await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
+
+    fake_router.update_settings.assert_called_once_with(routing_strategy="latency-based-routing")
+
+
+# ---------------------------------------------------------------------------
 # ProxyConfig._add_general_settings_from_db_config
 # ---------------------------------------------------------------------------
 

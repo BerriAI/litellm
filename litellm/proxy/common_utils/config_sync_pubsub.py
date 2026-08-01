@@ -60,6 +60,7 @@ _CONFIG_SYNCED_TABLE_NAMES: frozenset[str] = frozenset(
 _RESYNC_APPLIED_CONFIG_PARAM_NAMES: frozenset[str] = frozenset(
     {
         "general_settings",
+        "router_settings",
         "litellm_settings",
         "model_cost_map_reload_config",
         "anthropic_beta_headers_reload_config",
