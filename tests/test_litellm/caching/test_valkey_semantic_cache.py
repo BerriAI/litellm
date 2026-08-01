@@ -265,6 +265,56 @@ def test_get_cache_query_filters_by_scope_tag():
     assert "KNN 1 @embedding" in query.query_string()
 
 
+def test_set_cache_passes_only_metadata_to_get_embedding():
+    sync_client = MagicMock()
+    cache = _make_cache(sync_client=sync_client)
+    captured: dict[str, object] = {}
+
+    def spy_embedding(prompt: str, metadata: dict | None = None) -> list[float]:
+        captured["prompt"] = prompt
+        captured["metadata"] = metadata
+        return [0.1, 0.2, 0.3]
+
+    cache._get_embedding = spy_embedding
+
+    cache.set_cache(
+        key="cache-key",
+        value={"content": "Paris"},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"user_api_key": "sk-test"},
+        cache_key="abc123",
+        custom_llm_provider="openai",
+    )
+
+    assert captured["metadata"] == {"user_api_key": "sk-test"}
+    sync_client.hset.assert_called_once()
+
+
+def test_get_cache_passes_only_metadata_to_get_embedding():
+    sync_client = MagicMock()
+    sync_client.ft.return_value.search.return_value = _search_result(0.05)
+    cache = _make_cache(sync_client=sync_client)
+    captured: dict[str, object] = {}
+
+    def spy_embedding(prompt: str, metadata: dict | None = None) -> list[float]:
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(metadata) if metadata is not None else None
+        return [0.1, 0.2, 0.3]
+
+    cache._get_embedding = spy_embedding
+
+    result = cache.get_cache(
+        key="cache-key",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"user_api_key": "sk-test"},
+        cache_key="abc123",
+        custom_llm_provider="openai",
+    )
+
+    assert result == {"content": "Paris"}
+    assert captured["metadata"] == {"user_api_key": "sk-test"}
+
+
 def _async_ft(search_distance):
     search_obj = SimpleNamespace(
         search=AsyncMock(return_value=_search_result(search_distance)),
