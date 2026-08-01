@@ -118,7 +118,10 @@ class TestPreCallToolCheckReturnsHeaders:
                         server=server,
                     )
 
-        assert result == {}
+        # No hook-provided keys; "_litellm_call_data" is always present so
+        # call_tool can release the parallel-request slot on completion.
+        assert "arguments" not in result
+        assert "extra_headers" not in result
 
     @pytest.mark.asyncio
     async def test_returns_extra_headers_from_hook(self):
@@ -179,7 +182,10 @@ class TestPreCallToolCheckReturnsHeaders:
                         server=server,
                     )
 
-        assert result == {}
+        # No hook-provided keys; "_litellm_call_data" is always present so
+        # call_tool can release the parallel-request slot on completion.
+        assert "arguments" not in result
+        assert "extra_headers" not in result
 
     @pytest.mark.asyncio
     async def test_returns_modified_arguments_from_hook(self):
