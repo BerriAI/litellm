@@ -10,7 +10,7 @@
 import asyncio
 import copy
 import inspect
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -32,6 +32,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
+
+
+REDACTED_MESSAGES_PLACEHOLDER: Final[tuple[dict[str, str], ...]] = ({"role": "user", "content": "redacted-by-litellm"},)
 
 
 def redact_message_input_output_from_custom_logger(
@@ -235,7 +238,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     copy via redact_streaming_responses_for_custom_logger instead.
     """
     # Redact model_call_details
-    model_call_details["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
+    model_call_details["messages"] = list(REDACTED_MESSAGES_PLACEHOLDER)
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
     _redact_standard_logging_object(model_call_details)
