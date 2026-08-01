@@ -98,6 +98,11 @@ def _cache_token_split(usage: Usage) -> tuple[int, int]:
     return int(read), int(created)
 
 
+_CACHE_SPLIT_FIELDS = frozenset(
+    ("cached_tokens", "cache_creation_tokens", "cache_write_tokens", "cache_creation_token_details", "text_tokens")
+)
+
+
 def _baseline_usage(usage: Usage) -> Usage:
     """The same request as a single-model baseline would have met it.
 
@@ -108,9 +113,16 @@ def _baseline_usage(usage: Usage) -> Usage:
     penalty exists for. Gating on a read instead would charge the baseline a write it
     would never repeat, and a cold switch would then report a larger saving than the
     same traffic with caching turned off.
+
+    Only the cache buckets move. Every other field the request was priced on travels
+    through untouched, audio and image and video counts among them, because the baseline
+    is this same request served by a model that happened to be warm; naming the fields to
+    keep instead would price the baseline on a request that never ran, and would go stale
+    the next time a priced field is added.
     """
     cache_read, cache_creation = _cache_token_split(usage)
-    if cache_creation <= 0:
+    details = usage.prompt_tokens_details
+    if details is None or cache_creation <= 0:
         return usage
     return Usage(
         prompt_tokens=usage.prompt_tokens,
@@ -118,11 +130,15 @@ def _baseline_usage(usage: Usage) -> Usage:
         total_tokens=usage.total_tokens,
         completion_tokens_details=usage.completion_tokens_details,
         prompt_tokens_details=PromptTokensDetailsWrapper(
+            **details.model_dump(exclude=_CACHE_SPLIT_FIELDS),
             # The tokens this request paid to write are moved into the cached count and
             # the creation charge is dropped: on one model that cache was already warm,
             # so the baseline would have read them rather than paying to create them.
+            # The 5m/1h breakdown goes with it; left behind it re-charges the write.
             cached_tokens=cache_read + cache_creation,
             cache_creation_tokens=0,
+            cache_write_tokens=0,
+            cache_creation_token_details=None,
             text_tokens=max(usage.prompt_tokens - cache_read - cache_creation, 0),
         ),
     )

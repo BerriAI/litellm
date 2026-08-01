@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.proxy.spend_tracking.savings import (
+    _baseline_usage,
     compute_autorouter_savings,
     compute_savings_spend,
 )
@@ -200,6 +201,55 @@ def test_moving_one_token_between_cache_buckets_does_not_move_the_answer():
     reads_nothing = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(0, 0, 20_000, 1_000))
     reads_one = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(0, 1, 19_999, 1_000))
     assert reads_one == pytest.approx(reads_nothing, abs=1e-4)
+
+
+def test_multimodal_prompts_are_priced_on_the_baseline_too():
+    """The baseline is this same request met by a warm cache, so every field it was
+    priced on has to survive. Rebuilding the details from the cache buckets alone
+    dropped the image and audio counts, which priced the baseline as a text-only
+    request that never ran and shrank the reported saving on multimodal traffic.
+    """
+    details = {"cached_tokens": 0, "cache_creation_tokens": 16_000, "text_tokens": 0, "image_tokens": 4_000}
+    with_images = Usage(
+        prompt_tokens=20_000,
+        completion_tokens=1_000,
+        total_tokens=21_000,
+        prompt_tokens_details=details,
+    )
+    baseline = _baseline_usage(with_images)
+
+    assert baseline.prompt_tokens_details.image_tokens == 4_000, "image tokens must survive into the baseline"
+
+    opus = litellm.get_model_info("claude-opus-5", "anthropic")
+    priced, _ = generic_cost_per_token(model="claude-opus-5", usage=baseline, custom_llm_provider="anthropic")
+    text_only = 20_000 * opus["cache_read_input_token_cost"]
+    assert priced > text_only, "dropping the image tokens undercharges the baseline and hides the saving"
+
+
+def test_the_baseline_is_never_charged_a_cache_write():
+    """Carrying the details through must not carry the 5m/1h creation breakdown with
+    them. `generic_cost_per_token` charges a creation cost whenever that breakdown is
+    present, even against a zeroed creation count, which would put the phantom write
+    back on the baseline for every long-cache request.
+    """
+    long_cache = Usage(
+        prompt_tokens=20_000,
+        completion_tokens=1_000,
+        total_tokens=21_000,
+        prompt_tokens_details={
+            "cached_tokens": 0,
+            "cache_creation_tokens": 20_000,
+            "text_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_1h_input_tokens": 20_000},
+        },
+    )
+    baseline = _baseline_usage(long_cache)
+
+    opus = litellm.get_model_info("claude-opus-5", "anthropic")
+    priced, _ = generic_cost_per_token(model="claude-opus-5", usage=baseline, custom_llm_provider="anthropic")
+    assert priced == pytest.approx(20_000 * opus["cache_read_input_token_cost"]), (
+        "the baseline reads a warm cache; it never pays to create one"
+    )
 
 
 def test_uncached_request_is_the_plain_rate_difference():
