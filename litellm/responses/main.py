@@ -1028,7 +1028,10 @@ def responses(
                 local_vars["reasoning"] = _mapped
         # Get ResponsesAPIOptionalRequestParams with only valid parameters
         response_api_optional_params: ResponsesAPIOptionalRequestParams = (
-            ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
+            ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+                local_vars,
+                allowed_openai_params=allowed_openai_params,
+            )
         )
 
         _file_search_dispatch = _responses_try_dispatch_emulated_file_search(
