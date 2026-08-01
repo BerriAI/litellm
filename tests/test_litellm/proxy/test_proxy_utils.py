@@ -177,6 +177,136 @@ async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
     assert "litellm_metadata" not in captured["optional_params"]
 
 
+@pytest.mark.asyncio
+async def test_proxy_only_error_log_preserves_resolved_call_type():
+    """A /v1/responses request already has ``aresponses`` resolved on its logging
+    object; the payload-shape inference must not rewrite it to ``aembedding``."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import CallTypes
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses.value,
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="1234",
+        function_id="1234",
+    )
+
+    orig_pre_call = Logging.pre_call
+    orig_async_failure = Logging.async_failure_handler
+
+    async def _noop_async_failure(self, *args, **kwargs):
+        return None
+
+    Logging.pre_call = lambda self, *args, **kwargs: None
+    Logging.async_failure_handler = _noop_async_failure
+    try:
+        await proxy_logging_obj._handle_logging_proxy_only_error(
+            request_data={
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": "hi"}],
+                "litellm_logging_obj": logging_obj,
+            },
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-1234", request_route="/v1/responses"
+            ),
+            route="/v1/responses",
+            original_exception=HTTPException(status_code=429, detail="rate limited"),
+        )
+    finally:
+        Logging.pre_call = orig_pre_call
+        Logging.async_failure_handler = orig_async_failure
+
+    assert logging_obj.call_type == CallTypes.aresponses.value
+    assert logging_obj.model_call_details["call_type"] == CallTypes.aresponses.value
+
+
+@pytest.mark.parametrize(
+    "payload, expected_call_type",
+    [
+        ({"input": [1, 2, 3]}, "aembedding"),
+        ({"prompt": "hello"}, "atext_completion"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_proxy_only_error_log_infers_call_type_without_logging_obj(
+    payload, expected_call_type
+):
+    """An auth/rate-limit error that never reached litellm has no resolved call type,
+    so the payload shape is the only signal available."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+
+    orig_pre_call = Logging.pre_call
+    orig_async_failure = Logging.async_failure_handler
+
+    def fake_pre_call(self, *args, **kwargs):
+        captured["call_type"] = self.call_type
+
+    async def _noop_async_failure(self, *args, **kwargs):
+        return None
+
+    Logging.pre_call = fake_pre_call
+    Logging.async_failure_handler = _noop_async_failure
+    try:
+        await proxy_logging_obj._handle_logging_proxy_only_error(
+            request_data={"model": "gpt-4o", **payload},
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-bad", request_route="/v1/embeddings"
+            ),
+            route="/v1/embeddings",
+            original_exception=Exception("bad key"),
+        )
+    finally:
+        Logging.pre_call = orig_pre_call
+        Logging.async_failure_handler = orig_async_failure
+
+    assert captured["call_type"] == expected_call_type
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_lifts_call_type_onto_request_data():
+    """The logging object is popped before the failure callbacks run, so the route's
+    call type must be lifted onto request_data or the spend log falls back to
+    ``acompletion`` for every failed request."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import CallTypes
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses.value,
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="1234",
+        function_id="1234",
+    )
+    request_data = {
+        "model": "gpt-4o",
+        "input": [{"role": "user", "content": "hi"}],
+        "litellm_logging_obj": logging_obj,
+    }
+
+    await proxy_logging_obj.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=Exception("upstream boom"),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-1234", request_route="/v1/responses"
+        ),
+    )
+
+    assert request_data["call_type"] == CallTypes.aresponses.value
+
+
 def test_get_model_group_info_order():
     from litellm import Router
     from litellm.proxy.proxy_server import _get_model_group_info
