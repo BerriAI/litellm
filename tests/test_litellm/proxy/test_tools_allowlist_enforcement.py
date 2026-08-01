@@ -86,6 +86,40 @@ class TestExtractRequestToolNames:
             "get_current_weather",
         ]
 
+    def test_openai_responses_additional_tools_input_items(self):
+        """Codex CLI 0.143+ ships tool definitions inside an additional_tools
+        input item instead of (or alongside) top-level tools; those nested tools
+        must be extracted too or a restricted key could smuggle a disallowed
+        tool past allowlist enforcement (VERIA finding on PR #33228)."""
+        data = {
+            "tools": [{"type": "function", "name": "get_current_weather"}],
+            "input": [
+                {"role": "user", "content": "hi"},
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {"type": "custom", "name": "exec", "description": "x"},
+                        {"type": "mcp", "server_label": "dmcp", "server_url": "http://x"},
+                    ],
+                },
+            ],
+        }
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "get_current_weather",
+            "exec",
+            "dmcp",
+        ]
+
+    def test_openai_responses_string_input_ignored(self):
+        data = {
+            "tools": [{"type": "function", "name": "get_current_weather"}],
+            "input": "hi",
+        }
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "get_current_weather"
+        ]
+
     def test_anthropic_tools(self):
         data = {"tools": [{"name": "get_weather"}, {"name": "run_sql"}]}
         assert extract_request_tool_names("/v1/messages", data) == [
@@ -172,6 +206,28 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_disallowed_additional_tools_input_item_raises_on_responses_route(self):
+        token = _token(metadata={"allowed_tools": ["other_tool"]})
+        body = {
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "custom", "name": "exec"}],
+                },
+            ],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "exec" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):
