@@ -12,11 +12,10 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 import asyncio
 import datetime
 import uuid
+from collections.abc import AsyncIterator, Coroutine
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
     Dict,
     Optional,
     Union,

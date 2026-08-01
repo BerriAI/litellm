@@ -4,11 +4,10 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Iterator,
     List,
     Optional,
     Tuple,

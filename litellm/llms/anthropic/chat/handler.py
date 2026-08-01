@@ -4,10 +4,10 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
+from collections.abc import Callable
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
     List,
     Literal,

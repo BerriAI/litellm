@@ -2,7 +2,8 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+from collections.abc import Coroutine
+from typing import Any, Dict, Optional, Union
 
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (

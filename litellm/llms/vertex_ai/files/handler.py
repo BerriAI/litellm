@@ -2,8 +2,9 @@ import asyncio
 import json
 import os
 import time
+from collections.abc import Coroutine, Mapping
+from typing import Any, Optional, Tuple, Union
 from urllib.parse import unquote
-from typing import Any, Coroutine, Mapping, Optional, Tuple, Union
 
 import httpx
 
@@ -12,19 +13,19 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import (
     GCSBucketBase,
     GCSLoggingConfig,
 )
-from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.litellm_core_utils.cloud_storage_security import (
     VERTEX_AI_MANAGED_GCS_PREFIX,
     should_allow_legacy_cloud_file_ids,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import (
     FileContentRequest,
     HttpxBinaryResponseContent,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.utils import StandardCallbackDynamicParams
 
 from .transformation import VertexAIFilesConfig
 

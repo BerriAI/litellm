@@ -3,7 +3,8 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 

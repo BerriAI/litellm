@@ -1,6 +1,7 @@
 import json
 import os
-from typing import Any, Callable, Dict, List, Literal, Optional, Union, get_args
+from collections.abc import Callable
+from typing import Any, Dict, List, Literal, Optional, Union, get_args
 
 import httpx
 

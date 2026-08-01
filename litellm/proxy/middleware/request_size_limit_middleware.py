@@ -1,5 +1,6 @@
 import json
-from typing import Callable, Optional, Union
+from collections.abc import Callable
+from typing import Optional, Union
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 

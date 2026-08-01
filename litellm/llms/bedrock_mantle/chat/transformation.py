@@ -10,7 +10,8 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
       BedrockMantleAuthMixin in common_utils.
 """
 
-from typing import Iterator, AsyncIterator, Any, List, Optional, Tuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, List, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,8 +24,8 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
-from ..common_utils import mantle_base_segment
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+from ..common_utils import mantle_base_segment
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):

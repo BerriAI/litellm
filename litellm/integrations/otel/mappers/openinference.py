@@ -7,13 +7,13 @@ Phoenix + any other OpenInference-aware backend simultaneously.
 """
 
 import json
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     collect,
     drop_none,
-    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     json_if,
     message_content,
     output_messages,

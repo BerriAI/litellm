@@ -10,9 +10,10 @@ import subprocess
 import time
 import urllib
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Protocol, Union
+from typing import Any, Protocol, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool

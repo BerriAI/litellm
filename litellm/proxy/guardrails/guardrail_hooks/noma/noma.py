@@ -9,11 +9,11 @@ import asyncio
 import json
 import os
 import warnings
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     Dict,
     Final,
     List,

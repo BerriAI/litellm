@@ -5,13 +5,14 @@ this is OpenAI compatible - no translation needed / occurs
 """
 
 import os
+from collections.abc import Coroutine
+from typing import Any, List, Literal, Optional, Tuple, Union, overload
 
-from typing import Optional, List, Tuple, Union, Coroutine, Any, Literal, overload
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
-from litellm.types.llms.openai import AllMessageValues
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.types.llms.openai import AllMessageValues
 
 
 # Base error class for Heroku

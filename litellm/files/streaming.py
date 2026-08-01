@@ -1,17 +1,17 @@
 import datetime
 import traceback
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
     Dict,
-    Iterator,
     Optional,
     Union,
     cast,
 )
 
 import anyio
+
 from litellm.files.types import FileContentProvider
 
 if TYPE_CHECKING:

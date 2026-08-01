@@ -17,11 +17,12 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
+import json
+from collections.abc import Iterable
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
-    Iterable,
     List,
     Literal,
     NoReturn,
@@ -32,8 +33,6 @@ from typing import (
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-
-import json
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -631,10 +630,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             can_team_access_model,
             get_team_object,
         )
-        from litellm.proxy.proxy_server import llm_router
-        from litellm.proxy.proxy_server import prisma_client
-        from litellm.proxy.proxy_server import proxy_logging_obj
-        from litellm.proxy.proxy_server import user_api_key_cache
+        from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj, user_api_key_cache
 
         if target_model_names:
             models = target_model_names

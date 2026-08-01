@@ -3,7 +3,8 @@
 import json
 import traceback
 from collections import deque
-from typing import Any, AsyncIterator, Dict
+from collections.abc import AsyncIterator
+from typing import Any, Dict
 
 from litellm import verbose_logger
 from litellm._uuid import uuid

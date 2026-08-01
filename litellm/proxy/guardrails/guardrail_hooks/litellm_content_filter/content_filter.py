@@ -9,16 +9,16 @@ import asyncio
 import json
 import os
 import re
+from collections.abc import AsyncGenerator
 from datetime import datetime
+from re import Pattern
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     Dict,
     List,
     Literal,
     Optional,
-    Pattern,
     Tuple,
     Union,
     cast,

@@ -6,7 +6,8 @@ Maps OpenAI TTS spec to RunwayML Text-to-Speech API
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 

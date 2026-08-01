@@ -1,12 +1,13 @@
 import json
 import time
-from litellm._uuid import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from httpx._models import Headers, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )

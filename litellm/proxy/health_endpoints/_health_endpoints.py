@@ -5,8 +5,9 @@ import os
 import secrets
 import time
 import traceback
+from collections.abc import Iterable
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, Literal, Optional, TypedDict, Union, cast
+from typing import Any, Dict, Literal, Optional, TypedDict, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status

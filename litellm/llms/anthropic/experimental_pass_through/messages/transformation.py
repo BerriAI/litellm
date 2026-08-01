@@ -1,4 +1,5 @@
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 

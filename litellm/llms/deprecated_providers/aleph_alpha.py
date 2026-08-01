@@ -1,7 +1,8 @@
 import json
 import time
 import types
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Optional
 
 import httpx  # type: ignore
 

@@ -11,14 +11,13 @@ __all__ = ["ingest", "aingest", "query", "aquery"]
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine, Iterator
 from contextlib import contextmanager
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Coroutine,
     Dict,
-    Iterator,
     List,
     Optional,
     Tuple,

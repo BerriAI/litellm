@@ -10,11 +10,11 @@ Supports three modes:
 import asyncio
 import threading
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     Dict,
     List,
     Optional,

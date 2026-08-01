@@ -2,7 +2,8 @@ import asyncio
 import hashlib
 import json
 import os
-from typing import Any, Callable, Dict, Literal, NamedTuple, Optional, Union, cast
+from collections.abc import Callable
+from typing import Any, Dict, Literal, NamedTuple, Optional, Union, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI

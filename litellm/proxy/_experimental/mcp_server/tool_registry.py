@@ -1,5 +1,6 @@
 import json
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.proxy.types_utils.utils import get_instance_fn

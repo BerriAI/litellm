@@ -3,12 +3,11 @@
 import base64
 import io
 import struct
+from collections.abc import Callable, Mapping
 from typing import (
     Any,
-    Callable,
     List,
     Literal,
-    Mapping,
     Optional,
     Tuple,
     Union,
@@ -30,8 +29,8 @@ from litellm.constants import (
     MAX_TILE_WIDTH,
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.litellm_core_utils.url_utils import safe_get
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,

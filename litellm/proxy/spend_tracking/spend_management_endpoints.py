@@ -2,6 +2,7 @@
 import collections
 import json
 import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -9,10 +10,8 @@ from typing import (
     Dict,
     List,
     Literal,
-    Mapping,
     NamedTuple,
     Protocol,
-    Sequence,
     TypedDict,
     TypeVar,
     Union,

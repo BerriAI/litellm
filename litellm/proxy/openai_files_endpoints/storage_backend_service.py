@@ -7,7 +7,8 @@ storage backends (e.g., Azure Blob Storage) and managing associated metadata.
 
 import base64
 import time
-from typing import Any, List, Mapping, cast
+from collections.abc import Mapping
+from typing import Any, List, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module

@@ -7,9 +7,10 @@ V2 is not the active logger — so a call site can wrap a request phase or seed
 identity unconditionally.
 """
 
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import cache
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Optional
 
 
 @cache

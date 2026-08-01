@@ -1,5 +1,6 @@
 import json
-from typing import Any, Coroutine, Dict, Optional, Union
+from collections.abc import Coroutine
+from typing import Any, Dict, Optional, Union
 
 import httpx
 

@@ -3,12 +3,11 @@ Streaming iterator for transforming Responses API stream to Interactions API str
 """
 
 from collections import deque
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     Any,
-    AsyncIterator,
     Deque,
     Dict,
-    Iterator,
     List,
     Optional,
     cast,

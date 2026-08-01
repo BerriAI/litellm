@@ -7,8 +7,9 @@ Handles search tool selection, load balancing, and fallback logic for search req
 import asyncio
 import random
 import traceback
+from collections.abc import Callable
 from functools import partial
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from litellm._logging import verbose_router_logger
 

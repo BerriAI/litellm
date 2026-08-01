@@ -2,7 +2,8 @@
 Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, Literal, Optional, Tuple, Union, cast, overload
+from collections.abc import Coroutine
+from typing import Any, Literal, Optional, Tuple, Union, cast, overload
 
 from typing_extensions import override
 

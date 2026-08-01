@@ -9,13 +9,13 @@ import functools
 import json
 import os
 import re
+from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
     List,
     Literal,
-    Mapping,
     Optional,
     TypedDict,
     Union,

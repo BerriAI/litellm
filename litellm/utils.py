@@ -60,23 +60,23 @@ from litellm._lazy_imports import (
     _get_token_counter_new,
 )
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.fallback_generalizations import (
-    match_capability_generalizations,
-)
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_EMBEDDING_PARAM_VALUES,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
     INITIAL_RETRY_DELAY,
     JITTER,
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
-    DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
+)
+from litellm.litellm_core_utils.fallback_generalizations import (
+    match_capability_generalizations,
 )
 
 _CachingHandlerResponse = None
@@ -170,7 +170,6 @@ from litellm.types.llms.openai import (
     OpenAITextCompletionUserMessage,
     OpenAIWebSearchOptions,
 )
-from litellm.types.utils import FileTypes  # type: ignore
 from litellm.types.utils import (
     OPENAI_RESPONSE_HEADERS,
     CallTypes,
@@ -183,6 +182,7 @@ from litellm.types.utils import (
     Delta,
     Embedding,
     EmbeddingResponse,
+    FileTypes,  # type: ignore
     Function,
     ImageResponse,
     LlmProviders,
@@ -234,15 +234,13 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
+from collections.abc import Callable, Iterable, Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
-    Iterable,
     List,
     Literal,
-    Mapping,
     Optional,
     Tuple,
     Type,
@@ -265,53 +263,6 @@ if TYPE_CHECKING:
         LLMCachingHandler,
     )
     from litellm.integrations.custom_logger import CustomLogger
-    from litellm.llms.base_llm.files.transformation import BaseFilesConfig
-    from litellm.llms.base_llm.realtime.http_transformation import (
-        BaseRealtimeHTTPConfig,
-    )
-    from litellm.proxy._types import AllowedModelRegion
-
-    # Type stubs for lazy-loaded functions to help mypy understand their types
-    # These imports allow mypy to understand the types when these are accessed via __getattr__
-    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
-    from litellm.litellm_core_utils.get_llm_provider_logic import (
-        _is_non_openai_azure_model,
-        get_llm_provider,
-    )
-    from litellm.litellm_core_utils.get_supported_openai_params import (
-        get_supported_openai_params,
-    )
-    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-        LiteLLMResponseObjectHandler,
-        _handle_invalid_parallel_tool_calls,
-        convert_to_model_response_object,
-        convert_to_streaming_response,
-        convert_to_streaming_response_async,
-    )
-    from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
-    from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-        ResponseMetadata,
-    )
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        _parse_content_for_reasoning,
-    )
-    from litellm.litellm_core_utils.redact_messages import (
-        LiteLLMLoggingObject,
-        redact_message_input_output_from_logging,
-    )
-    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.llms.base_llm.google_genai.transformation import (
-        BaseGoogleGenAIGenerateContentConfig,
-    )
-    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
-    from litellm.llms.base_llm.sandbox.transformation import BaseSandboxConfig
-    from litellm.llms.base_llm.search.transformation import BaseSearchConfig
-    from litellm.llms.base_llm.text_to_speech.transformation import (
-        BaseTextToSpeechConfig,
-    )
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo
-    from litellm.llms.cohere.common_utils import CohereModelInfo
-    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 
     # Type stubs for lazy-loaded functions and classes
     from litellm.litellm_core_utils.cached_imports import (
@@ -328,11 +279,30 @@ if TYPE_CHECKING:
         delete_nested_value,
         is_nested_path,
     )
+
+    # Type stubs for lazy-loaded functions to help mypy understand their types
+    # These imports allow mypy to understand the types when these are accessed via __getattr__
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
     from litellm.litellm_core_utils.get_litellm_params import (
         _get_base_model_from_litellm_call_metadata,
         get_litellm_params,
     )
+    from litellm.litellm_core_utils.get_llm_provider_logic import (
+        _is_non_openai_azure_model,
+        get_llm_provider,
+    )
+    from litellm.litellm_core_utils.get_supported_openai_params import (
+        get_supported_openai_params,
+    )
     from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        LiteLLMResponseObjectHandler,
+        _handle_invalid_parallel_tool_calls,
+        convert_to_model_response_object,
+        convert_to_streaming_response,
+        convert_to_streaming_response_async,
+    )
+    from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
     from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
         get_formatted_prompt,
     )
@@ -340,9 +310,18 @@ if TYPE_CHECKING:
         get_response_headers,
     )
     from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+        ResponseMetadata,
         update_response_metadata,
     )
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _parse_content_for_reasoning,
+    )
+    from litellm.litellm_core_utils.redact_messages import (
+        LiteLLMLoggingObject,
+        redact_message_input_output_from_logging,
+    )
     from litellm.litellm_core_utils.rules import Rules
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.litellm_core_utils.thread_pool_executor import executor
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
@@ -350,16 +329,15 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.audio_transcription.transformation import (
         BaseAudioTranscriptionConfig,
     )
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-    from litellm.router_utils.get_retry_from_policy import (
-        get_num_retries_from_retry_policy,
-        reset_retry_policy,
-    )
 
     # Type stubs for lazy-loaded config classes and types
     from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
     from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
     from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+    from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+    from litellm.llms.base_llm.google_genai.transformation import (
+        BaseGoogleGenAIGenerateContentConfig,
+    )
     from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
     from litellm.llms.base_llm.image_generation.transformation import (
         BaseImageGenerationConfig,
@@ -367,33 +345,50 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.image_variations.transformation import (
         BaseImageVariationConfig,
     )
+    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.llms.base_llm.realtime.http_transformation import (
+        BaseRealtimeHTTPConfig,
+    )
     from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
     from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+    from litellm.llms.base_llm.sandbox.transformation import BaseSandboxConfig
+    from litellm.llms.base_llm.search.transformation import BaseSearchConfig
+    from litellm.llms.base_llm.text_to_speech.transformation import (
+        BaseTextToSpeechConfig,
+    )
     from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
     from litellm.llms.base_llm.vector_store_files.transformation import (
         BaseVectorStoreFilesConfig,
     )
     from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.llms.cohere.common_utils import CohereModelInfo
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+    from litellm.proxy._types import AllowedModelRegion
+    from litellm.router_utils.get_retry_from_policy import (
+        get_num_retries_from_retry_policy,
+        reset_retry_policy,
+    )
     from litellm.types.llms.anthropic import (
         ANTHROPIC_API_ONLY_HEADERS,
         AnthropicThinkingParam,
     )
-    from litellm.types.rerank import RerankResponse
     from litellm.types.llms.openai import (
         ChatCompletionDeltaToolCallChunk,
         ChatCompletionToolCallChunk,
         ChatCompletionToolCallFunctionChunk,
     )
+    from litellm.types.rerank import RerankResponse
     from litellm.types.router import LiteLLM_Params
-
-from litellm.secret_managers.main import get_secret
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
+from litellm.secret_managers.main import get_secret
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (

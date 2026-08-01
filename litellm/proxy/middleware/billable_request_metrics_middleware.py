@@ -10,8 +10,9 @@ middleware is a transparent pass-through.
 
 import re
 import threading
+from collections.abc import Callable, Sequence
 from enum import Enum
-from typing import Callable, Optional, Protocol, Sequence, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 

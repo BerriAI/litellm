@@ -3,7 +3,8 @@ Legacy /v1/embedding handler for Bedrock Cohere.
 """
 
 import json
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any, Optional, Union
 
 import httpx
 

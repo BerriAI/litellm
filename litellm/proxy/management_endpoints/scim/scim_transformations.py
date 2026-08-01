@@ -1,4 +1,5 @@
-from typing import Callable, List, TypeVar, Union
+from collections.abc import Callable
+from typing import List, TypeVar, Union
 
 from pydantic import ValidationError
 

@@ -2,12 +2,10 @@
 Handler for transforming interactions API requests to litellm.responses requests.
 """
 
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import (
     Any,
-    AsyncIterator,
-    Coroutine,
     Dict,
-    Iterator,
     Optional,
     Union,
     cast,

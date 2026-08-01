@@ -1,4 +1,5 @@
-from typing import Any, Coroutine, Dict, Iterable, Literal, Optional, Union
+from collections.abc import Coroutine, Iterable
+from typing import Any, Dict, Literal, Optional, Union
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI

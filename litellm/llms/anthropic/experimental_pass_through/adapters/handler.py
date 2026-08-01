@@ -1,10 +1,8 @@
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
     Dict,
-    Iterator,
     List,
     Optional,
     Tuple,

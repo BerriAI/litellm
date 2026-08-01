@@ -3,7 +3,8 @@ Base configuration for A2A protocol providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any, Dict, Optional
 
 
 class BaseA2AProviderConfig(ABC):

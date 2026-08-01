@@ -8,8 +8,9 @@ and uses LiteLLM auth.
 """
 
 import re
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Dict, List, Literal, Mapping
+from typing import Any, Dict, List, Literal
 
 SupportedA2AVersion = Literal["0.3", "1.0"]
 

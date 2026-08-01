@@ -1,12 +1,11 @@
 import re
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
-    Iterable,
     List,
     Literal,
     Optional,

@@ -1,7 +1,8 @@
 """Dispatch ``context_management`` edits to registered polyfill editors."""
 
 import inspect
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union, cast
+from collections.abc import Awaitable, Callable
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AppliedEdit

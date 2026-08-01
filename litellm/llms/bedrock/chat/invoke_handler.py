@@ -1,7 +1,6 @@
 import types
+from collections.abc import AsyncIterator, Iterator
 from typing import (
-    AsyncIterator,
-    Iterator,
     Optional,
     Tuple,
     cast,
@@ -37,14 +36,12 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     Delta,
-)
-from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
     Usage,
 )
+from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..common_utils import (
     BedrockError,

@@ -18,13 +18,11 @@ import asyncio
 import datetime
 import inspect
 import time
+from collections.abc import AsyncGenerator, Callable, Generator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Callable,
     Dict,
-    Generator,
     List,
     Optional,
     Tuple,

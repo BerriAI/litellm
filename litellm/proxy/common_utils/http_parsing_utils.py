@@ -1,6 +1,7 @@
 import json
 import re
-from typing import Any, Collection, Dict, List, Optional
+from collections.abc import Collection
+from typing import Any, Dict, List, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status

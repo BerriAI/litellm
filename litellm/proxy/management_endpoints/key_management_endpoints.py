@@ -18,9 +18,9 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional, Protocol, Tuple, TypeVar, cast
+from typing import Any, Dict, List, Literal, Optional, Protocol, Tuple, TypeVar, cast
 
 import fastapi
 import yaml

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, NoReturn, Optional, Sequence, cast
+from typing import Any, Dict, List, NoReturn, Optional, cast
 
 from fastapi import HTTPException, status
 
@@ -471,8 +472,8 @@ async def _get_tag_budget_counters(
     user_api_key_cache: DualCache,
     proxy_logging_obj: ProxyLogging,
 ) -> List[_BudgetCounter]:
-    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
     from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
     tag_names = _dedupe_tags(get_tags_from_request_body(request_body=request_body))
     if not tag_names:
@@ -659,8 +660,8 @@ async def _reserve_counter(
     from litellm.proxy.proxy_server import (
         _ensure_spend_counter_initialized,
         _ensure_window_spend_counter_initialized,
-        _invalidate_spend_counter,
         _increment_spend_counter_cache,
+        _invalidate_spend_counter,
     )
 
     attempted_increment = False

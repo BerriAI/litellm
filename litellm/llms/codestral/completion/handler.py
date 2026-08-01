@@ -2,8 +2,9 @@
 ## handler file for TextCompletionCodestral Integration - https://codestral.com/
 
 import json
+from collections.abc import Callable
 from functools import partial
-from typing import Callable, List, Optional, Union
+from typing import List, Optional, Union
 
 import httpx  # type: ignore
 

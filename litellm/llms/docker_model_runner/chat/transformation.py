@@ -4,7 +4,8 @@ Translates from OpenAI's `/v1/chat/completions` to Docker Model Runner's `/engin
 Docker Model Runner API Reference: https://docs.docker.com/ai/model-runner/api-reference/
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from collections.abc import Coroutine
+from typing import Any, List, Literal, Optional, Tuple, Union, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,

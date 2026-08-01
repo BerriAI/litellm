@@ -9,8 +9,9 @@ omits each feature's routes until the feature is warmed.
 import asyncio
 import importlib
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Dict, Tuple
+from typing import TYPE_CHECKING, Dict, Tuple
 
 from starlette.types import Receive, Scope, Send
 

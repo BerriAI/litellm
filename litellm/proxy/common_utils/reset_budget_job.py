@@ -1,8 +1,9 @@
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any, Callable, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger

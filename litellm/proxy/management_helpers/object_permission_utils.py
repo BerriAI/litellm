@@ -4,8 +4,9 @@ organizations, teams, and keys.
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from fastapi import HTTPException, status
 

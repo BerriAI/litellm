@@ -8,8 +8,9 @@ surface from silently dropping a field: omitting the auth headers, for instance,
 still executes the tool, just with no credentials.
 """
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence, Union
+from typing import Any, Union
 
 
 @dataclass(frozen=True, slots=True)

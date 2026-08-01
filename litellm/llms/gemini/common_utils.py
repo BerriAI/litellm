@@ -2,7 +2,8 @@ import base64
 import datetime
 import json
 import math
-from typing import Any, Dict, List, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 

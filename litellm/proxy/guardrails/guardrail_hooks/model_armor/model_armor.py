@@ -1,12 +1,10 @@
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     List,
     Literal,
-    Mapping,
     Optional,
-    Sequence,
     Type,
     Union,
 )
@@ -22,17 +20,18 @@ import json
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
+)
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
@@ -40,7 +39,6 @@ from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
     MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
     plan_file_scans,
 )
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (

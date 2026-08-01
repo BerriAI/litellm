@@ -4,16 +4,14 @@ import logging
 import math
 import time
 import traceback
+from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import datetime
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Callable,
     Dict,
     Literal,
-    Mapping,
     Optional,
     Tuple,
     Union,

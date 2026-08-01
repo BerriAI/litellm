@@ -3,7 +3,8 @@ Prometheus Auth Middleware - Pure ASGI implementation
 """
 
 import json
-from typing import Any, List, MutableMapping
+from collections.abc import MutableMapping
+from typing import Any, List
 
 from fastapi import Request
 from starlette.types import ASGIApp, Receive, Scope, Send

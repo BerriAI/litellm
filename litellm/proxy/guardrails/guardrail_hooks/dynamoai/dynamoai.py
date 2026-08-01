@@ -6,8 +6,9 @@
 # +-------------------------------------------------------------+
 
 import os
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 import httpx
 

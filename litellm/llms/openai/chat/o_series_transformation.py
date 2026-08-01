@@ -11,7 +11,8 @@ Translations handled by LiteLLM:
 - Logprobs => drop param (if user opts in to dropping param)
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Union, cast, overload
+from collections.abc import Coroutine
+from typing import Any, List, Literal, Optional, Union, cast, overload
 
 import litellm
 from litellm import verbose_logger

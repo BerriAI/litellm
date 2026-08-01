@@ -8,13 +8,13 @@ import asyncio
 import binascii
 import os
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
     FrozenSet,
     List,

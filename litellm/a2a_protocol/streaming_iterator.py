@@ -3,8 +3,9 @@ A2A Streaming Iterator with token tracking and logging support.
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import litellm
 from litellm._logging import verbose_logger

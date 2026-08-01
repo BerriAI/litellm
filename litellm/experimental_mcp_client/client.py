@@ -5,18 +5,17 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 import asyncio
 import base64
 import os
+from collections.abc import Awaitable, Callable, Generator
 from typing import (
     Any,
-    Awaitable,
-    Callable,
     Dict,
-    Generator,
     List,
     Optional,
     Tuple,
     TypeVar,
     Union,
 )
+
 import httpx
 from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
@@ -40,6 +39,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
+
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration

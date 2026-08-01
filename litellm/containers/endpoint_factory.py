@@ -8,9 +8,10 @@ that use the generic container handler.
 import asyncio
 import contextvars
 import json
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Type
+from typing import Any, Dict, List, Literal, Optional, Type
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT

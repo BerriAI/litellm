@@ -1,22 +1,22 @@
 import time
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.cohere import CohereV2ChatResponse
 from litellm.types.llms.openai import (
     AllMessageValues,
-    ChatCompletionToolCallChunk,
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
+    ChatCompletionToolCallChunk,
 )
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.utils import ModelResponse, Usage
 
-from ..common_utils import CohereError
-from ..common_utils import CohereV2ModelResponseIterator
+from ..common_utils import CohereError, CohereV2ModelResponseIterator
 from ..common_utils import validate_environment as cohere_validate_environment
 
 if TYPE_CHECKING:

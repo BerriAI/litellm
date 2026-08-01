@@ -8,9 +8,10 @@ identical metrics. The attribute cardinality filter is reused from v1 by import
 (no duplication of the valid-name set or its validation).
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, FrozenSet, Mapping, Optional, TypeAlias
+from typing import Any, Final, FrozenSet, Optional, TypeAlias
 
 from opentelemetry.metrics import Histogram, Meter
 

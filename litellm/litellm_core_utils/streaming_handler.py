@@ -6,13 +6,11 @@ import logging
 import threading
 import time
 import traceback
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from typing import (
     Any,
-    AsyncIterator,
-    Callable,
     Dict,
-    Iterator,
     List,
     NoReturn,
     Optional,
@@ -36,15 +34,13 @@ from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     Delta,
-)
-from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import (
     LlmProviders,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
     Usage,
 )
+from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers

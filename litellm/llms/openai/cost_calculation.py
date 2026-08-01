@@ -3,7 +3,8 @@ Helper util for handling openai-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import Any, Literal, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any, Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token

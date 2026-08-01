@@ -15,13 +15,11 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Callable,
     Dict,
     List,
     Literal,
@@ -308,11 +306,6 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
-from litellm.proxy.config_resolvers import resolve_fields
-from litellm.proxy.config_resolvers.alerting import (
-    EMAIL_DESCRIPTORS,
-    SLACK_DESCRIPTORS,
-)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -337,6 +330,11 @@ from litellm.proxy.common_utils.timezone_utils import (
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
+)
+from litellm.proxy.config_resolvers import resolve_fields
+from litellm.proxy.config_resolvers.alerting import (
+    EMAIL_DESCRIPTORS,
+    SLACK_DESCRIPTORS,
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
@@ -387,6 +385,8 @@ from litellm.proxy.management_endpoints.common_utils import (
 )
 from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
     get_persisted_coordination_redis_settings,
+)
+from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
     router as coordination_redis_settings_router,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
@@ -395,16 +395,6 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
-from litellm.proxy.management_endpoints.management_v1 import (
-    router as management_v1_router,
-)
-from litellm.proxy.management_endpoints.management_v1.common import (
-    MANAGEMENT_V1_PREFIX,
-    PROBLEM_TYPE_BASE,
-    ManagementProblem,
-    problem_response,
-)
-from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
 )
@@ -421,6 +411,15 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
+)
+from litellm.proxy.management_endpoints.management_v1 import (
+    router as management_v1_router,
+)
+from litellm.proxy.management_endpoints.management_v1.common import (
+    MANAGEMENT_V1_PREFIX,
+    PROBLEM_TYPE_BASE,
+    ManagementProblem,
+    problem_response,
 )
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     router as model_access_group_management_router,
@@ -475,6 +474,7 @@ from litellm.proxy.plugin_routes import (
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
+from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (

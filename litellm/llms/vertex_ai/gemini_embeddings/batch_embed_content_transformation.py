@@ -4,8 +4,8 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
-from collections.abc import Mapping
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Dict, List, Optional, Tuple
 
 from pydantic import TypeAdapter, ValidationError
 

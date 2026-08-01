@@ -3,8 +3,9 @@
 import asyncio
 import contextvars
 import os
+from collections.abc import Coroutine, Iterable
 from functools import partial
-from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
 from openai import AsyncOpenAI, OpenAI

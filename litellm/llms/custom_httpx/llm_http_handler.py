@@ -2,18 +2,15 @@ import asyncio
 import json
 import os
 import ssl
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
     Dict,
-    Iterator,
     List,
     Literal,
-    Mapping,
     Optional,
     Tuple,
     TypeVar,

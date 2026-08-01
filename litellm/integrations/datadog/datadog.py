@@ -18,8 +18,9 @@ import datetime
 import os
 import time
 import traceback
+from collections.abc import Sequence
 from datetime import datetime as datetimeObj
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from httpx import Response
@@ -28,16 +29,16 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.datadog.datadog_mock_client import (
-    should_use_datadog_mock,
-    create_mock_datadog_client,
-)
 from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_base_url_from_env,
     get_datadog_hostname,
     get_datadog_service,
     get_datadog_source,
     get_datadog_tags,
-    get_datadog_base_url_from_env,
+)
+from litellm.integrations.datadog.datadog_mock_client import (
+    create_mock_datadog_client,
+    should_use_datadog_mock,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
@@ -51,10 +52,10 @@ from litellm.types.integrations.datadog import (
     DD_ERRORS,
     DD_MAX_BATCH_SIZE,
     DD_MAX_PAYLOAD_SIZE_BYTES,
-    DataDogStatus,
     DatadogInitParams,
     DatadogPayload,
     DatadogProxyFailureHookJsonMessage,
+    DataDogStatus,
 )
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import StandardLoggingPayload

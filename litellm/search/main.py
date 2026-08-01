@@ -4,8 +4,9 @@ Main Search function for LiteLLM.
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 

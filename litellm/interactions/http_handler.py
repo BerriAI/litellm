@@ -4,12 +4,10 @@ HTTP Handler for Interactions API requests.
 This module handles the HTTP communication for the Google Interactions API.
 """
 
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import (
     Any,
-    AsyncIterator,
-    Coroutine,
     Dict,
-    Iterator,
     Optional,
     Union,
 )

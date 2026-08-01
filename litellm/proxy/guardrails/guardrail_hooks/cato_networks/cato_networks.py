@@ -9,7 +9,8 @@ import contextlib
 import json
 import os
 import ssl
-from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Optional, Type, Union
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any, List, Optional, Type, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel

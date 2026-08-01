@@ -14,7 +14,8 @@ Flow:
 import json
 import time
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast
+from collections.abc import Iterable
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger

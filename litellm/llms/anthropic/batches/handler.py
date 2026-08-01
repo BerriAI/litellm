@@ -3,7 +3,8 @@ Anthropic Batches API Handler
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 

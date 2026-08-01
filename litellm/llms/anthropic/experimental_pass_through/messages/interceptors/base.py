@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Dict, List, Optional, Union
+from collections.abc import AsyncIterator
+from typing import Dict, List, Optional, Union
 
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,

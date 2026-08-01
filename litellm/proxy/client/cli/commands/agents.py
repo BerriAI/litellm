@@ -1,7 +1,8 @@
 import os
 import shutil
 import sys
-from typing import Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
+from collections.abc import Callable, Mapping, Sequence
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import click
 import requests

@@ -4,7 +4,8 @@ Generic competitor intent checker: two entity sets and overridable disambiguatio
 
 import re
 import unicodedata
-from typing import Any, Dict, List, Optional, Pattern, Set, Tuple, cast
+from re import Pattern
+from typing import Any, Dict, List, Optional, Set, Tuple, cast
 
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     CompetitorActionHint,

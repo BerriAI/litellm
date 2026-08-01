@@ -4,7 +4,8 @@ LiteLLM A2A Client class.
 Provides a class-based interface for A2A agent invocation.
 """
 
-from typing import TYPE_CHECKING, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Dict, Optional
 
 from litellm.types.agents import LiteLLMSendMessageResponse
 

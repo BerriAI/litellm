@@ -7,7 +7,8 @@ The bedrock-mantle endpoint uses the Anthropic Messages API format but is served
 at a different endpoint (bedrock-mantle.{region}.api.aws) with AWS SigV4 auth.
 """
 
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,

@@ -10,7 +10,8 @@ This is an __init__.py file to allow the following interface
 
 """
 
-from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Coroutine, Iterator
+from typing import Any, Dict, List, Optional, Union
 
 from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     anthropic_messages as _async_anthropic_messages,

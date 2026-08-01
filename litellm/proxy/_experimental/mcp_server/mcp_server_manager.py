@@ -13,13 +13,11 @@ import json
 import os
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Callable,
     Literal,
     Optional,
     TypeAlias,

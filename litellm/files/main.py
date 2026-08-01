@@ -9,9 +9,10 @@ import asyncio
 import contextvars
 import time
 import uuid as uuid_module
+from collections.abc import Coroutine
 from functools import partial
 from types import MappingProxyType
-from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 import httpx
 

@@ -1,6 +1,7 @@
 import json
+from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Sequence, Union, cast
+from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 import httpx
 

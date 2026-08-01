@@ -5,7 +5,8 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 import urllib.parse
-from typing import Any, Callable, List, Optional, Tuple, Union, get_args
+from collections.abc import Callable
+from typing import Any, List, Optional, Tuple, Union, get_args
 
 import httpx
 

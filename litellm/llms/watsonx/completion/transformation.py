@@ -1,11 +1,10 @@
 import time
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
     Dict,
-    Iterator,
     List,
     Optional,
     Union,

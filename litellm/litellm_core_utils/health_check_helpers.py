@@ -2,7 +2,8 @@
 Helper functions for health check calls.
 """
 
-from typing import TYPE_CHECKING, Callable, Dict, Literal, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Dict, Literal, Optional
 
 from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 

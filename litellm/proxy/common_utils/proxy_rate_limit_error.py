@@ -36,7 +36,8 @@ This module provides a single proxy-side error class that:
 """
 
 import json
-from typing import Any, Dict, Mapping, Optional, Union
+from collections.abc import Mapping
+from typing import Any, Dict, Optional, Union
 
 from fastapi import HTTPException
 

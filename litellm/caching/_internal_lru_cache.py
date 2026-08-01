@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from functools import lru_cache
-from typing import Callable, Optional, TypeVar
+from typing import Optional, TypeVar
 
 T = TypeVar("T")
 

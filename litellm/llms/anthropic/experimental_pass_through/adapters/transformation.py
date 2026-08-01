@@ -1,12 +1,11 @@
 import copy
 import hashlib
 import json
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
     Dict,
-    Iterator,
     List,
     Literal,
     Optional,

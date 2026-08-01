@@ -1,6 +1,6 @@
 """Shared helpers for the integration presets."""
 
-from typing import Iterable
+from collections.abc import Iterable
 
 
 def ensure_mappers(mapper_names: Iterable[str], *names: str) -> list[str]:

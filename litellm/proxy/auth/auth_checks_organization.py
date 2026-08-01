@@ -2,7 +2,8 @@
 Auth Checks for Organizations
 """
 
-from typing import Awaitable, Callable, Dict, List, Optional, Tuple
+from collections.abc import Awaitable, Callable
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import status
 

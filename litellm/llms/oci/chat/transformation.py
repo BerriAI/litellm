@@ -10,12 +10,11 @@ implement the LiteLLM BaseConfig interface.  Heavy-lifting lives in:
 """
 
 import json
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
     Dict,
-    Iterator,
     List,
     Optional,
     Tuple,
@@ -27,6 +26,7 @@ import httpx
 import litellm
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -71,7 +71,6 @@ from litellm.types.utils import (
     ModelResponseStream,
 )
 from litellm.utils import supports_reasoning
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj

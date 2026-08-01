@@ -19,12 +19,12 @@ request is sent with the ``X-Cisco-AI-Defense-API-Key`` header.
 
 import json
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
     Dict,
     List,
     Literal,

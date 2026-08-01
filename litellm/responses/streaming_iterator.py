@@ -5,10 +5,11 @@ import json
 import time
 import traceback
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Dict, List, Literal, Mapping, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 from openai._streaming import SSEDecoder

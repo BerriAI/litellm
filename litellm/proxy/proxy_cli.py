@@ -6,8 +6,9 @@ import random
 import subprocess
 import sys
 import urllib.parse as urlparse
+from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import click
 import httpx

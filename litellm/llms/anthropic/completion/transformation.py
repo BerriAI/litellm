@@ -6,7 +6,8 @@ Litellm provider slug: `anthropic_text/<model_name>`
 
 import json
 import time
-from typing import AsyncIterator, Dict, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Dict, List, Optional, Union
 
 import httpx
 

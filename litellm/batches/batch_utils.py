@@ -1,6 +1,7 @@
 import json
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple
+from typing import Any, List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger

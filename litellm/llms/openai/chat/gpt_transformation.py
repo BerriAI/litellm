@@ -3,13 +3,12 @@ Support for gpt model family
 """
 
 import json
+import os
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
     Dict,
-    Iterator,
     List,
     Literal,
     Optional,
@@ -18,8 +17,6 @@ from typing import (
     cast,
     overload,
 )
-
-import os
 from urllib.parse import urlparse
 
 import httpx

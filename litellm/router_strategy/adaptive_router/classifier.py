@@ -8,7 +8,8 @@ Order matters: we check more specific types first, falling back to GENERAL.
 """
 
 import re
-from typing import List, Pattern, Tuple
+from re import Pattern
+from typing import List, Tuple
 
 from litellm.types.router import RequestType
 

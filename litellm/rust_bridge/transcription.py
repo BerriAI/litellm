@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Awaitable, Final, Protocol, Union, cast
+from typing import Final, Protocol, Union, cast
 
 import httpx
 

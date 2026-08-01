@@ -7,7 +7,8 @@
 import asyncio
 import json
 import os
-from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Optional, Type, Union
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any, List, Optional, Type, Union
 
 from pydantic import BaseModel
 from websockets.asyncio.client import ClientConnection, connect

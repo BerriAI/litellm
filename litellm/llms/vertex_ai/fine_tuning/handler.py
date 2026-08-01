@@ -1,7 +1,8 @@
 import json
 import traceback
+from collections.abc import Coroutine
 from datetime import datetime
-from typing import Any, Coroutine, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 import httpx
 

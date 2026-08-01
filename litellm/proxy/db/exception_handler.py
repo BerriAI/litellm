@@ -1,4 +1,5 @@
-from typing import Any, Awaitable, Callable, Optional, Union
+from collections.abc import Awaitable, Callable
+from typing import Any, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (

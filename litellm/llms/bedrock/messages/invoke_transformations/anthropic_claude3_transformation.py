@@ -1,7 +1,7 @@
+from collections.abc import AsyncIterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
     Dict,
     List,
     Optional,
@@ -53,9 +53,8 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import ModelResponseStream
 from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:

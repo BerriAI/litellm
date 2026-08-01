@@ -1,6 +1,7 @@
 import json
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Callable, List, Optional, Union, cast
+from typing import Any, List, Optional, Union, cast
 
 import httpx
 
@@ -21,8 +22,8 @@ from litellm.utils import (
 )
 
 from ..common_utils import AWSEventStreamDecoder, SagemakerError
-from .transformation import SagemakerConfig
 from ..embedding.transformation import SagemakerEmbeddingConfig
+from .transformation import SagemakerConfig
 
 sagemaker_config = SagemakerConfig()
 

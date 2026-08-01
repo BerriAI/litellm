@@ -1,13 +1,9 @@
 import time
 import types
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Callable,
-    Coroutine,
-    Iterable,
-    Iterator,
     List,
     Literal,
     Optional,

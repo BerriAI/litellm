@@ -1,6 +1,7 @@
 import copy
 import os
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import litellm
 from litellm import get_secret

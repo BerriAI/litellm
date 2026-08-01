@@ -4,17 +4,14 @@ import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional, TypeGuard
 
 import httpx
-from collections.abc import Mapping, Sequence
 from fastapi import HTTPException
+from httpx import Response as HttpxResponse
 
 import litellm
-from httpx import Response as HttpxResponse
-from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
-from typing_extensions import TypeGuard
-
 from litellm._logging import verbose_proxy_logger
 from litellm.compression.compress import get_protected_indices
 from litellm.integrations.custom_guardrail import (
@@ -37,6 +34,7 @@ from litellm.proxy.guardrails.guardrail_hooks.content_text import (
     is_all_text_parts,
     merge_rewritten_text_parts,
 )
+from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch

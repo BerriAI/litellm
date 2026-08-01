@@ -9,7 +9,8 @@ import json
 import os
 import re
 from enum import Enum
-from typing import Any, Dict, List, Pattern
+from re import Pattern
+from typing import Any, Dict, List
 
 
 def _load_patterns_from_json() -> Dict:

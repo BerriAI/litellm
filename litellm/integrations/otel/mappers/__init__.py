@@ -6,7 +6,7 @@ carry both the canonical ``gen_ai.*`` keys and the OpenInference (Arize +
 Phoenix) keys. Add ``"langfuse"`` and it works for all three backends at once.
 """
 
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 from litellm.integrations.otel.mappers.base import (
     AttributeMap,

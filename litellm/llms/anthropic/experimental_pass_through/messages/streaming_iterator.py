@@ -1,7 +1,8 @@
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, AsyncIterator, List, Protocol, Union, runtime_checkable
+from typing import Any, List, Protocol, Union, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter

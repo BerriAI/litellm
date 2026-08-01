@@ -1,4 +1,5 @@
-from typing import AsyncIterator, Dict, Iterator, Literal, NamedTuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Dict, Literal, NamedTuple, Union
 
 FileContentProvider = Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"]
 

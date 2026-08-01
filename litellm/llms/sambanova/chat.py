@@ -4,7 +4,8 @@ Sambanova Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Union, overload
+from collections.abc import Coroutine
+from typing import Any, List, Literal, Optional, Union, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,

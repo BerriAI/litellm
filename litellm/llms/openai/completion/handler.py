@@ -1,5 +1,6 @@
 import json
-from typing import Callable, List, Optional, Union
+from collections.abc import Callable
+from typing import List, Optional, Union
 
 from openai import AsyncOpenAI, OpenAI
 

@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from typing import Callable, List, Union
+from collections.abc import Callable
+from typing import List, Union
 
 import litellm
 from litellm.constants import REPLICATE_POLLING_DELAY_SECONDS

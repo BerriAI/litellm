@@ -6,11 +6,9 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import (
     Any,
-    AsyncIterator,
-    Coroutine,
-    Iterator,
     List,
     Literal,
     Optional,
@@ -29,8 +27,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_none_values_from_message,
 )
 from litellm.llms.openai.chat.gpt_transformation import (
-    OpenAIGPTConfig,
     OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
