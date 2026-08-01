@@ -369,7 +369,7 @@ def aggregate_authorize(
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
     )
     connect_url = _append_query_params(
-        f"{base_url}/ui/chat/integrations",
+        f"{base_url}/ui/connect",
         {"connect_flow": handle, "connect_client": _origin_only(redirect_uri)},
     )
     response = RedirectResponse(connect_url, status_code=303)
