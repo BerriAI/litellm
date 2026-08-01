@@ -1153,11 +1153,7 @@ async def proxy_startup_event(app: FastAPI):
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
 
-    if proxy_config.config_sync_subscriber is not None:
-        try:
-            await proxy_config.config_sync_subscriber.stop()
-        except Exception as e:
-            verbose_proxy_logger.error(f"Error stopping config sync subscriber: {e}")
+    await proxy_config.stop_config_sync_subscriber()
 
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
@@ -6213,6 +6209,38 @@ class ProxyConfig:
                 "litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - {}".format(str(e))
             )
 
+    def start_config_sync_subscriber(
+        self,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        redis_cache: Optional[RedisCache],
+    ) -> None:
+        if redis_cache is None or self.config_sync_subscriber is not None:
+            return
+
+        async def _resync_config_from_db() -> None:
+            await self.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+
+        async def _resync_credentials_from_db() -> None:
+            await self.get_credentials(prisma_client=prisma_client)
+
+        subscriber = ConfigSyncSubscriber(
+            redis_cache=redis_cache,
+            resync_callbacks=(_resync_config_from_db, _resync_credentials_from_db),
+        )
+        self.config_sync_subscriber = subscriber
+        subscriber.start()
+
+    async def stop_config_sync_subscriber(self) -> None:
+        subscriber = self.config_sync_subscriber
+        if subscriber is None:
+            return
+        self.config_sync_subscriber = None
+        try:
+            await subscriber.stop()
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error stopping config sync subscriber: {e}")
+
     async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
         """
         Use this to read non-llm objects from the db and initialize them
@@ -8174,19 +8202,11 @@ class ProxyStartupEvent:
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
 
-            if redis_usage_cache is not None and proxy_config.config_sync_subscriber is None:
-
-                async def _resync_config_from_db() -> None:
-                    await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
-
-                async def _resync_credentials_from_db() -> None:
-                    await proxy_config.get_credentials(prisma_client=prisma_client)
-
-                proxy_config.config_sync_subscriber = ConfigSyncSubscriber(
-                    redis_cache=redis_usage_cache,
-                    resync_callbacks=(_resync_config_from_db, _resync_credentials_from_db),
-                )
-                proxy_config.config_sync_subscriber.start()
+            proxy_config.start_config_sync_subscriber(
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                redis_cache=redis_usage_cache,
+            )
 
         if store_model_in_db is not True:
             await proxy_config.init_mcp_servers_from_db()
