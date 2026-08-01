@@ -29,7 +29,12 @@ from starlette.responses import JSONResponse
 from starlette.types import Message, Receive, Scope, Send
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.constants import (
+    MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    MCP_MAX_STATEFUL_SESSIONS_PER_OWNER,
+    MCP_SESSION_OWNER_HEADER,
+    MCP_SESSION_OWNER_PREFER_IP,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -98,8 +103,8 @@ _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60
 # without a cap an authenticated client could spam `initialize` and exhaust
 # memory. The caller's own oldest idle sessions are evicted to make room; if
 # the cap is still hit (every session in flight), the new `initialize` is
-# rejected with 429.
-_MAX_STATEFUL_SESSIONS_PER_OWNER = 100
+# rejected with 429. Override via LITELLM_MCP_MAX_STATEFUL_SESSIONS_PER_OWNER.
+_MAX_STATEFUL_SESSIONS_PER_OWNER = MCP_MAX_STATEFUL_SESSIONS_PER_OWNER
 # Maximum bytes to peek when sniffing the JSON-RPC method on a POST.
 # An `initialize` envelope is a few hundred bytes; capping the peek
 # prevents an authenticated client from forcing the proxy to buffer an
@@ -3431,6 +3436,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: UserAPIKeyAuth | None,
         oauth2_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> str:
         """
         Stable, non-reversible identifier for the caller used to bind an
@@ -3441,6 +3447,17 @@ if MCP_AVAILABLE:
         the caller's identity is the upstream OAuth bearer; hash it so two
         OAuth callers with different tokens don't both fingerprint to
         ``anonymous`` and end up sharing a session.
+
+        Shared API keys collapse every caller into one owner bucket by default.
+        Deployments that distribute one service-account key to many IDE /
+        plugin users can opt out of that collapse in two ways:
+
+        1. Send ``LITELLM_MCP_SESSION_OWNER_HEADER`` (default
+           ``x-litellm-mcp-session-owner``) with a per-user value — that header
+           is preferred over the API key when present.
+        2. Set ``LITELLM_MCP_SESSION_OWNER_PREFER_IP=true`` so the client IP is
+           preferred over the API key (useful when callers share a key but
+           arrive from distinct IPs).
 
         When no caller-identifying credentials are available at all
         (e.g. proxy running without master key, or an unauthenticated
@@ -3464,6 +3481,21 @@ if MCP_AVAILABLE:
             if isinstance(value, str):
                 return value.encode("utf-8")
             return None
+
+        # Prefer an explicit per-caller owner header over a shared API key so
+        # IDE / plugin users behind one service-account key get independent
+        # session caps (#35383).
+        if MCP_SESSION_OWNER_HEADER and request_headers:
+            normalized = {str(k).lower(): v for k, v in request_headers.items() if isinstance(k, str)}
+            owner_hdr = normalized.get(MCP_SESSION_OWNER_HEADER.lower())
+            owner_bytes = _bytes_for_hash(owner_hdr)
+            if owner_bytes:
+                return f"hdr:{hashlib.sha256(owner_bytes).hexdigest()}"
+
+        # Prefer client IP over API key when configured for shared-key
+        # deployments that still have distinct source IPs.
+        if MCP_SESSION_OWNER_PREFER_IP and client_ip and isinstance(client_ip, str):
+            return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
 
         if user_api_key_auth is not None:
             key_material = _bytes_for_hash(getattr(user_api_key_auth, "api_key", None))
@@ -4198,7 +4230,7 @@ if MCP_AVAILABLE:
             # response sees a pristine ``receive`` channel.
             if session_id:
                 expected_owner = _stateful_session_owners.get(session_id)
-                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
+                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip, raw_headers)
                 if expected_owner is not None and expected_owner != request_owner:
                     verbose_logger.warning(
                         "Rejecting MCP request: session '%s' owner mismatch.",
@@ -4242,7 +4274,7 @@ if MCP_AVAILABLE:
             # session. Cap how many a single caller can hold so an authenticated
             # client cannot spam `initialize` and exhaust memory.
             if is_initialize and not session_id:
-                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
+                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip, raw_headers)
                 if not await _enforce_stateful_session_cap_for_owner(request_owner):
                     verbose_logger.warning(
                         "Rejecting MCP initialize: caller already holds the maximum number of active stateful sessions."
@@ -4361,7 +4393,7 @@ if MCP_AVAILABLE:
                     local_send = _wrap_send_with_stateful_session_auth_context(
                         local_send,
                         auth_user,
-                        _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip),
+                        _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip, raw_headers),
                         _track_initialized_stateful_session,
                     )
 

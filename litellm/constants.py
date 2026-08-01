@@ -121,6 +121,23 @@ MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "
 MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
 
+# Cap concurrent stateful MCP sessions per caller fingerprint. Shared API keys
+# collapse many users into one bucket unless session ownership is customized
+# via MCP_SESSION_OWNER_HEADER / MCP_SESSION_OWNER_PREFER_IP (see #35383).
+MCP_MAX_STATEFUL_SESSIONS_PER_OWNER = int(os.getenv("LITELLM_MCP_MAX_STATEFUL_SESSIONS_PER_OWNER", "100"))
+# When present on a request, this header is hashed and preferred over the API
+# key for session-owner fingerprinting — so IDE / plugin users behind a shared
+# service-account key get independent session caps. Empty string disables.
+MCP_SESSION_OWNER_HEADER = os.getenv("LITELLM_MCP_SESSION_OWNER_HEADER", "x-litellm-mcp-session-owner")
+# When true, bucket sessions by client IP before the API key so callers that
+# share a service-account key but arrive from different IPs get separate caps.
+MCP_SESSION_OWNER_PREFER_IP = os.getenv("LITELLM_MCP_SESSION_OWNER_PREFER_IP", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
 # Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").
