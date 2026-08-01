@@ -1071,6 +1071,7 @@ class BaseLLMHTTPHandler:
             headers=headers or {},
             model=model,
             optional_params=optional_rerank_params,
+            litellm_params=litellm_params,
         )
 
         api_base = provider_config.get_complete_url(

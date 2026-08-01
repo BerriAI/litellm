@@ -4,12 +4,13 @@ Transformation logic from Cohere's /v1/rerank format to Infinity's  `/v1/rerank`
 Why separate file? Make it easy to see how transformation works
 """
 
-from litellm._uuid import uuid
+from collections.abc import Mapping
 from typing import List, Optional
 
 import httpx
 
 import litellm
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -46,6 +47,7 @@ class InfinityRerankConfig(CohereRerankConfig):
         model: str,
         api_key: Optional[str] = None,
         optional_params: Optional[dict] = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("INFINITY_API_KEY") or get_secret_str("INFINITY_API_KEY") or litellm.infinity_key
