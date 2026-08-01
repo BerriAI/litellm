@@ -4934,6 +4934,28 @@ class TestTierFallbackLadder:
         assert response.routing_decision["tier_fallback_from"] == "SIMPLE"
 
     @pytest.mark.asyncio
+    async def test_a_deployment_with_no_id_counts_as_live(self):
+        """Cooldowns are keyed by deployment id, so one without an id can never be known to
+        be cooling. It counts as live, matching the rule everywhere else that an absent
+        health signal means live; excluding it would let missing metadata empty a tier and
+        push traffic to a pricier one."""
+
+        class IdlessRouter(StubRouter):
+            def get_model_list(self, model_name=None, team_id=None):
+                self.listed.append(model_name)
+                return [{"model_info": {}}] if model_name in self.registered else []
+
+        router = ComplexityRouter(
+            model_name="test-ladder-router",
+            litellm_router_instance=IdlessRouter(live=set()),
+            complexity_router_config={"tiers": dict(LADDER_TIERS), "session_affinity": False},
+        )
+        response = await _route(router, "What is 2+2?")
+        assert response.model in {"simple-a", "simple-b"}
+        assert "tier_fallback_from" not in response.routing_decision
+        assert "resolved_by" not in response.routing_decision
+
+    @pytest.mark.asyncio
     async def test_health_lookup_failure_keeps_the_classified_tier(self):
         """A health view that cannot be read must not empty every tier and push traffic up
         the ladder; it degrades to serving the configured pool."""

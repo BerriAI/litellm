@@ -926,9 +926,17 @@ class ComplexityRouter(CustomLogger):
 
         Reads the router's in-process deployment list, so it costs no I/O: the cooldown
         set was already fetched once for the whole request.
+
+        A deployment with no id counts as live. Cooldowns are keyed by id, so one that
+        cannot be identified can never be known to be cooling, and the ladder's rule
+        everywhere else is that an absent health signal means live. Excluding it instead
+        would let missing metadata empty a tier and push traffic to a pricier one.
         """
         deployments = self.litellm_router_instance.get_model_list(model_name=model) or ()
-        return any(self._deployment_id(deployment) not in cooled_down for deployment in deployments)
+        return any(
+            deployment_id is None or deployment_id not in cooled_down
+            for deployment_id in map(self._deployment_id, deployments)
+        )
 
     @staticmethod
     def _deployment_id(deployment: Mapping[str, Any]) -> str | None:
