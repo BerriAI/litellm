@@ -77,7 +77,7 @@ class SearchAPIRouter:
             verbose_router_logger.info(f"Successfully updated router with {len(router_search_tools)} search tool(s)")
 
         except Exception as e:
-            verbose_router_logger.exception(f"Error updating router with search tools: {e!s}")
+            verbose_router_logger.exception(f"Error updating router with search tools: {e}")
             raise e
 
     @staticmethod
@@ -226,6 +226,6 @@ class SearchAPIRouter:
 
         except Exception as e:
             verbose_router_logger.error(
-                f"Error in SearchAPIRouter.async_search_with_fallbacks_helper for {search_tool_name}: {e!s}"
+                f"Error in SearchAPIRouter.async_search_with_fallbacks_helper for {search_tool_name}: {e}"
             )
             raise e

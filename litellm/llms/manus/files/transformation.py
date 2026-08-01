@@ -279,8 +279,8 @@ class ManusFilesConfig(BaseFilesConfig):
                 status_details=response_json.get("status_details"),
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing Manus file response: {e!s}")
-            raise ValueError(f"Error parsing Manus file response: {e!s}")
+            verbose_logger.exception(f"Error parsing Manus file response: {e}")
+            raise ValueError(f"Error parsing Manus file response: {e}")
 
     def transform_retrieve_file_request(
         self,

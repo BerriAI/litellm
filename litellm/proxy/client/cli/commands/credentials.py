@@ -71,7 +71,7 @@ def create(ctx: click.Context, credential_name: str, info: str, values: str):
         credential_info = json.loads(info)
         credential_values = json.loads(values)
     except json.JSONDecodeError as e:
-        raise click.BadParameter(f"Invalid JSON: {e!s}")
+        raise click.BadParameter(f"Invalid JSON: {e}")
 
     try:
         response = client.create(credential_name, credential_info, credential_values)

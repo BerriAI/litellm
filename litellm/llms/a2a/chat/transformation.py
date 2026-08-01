@@ -279,7 +279,7 @@ class A2AConfig(BaseConfig):
         except Exception as e:
             raise A2AError(
                 status_code=raw_response.status_code,
-                message=f"Failed to parse A2A response: {e!s}",
+                message=f"Failed to parse A2A response: {e}",
                 headers=dict(raw_response.headers),
             )
 

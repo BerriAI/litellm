@@ -68,7 +68,7 @@ class SpendLogCleanup:
             return True
         except ValueError as e:
             verbose_proxy_logger.warning(
-                f"Invalid maximum_spend_logs_retention_period value: {retention_setting}, error: {e!s}"
+                f"Invalid maximum_spend_logs_retention_period value: {retention_setting}, error: {e}"
             )
             return False
 

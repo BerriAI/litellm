@@ -68,7 +68,7 @@ class Authenticator:
                     verbose_logger.error("Error saving access token to file")
                 return access_token
             except (GetDeviceCodeError, GetAccessTokenError, RefreshAPIKeyError) as e:
-                verbose_logger.warning(f"Failed attempt {attempt + 1}: {e!s}")
+                verbose_logger.warning(f"Failed attempt {attempt + 1}: {e}")
                 continue
 
         raise GetAccessTokenError(
@@ -100,7 +100,7 @@ class Authenticator:
         except OSError:
             verbose_logger.warning("No API key file found or error opening file")
         except (json.JSONDecodeError, KeyError) as e:
-            verbose_logger.warning(f"Error reading API key from file: {e!s}")
+            verbose_logger.warning(f"Error reading API key from file: {e}")
         except APIKeyExpiredError:
             pass  # Already logged in the try block
 
@@ -117,14 +117,14 @@ class Authenticator:
                     status_code=401,
                 )
         except OSError as e:
-            verbose_logger.error(f"Error saving API key to file: {e!s}")
+            verbose_logger.error(f"Error saving API key to file: {e}")
             raise GetAPIKeyError(
-                message=f"Failed to save API key: {e!s}",
+                message=f"Failed to save API key: {e}",
                 status_code=500,
             )
         except RefreshAPIKeyError as e:
             raise GetAPIKeyError(
-                message=f"Failed to refresh API key: {e!s}",
+                message=f"Failed to refresh API key: {e}",
                 status_code=401,
             )
 
@@ -142,7 +142,7 @@ class Authenticator:
                 api_endpoint = endpoints.get("api")
                 return api_endpoint
         except (OSError, json.JSONDecodeError, KeyError) as e:
-            verbose_logger.warning(f"Error reading API endpoint from file: {e!s}")
+            verbose_logger.warning(f"Error reading API endpoint from file: {e}")
             return None
 
     def _refresh_api_key(self) -> dict[str, Any]:
@@ -173,9 +173,9 @@ class Authenticator:
                 else:
                     verbose_logger.warning(f"API key response missing token: {response_json}")
             except httpx.HTTPStatusError as e:
-                verbose_logger.error(f"HTTP error refreshing API key (attempt {attempt + 1}/{max_retries}): {e!s}")
+                verbose_logger.error(f"HTTP error refreshing API key (attempt {attempt + 1}/{max_retries}): {e}")
             except Exception as e:
-                verbose_logger.error(f"Unexpected error refreshing API key: {e!s}")
+                verbose_logger.error(f"Unexpected error refreshing API key: {e}")
 
         raise RefreshAPIKeyError(
             message="Failed to refresh API key after maximum retries",
@@ -245,21 +245,21 @@ class Authenticator:
 
             return resp_json
         except httpx.HTTPStatusError as e:
-            verbose_logger.error(f"HTTP error getting device code: {e!s}")
+            verbose_logger.error(f"HTTP error getting device code: {e}")
             raise GetDeviceCodeError(
-                message=f"Failed to get device code: {e!s}",
+                message=f"Failed to get device code: {e}",
                 status_code=400,
             )
         except json.JSONDecodeError as e:
-            verbose_logger.error(f"Error decoding JSON response: {e!s}")
+            verbose_logger.error(f"Error decoding JSON response: {e}")
             raise GetDeviceCodeError(
-                message=f"Failed to decode device code response: {e!s}",
+                message=f"Failed to decode device code response: {e}",
                 status_code=400,
             )
         except Exception as e:
-            verbose_logger.error(f"Unexpected error getting device code: {e!s}")
+            verbose_logger.error(f"Unexpected error getting device code: {e}")
             raise GetDeviceCodeError(
-                message=f"Failed to get device code: {e!s}",
+                message=f"Failed to get device code: {e}",
                 status_code=400,
             )
 
@@ -304,21 +304,21 @@ class Authenticator:
                 else:
                     verbose_logger.warning(f"Unexpected response: {resp_json}")
             except httpx.HTTPStatusError as e:
-                verbose_logger.error(f"HTTP error polling for access token: {e!s}")
+                verbose_logger.error(f"HTTP error polling for access token: {e}")
                 raise GetAccessTokenError(
-                    message=f"Failed to get access token: {e!s}",
+                    message=f"Failed to get access token: {e}",
                     status_code=400,
                 )
             except json.JSONDecodeError as e:
-                verbose_logger.error(f"Error decoding JSON response: {e!s}")
+                verbose_logger.error(f"Error decoding JSON response: {e}")
                 raise GetAccessTokenError(
-                    message=f"Failed to decode access token response: {e!s}",
+                    message=f"Failed to decode access token response: {e}",
                     status_code=400,
                 )
             except Exception as e:
-                verbose_logger.error(f"Unexpected error polling for access token: {e!s}")
+                verbose_logger.error(f"Unexpected error polling for access token: {e}")
                 raise GetAccessTokenError(
-                    message=f"Failed to get access token: {e!s}",
+                    message=f"Failed to get access token: {e}",
                     status_code=400,
                 )
 

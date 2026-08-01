@@ -158,7 +158,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
             )
             query_vector = embedding_response.data[0]["embedding"]
         except Exception as e:
-            raise Exception(f"Failed to generate embedding for query: {e!s}")
+            raise Exception(f"Failed to generate embedding for query: {e}")
 
         # Azure AI Search endpoint for search
         index_name = vector_store_id  # vector_store_id is the index name

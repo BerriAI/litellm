@@ -679,7 +679,7 @@ def _map_replicate_exception(
             )
     raise APIError(
         status_code=500,
-        message=f"ReplicateException - {original_exception!s}",
+        message=f"ReplicateException - {original_exception}",
         llm_provider="replicate",
         model=model,
         request=httpx.Request(
@@ -2459,7 +2459,7 @@ def exception_type(  # type: ignore
         ):  # deal with edge-case invalid request error bug in openai-python sdk
             exception_mapping_worked = True
             raise BadRequestError(
-                message=f"{exception_provider} BadRequestError : This can happen due to missing AZURE_API_VERSION: {original_exception!s}",
+                message=f"{exception_provider} BadRequestError : This can happen due to missing AZURE_API_VERSION: {original_exception}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
@@ -2478,7 +2478,7 @@ def exception_type(  # type: ignore
                 )
             else:
                 raise APIConnectionError(
-                    message=f"{original_exception!s}\n{_redact_string(traceback.format_exc())}",
+                    message=f"{original_exception}\n{_redact_string(traceback.format_exc())}",
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request

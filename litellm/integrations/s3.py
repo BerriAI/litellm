@@ -78,7 +78,7 @@ class S3Logger:
                 **kwargs,
             )
         except Exception as e:
-            print_verbose(f"Got exception on init s3 client {e!s}")
+            print_verbose(f"Got exception on init s3 client {e}")
             raise e
 
     async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
@@ -163,12 +163,12 @@ class S3Logger:
                 **sse_params,
             )
 
-            print_verbose(f"Response from s3:{response!s}")
+            print_verbose(f"Response from s3:{response}")
 
             print_verbose(f"s3 Layer Logging - final response object: {response_obj}")
             return response
         except Exception as e:
-            verbose_logger.exception(f"s3 Layer Error - {e!s}")
+            verbose_logger.exception(f"s3 Layer Error - {e}")
 
 
 def _validated_sse_value(name: str, value: str | None) -> str | None:

@@ -356,7 +356,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
             raise BedrockError(
-                message=f"Error processing={raw_response.text}, Received error={e!s}",
+                message=f"Error processing={raw_response.text}, Received error={e}",
                 status_code=422,
             )
 
@@ -379,7 +379,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 raise Exception()
         except Exception as e:
             raise BedrockError(
-                message=f"Error parsing received text={outputText}.\nError-{e!s}",
+                message=f"Error parsing received text={outputText}.\nError-{e}",
                 status_code=raw_response.status_code,
             )
 

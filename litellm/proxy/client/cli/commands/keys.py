@@ -122,7 +122,7 @@ def generate(
         aliases_dict = json.loads(aliases) if aliases else None
         config_dict = json.loads(config) if config else None
     except json.JSONDecodeError as e:
-        raise click.BadParameter(f"Invalid JSON: {e!s}")
+        raise click.BadParameter(f"Invalid JSON: {e}")
     try:
         response = client.generate(
             models=models_list,
@@ -316,7 +316,7 @@ def _import_keys_to_destination(
         except Exception as e:
             failed_count += 1
             key_alias = key.get("key_alias", "N/A")
-            click.echo(f"Failed to import key {key_alias}: {e!s}", err=True)
+            click.echo(f"Failed to import key {key_alias}: {e}", err=True)
 
     return imported_count, failed_count
 
@@ -389,5 +389,5 @@ def import_keys(
             click.echo(e.response.text, err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {e!s}", err=True)
+        click.echo(f"Error: {e}", err=True)
         raise click.Abort()

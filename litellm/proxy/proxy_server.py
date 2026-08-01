@@ -3848,7 +3848,7 @@ class ProxyConfig:
             with open(file_path, "r") as file:
                 return yaml.safe_load(file) or {}
         except Exception as e:
-            raise Exception(f"Error loading yaml file {file_path}: {e!s}")
+            raise Exception(f"Error loading yaml file {file_path}: {e}")
 
     async def _get_config_from_file(self, config_file_path: str | None = None) -> dict:
         """
@@ -4286,7 +4286,7 @@ class ProxyConfig:
                 search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(**search_tool)  # type: ignore
                 search_tools_parsed.append(search_tool_typed)
             except Exception as e:
-                verbose_proxy_logger.error(f"Error parsing search tool {search_tool_name}: {e!s}")
+                verbose_proxy_logger.error(f"Error parsing search tool {search_tool_name}: {e}")
                 continue
 
         return search_tools_parsed if search_tools_parsed else None
@@ -5499,7 +5499,7 @@ class ProxyConfig:
                 self._add_deployment(db_models=models_list)
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error adding/deleting model to llm_router: {e!s}")
+            verbose_proxy_logger.exception(f"Error adding/deleting model to llm_router: {e}")
 
         if llm_router is not None:
             llm_model_list = llm_router.get_model_list()
@@ -6143,7 +6143,7 @@ class ProxyConfig:
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {e!s}"
+                f"litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {e}"
             )
             return None
 
@@ -6200,7 +6200,7 @@ class ProxyConfig:
             await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - {e!s}")
+            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - {e}")
 
         return still_desired_ids
 
@@ -6375,9 +6375,7 @@ class ProxyConfig:
                 uppercase_sso_settings = {key.upper(): value for key, value in sso_settings.sso_settings.items()}
                 self._decrypt_and_set_db_env_variables(environment_variables=uppercase_sso_settings)
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {e!s}"
-            )
+            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {e}")
 
     async def _init_hashicorp_vault_config_override(self, prisma_client: PrismaClient):
         """
@@ -6534,7 +6532,7 @@ class ProxyConfig:
                 )
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in _check_and_reload_model_cost_map: {e!s}")
+            verbose_proxy_logger.exception(f"Error in _check_and_reload_model_cost_map: {e}")
 
     async def _check_and_reload_anthropic_beta_headers(self, prisma_client: PrismaClient):
         """
@@ -6631,7 +6629,7 @@ class ProxyConfig:
                 )
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in _check_and_reload_anthropic_beta_headers: {e!s}")
+            verbose_proxy_logger.exception(f"Error in _check_and_reload_anthropic_beta_headers: {e}")
 
     def _get_prompt_spec_for_db_prompt(self, db_prompt):
         """
@@ -6660,7 +6658,7 @@ class ProxyConfig:
                 prompt_spec = self._get_prompt_spec_for_db_prompt(db_prompt=prompt)
                 IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt_spec)
         except Exception as e:
-            verbose_proxy_logger.debug(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - {e!s}")
+            verbose_proxy_logger.debug(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - {e}")
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
@@ -6687,7 +6685,7 @@ class ProxyConfig:
             # pod. Config-loaded entries are never touched.
             IN_MEMORY_GUARDRAIL_HANDLER.reconcile_db_guardrails(db_guardrail_ids=db_guardrail_ids)
         except Exception as e:
-            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - {e!s}")
+            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - {e}")
 
     async def _init_policies_in_db(self, prisma_client: PrismaClient):
         """
@@ -6711,7 +6709,7 @@ class ProxyConfig:
 
             verbose_proxy_logger.debug("Successfully synced policies and attachments from DB")
         except Exception as e:
-            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_policies_in_db - {e!s}")
+            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_policies_in_db - {e}")
 
     async def _init_tool_policy_in_db(self, prisma_client: PrismaClient):
         """
@@ -6725,9 +6723,7 @@ class ProxyConfig:
             await registry.sync_tool_policy_from_db(prisma_client=prisma_client)
             verbose_proxy_logger.debug("Successfully synced tool policy from DB")
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_tool_policy_in_db - {e!s}"
-            )
+            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_tool_policy_in_db - {e}")
 
     async def _init_vector_stores_in_db(self, prisma_client: PrismaClient):
         from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
@@ -6745,7 +6741,7 @@ class ProxyConfig:
                     litellm.vector_store_registry.add_vector_store_to_registry(vector_store=vector_store)
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - {e!s}"
+                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - {e}"
             )
 
     async def _init_vector_store_indexes_in_db(self, prisma_client: PrismaClient):
@@ -6769,7 +6765,7 @@ class ProxyConfig:
                     litellm.vector_store_index_registry.upsert_vector_store_index(vector_store_index=vector_store_index)
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - {e!s}"
+                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - {e}"
             )
 
     async def _init_mcp_servers_in_db(self):
@@ -6794,7 +6790,7 @@ class ProxyConfig:
                 await backfill_null_oauth2_flows(prisma_client)
         except Exception as e:  # noqa: BLE001
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db backfill - {e!s}"
+                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db backfill - {e}"
             )
 
         try:
@@ -6802,15 +6798,13 @@ class ProxyConfig:
                 await backfill_discovery_stamped_issuers(prisma_client)
         except Exception as e:  # noqa: BLE001
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db issuer stamp backfill - {e!s}"
+                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db issuer stamp backfill - {e}"
             )
 
         try:
             await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {e!s}"
-            )
+            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {e}")
 
     async def init_mcp_servers_from_db(self) -> None:
         if self._should_load_db_object(object_type="mcp"):
@@ -6838,7 +6832,7 @@ class ProxyConfig:
             await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:  # noqa: BLE001  # scheduled job: a reload failure must not kill the recurring retry
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.py::ProxyConfig:reload_mcp_servers_from_db - {e!s}"
+                f"litellm.proxy.proxy_server.py::ProxyConfig:reload_mcp_servers_from_db - {e}"
             )
 
     async def _init_agents_in_db(self, prisma_client: PrismaClient):
@@ -6850,7 +6844,7 @@ class ProxyConfig:
             db_agents = await AGENT_REGISTRY.get_all_agents_from_db(prisma_client=prisma_client)
             AGENT_REGISTRY.load_agents_from_db_and_config(db_agents=db_agents)
         except Exception as e:
-            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_agents_in_db - {e!s}")
+            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_agents_in_db - {e}")
 
     async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
         """
@@ -6890,9 +6884,7 @@ class ProxyConfig:
                 )
 
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - {e!s}"
-            )
+            verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - {e}")
 
     @staticmethod
     def _merge_config_and_db_search_tools(
@@ -6958,7 +6950,7 @@ class ProxyConfig:
             CredentialAccessor.upsert_credentials(credentials)  # upsert credentials that are in the all-up list
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy_server.py::get_credentials() - Error getting credentials from DB - {e!s}"
+                f"litellm.proxy_server.py::get_credentials() - Error getting credentials from DB - {e}"
             )
             return []
 
@@ -7138,14 +7130,14 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
                 try:
                     yield f"data: {c}\n\n"
                 except Exception as e:
-                    yield f"data: {e!s}\n\n"
+                    yield f"data: {e}\n\n"
 
         # Streaming is done, yield the [DONE] chunk
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occured - {e!s}"
+            f"litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occured - {e}"
         )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -7586,7 +7578,7 @@ async def async_data_generator(
                 try:
                     yield _format_streaming_sse_chunk(chunk=chunk)
                 except Exception as e:
-                    yield f"data: {e!s}\n\n"
+                    yield f"data: {e}\n\n"
 
             if pending_fallback_event:
                 yield _format_fallback_metadata_sse_event(
@@ -7624,7 +7616,7 @@ async def async_data_generator(
             client_disconnected = True
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.async_data_generator(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.async_data_generator(): Exception occured - {e}")
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -9375,8 +9367,8 @@ async def completion(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.completion(): Exception occured - {e!s}")
-        error_msg = f"{e!s}"
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.completion(): Exception occured - {e}")
+        error_msg = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
@@ -9614,7 +9606,7 @@ async def moderations(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.moderations(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.moderations(): Exception occured - {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
@@ -9623,7 +9615,7 @@ async def moderations(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -9760,7 +9752,7 @@ async def audio_speech(
             original_exception=e,
             request_data=data,
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.audio_speech(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.audio_speech(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
@@ -9902,7 +9894,7 @@ async def audio_transcriptions(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.audio_transcription(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.audio_transcription(): Exception occured - {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -9911,7 +9903,7 @@ async def audio_transcriptions(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -10188,7 +10180,7 @@ async def get_assistants(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_assistants(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_assistants(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -10198,7 +10190,7 @@ async def get_assistants(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -10279,7 +10271,7 @@ async def create_assistant(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.create_assistant(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.create_assistant(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -10289,7 +10281,7 @@ async def create_assistant(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -10368,7 +10360,7 @@ async def delete_assistant(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.delete_assistant(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.delete_assistant(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -10378,7 +10370,7 @@ async def delete_assistant(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -10457,7 +10449,7 @@ async def create_threads(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.create_threads(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.create_threads(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -10467,7 +10459,7 @@ async def create_threads(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -10544,7 +10536,7 @@ async def get_thread(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_thread(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_thread(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -10554,7 +10546,7 @@ async def get_thread(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -10635,7 +10627,7 @@ async def add_messages(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.add_messages(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.add_messages(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -10645,7 +10637,7 @@ async def add_messages(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -10722,7 +10714,7 @@ async def get_messages(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_messages(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_messages(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -10732,7 +10724,7 @@ async def get_messages(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -10823,7 +10815,7 @@ async def run_thread(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.run_thread(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.run_thread(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -10833,7 +10825,7 @@ async def run_thread(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -11760,7 +11752,7 @@ async def _apply_search_filter_to_models(
             )
             search_total_count = router_models_count + db_models_total_count
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error querying database models with search: {e!s}")
+            verbose_proxy_logger.exception(f"Error querying database models with search: {e}")
             search_total_count = router_models_count
     else:
         search_total_count = router_models_count
@@ -11895,7 +11887,7 @@ def _sort_models(
         sorted_models = sorted(all_models, key=get_sort_key, reverse=reverse)
         return sorted_models
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error sorting models by {sort_by}: {e!s}")
+        verbose_proxy_logger.exception(f"Error sorting models by {sort_by}: {e}")
         return all_models
 
 
@@ -11975,7 +11967,7 @@ async def _load_team_object_for_model_filter(team_id: str, prisma_client: Prisma
             return None
         return LiteLLM_TeamTable.model_validate(team_db_object.model_dump())
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching team {team_id}: {e!s}")
+        verbose_proxy_logger.exception(f"Error fetching team {team_id}: {e}")
         return None
 
 
@@ -12025,7 +12017,7 @@ async def _gather_team_accessible_model_ids(
                 if db_model.model_id:
                     team_accessible_model_ids.add(db_model.model_id)
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error querying database models for team {team_id}: {e!s}")
+        verbose_proxy_logger.debug(f"Error querying database models for team {team_id}: {e}")
 
     return team_accessible_model_ids
 
@@ -12163,7 +12155,7 @@ async def _find_model_by_id(
                 if decrypted_models:
                     found_model = decrypted_models[0]
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error querying database for modelId {model_id}: {e!s}")
+            verbose_proxy_logger.exception(f"Error querying database for modelId {model_id}: {e}")
 
     # If model found, verify search filter if provided
     if found_model is not None:
@@ -13613,7 +13605,7 @@ async def async_queue_request(
         )
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -13779,7 +13771,7 @@ async def login_v2(request: Request):
         json_response.set_cookie(key="token", value=jwt_token)
         return json_response
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.login_v2(): Exception occurred - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.login_v2(): Exception occurred - {e}")
         if isinstance(e, ProxyException):
             raise e
         elif isinstance(e, HTTPException):
@@ -13790,7 +13782,7 @@ async def login_v2(request: Request):
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=error_msg,
                 type=ProxyErrorTypes.auth_error,
@@ -13856,7 +13848,7 @@ async def login_v3(request: Request):
             status_code=status.HTTP_200_OK,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.login_v3(): Exception occurred - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.login_v3(): Exception occurred - {e}")
         if isinstance(e, ProxyException):
             raise e
         elif isinstance(e, HTTPException):
@@ -13867,7 +13859,7 @@ async def login_v3(request: Request):
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=error_msg,
                 type=ProxyErrorTypes.auth_error,
@@ -13929,7 +13921,7 @@ async def login_v3_exchange(request: Request):
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.login_v3_exchange(): Exception occurred - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.login_v3_exchange(): Exception occurred - {e}")
         raise ProxyException(
             message=str(e),
             type=ProxyErrorTypes.auth_error,
@@ -14756,11 +14748,11 @@ async def update_config(
 
         return {"message": "Config updated successfully"}
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.update_config(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.update_config(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -15584,7 +15576,7 @@ async def delete_callback(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.delete_callback(): Exception occurred - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.delete_callback(): Exception occurred - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         raise ProxyException(
             message="Error deleting callback: " + str(e),
@@ -15708,10 +15700,10 @@ async def get_config(
             "available_callbacks": all_available_callbacks,
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.get_config(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.get_config(): Exception occured - {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -15826,8 +15818,8 @@ async def reload_model_cost_map(
             "timestamp": current_time.isoformat(),
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to reload model cost map: {e!s}")
-        raise HTTPException(status_code=500, detail=f"Failed to reload model cost map: {e!s}")
+        verbose_proxy_logger.exception(f"Failed to reload model cost map: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload model cost map: {e}")
 
 
 @router.post(
@@ -15883,10 +15875,10 @@ async def schedule_model_cost_map_reload(
             "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to schedule model cost map reload: {e!s}")
+        verbose_proxy_logger.exception(f"Failed to schedule model cost map reload: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to schedule model cost map reload: {e!s}",
+            detail=f"Failed to schedule model cost map reload: {e}",
         )
 
 
@@ -15928,8 +15920,8 @@ async def cancel_model_cost_map_reload(
             "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to cancel model cost map reload: {e!s}")
-        raise HTTPException(status_code=500, detail=f"Failed to cancel model cost map reload: {e!s}")
+        verbose_proxy_logger.exception(f"Failed to cancel model cost map reload: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to cancel model cost map reload: {e}")
 
 
 @router.get(
@@ -16015,10 +16007,10 @@ async def get_model_cost_map_reload_status(
             "next_run": next_run,
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to get model cost map reload status: {e!s}")
+        verbose_proxy_logger.exception(f"Failed to get model cost map reload status: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get model cost map reload status: {e!s}",
+            detail=f"Failed to get model cost map reload status: {e}",
         )
 
 
@@ -16063,10 +16055,10 @@ async def get_model_cost_map_source(
             "model_count": model_count,
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to get model cost map source info: {e!s}")
+        verbose_proxy_logger.exception(f"Failed to get model cost map source info: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get model cost map source info: {e!s}",
+            detail=f"Failed to get model cost map source info: {e}",
         )
 
 
@@ -16142,8 +16134,8 @@ async def reload_anthropic_beta_headers(
             "timestamp": current_time.isoformat(),
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to reload anthropic beta headers: {e!s}")
-        raise HTTPException(status_code=500, detail=f"Failed to reload anthropic beta headers: {e!s}")
+        verbose_proxy_logger.exception(f"Failed to reload anthropic beta headers: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload anthropic beta headers: {e}")
 
 
 @router.post(
@@ -16199,10 +16191,10 @@ async def schedule_anthropic_beta_headers_reload(
             "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to schedule anthropic beta headers reload: {e!s}")
+        verbose_proxy_logger.exception(f"Failed to schedule anthropic beta headers reload: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to schedule anthropic beta headers reload: {e!s}",
+            detail=f"Failed to schedule anthropic beta headers reload: {e}",
         )
 
 
@@ -16244,10 +16236,10 @@ async def cancel_anthropic_beta_headers_reload(
             "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to cancel anthropic beta headers reload: {e!s}")
+        verbose_proxy_logger.exception(f"Failed to cancel anthropic beta headers reload: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to cancel anthropic beta headers reload: {e!s}",
+            detail=f"Failed to cancel anthropic beta headers reload: {e}",
         )
 
 
@@ -16336,10 +16328,10 @@ async def get_anthropic_beta_headers_reload_status(
             "next_run": next_run,
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to get anthropic beta headers reload status: {e!s}")
+        verbose_proxy_logger.exception(f"Failed to get anthropic beta headers reload status: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get anthropic beta headers reload status: {e!s}",
+            detail=f"Failed to get anthropic beta headers reload status: {e}",
         )
 
 

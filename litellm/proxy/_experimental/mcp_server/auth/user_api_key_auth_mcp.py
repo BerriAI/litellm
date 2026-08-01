@@ -1008,7 +1008,7 @@ class MCPRequestHandler:
                     limits[source.team_id] = applicable
             return limits or None
         except Exception as e:  # noqa: BLE001  # throttling metadata must never fail an allowed request
-            verbose_logger.warning(f"Failed to resolve per-team MCP rpm limits for admitted subject: {e!s}")
+            verbose_logger.warning(f"Failed to resolve per-team MCP rpm limits for admitted subject: {e}")
             return None
 
     @staticmethod
@@ -1514,9 +1514,9 @@ class MCPRequestHandler:
             if isinstance(e, UnloadableEntitlementError):
                 # A ceiling we KNOW exists and cannot read. Denying is the only answer that does not
                 # widen this caller past what an operator configured, for both caller shapes.
-                verbose_logger.warning(f"Denying MCP access, entitlement unreadable: {e!s}")
+                verbose_logger.warning(f"Denying MCP access, entitlement unreadable: {e}")
             else:
-                verbose_logger.warning(f"Failed to get allowed MCP servers: {e!s}")
+                verbose_logger.warning(f"Failed to get allowed MCP servers: {e}")
             return []
 
     @staticmethod
@@ -1649,7 +1649,7 @@ class MCPRequestHandler:
             # Fault isolation is per SOURCE: an unresolvable team contributes nothing (fail closed for
             # it alone, access only narrows) while every other source stands. Raising would collapse the
             # whole union to deny-all over one momentarily-unreadable row.
-            verbose_logger.warning(f"MCP admitted-subject source team {team_id!r} unresolvable, skipping: {e!s}")
+            verbose_logger.warning(f"MCP admitted-subject source team {team_id!r} unresolvable, skipping: {e}")
             return None
         if team_obj is None:
             return None
@@ -1682,10 +1682,10 @@ class MCPRequestHandler:
                 proxy_logging_obj=proxy_logging_obj,
             )
         except BudgetExceededError as e:
-            verbose_logger.info(f"MCP admitted-subject source team {team_id!r} over budget, not a grantor: {e!s}")
+            verbose_logger.info(f"MCP admitted-subject source team {team_id!r} over budget, not a grantor: {e}")
             return None
         except Exception as e:  # noqa: BLE001  # per-source isolation: a budget-check fault narrows, never raises
-            verbose_logger.warning(f"MCP budget check failed for source team {team_id!r}, skipping source: {e!s}")
+            verbose_logger.warning(f"MCP budget check failed for source team {team_id!r}, skipping source: {e}")
             return None
         return team_obj
 
@@ -1738,7 +1738,7 @@ class MCPRequestHandler:
             billed.org_id = source.org_id
             return billed
         except Exception as e:  # noqa: BLE001  # attribution must never fail an authorized call
-            verbose_logger.warning(f"MCP billing attribution failed for {tool_name!r}, billing the user: {e!s}")
+            verbose_logger.warning(f"MCP billing attribution failed for {tool_name!r}, billing the user: {e}")
             return auth
 
     @staticmethod
@@ -1946,9 +1946,9 @@ class MCPRequestHandler:
             # than the None (allow-all) key auth gets for an indeterminate fault.
             unreadable_entitlement = isinstance(e, UnloadableEntitlementError)
             if unreadable_entitlement:
-                verbose_logger.warning(f"Denying MCP tools, entitlement unreadable: {e!s}")
+                verbose_logger.warning(f"Denying MCP tools, entitlement unreadable: {e}")
             else:
-                verbose_logger.warning(f"Failed to get allowed tools for server: {e!s}")
+                verbose_logger.warning(f"Failed to get allowed tools for server: {e}")
             # Fail CLOSED for a keyless admitted subject: ANY error must deny the server's tools ([]),
             # not collapse to allow-all (None); key/JWT auth keeps its prior allow-all-on-error. Both
             # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
@@ -1999,7 +1999,7 @@ class MCPRequestHandler:
                     raise
                 verbose_logger.warning(
                     f"MCP org tool ceiling unresolvable for org_id={user_api_key_auth.org_id!r}; "
-                    f"skipping org intersect, key/team/agent restrictions stand: {e!s}"
+                    f"skipping org intersect, key/team/agent restrictions stand: {e}"
                 )
                 return allowed_tools
             org_tools = (
@@ -2102,7 +2102,7 @@ class MCPRequestHandler:
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             return global_mcp_server_manager.expand_permission_list(raw_server_ids)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get key access group MCP server grants: {e!s}")
+            verbose_logger.warning(f"Failed to get key access group MCP server grants: {e}")
             return []
 
     @staticmethod
@@ -2180,7 +2180,7 @@ class MCPRequestHandler:
             all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
             return list(set(all_servers))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers for key: {e!s}")
+            verbose_logger.warning(f"Failed to get allowed MCP servers for key: {e}")
             return []
 
     @staticmethod
@@ -2238,7 +2238,7 @@ class MCPRequestHandler:
                 proxy_logging_obj=proxy_logging_obj,
             )
         except Exception as e:  # noqa: BLE001  # a team-resolution blip narrows access, never raises
-            verbose_logger.warning(f"Failed to resolve user teams for MCP grant: {e!s}")
+            verbose_logger.warning(f"Failed to resolve user teams for MCP grant: {e}")
             return []
         if user_object is None or not user_object.teams:
             return []
@@ -2323,7 +2323,7 @@ class MCPRequestHandler:
             servers = await MCPRequestHandler._team_granted_servers(team_obj, team_access_group_servers)
             return list(servers)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers for team: {e!s}")
+            verbose_logger.warning(f"Failed to get allowed MCP servers for team: {e}")
             return []
 
     @staticmethod
@@ -2462,7 +2462,7 @@ class MCPRequestHandler:
             # A NAMED-but-unreadable ceiling is a stronger fact than "unresolved" and denies everywhere.
             if isinstance(e, UnloadableEntitlementError):
                 raise
-            verbose_logger.warning(f"Failed to get allowed MCP servers for org: {e!s}")
+            verbose_logger.warning(f"Failed to get allowed MCP servers for org: {e}")
             return None
 
     @staticmethod
@@ -2490,7 +2490,7 @@ class MCPRequestHandler:
                 route="/mcp",
             )
         except Exception as e:  # noqa: BLE001  # entitlement unknown, not known-absent: no ceiling, as before this level
-            verbose_logger.warning(f"Failed to resolve end_user for MCP permissions: {e!s}")
+            verbose_logger.warning(f"Failed to resolve end_user for MCP permissions: {e}")
             return None
 
         if end_user_obj is None:
@@ -2554,7 +2554,7 @@ class MCPRequestHandler:
             all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
             return list(set(all_servers))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers for end_user: {e!s}")
+            verbose_logger.warning(f"Failed to get allowed MCP servers for end_user: {e}")
             return []
 
     @staticmethod
@@ -2637,7 +2637,7 @@ class MCPRequestHandler:
             )
             return object_permission_id
         except Exception as e:  # noqa: BLE001  # unknown whether entitled at all: no ceiling, as before
-            verbose_logger.warning(f"MCP user entitlement: link for {user_id!r} unresolved, no ceiling: {e!s}")
+            verbose_logger.warning(f"MCP user entitlement: link for {user_id!r} unresolved, no ceiling: {e}")
             return None
 
     @staticmethod
@@ -2669,7 +2669,7 @@ class MCPRequestHandler:
             )
             return list(set(direct_mcp_servers + access_group_servers + tool_perm_servers))
         except Exception as e:  # noqa: BLE001  # any resolution fault is an unresolved ceiling, never "no ceiling"
-            verbose_logger.warning(f"Failed to get allowed MCP servers for user: {e!s}")
+            verbose_logger.warning(f"Failed to get allowed MCP servers for user: {e}")
             return None
 
     @staticmethod
@@ -2739,7 +2739,7 @@ class MCPRequestHandler:
         try:
             object_permissions = await MCPRequestHandler._get_user_object_permission(user_api_key_auth)
         except Exception as e:  # noqa: BLE001  # an unresolved human entitlement must deny, not widen
-            verbose_logger.warning(f"MCP user tool ceiling unresolvable, denying tools on {server_id!r}: {e!s}")
+            verbose_logger.warning(f"MCP user tool ceiling unresolvable, denying tools on {server_id!r}: {e}")
             return []
 
         if object_permissions is None or not object_permissions.mcp_tool_permissions:
@@ -2785,7 +2785,7 @@ class MCPRequestHandler:
             )
             return object_permission_id
         except Exception as e:  # noqa: BLE001  # entitlement unknown, not known-absent: no ceiling, as before this level
-            verbose_logger.warning(f"Failed to resolve object_permission_id for agent {agent_id!r}: {e!s}")
+            verbose_logger.warning(f"Failed to resolve object_permission_id for agent {agent_id!r}: {e}")
             return None
 
     @staticmethod
@@ -2869,7 +2869,7 @@ class MCPRequestHandler:
             all_servers = expanded_direct_servers + access_group_servers
             return list(set(all_servers))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers for agent: {e!s}")
+            verbose_logger.warning(f"Failed to get allowed MCP servers for agent: {e}")
             return []
 
     @staticmethod
@@ -2911,7 +2911,7 @@ class MCPRequestHandler:
             tools = global_mcp_server_manager.expand_tool_permissions(mcp_tool_permissions).get(server_id)
             return list(tools) if tools else None
         except Exception as e:
-            verbose_logger.warning(f"Failed to get agent tool permissions for server: {e!s}")
+            verbose_logger.warning(f"Failed to get agent tool permissions for server: {e}")
             return None
 
     @staticmethod
@@ -2969,7 +2969,7 @@ class MCPRequestHandler:
 
             return list(server_ids)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get MCP servers from access groups: {e!s}")
+            verbose_logger.warning(f"Failed to get MCP servers from access groups: {e}")
             return []
 
     @staticmethod
@@ -3029,7 +3029,7 @@ class MCPRequestHandler:
 
             return key_object_permission.mcp_access_groups or []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get MCP access groups for key: {e!s}")
+            verbose_logger.warning(f"Failed to get MCP access groups for key: {e}")
             return []
 
     @staticmethod
@@ -3077,7 +3077,7 @@ class MCPRequestHandler:
 
             return object_permissions.mcp_access_groups or []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get MCP access groups for team: {e!s}")
+            verbose_logger.warning(f"Failed to get MCP access groups for team: {e}")
             return []
 
     @staticmethod

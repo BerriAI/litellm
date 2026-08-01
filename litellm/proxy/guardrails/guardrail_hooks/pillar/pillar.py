@@ -457,7 +457,7 @@ class PillarGuardrail(CustomGuardrail):
                 raise e
 
             # Handle API communication errors based on fallback_on_error setting
-            verbose_proxy_logger.error(f"Pillar Guardrail: API communication failed - {e!s}")
+            verbose_proxy_logger.error(f"Pillar Guardrail: API communication failed - {e}")
 
             return self._handle_api_error(e, data)
 

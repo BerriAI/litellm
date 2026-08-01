@@ -587,7 +587,7 @@ class SkillsInjectionHook(CustomLogger):
 
             return result or "Code executed successfully"
         except Exception as e:
-            return f"Code execution failed: {e!s}"
+            return f"Code execution failed: {e}"
 
     async def _execute_skill_tool(
         self,
@@ -821,7 +821,7 @@ print('No executable skill module found')
 
         except Exception as e:
             verbose_proxy_logger.error(f"SkillsInjectionHook: Code execution failed: {e}")
-            return f"Code execution failed: {e!s}"
+            return f"Code execution failed: {e}"
 
     def _attach_files_to_response(
         self,

@@ -257,7 +257,7 @@ async def add_team_callbacks(
     except ProxyException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {e}")
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
@@ -373,7 +373,7 @@ async def disable_team_logging(
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         raise ProxyException(
             message="Internal Server Error, " + str(e),
@@ -465,11 +465,11 @@ async def get_team_callbacks(
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Internal Server Error({e!s})"),
+                message=getattr(e, "detail", f"Internal Server Error({e})"),
                 type=ProxyErrorTypes.internal_server_error.value,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),

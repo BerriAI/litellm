@@ -600,7 +600,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 )
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error counting input file usage for {file_id}: {e!s}")
+            verbose_proxy_logger.error(f"Error counting input file usage for {file_id}: {e}")
             raise
 
     async def _enforce_batch_file_model_access(
@@ -704,7 +704,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     detail={
                         "error": (
                             "Batch input file references a model the caller is "
-                            f"not authorized to use: model={model_to_check}, reason={e!s}"
+                            f"not authorized to use: model={model_to_check}, reason={e}"
                         )
                     },
                 )
@@ -734,7 +734,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
         except ImportError as e:
             raise ValueError(
-                f"Cannot import proxy_server dependencies: {e!s}. Managed files require proxy_server to be initialized."
+                f"Cannot import proxy_server dependencies: {e}. Managed files require proxy_server to be initialized."
             )
 
         # Get the managed files hook
@@ -846,6 +846,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Re-raise HTTP exceptions (rate limit exceeded)
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in batch rate limiting: {e!s}", exc_info=True)
+            verbose_proxy_logger.error(f"Error in batch rate limiting: {e}", exc_info=True)
             # Don't block the request if rate limiting fails
             return data

@@ -534,5 +534,5 @@ def rerank(
         # Placeholder return
         return response
     except Exception as e:
-        verbose_logger.error(f"Error in rerank: {e!s}")
+        verbose_logger.error(f"Error in rerank: {e}")
         raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=e)

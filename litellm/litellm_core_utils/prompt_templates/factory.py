@@ -438,9 +438,7 @@ def _render_chat_template(env, chat_template: str, bos_token: str, eos_token: st
 
         return rendered_text
     except Exception as e:
-        raise Exception(
-            f"Error rendering template - {e!s}"
-        )  # don't use verbose_logger.exception, if exception is raised
+        raise Exception(f"Error rendering template - {e}")  # don't use verbose_logger.exception, if exception is raised
 
 
 async def _afetch_and_extract_template(
@@ -858,7 +856,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         raise
     except Exception as e:
         raise Exception(
-            f"""Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{{base64_image}}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']. Error: {e!s}"""
+            f"""Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{{base64_image}}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']. Error: {e}"""
         )
 
 
@@ -1361,7 +1359,7 @@ def convert_to_gemini_tool_call_invoke(
                 )
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e!s}")
+        raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
 
 
 def convert_to_gemini_tool_call_result(
@@ -3713,7 +3711,7 @@ def _convert_to_bedrock_tool_call_invoke(
                         _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={tool_calls} to bedrock tool calls. Received error={e!s}")
+        raise Exception(f"Unable to convert openai tool calls={tool_calls} to bedrock tool calls. Received error={e}")
 
 
 def _append_bedrock_tool_result_media_block(

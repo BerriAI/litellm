@@ -232,7 +232,7 @@ def sign_with_oci_signer(
         raise OCIError(
             status_code=500,
             message=(
-                f"Failed to sign request with provided oci_signer: {e!s}. "
+                f"Failed to sign request with provided oci_signer: {e}. "
                 "The signer must implement the OCI SDK Signer interface with a "
                 "do_request_sign(request, enforce_content_headers=True) method. "
                 "See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html"

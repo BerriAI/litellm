@@ -345,7 +345,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             response_json = raw_response.json()
         except Exception as e:
             raise OpenRouterException(
-                message=f"Error parsing OpenRouter response: {e!s}",
+                message=f"Error parsing OpenRouter response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -394,7 +394,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
 
         except Exception as e:
             raise OpenRouterException(
-                message=f"Error transforming OpenRouter image generation response: {e!s}",
+                message=f"Error transforming OpenRouter image generation response: {e}",
                 status_code=500,
                 headers={},
             )
