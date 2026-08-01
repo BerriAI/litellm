@@ -426,3 +426,115 @@ def test_handle_db_exception_with_non_db_error():
     )
     with pytest.raises(litellm.BudgetExceededError):
         PrismaDBExceptionHandler.handle_db_exception(regular_error)
+
+
+# Test that every classifier degrades gracefully when the optional `prisma`
+# package isn't installed (a bare master-key-only deployment with no
+# DATABASE_URL never installs it). Before the fix, each of these methods did
+# an unconditional `import prisma`, so ANY auth failure -- including a plain
+# unauthenticated request -- crashed `_user_api_key_auth_builder` with
+# `ModuleNotFoundError: No module named 'prisma'`, turning a clean 401 into
+# an unrelated 500 for every misauthenticated or unauthenticated request.
+def _no_prisma():
+    return patch(
+        "litellm.proxy.db.exception_handler._try_import_prisma", return_value=None
+    )
+
+
+def test_try_import_prisma_returns_module_when_available():
+    from litellm.proxy.db.exception_handler import _try_import_prisma
+
+    assert _try_import_prisma() is not None
+    assert _try_import_prisma().__name__ == "prisma"
+
+
+def test_try_import_prisma_returns_none_on_actual_import_error():
+    """Exercises the real `except ImportError` branch inside
+    `_try_import_prisma` itself, rather than mocking the helper -- setting
+    `sys.modules["prisma"] = None` is the standard way to make a subsequent
+    `import prisma` raise ImportError even though the package is actually
+    installed, reproducing what happens on a deployment where it truly
+    isn't."""
+    from litellm.proxy.db.exception_handler import _try_import_prisma
+
+    with patch.dict(sys.modules, {"prisma": None}):
+        assert _try_import_prisma() is None
+
+
+def test_is_database_connection_error_without_prisma_does_not_raise():
+    """The exact crash reproduction: a plain auth-failure exception (no
+    prisma-specific type at all) must classify to False, not raise
+    ModuleNotFoundError."""
+    with _no_prisma():
+        assert (
+            PrismaDBExceptionHandler.is_database_connection_error(
+                Exception("No api key passed in.")
+            )
+            is False
+        )
+
+
+def test_is_database_connection_error_without_prisma_still_matches_non_prisma_types():
+    """DB_CONNECTION_ERROR_TYPES / ProxyException classification must not
+    regress just because prisma is unavailable -- those checks never needed
+    the prisma module in the first place."""
+    with _no_prisma():
+        db_proxy_exception = ProxyException(
+            message="DB Connection Error",
+            type=ProxyErrorTypes.no_db_connection,
+            param="test-param",
+        )
+        assert (
+            PrismaDBExceptionHandler.is_database_connection_error(db_proxy_exception)
+            is True
+        )
+
+
+def test_is_prisma_data_error_without_prisma_does_not_raise():
+    with _no_prisma():
+        assert (
+            PrismaDBExceptionHandler.is_prisma_data_error(Exception("some error"))
+            is False
+        )
+
+
+def test_is_database_transport_error_without_prisma_does_not_raise():
+    import httpx
+
+    with _no_prisma():
+        assert (
+            PrismaDBExceptionHandler.is_database_transport_error(
+                Exception("No api key passed in.")
+            )
+            is False
+        )
+        # httpx.ConnectError is in DB_CONNECTION_ERROR_TYPES, which doesn't need prisma.
+        assert (
+            PrismaDBExceptionHandler.is_database_transport_error(
+                httpx.ConnectError("connection refused")
+            )
+            is True
+        )
+
+
+def test_is_prisma_engine_internal_error_without_prisma_does_not_raise():
+    with _no_prisma():
+        assert (
+            PrismaDBExceptionHandler.is_prisma_engine_internal_error(
+                Exception("some error")
+            )
+            is False
+        )
+
+
+def test_is_database_service_unavailable_error_without_prisma_does_not_raise():
+    """End-to-end: the aggregate classifier called directly from the auth
+    exception handler on every auth failure must not raise when prisma is
+    unavailable."""
+    with _no_prisma():
+        assert (
+            PrismaDBExceptionHandler.is_database_service_unavailable_error(
+                Exception("No api key passed in.")
+            )
+            is False
+        )
