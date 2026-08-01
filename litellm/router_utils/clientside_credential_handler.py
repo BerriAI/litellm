@@ -38,10 +38,6 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
         "api_type",
         "azure_ad_token",
         "azure_ad_token_provider",
-        "aws_session_token",
-        "aws_sts_endpoint",
-        "aws_web_identity_token",
-        "aws_role_name",
         # OCI provider — consumed by litellm/llms/oci/* via optional_params
         # and not declared on CredentialLiteLLMParams. Without these here,
         # an admin's OCI signing key / tenancy / fingerprint would flow

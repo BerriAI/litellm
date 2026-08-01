@@ -259,6 +259,7 @@ def get_credentials_for_model(
     llm_router,  # Router instance
     model_id: str,
     operation_context: str = "file operation",
+    team_id: "str | None" = None,
 ):
     """
     Retrieve API credentials for a model from the LLM Router.
@@ -267,6 +268,8 @@ def get_credentials_for_model(
         llm_router: LiteLLM Router instance
         model_id: Model name or deployment ID
         operation_context: Description for error messages (e.g., "file upload", "batch creation")
+        team_id: Caller's team id; unlocks that team's own deployments and keeps
+            shared model names from resolving another team's credentials
 
     Returns:
         Dictionary with credentials (api_key, api_base, custom_llm_provider, etc.)
@@ -282,7 +285,7 @@ def get_credentials_for_model(
             detail={"error": "Router not initialized. Cannot use model-based routing."},
         )
 
-    credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
 
     if credentials is None:
         raise HTTPException(
