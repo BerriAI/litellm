@@ -422,9 +422,6 @@ async def route_request(
 
     await add_shared_session_to_data(data)
 
-    # Gated here rather than alongside the sibling untrusted-param checks in
-    # ``litellm_pre_call_utils``: the Responses WebSocket route calls
-    # ``route_request`` directly and never runs ``add_litellm_data_to_request``.
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
     data.pop("enable_tag_filtering", None)
