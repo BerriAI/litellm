@@ -3725,7 +3725,10 @@ def _convert_to_bedrock_tool_call_invoke(
                         #   '{"cmd":"a"}{"cmd":"b"}{"cmd":"c"}'
                         # Split them and emit one toolUse block per object.
                         # Fixes: https://github.com/BerriAI/litellm/issues/20543
-                        parsed_objects = split_concatenated_json_objects(arguments)
+                        try:
+                            parsed_objects = split_concatenated_json_objects(arguments)
+                        except json.JSONDecodeError:
+                            parsed_objects = []
                         if parsed_objects:
                             # First object keeps the original tool id.
                             for obj_idx, obj in enumerate(parsed_objects):
@@ -3761,8 +3764,13 @@ def _convert_to_bedrock_tool_call_invoke(
                         _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
-        raise Exception(
-            "Unable to convert openai tool calls={} to bedrock tool calls. Received error={}".format(tool_calls, str(e))
+        tool_call_ids = [tool.get("id") for tool in tool_calls if isinstance(tool, dict)]
+        raise litellm.BadRequestError(
+            message="Unable to convert openai tool calls with ids={} to bedrock tool calls. Received error={}".format(
+                tool_call_ids, str(e)
+            ),
+            model=model or "",
+            llm_provider="bedrock",
         )
 
 
