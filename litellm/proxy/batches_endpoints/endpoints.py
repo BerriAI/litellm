@@ -27,6 +27,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
+    ensure_batch_response_managed_file_ids,
     get_batch_id_from_unified_batch_id,
     get_batch_from_database,
     get_credentials_for_model,
@@ -440,10 +441,19 @@ async def retrieve_batch(
             )
 
             # The DB may store raw provider file IDs (before hooks translate them).
-            # Resolve any raw input/output/error file IDs to unified IDs.
+            # Register any missing managed-file rows and rewrite raw IDs to unified
+            # IDs so terminal rows written by the poller don't leak raw provider
+            # file IDs that bypass the /v1/files ownership check.
             if unified_batch_id:
-                await resolve_input_file_id_to_unified(response, prisma_client)
-                await resolve_output_file_ids_to_unified(response, prisma_client)
+                await ensure_batch_response_managed_file_ids(
+                    response=response,
+                    managed_files_obj=managed_files_obj,
+                    prisma_client=prisma_client,
+                    verbose_proxy_logger=verbose_proxy_logger,
+                    user_api_key_dict=user_api_key_dict,
+                    db_batch_object=db_batch_object,
+                    unified_batch_id=unified_batch_id,
+                )
 
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(

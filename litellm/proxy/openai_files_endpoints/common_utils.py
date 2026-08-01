@@ -933,6 +933,7 @@ async def ensure_batch_response_managed_file_ids(
     verbose_proxy_logger,
     user_api_key_dict=None,
     db_batch_object=None,
+    unified_batch_id: Optional[str] = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""
     await resolve_input_file_id_to_unified(response, prisma_client)
@@ -943,6 +944,8 @@ async def ensure_batch_response_managed_file_ids(
 
     hidden_params = getattr(response, "_hidden_params", None) or {}
     model_id = hidden_params.get("model_id")
+    if not model_id and unified_batch_id:
+        model_id = get_model_id_from_unified_batch_id(unified_batch_id)
     if not model_id:
         return
 

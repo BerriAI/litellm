@@ -201,6 +201,40 @@ async def test_ensure_batch_response_resolves_model_name_from_unified_file_id():
 
 
 @pytest.mark.asyncio
+async def test_ensure_batch_response_derives_model_id_from_unified_batch_id():
+    """Terminal DB rows have empty _hidden_params (rehydrated from stored JSON).
+
+    Regression for GH #33989: the helper must still register the raw output/error
+    ids as managed files by deriving model_id from the unified batch id, otherwise
+    the terminal-retrieve short-circuit leaks raw provider file ids.
+    """
+    unified_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
+    response = _build_batch_response(
+        output_file_id="file-raw-output",
+        error_file_id="file-raw-error",
+        hidden_params={},
+    )
+    mock_managed_files = _build_managed_files_mock(unified_id=unified_id)
+
+    await ensure_batch_response_managed_file_ids(
+        response=response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=_build_prisma_mock(),
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=SimpleNamespace(created_by="user-from-db", team_id=None, status="failed"),
+        unified_batch_id="litellm_proxy;model_id:deployment-42;llm_batch_id:batch_abc",
+    )
+
+    assert response.output_file_id == unified_id
+    assert response.error_file_id == unified_id
+    assert mock_managed_files.get_unified_output_file_id.call_count == 2
+    assert (
+        mock_managed_files.get_unified_output_file_id.call_args.kwargs["model_id"]
+        == "deployment-42"
+    )
+
+
+@pytest.mark.asyncio
 async def test_ensure_batch_response_returns_early_without_managed_files_obj():
     """Without managed_files_obj, the helper is a no-op (no conversion attempted)."""
     response = _build_batch_response(
