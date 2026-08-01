@@ -5,6 +5,7 @@ import os
 import re
 import urllib.parse
 from datetime import datetime
+from threading import Lock
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -24,10 +25,14 @@ from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
     BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
+    BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES,
+    BEDROCK_IAM_CACHE_MAX_ENTRIES,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
     BEDROCK_MAX_POLICY_SIZE,
+    STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
@@ -75,14 +80,28 @@ class AwsAuthError(Exception):
 
 class BaseAWSLLM:
     # Process-wide IAM credential cache (shared across instances — Bedrock passthrough is per-request).
-    # Storage is in-process memory only: default ``DualCache()`` has no Redis backend unless attached
-    # elsewhere. Entry TTL: static access-key + secret + region use ``_get_default_ttl_for_boto3_credentials``
-    # (~59 minutes); ambient env (``_auth_with_env_vars`` returns ``ttl=None``) uses ``InMemoryCache``'s
-    # ``default_ttl`` (600 seconds / 10 minutes); web identity STS credentials use
-    # ``_get_default_ttl_for_boto3_credentials`` (~59 minutes), keyed on all aws_* credential args
-    # plus ssl_verify. AssumeRole, profiles, and explicit session-token tuples are not cached — see
-    # ``get_credentials`` and ``_get_or_set_cached_credentials``.
-    _shared_iam_cache: ClassVar[DualCache] = DualCache()
+    # Storage is in-process memory only: no Redis backend unless attached elsewhere. Entry TTL: static
+    # access-key + secret + region use ``_get_default_ttl_for_boto3_credentials`` (~59 minutes); ambient
+    # env (``_auth_with_env_vars`` returns ``ttl=None``) uses ``InMemoryCache``'s ``default_ttl``
+    # (600 seconds / 10 minutes); web identity STS credentials use
+    # ``_get_default_ttl_for_boto3_credentials`` (~59 minutes); AssumeRole STS credentials expire with
+    # the STS session itself (Expiration minus a safety margin). All are keyed on all aws_* credential
+    # args plus ssl_verify, so ``aws_session_name`` scopes an entry to one attributed identity. Profiles
+    # and explicit session-token tuples are not cached — see ``get_credentials`` and
+    # ``_get_or_set_cached_credentials``. The bound is larger than ``InMemoryCache``'s default because
+    # per-user cost attribution puts one entry per attributed identity in this cache.
+    _shared_iam_cache: ClassVar[DualCache] = DualCache(
+        in_memory_cache=InMemoryCache(max_size_in_memory=BEDROCK_IAM_CACHE_MAX_ENTRIES)
+    )
+
+    # Striped single-flight locks over ``_shared_iam_cache``. Concurrent misses on one credential
+    # key would otherwise each issue their own STS call, which is the same thundering herd the cache
+    # exists to prevent, just moved to the miss window. Striping keeps distinct identities from
+    # serialising behind each other without a per-key registry that grows with the identity count.
+    # A cache hit holds its stripe only for the lookup itself.
+    _credential_fetch_locks: ClassVar[tuple[Lock, ...]] = tuple(
+        Lock() for _ in range(BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES)
+    )
 
     def __init__(self) -> None:
         self.iam_cache = BaseAWSLLM._shared_iam_cache
@@ -140,19 +159,21 @@ class BaseAWSLLM:
 
         Used for static access-key credentials, ambient credentials from
         ``_auth_with_env_vars`` (including when skipping AssumeRole because the runtime identity
-        already matches ``aws_role_name``), and web identity STS credentials (plain
-        non-refreshable ``Credentials`` cached ~59 min, inside the 3600s STS session).
+        already matches ``aws_role_name``), web identity STS credentials (plain
+        non-refreshable ``Credentials`` cached ~59 min, inside the 3600s STS session), and AssumeRole
+        STS credentials (cached for the lifetime of the STS session minus a safety margin).
 
-        AssumeRole, profiles, and explicit session-token tuples are not
-        cached here — shared ``Credentials`` / refresh state must not span logical sessions.
+        Profiles and explicit session-token tuples are not cached here — shared ``Credentials`` /
+        refresh state must not span logical sessions.
         """
         cache_key = self.get_cache_key(credential_args)
-        _cached = self.iam_cache.get_cache(cache_key)
-        if _cached:
-            return _cached
-        credentials, ttl = credential_fetcher()
-        self.iam_cache.set_cache(cache_key, credentials, ttl=ttl)
-        return credentials
+        with self._credential_fetch_locks[hash(cache_key) % len(self._credential_fetch_locks)]:
+            _cached = self.iam_cache.get_cache(cache_key)
+            if _cached:
+                return _cached
+            credentials, ttl = credential_fetcher()
+            self.iam_cache.set_cache(cache_key, credentials, ttl=ttl)
+            return credentials
 
     @staticmethod
     def _is_auth_with_web_identity_token(
@@ -269,8 +290,8 @@ class BaseAWSLLM:
         #   Credentials - boto3.Credentials
         #   cache ttl - Optional[int]. If None, the credentials are not cached. Some auth flows have no expiry time.
         #
-        # iam_cache: static keys, ambient env (including skip-AssumeRole path), and web identity.
-        # Do not cache AssumeRole / profile / explicit session-token paths here.
+        # iam_cache: static keys, ambient env (including skip-AssumeRole path), web identity, and
+        # AssumeRole. Do not cache profile / explicit session-token paths here.
         #########################################################
         if self._is_auth_with_web_identity_token(
             aws_web_identity_token,
@@ -290,30 +311,20 @@ class BaseAWSLLM:
                 ),
             )
         elif self._is_auth_with_aws_role(aws_role_name):
-            # Same role (IRSA/ECS/EC2): ambient creds via _get_or_set_cached_credentials like the
-            # default env branch; never pre-read cache (must run _is_already_running_as_role first).
-            if self._is_already_running_as_role(cast(str, aws_role_name), ssl_verify=ssl_verify):
-                verbose_logger.debug(
-                    "Already running as target role %s, using ambient credentials",
-                    aws_role_name,
-                )
-                return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
-            verbose_logger.debug("Using role assumption: calling _auth_with_aws_role")
-            # If aws_session_name is not provided, generate a default one
-            if aws_session_name is None:
-                aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
-            credentials, _assume_ttl = self._auth_with_aws_role(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_session_token=aws_session_token,
-                aws_role_name=cast(str, aws_role_name),
-                aws_session_name=aws_session_name,
-                aws_region_name=aws_region_name,
-                aws_sts_endpoint=aws_sts_endpoint,
-                aws_external_id=aws_external_id,
-                ssl_verify=ssl_verify,
+            return self._get_or_set_cached_credentials(
+                args,
+                lambda: self._resolve_role_credentials(
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key,
+                    aws_session_token=aws_session_token,
+                    aws_role_name=cast(str, aws_role_name),
+                    aws_session_name=aws_session_name,
+                    aws_region_name=aws_region_name,
+                    aws_sts_endpoint=aws_sts_endpoint,
+                    aws_external_id=aws_external_id,
+                    ssl_verify=ssl_verify,
+                ),
             )
-            return credentials
 
         elif self._is_auth_with_aws_profile(aws_profile_name):
             credentials, _cache_ttl = self._auth_with_aws_profile(cast(str, aws_profile_name))
@@ -1046,7 +1057,11 @@ class BaseAWSLLM:
         return sts_client.assume_role(**assume_role_params)
 
     def _extract_credentials_and_ttl(self, sts_response: dict) -> Tuple[Credentials, Optional[int]]:
-        """Extract credentials and TTL from STS response."""
+        """Extract credentials and TTL from STS response.
+
+        The TTL carries the same safety margin as the non-IRSA assume path, so a cached entry is
+        never handed out close enough to expiry to die mid-request.
+        """
         from botocore.credentials import Credentials
 
         sts_credentials = sts_response["Credentials"]
@@ -1057,9 +1072,51 @@ class BaseAWSLLM:
         )
 
         expiration_time = sts_credentials["Expiration"]
-        ttl = int((expiration_time - datetime.now(expiration_time.tzinfo)).total_seconds())
+        ttl = int(
+            (expiration_time - datetime.now(expiration_time.tzinfo)).total_seconds()
+            - STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS
+        )
 
         return credentials, ttl
+
+    def _resolve_role_credentials(
+        self,
+        aws_access_key_id: str | None,
+        aws_secret_access_key: str | None,
+        aws_session_token: str | None,
+        aws_role_name: str,
+        aws_session_name: str | None,
+        aws_region_name: str | None,
+        aws_sts_endpoint: str | None,
+        aws_external_id: str | None,
+        ssl_verify: bool | str | None,
+    ) -> tuple[Credentials, int | None]:
+        """
+        Resolve credentials for a target role, either from the ambient identity or via sts:AssumeRole.
+
+        Both the ``sts:GetCallerIdentity`` probe and the assume itself run here, so a cache hit on the
+        caller's key skips both. ``aws_session_name`` defaults inside this fetcher rather than in
+        ``get_credentials`` so the cache key stays stable when the caller does not supply one.
+        """
+        if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
+            verbose_logger.debug(
+                "Already running as target role %s, using ambient credentials",
+                aws_role_name,
+            )
+            return self._auth_with_env_vars()
+
+        verbose_logger.debug("Using role assumption: calling _auth_with_aws_role")
+        return self._auth_with_aws_role(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_role_name=aws_role_name,
+            aws_session_name=aws_session_name or f"litellm-session-{int(datetime.now().timestamp())}",
+            aws_region_name=aws_region_name,
+            aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
+            ssl_verify=ssl_verify,
+        )
 
     @tracer.wrap()
     def _auth_with_aws_role(
@@ -1192,7 +1249,7 @@ class BaseAWSLLM:
         sts_expiry = sts_credentials["Expiration"]
         # Convert to timezone-aware datetime for comparison
         current_time = datetime.now(sts_expiry.tzinfo)
-        sts_ttl = (sts_expiry - current_time).total_seconds() - 60
+        sts_ttl = (sts_expiry - current_time).total_seconds() - STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS
         return credentials, sts_ttl
 
     @tracer.wrap()
