@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 29813
+    "limit": 29721
   },
   "reportArgumentType": {
     "limit": 2645
@@ -18,13 +18,13 @@
     "limit": 59
   },
   "reportDeprecated": {
-    "limit": 325
+    "limit": 313
   },
   "reportDuplicateImport": {
     "limit": 42
   },
   "reportExplicitAny": {
-    "limit": 9473
+    "limit": 9422
   },
   "reportFunctionMemberAccess": {
     "limit": 11
@@ -99,7 +99,7 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45324
+    "limit": 45283
   },
   "reportUnknownLambdaType": {
     "limit": 113
