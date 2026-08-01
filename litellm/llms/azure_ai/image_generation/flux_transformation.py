@@ -1,5 +1,3 @@
-from typing import Optional
-
 from litellm.llms.openai.image_generation import GPTImageGenerationConfig
 
 
@@ -16,9 +14,9 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
 
     @staticmethod
     def get_flux2_image_generation_url(
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        api_version: Optional[str],
+        api_version: str | None,
     ) -> str:
         """
         Constructs the complete URL for Azure AI FLUX 2 image generation.

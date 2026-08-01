@@ -2,8 +2,6 @@
 For calculating cost of fireworks ai serverless inference models.
 """
 
-from typing import Tuple
-
 from litellm.constants import (
     FIREWORKS_AI_4_B,
     FIREWORKS_AI_16_B,
@@ -54,7 +52,7 @@ def get_base_model_for_pricing(model_name: str) -> str:
     return "fireworks-ai-default"
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 

@@ -4,7 +4,6 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 
 import json
 from pathlib import Path
-from typing import Dict, Optional
 
 from litellm._logging import verbose_logger
 
@@ -27,7 +26,7 @@ class SimpleProviderConfig:
 class JSONProviderRegistry:
     """Load providers from JSON once on import"""
 
-    _providers: Dict[str, SimpleProviderConfig] = {}
+    _providers: dict[str, SimpleProviderConfig] = {}
     _loaded = False
 
     @classmethod
@@ -56,7 +55,7 @@ class JSONProviderRegistry:
             cls._loaded = True
 
     @classmethod
-    def get(cls, slug: str) -> Optional[SimpleProviderConfig]:
+    def get(cls, slug: str) -> SimpleProviderConfig | None:
         """Get a provider configuration by slug"""
         return cls._providers.get(slug)
 

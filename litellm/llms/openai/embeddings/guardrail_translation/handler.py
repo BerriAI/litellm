@@ -5,7 +5,7 @@ This module provides guardrail translation support for OpenAI's embeddings endpo
 The handler processes the 'input' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -35,7 +35,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
+        litellm_logging_obj: Any | None = None,
     ) -> Any:
         """
         Process input text by applying guardrails to text content.
@@ -70,7 +70,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         data: dict,
         input_data: str,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any],
+        litellm_logging_obj: Any | None,
     ) -> dict:
         """Process a single string input through the guardrail."""
         inputs = GenericGuardrailAPIInputs(texts=[input_data])
@@ -97,9 +97,9 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
     async def _process_list_input(
         self,
         data: dict,
-        input_data: List[Union[str, int, List[int]]],
+        input_data: list[str | int | list[int]],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any],
+        litellm_logging_obj: Any | None,
     ) -> dict:
         """Process a list input through the guardrail (if it contains strings)."""
         if len(input_data) == 0:
@@ -144,9 +144,9 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         self,
         response: "EmbeddingResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process output response - embeddings responses contain vectors, not text.

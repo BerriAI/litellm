@@ -8,10 +8,7 @@ from abc import ABC, abstractmethod
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
     Generic,
-    List,
-    Optional,
     TypeVar,
     Union,
     cast,
@@ -84,7 +81,6 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         Return the resource type identifier (e.g., 'file', 'vector_store', 'vector_store_file').
         Used for logging and unified ID generation.
         """
-        pass
 
     @property
     @abstractmethod
@@ -93,13 +89,12 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         Return the database table name for this resource type.
         Example: 'litellm_managedfiletable', 'litellm_managedvectorstoretable'
         """
-        pass
 
     @abstractmethod
     def get_unified_resource_id_format(
         self,
         resource_object: ResourceObjectType,
-        target_model_names_list: List[str],
+        target_model_names_list: list[str],
     ) -> str:
         """
         Generate the format string for the unified resource ID.
@@ -115,14 +110,13 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         Returns:
             Format string to be base64 encoded
         """
-        pass
 
     @abstractmethod
     async def create_resource_for_model(
         self,
         llm_router: Router,
         model: str,
-        request_data: Dict[str, Any],
+        request_data: dict[str, Any],
         litellm_parent_otel_span: Span,
     ) -> ResourceObjectType:
         """
@@ -137,7 +131,6 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         Returns:
             Resource object from the provider
         """
-        pass
 
     # ============================================================================
     #                     COMMON STORAGE OPERATIONS
@@ -146,11 +139,11 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def store_unified_resource_id(
         self,
         unified_resource_id: str,
-        resource_object: Optional[ResourceObjectType],
-        litellm_parent_otel_span: Optional[Span],
-        model_mappings: Dict[str, str],
+        resource_object: ResourceObjectType | None,
+        litellm_parent_otel_span: Span | None,
+        model_mappings: dict[str, str],
         user_api_key_dict: UserAPIKeyAuth,
-        additional_db_fields: Optional[Dict[str, Any]] = None,
+        additional_db_fields: dict[str, Any] | None = None,
     ) -> None:
         """
         Store unified resource ID with model mappings in cache and database.
@@ -228,8 +221,8 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def get_unified_resource_id(
         self,
         unified_resource_id: str,
-        litellm_parent_otel_span: Optional[Span] = None,
-    ) -> Optional[Dict[str, Any]]:
+        litellm_parent_otel_span: Span | None = None,
+    ) -> dict[str, Any] | None:
         """
         Retrieve unified resource by ID from cache or database.
 
@@ -242,7 +235,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         """
         # Check cache first
         result = cast(
-            Optional[dict],
+            dict | None,
             await self.internal_usage_cache.async_get_cache(
                 key=unified_resource_id,
                 litellm_parent_otel_span=litellm_parent_otel_span,
@@ -264,8 +257,8 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def delete_unified_resource_id(
         self,
         unified_resource_id: str,
-        litellm_parent_otel_span: Optional[Span] = None,
-    ) -> Optional[ResourceObjectType]:
+        litellm_parent_otel_span: Span | None = None,
+    ) -> ResourceObjectType | None:
         """
         Delete unified resource from cache and database.
 
@@ -299,7 +292,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         unified_resource_id: str,
         user_api_key_dict: UserAPIKeyAuth,
-        litellm_parent_otel_span: Optional[Span] = None,
+        litellm_parent_otel_span: Span | None = None,
     ) -> bool:
         """
         Check if user has access to the unified resource ID.
@@ -333,9 +326,9 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
     async def get_model_resource_id_mapping(
         self,
-        resource_ids: List[str],
+        resource_ids: list[str],
         litellm_parent_otel_span: Span,
-    ) -> Dict[str, Dict[str, str]]:
+    ) -> dict[str, dict[str, str]]:
         """
         Get model-specific resource IDs for a list of unified resource IDs.
 
@@ -354,7 +347,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
                 }
             }
         """
-        resource_id_mapping: Dict[str, Dict[str, str]] = {}
+        resource_id_mapping: dict[str, dict[str, str]] = {}
 
         for resource_id in resource_ids:
             # Get unified resource from cache/db
@@ -378,10 +371,10 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def create_resource_for_each_model(
         self,
         llm_router: Router,
-        request_data: Dict[str, Any],
-        target_model_names_list: List[str],
+        request_data: dict[str, Any],
+        target_model_names_list: list[str],
         litellm_parent_otel_span: Span,
-    ) -> List[ResourceObjectType]:
+    ) -> list[ResourceObjectType]:
         """
         Create a resource for each model in the target list.
 
@@ -410,8 +403,8 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
     def generate_unified_resource_id(
         self,
-        resource_objects: List[ResourceObjectType],
-        target_model_names_list: List[str],
+        resource_objects: list[ResourceObjectType],
+        target_model_names_list: list[str],
     ) -> str:
         """
         Generate a unified resource ID from multiple resource objects.
@@ -436,8 +429,8 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
     def extract_model_mappings_from_responses(
         self,
-        resource_objects: List[ResourceObjectType],
-    ) -> Dict[str, str]:
+        resource_objects: list[ResourceObjectType],
+    ) -> dict[str, str]:
         """
         Extract model mappings from resource objects.
 
@@ -447,7 +440,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         Returns:
             Dictionary mapping model_id -> provider_resource_id
         """
-        model_mappings: Dict[str, str] = {}
+        model_mappings: dict[str, str] = {}
 
         for resource_object in resource_objects:
             # Get hidden params if available
@@ -466,11 +459,11 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def async_filter_deployments(
         self,
         model: str,
-        healthy_deployments: List,
-        request_kwargs: Optional[Dict] = None,
-        parent_otel_span: Optional[Span] = None,
+        healthy_deployments: list,
+        request_kwargs: dict | None = None,
+        parent_otel_span: Span | None = None,
         resource_id_key: str = "resource_id",
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Filter deployments based on model mappings for a resource.
 
@@ -490,9 +483,9 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         if request_kwargs is None:
             return healthy_deployments
 
-        resource_id = cast(Optional[str], request_kwargs.get(resource_id_key))
+        resource_id = cast(str | None, request_kwargs.get(resource_id_key))
         model_resource_id_mapping = cast(
-            Optional[Dict[str, Dict[str, str]]],
+            dict[str, dict[str, str]] | None,
             request_kwargs.get("model_resource_id_mapping"),
         )
 
@@ -526,10 +519,10 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def list_user_resources(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        limit: Optional[int] = None,
-        after: Optional[str] = None,
-        additional_filters: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        limit: int | None = None,
+        after: str | None = None,
+        additional_filters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         List resources created by a user.
 
@@ -546,7 +539,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         if owner_filter is None:
             return build_list_page([])
 
-        where_clause: Dict[str, Any] = {**owner_filter}
+        where_clause: dict[str, Any] = {**owner_filter}
 
         if after:
             where_clause["id"] = {"gt": after}
@@ -564,7 +557,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             order={"created_at": "desc"},
         )
 
-        resource_objects: List[Any] = []
+        resource_objects: list[Any] = []
         for resource in resources:
             try:
                 # Stop once we have enough

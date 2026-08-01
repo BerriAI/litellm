@@ -1,6 +1,6 @@
 import os
 from functools import lru_cache
-from typing import Literal, Optional, Union
+from typing import Literal
 
 import httpx
 
@@ -14,9 +14,9 @@ class HuggingFaceError(BaseLLMException):
         self,
         status_code,
         message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[httpx.Headers, dict]] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: httpx.Headers | dict | None = None,
     ):
         super().__init__(
             status_code=status_code,
@@ -96,7 +96,7 @@ def _fetch_inference_provider_mapping(model: str) -> dict:
             status_code = 500
             headers = {}
         raise HuggingFaceError(
-            message=f"Failed to fetch provider mapping: {str(e)}",
+            message=f"Failed to fetch provider mapping: {e!s}",
             status_code=status_code,
             headers=headers,
         )

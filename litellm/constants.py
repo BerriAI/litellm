@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import List, Literal, Optional
+from typing import Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
 
@@ -405,14 +405,14 @@ DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be
 # replaced with the original base_url. This is a common misconfiguration where
 # developers deploy agents with development URLs in their agent cards.
-LOCALHOST_URL_PATTERNS: List[str] = [
+LOCALHOST_URL_PATTERNS: list[str] = [
     "localhost",
     "127.0.0.1",
     "0.0.0.0",
     "[::1]",  # IPv6 localhost
 ]
 # Patterns in error messages that indicate a connection failure
-CONNECTION_ERROR_PATTERNS: List[str] = [
+CONNECTION_ERROR_PATTERNS: list[str] = [
     "connect",
     "connection",
     "network",
@@ -694,7 +694,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "context_management": None,
 }
 
-openai_compatible_endpoints: List = [
+openai_compatible_endpoints: list = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
@@ -740,7 +740,7 @@ openai_compatible_endpoints: List = [
 ]
 
 
-openai_compatible_providers: List = [
+openai_compatible_providers: list = [
     "anyscale",
     "groq",
     "nvidia_nim",
@@ -805,7 +805,7 @@ openai_compatible_providers: List = [
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
 ]
-openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
+openai_text_completion_compatible_providers: list = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",
     "hosted_vllm",
@@ -828,7 +828,7 @@ openai_text_completion_compatible_providers: List = [  # providers that support 
     "hyperbolic",
     "wandb",
 ]
-_openai_like_providers: List = [
+_openai_like_providers: list = [
     "predibase",
     "databricks",
     "lemonade",
@@ -1371,7 +1371,7 @@ try:
     _raw_background_health_check_max_tokens = (
         _background_health_check_max_tokens_env.strip() if _background_health_check_max_tokens_env is not None else ""
     )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS: Optional[int] = (
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS: int | None = (
         int(_raw_background_health_check_max_tokens) if _raw_background_health_check_max_tokens else None
     )
 except (ValueError, TypeError):
@@ -1385,7 +1385,7 @@ try:
         if _background_health_check_max_tokens_reasoning_env is not None
         else ""
     )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: Optional[int] = (
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: int | None = (
         int(_raw_background_health_check_max_tokens_reasoning)
         if _raw_background_health_check_max_tokens_reasoning
         else None

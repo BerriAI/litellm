@@ -7,7 +7,7 @@ import json
 import os
 import random
 import types
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 from pydantic import BaseModel  # type: ignore
@@ -41,9 +41,9 @@ def is_serializable(value):
 class ArgillaLogger(CustomBatchLogger):
     def __init__(
         self,
-        argilla_api_key: Optional[str] = None,
-        argilla_dataset_name: Optional[str] = None,
-        argilla_base_url: Optional[str] = None,
+        argilla_api_key: str | None = None,
+        argilla_dataset_name: str | None = None,
+        argilla_base_url: str | None = None,
         **kwargs,
     ):
         if litellm.argilla_transformation_object is None:
@@ -69,7 +69,7 @@ class ArgillaLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
-    def validate_argilla_transformation_object(self, argilla_transformation_object: Dict[str, Any]):
+    def validate_argilla_transformation_object(self, argilla_transformation_object: dict[str, Any]):
         if not isinstance(argilla_transformation_object, dict):
             raise Exception("'argilla_transformation_object' must be a dictionary, to log your payload to Argilla.")
 
@@ -81,9 +81,9 @@ class ArgillaLogger(CustomBatchLogger):
 
     def get_credentials_from_env(
         self,
-        argilla_api_key: Optional[str],
-        argilla_dataset_name: Optional[str],
-        argilla_base_url: Optional[str],
+        argilla_api_key: str | None,
+        argilla_dataset_name: str | None,
+        argilla_base_url: str | None,
     ) -> ArgillaCredentialsObject:
         _credentials_api_key = argilla_api_key or os.getenv("ARGILLA_API_KEY")
         if _credentials_api_key is None:
@@ -115,7 +115,7 @@ class ArgillaLogger(CustomBatchLogger):
             ARGILLA_DATASET_NAME=_credentials_dataset_name,
         )
 
-    def get_chat_messages(self, payload: StandardLoggingPayload) -> List[Dict[str, Any]]:
+    def get_chat_messages(self, payload: StandardLoggingPayload) -> list[dict[str, Any]]:
         payload_messages = payload.get("messages", None)
 
         if payload_messages is None:
@@ -141,10 +141,10 @@ class ArgillaLogger(CustomBatchLogger):
         else:
             raise Exception(f"Invalid response format: {response}")
 
-    def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> Optional[ArgillaItem]:
+    def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> ArgillaItem | None:
         try:
             # Ensure everything in the payload is converted to str
-            payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+            payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
 
             if payload is None:
                 raise Exception("Error logging request payload. Payload=none.")
@@ -204,9 +204,7 @@ class ArgillaLogger(CustomBatchLogger):
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
-                        sampling_rate, random_sample
-                    )
+                    f"Skipping Langsmith logging. Sampling rate={sampling_rate}, random_sample={random_sample}"
                 )
                 return  # Skip logging
             verbose_logger.debug(
@@ -233,9 +231,7 @@ class ArgillaLogger(CustomBatchLogger):
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
-                        sampling_rate, random_sample
-                    )
+                    f"Skipping Langsmith logging. Sampling rate={sampling_rate}, random_sample={random_sample}"
                 )
                 return  # Skip logging
             verbose_logger.debug(
@@ -243,7 +239,7 @@ class ArgillaLogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
-            payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+            payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
 
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
 
@@ -276,7 +272,7 @@ class ArgillaLogger(CustomBatchLogger):
         random_sample = random.random()
         if random_sample > sampling_rate:
             verbose_logger.info(
-                "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(sampling_rate, random_sample)
+                f"Skipping Langsmith logging. Sampling rate={sampling_rate}, random_sample={random_sample}"
             )
             return  # Skip logging
         verbose_logger.info("Langsmith Failure Event Logging!")

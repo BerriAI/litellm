@@ -6,7 +6,7 @@ This allows the same policy to be attached to multiple scopes.
 """
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.table_repositories import PolicyAttachmentRepository
@@ -41,11 +41,11 @@ class AttachmentRegistry:
     """
 
     def __init__(self):
-        self._attachments: List[PolicyAttachment] = []
+        self._attachments: list[PolicyAttachment] = []
         self._config_attachments: tuple[PolicyAttachment, ...] = ()
         self._initialized: bool = False
 
-    def load_attachments(self, attachments_config: List[Dict[str, Any]]) -> None:
+    def load_attachments(self, attachments_config: list[dict[str, Any]]) -> None:
         """
         Load attachments from a configuration list.
 
@@ -60,14 +60,14 @@ class AttachmentRegistry:
                 self._attachments.append(attachment)
                 verbose_proxy_logger.debug(f"Loaded attachment for policy: {attachment.policy}")
             except Exception as e:
-                verbose_proxy_logger.error(f"Error loading attachment: {str(e)}")
-                raise ValueError(f"Invalid attachment: {str(e)}") from e
+                verbose_proxy_logger.error(f"Error loading attachment: {e!s}")
+                raise ValueError(f"Invalid attachment: {e!s}") from e
 
         self._config_attachments = tuple(self._attachments)
         self._initialized = True
         verbose_proxy_logger.info(f"Loaded {len(self._attachments)} policy attachments")
 
-    def _parse_attachment(self, attachment_data: Dict[str, Any]) -> PolicyAttachment:
+    def _parse_attachment(self, attachment_data: dict[str, Any]) -> PolicyAttachment:
         """
         Parse an attachment from raw configuration data.
 
@@ -86,7 +86,7 @@ class AttachmentRegistry:
             tags=attachment_data.get("tags"),
         )
 
-    def get_attached_policies(self, context: PolicyMatchContext) -> List[str]:
+    def get_attached_policies(self, context: PolicyMatchContext) -> list[str]:
         """
         Get list of policy names attached to the given context.
 
@@ -98,7 +98,7 @@ class AttachmentRegistry:
         """
         return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context)]
 
-    def get_attached_policies_with_reasons(self, context: PolicyMatchContext) -> List[Dict[str, Any]]:
+    def get_attached_policies_with_reasons(self, context: PolicyMatchContext) -> list[dict[str, Any]]:
         """
         Get list of policy names and match reasons for the given context.
 
@@ -107,7 +107,7 @@ class AttachmentRegistry:
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         seen_policies: set = set()
 
         for attachment in self._attachments:
@@ -166,7 +166,7 @@ class AttachmentRegistry:
         attached = self.get_attached_policies(context)
         return policy_name in attached
 
-    def get_all_attachments(self) -> List[PolicyAttachment]:
+    def get_all_attachments(self) -> list[PolicyAttachment]:
         """
         Get all loaded attachments.
 
@@ -184,7 +184,7 @@ class AttachmentRegistry:
         """
         return self._config_attachments
 
-    def get_attachments_for_policy(self, policy_name: str) -> List[PolicyAttachment]:
+    def get_attachments_for_policy(self, policy_name: str) -> list[PolicyAttachment]:
         """
         Get all attachments for a specific policy.
 
@@ -263,7 +263,7 @@ class AttachmentRegistry:
         self,
         attachment_request: PolicyAttachmentCreateRequest,
         prisma_client: "PrismaClient",
-        created_by: Optional[str] = None,
+        created_by: str | None = None,
     ) -> PolicyAttachmentDBResponse:
         """
         Add a policy attachment to the database.
@@ -318,13 +318,13 @@ class AttachmentRegistry:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error adding attachment to DB: {e}")
-            raise Exception(f"Error adding attachment to DB: {str(e)}")
+            raise Exception(f"Error adding attachment to DB: {e!s}")
 
     async def delete_attachment_from_db(
         self,
         attachment_id: str,
         prisma_client: "PrismaClient",
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """
         Delete a policy attachment from the database.
 
@@ -354,13 +354,13 @@ class AttachmentRegistry:
             return {"message": f"Attachment {attachment_id} deleted successfully"}
         except Exception as e:
             verbose_proxy_logger.exception(f"Error deleting attachment from DB: {e}")
-            raise Exception(f"Error deleting attachment from DB: {str(e)}")
+            raise Exception(f"Error deleting attachment from DB: {e!s}")
 
     async def get_attachment_by_id_from_db(
         self,
         attachment_id: str,
         prisma_client: "PrismaClient",
-    ) -> Optional[PolicyAttachmentDBResponse]:
+    ) -> PolicyAttachmentDBResponse | None:
         """
         Get a policy attachment by ID from the database.
 
@@ -394,12 +394,12 @@ class AttachmentRegistry:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error getting attachment from DB: {e}")
-            raise Exception(f"Error getting attachment from DB: {str(e)}")
+            raise Exception(f"Error getting attachment from DB: {e!s}")
 
     async def get_all_attachments_from_db(
         self,
         prisma_client: "PrismaClient",
-    ) -> List[PolicyAttachmentDBResponse]:
+    ) -> list[PolicyAttachmentDBResponse]:
         """
         Get all policy attachments from the database.
 
@@ -432,7 +432,7 @@ class AttachmentRegistry:
             ]
         except Exception as e:
             verbose_proxy_logger.exception(f"Error getting attachments from DB: {e}")
-            raise Exception(f"Error getting attachments from DB: {str(e)}")
+            raise Exception(f"Error getting attachments from DB: {e!s}")
 
     async def sync_attachments_from_db(
         self,
@@ -468,11 +468,11 @@ class AttachmentRegistry:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error syncing attachments from DB: {e}")
-            raise Exception(f"Error syncing attachments from DB: {str(e)}")
+            raise Exception(f"Error syncing attachments from DB: {e!s}")
 
 
 # Global singleton instance
-_attachment_registry: Optional[AttachmentRegistry] = None
+_attachment_registry: AttachmentRegistry | None = None
 
 
 def get_attachment_registry() -> AttachmentRegistry:

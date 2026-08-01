@@ -8,15 +8,15 @@ Talks to e2b's REST API directly over httpx (no e2b SDK dependency):
 """
 
 import json
-from typing import Union, cast
+from typing import cast
 
 import httpx
 
 from litellm.llms.base_llm.sandbox.transformation import (
+    SANDBOX_MAX_OUTPUT_BYTES,
     BaseSandboxConfig,
     CodeExecutionResult,
     ContainerHandle,
-    SANDBOX_MAX_OUTPUT_BYTES,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -94,7 +94,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
     async def arun_code(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         code: str,
         api_key: str | None = None,
         env_vars: dict | None = None,
@@ -132,7 +132,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
     async def adelete_sandbox(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
@@ -156,7 +156,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         return 200 <= response.status_code < 300
 
     @staticmethod
-    def _as_handle(container: Union[ContainerHandle, str]) -> ContainerHandle:
+    def _as_handle(container: ContainerHandle | str) -> ContainerHandle:
         if isinstance(container, ContainerHandle):
             return container
         handle = ContainerHandle(id=str(container), provider="e2b", domain=E2B_DEFAULT_DOMAIN)
