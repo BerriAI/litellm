@@ -32,6 +32,7 @@ from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
     RoutingDecisionCause,
+    RoutingDecisionTierResolution,
     StandardLoggingRoutingDecision,
     StandardLoggingRoutingDecisionTierBoundaries,
 )
@@ -277,6 +278,22 @@ class KeywordOverride(NamedTuple):
 
     tier: ComplexityTier
     matched_keyword: str | None
+
+
+class TierResolution(NamedTuple):
+    """How a classified tier became a model, not just which model came out.
+
+    Returning the served tier alone cannot express that `default_model` answered, or that
+    nothing reported a live deployment and the tier was served anyway: both look identical
+    to an ordinary pick from the classified tier, so a decision record could not say which
+    happened. `resolved_by` carries that, and `served_tier` differing from `classified_tier`
+    carries the climb. The two are independent; an exhausted ladder can do both.
+    """
+
+    model: str
+    classified_tier: ComplexityTier
+    served_tier: ComplexityTier
+    resolved_by: RoutingDecisionTierResolution
 
 
 class ClassificationOutcome(NamedTuple):
@@ -596,6 +613,7 @@ class ComplexityRouter(CustomLogger):
         escalation_keyword: str | None = None,
         escalated: bool = False,
         classifier_model: str | None = None,
+        resolution: TierResolution | None = None,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -632,6 +650,16 @@ class ComplexityRouter(CustomLogger):
             decision["escalated"] = escalated
         if classifier_model is not None:
             decision["classifier_model"] = classifier_model
+        if resolution is not None:
+            # Two independent facts, both invisible from the routed model alone. A served
+            # tier above the classified one explains why a cheap request is on an expensive
+            # model; resolved_by says the model came from somewhere other than a tier pool
+            # at all. An exhausted ladder can produce both, so neither is derived from the
+            # other, and the ordinary case adds nothing.
+            if resolution.served_tier != resolution.classified_tier:
+                decision["tier_fallback_from"] = resolution.classified_tier.value
+            if resolution.resolved_by != "tier_pool":
+                decision["resolved_by"] = resolution.resolved_by
         return decision
 
     async def aclassify(
@@ -812,19 +840,50 @@ class ComplexityRouter(CustomLogger):
         Returns:
             The model name configured for that tier.
         """
-        tier_key = tier.value if isinstance(tier, ComplexityTier) else tier
+        return self._resolve_configured_tier(tier).model
 
-        if tier_key in self.config.tiers:
-            return self._pick_from_tier_value(self.config.tiers[tier_key], tier_key)
+    def _resolve_configured_tier(
+        self, tier: ComplexityTier, resolved_by: RoutingDecisionTierResolution = "tier_pool"
+    ) -> TierResolution:
+        """Structural half of tier resolution: the first tier at or above `tier` that has
+        models configured, then `default_model` as the last resort.
+
+        Falling upward rather than to a fixed tier keeps an under-configured deployment from
+        quietly serving a request from a cheaper model than it classified. `resolved_by` is
+        what the caller already knows about how it got here, since reaching this without a
+        live deployment anywhere is a best effort rather than an ordinary pick.
+        """
+        for candidate_tier in self._tier_ladder_from(tier):
+            if candidate_tier.value not in self.config.tiers:
+                continue
+            # A tier configured as an empty pool is a config error, not a gap to route
+            # around, so _pick_from_tier_value raises rather than climbing past it.
+            return TierResolution(
+                model=self._pick_from_tier_value(self.config.tiers[candidate_tier.value], candidate_tier.value),
+                classified_tier=tier,
+                served_tier=candidate_tier,
+                resolved_by=resolved_by,
+            )
 
         if self.config.default_model:
-            return self.config.default_model
+            return TierResolution(
+                model=self.config.default_model,
+                classified_tier=tier,
+                served_tier=tier,
+                resolved_by="default_model",
+            )
 
-        medium_key = ComplexityTier.MEDIUM.value
-        if medium_key in self.config.tiers:
-            return self._pick_from_tier_value(self.config.tiers[medium_key], medium_key)
+        raise ValueError(
+            f"No model configured for tier {tier.value} or any tier above it "
+            f"({sorted(self.config.tiers)}), and no default_model set"
+        )
 
-        raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
+    @staticmethod
+    def _tier_ladder_from(tier: ComplexityTier) -> tuple[ComplexityTier, ...]:
+        """`tier` and every tier above it, cheapest first."""
+        if tier not in TIER_SEVERITY_ORDER:
+            return (tier,)
+        return TIER_SEVERITY_ORDER[TIER_SEVERITY_ORDER.index(tier) :]
 
     @staticmethod
     def _pick_from_tier_value(model: str | list[str], tier_key: str) -> str:
@@ -837,37 +896,147 @@ class ComplexityRouter(CustomLogger):
     def _tier_pools(self) -> dict[str, list[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
 
+    async def _cooled_down_deployment_ids(self) -> frozenset[str] | None:
+        """Deployment ids currently in cooldown, read once per request.
+
+        This is the only I/O the ladder does. Asking the router per model instead would
+        re-read the whole cooldown set once per pool member, and that set is Redis-backed
+        in production, so it would put N round trips in front of every completion.
+
+        None means the view could not be read at all. Callers treat that as "assume the
+        pool is live", so a cache or router hiccup degrades to the previous behavior
+        instead of emptying every tier and pushing all traffic to the top of the ladder.
+        """
+        from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+
+        try:
+            return frozenset(
+                await _async_get_cooldown_deployments(
+                    litellm_router_instance=self.litellm_router_instance, parent_otel_span=None
+                )
+            )
+        except Exception as e:  # noqa: BLE001 -- the cooldown view can fail in many ways (cache, redis, a router without one); none of them should block routing
+            verbose_router_logger.debug(
+                f"ComplexityRouter: cooldown view unavailable ({e}), treating tier pools as servable"
+            )
+            return None
+
+    def _has_live_deployment(self, model: str, cooled_down: frozenset[str]) -> bool:
+        """Whether the router can serve this model group right now.
+
+        Reads the router's in-process deployment list, so it costs no I/O: the cooldown
+        set was already fetched once for the whole request.
+
+        A deployment with no id counts as live. Cooldowns are keyed by id, so one that
+        cannot be identified can never be known to be cooling, and the ladder's rule
+        everywhere else is that an absent health signal means live. Excluding it instead
+        would let missing metadata empty a tier and push traffic to a pricier one.
+        """
+        deployments = self.litellm_router_instance.get_model_list(model_name=model) or ()
+        return any(
+            deployment_id is None or deployment_id not in cooled_down
+            for deployment_id in map(self._deployment_id, deployments)
+        )
+
+    @staticmethod
+    def _deployment_id(deployment: Mapping[str, Any]) -> str | None:
+        model_info = deployment.get("model_info")
+        return model_info.get("id") if isinstance(model_info, Mapping) else None
+
+    def _live_models(self, pool: Sequence[str], cooled_down: frozenset[str] | None) -> tuple[str, ...]:
+        """Pool members the router can serve right now: the model group exists and has at
+        least one deployment that is not in cooldown.
+        """
+        if not pool or cooled_down is None:
+            return tuple(pool)
+        return tuple(model for model in pool if self._has_live_deployment(model, cooled_down))
+
     async def _pick_model_for_tier(
         self,
         tier: ComplexityTier,
         raw_messages: list[dict[str, Any]] | None,
         resolved_messages: list[dict[str, Any]] | None,
         request_kwargs: dict,
-    ) -> str:
-        if not self.config.plugins:
-            return self.get_model_for_tier(tier)
+    ) -> TierResolution:
+        """Resolve a classified tier to a servable model, reporting how it got there.
 
+        Walks the tier ladder: the classified tier's live models first, then the next tier
+        up, and so on. `default_model` stays the last resort, and is skipped entirely when
+        routing plugins are configured so their policy cannot be bypassed.
+        """
+        pools = self._tier_pools()
+        cooled_down = await self._cooled_down_deployment_ids()
+        for candidate_tier in self._tier_ladder_from(tier):
+            if candidate_tier.value not in pools:
+                continue
+            pool = pools[candidate_tier.value]
+            if not pool:
+                raise ValueError(f"Empty model pool for tier {candidate_tier.value}")
+            live = self._live_models(pool, cooled_down)
+            if not live:
+                continue
+            candidates = (
+                live
+                if not self.config.plugins
+                else await self._run_routing_plugins(
+                    live, candidate_tier, raw_messages, resolved_messages, request_kwargs
+                )
+            )
+            return TierResolution(
+                model=random.choice(candidates),
+                classified_tier=tier,
+                served_tier=candidate_tier,
+                resolved_by="tier_pool",
+            )
+
+        if self.config.plugins:
+            # default_model was never checked against the plugins, so serving it here would
+            # let their policy be bypassed. Raise instead, matching the Router-level plugin
+            # pipeline's own fail-closed behavior for the same situation.
+            raise ValueError(
+                f"No servable models for tier {tier.value} or any tier above it, with routing plugins configured"
+            )
+        if self.config.default_model:
+            return TierResolution(
+                model=self.config.default_model,
+                classified_tier=tier,
+                served_tier=tier,
+                resolved_by="default_model",
+            )
+        # Nothing on the ladder reported a live deployment and there is no declared
+        # fallback. Cooldowns expire and the health view is a snapshot, so serve the
+        # classified tier anyway and let the router surface the real error, rather than
+        # failing a request that may well succeed. It is recorded as a best effort, since
+        # the model that answers is one nothing confirmed was up.
+        return self._resolve_configured_tier(tier, resolved_by="best_effort")
+
+    async def _run_routing_plugins(
+        self,
+        candidates: Sequence[str],
+        tier: ComplexityTier,
+        raw_messages: Sequence[dict[str, Any]] | None,
+        resolved_messages: Sequence[dict[str, Any]] | None,
+        request_kwargs: dict,
+    ) -> tuple[str, ...]:
         from litellm.types.router import RoutingContext
 
-        tier_key = tier.value
         metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
         context = RoutingContext(
             raw_messages=raw_messages or [],
             structured_messages=resolved_messages or [],
-            candidate_models=list(self._tier_pools().get(tier_key, [])),
+            candidate_models=list(candidates),
             metadata=request_kwargs.get(metadata_key) or {},
         )
-        for plugin in self.config.plugins:
+        for plugin in self.config.plugins or []:
             context = await plugin.run(context)
 
         if not context.candidate_models:
             # A plugin narrowing a tier to zero candidates is a policy decision (e.g. no
-            # model this tenant's budget allows) -- falling back to default_model here
-            # (which was never checked against the plugins) would let that policy be
-            # silently bypassed. Raise instead, matching the Router-level plugin
-            # pipeline's own fail-closed behavior for the same situation.
-            raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
-        return self._pick_from_tier_value(context.candidate_models, tier_key)
+            # model this tenant's budget allows), not a gap to route around. Raise rather
+            # than climbing to the next tier, which would serve exactly what the policy
+            # just refused.
+            raise ValueError(f"No candidate models left for tier {tier.value} after routing-plugin filtering")
+        return tuple(context.candidate_models)
 
     def _ensure_adaptive_router(self) -> Any | None:
         if not self.config.adaptive:
@@ -1434,12 +1603,12 @@ class ComplexityRouter(CustomLogger):
                 # every non-plugin user, not just a security fix).
                 routed_model = self.config.default_model
             else:
-                # Plugins configured: default_model must never bypass them, so it's not
-                # checked here at all -- _pick_model_for_tier -> get_model_for_tier still
-                # falls back to it (after the MEDIUM tier) once the plugin pipeline runs.
-                routed_model = await self._pick_model_for_tier(
-                    ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
-                )
+                # Plugins configured: default_model must never bypass them, so it is not
+                # checked here at all. The tier ladder still reaches it as its last resort,
+                # but only once the plugin pipeline has run.
+                routed_model = (
+                    await self._pick_model_for_tier(ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs)
+                ).model
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
@@ -1453,7 +1622,10 @@ class ComplexityRouter(CustomLogger):
         if override is not None:
             routed_tier = self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
             keyword_escalated = routed_tier != override.tier
-            routed_model = await self._pick_model_for_tier(routed_tier, messages, resolved_messages, request_kwargs)
+            keyword_resolution = await self._pick_model_for_tier(
+                routed_tier, messages, resolved_messages, request_kwargs
+            )
+            routed_model = keyword_resolution.model
             keyword_cause: RoutingDecisionCause = (
                 "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
             )
@@ -1467,10 +1639,11 @@ class ComplexityRouter(CustomLogger):
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     cause=keyword_cause,
-                    tier=routed_tier,
+                    tier=keyword_resolution.served_tier,
                     matched_keyword=override.matched_keyword,
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
+                    resolution=keyword_resolution,
                 ),
             )
 
@@ -1483,6 +1656,8 @@ class ComplexityRouter(CustomLogger):
         if escalated:
             signals = (*signals, "escalation")
         score_repr = f"{score:.3f}" if score is not None else "n/a"
+        resolution: TierResolution | None = None
+        served_tier = tier
         if self.config.adaptive:
             routed_model = self._soft_floor_pick(tier, user_message, request_kwargs)
             adaptive = self._ensure_adaptive_router()
@@ -1497,10 +1672,13 @@ class ComplexityRouter(CustomLogger):
                 f"signals={signals}, routed_model={routed_model}"
             )
         else:
-            routed_model = await self._pick_model_for_tier(tier, messages, resolved_messages, request_kwargs)
+            resolution = await self._pick_model_for_tier(tier, messages, resolved_messages, request_kwargs)
+            routed_model, served_tier = resolution.model, resolution.served_tier
             verbose_router_logger.info(
-                f"ComplexityRouter: routing decision cause={outcome.cause}, tier={tier.value}, "
+                f"ComplexityRouter: routing decision cause={outcome.cause}, tier={served_tier.value}, "
                 f"score={score_repr}, signals={signals}, routed_model={routed_model}"
+                + (f", tier_fallback_from={tier.value}" if served_tier != tier else "")
+                + (f", resolved_by={resolution.resolved_by}" if resolution.resolved_by != "tier_pool" else "")
             )
 
         classifier_model = (
@@ -1514,11 +1692,12 @@ class ComplexityRouter(CustomLogger):
             routing_decision=self._build_routing_decision(
                 routed_model=routed_model,
                 cause=outcome.cause,
-                tier=tier,
+                tier=served_tier,
                 score=score,
                 signals=signals,
                 escalation_keyword=escalation_keyword,
                 escalated=escalated,
                 classifier_model=classifier_model,
+                resolution=resolution,
             ),
         )

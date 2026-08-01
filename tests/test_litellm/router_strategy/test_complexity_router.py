@@ -4738,3 +4738,301 @@ class TestClassifierTrustBoundary:
         assert system_message["content"] == _CLASSIFICATION_SYSTEM_RUBRIC
         assert hostile not in system_message["content"]
         assert hostile in user_message["content"]
+
+
+class StubCooldownCache:
+    """The one piece of I/O tier resolution does, so tests can count it."""
+
+    def __init__(self, cooled_ids: frozenset[str]):
+        self.cooled_ids = cooled_ids
+        self.reads = 0
+
+    async def async_get_active_cooldowns(self, model_ids, parent_otel_span=None):
+        self.reads += 1
+        return [(model_id, {"exception_received": "stubbed"}) for model_id in model_ids if model_id in self.cooled_ids]
+
+
+class StubRouter:
+    """Router stand-in over a fixed set of model groups, one deployment each.
+
+    A group is servable when the router knows it and its deployment is not in cooldown.
+    Those are the two real reasons a pool member cannot answer, so `live` names the ones
+    that can, and `registered` (defaulting to every model the tiers name) separates "the
+    router has never heard of this" from "everything behind it is down".
+    """
+
+    def __init__(self, live: set[str], registered: set[str] | None = None):
+        self.live = set(live)
+        self.registered = set(registered) if registered is not None else set(LADDER_MODELS)
+        self.cache = DualCache()
+        self.cooldown_cache = StubCooldownCache(frozenset(f"{model}-0" for model in self.registered - self.live))
+        self.listed: list[str] = []
+
+    def get_model_ids(self):
+        return [f"{model}-0" for model in sorted(self.registered)]
+
+    def get_model_list(self, model_name=None, team_id=None):
+        self.listed.append(model_name)
+        return [{"model_info": {"id": f"{model_name}-0"}}] if model_name in self.registered else []
+
+
+LADDER_TIERS = {
+    "SIMPLE": ["simple-a", "simple-b"],
+    "MEDIUM": "medium-model",
+    "COMPLEX": "complex-model",
+    "REASONING": "reasoning-model",
+}
+LADDER_MODELS = ("simple-a", "simple-b", "medium-model", "complex-model", "reasoning-model")
+
+
+def _ladder_router(live: set[str], **overrides):
+    return ComplexityRouter(
+        model_name="test-ladder-router",
+        litellm_router_instance=StubRouter(live),
+        complexity_router_config={"tiers": dict(LADDER_TIERS), "session_affinity": False, **overrides},
+    )
+
+
+async def _route(router, content: str):
+    return await router.async_pre_routing_hook(
+        model="test-model",
+        request_kwargs={},
+        messages=[{"role": "user", "content": content}],
+    )
+
+
+class TestTierFallbackLadder:
+    """A classified tier that cannot serve falls to its own peers first, then upward. It
+    never falls to a cheaper tier, because that would answer a hard request with the model
+    the classifier already rejected."""
+
+    @pytest.mark.asyncio
+    async def test_dead_pool_member_falls_to_a_peer_in_the_same_tier(self):
+        router = _ladder_router(live={"simple-b", "medium-model"})
+        for _ in range(8):
+            response = await _route(router, "What is 2+2?")
+            assert response.model == "simple-b"
+            assert response.routing_decision["tier"] == "SIMPLE"
+            assert "tier_fallback_from" not in response.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_whole_tier_dead_bumps_up_one_tier_and_records_it(self):
+        router = _ladder_router(live={"medium-model", "complex-model"})
+        response = await _route(router, "What is 2+2?")
+        assert response.model == "medium-model"
+        decision = response.routing_decision
+        assert decision["tier"] == "MEDIUM"
+        assert decision["tier_fallback_from"] == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_climbs_past_several_dead_tiers(self):
+        router = _ladder_router(live={"reasoning-model"})
+        response = await _route(router, "What is 2+2?")
+        assert response.model == "reasoning-model"
+        assert response.routing_decision["tier"] == "REASONING"
+        assert response.routing_decision["tier_fallback_from"] == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_never_falls_to_a_cheaper_tier(self):
+        """REASONING is dead with nothing above it, and the cheaper tiers are alive. They
+        are still not used: they are what the classifier already ruled out. With no
+        default_model to fall to, the request stays on its own tier and lets the router
+        report the real failure, since a cooldown may have expired since the health read."""
+        router = _ladder_router(live={"simple-a", "medium-model", "complex-model"})
+        response = await _route(router, "Think step by step and reason through this carefully")
+        assert response.model == "reasoning-model"
+        assert response.routing_decision["tier"] == "REASONING"
+        assert "tier_fallback_from" not in response.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_default_model_is_the_last_resort_not_the_first(self):
+        router = _ladder_router(live={"complex-model"}, default_model="fallback-model")
+        response = await _route(router, "What is 2+2?")
+        assert response.model == "complex-model"
+        assert response.routing_decision["tier_fallback_from"] == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_default_model_serves_when_the_ladder_is_exhausted_and_says_so(self):
+        """The routed model alone cannot be told apart from an ordinary pick out of the
+        classified tier, so the record has to name default_model as what answered."""
+        router = _ladder_router(live=set(), default_model="fallback-model")
+        response = await _route(router, "What is 2+2?")
+        assert response.model == "fallback-model"
+        decision = response.routing_decision
+        assert decision["resolved_by"] == "default_model"
+        assert decision["tier"] == "SIMPLE"
+        assert "tier_fallback_from" not in decision
+
+    @pytest.mark.asyncio
+    async def test_serving_an_unconfirmed_tier_is_recorded_as_best_effort(self):
+        """Nothing reported a live deployment and there is no default_model, so the tier is
+        served anyway rather than failing a request a stale cooldown may not block. That is
+        a different fact from an ordinary pick and the record keeps them apart."""
+        router = _ladder_router(live=set())
+        response = await _route(router, "What is 2+2?")
+        assert response.model in {"simple-a", "simple-b"}
+        decision = response.routing_decision
+        assert decision["resolved_by"] == "best_effort"
+        assert decision["tier"] == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_pick_records_no_resolution_fact(self):
+        router = _ladder_router(live={"simple-a", "simple-b"})
+        decision = (await _route(router, "What is 2+2?")).routing_decision
+        assert "resolved_by" not in decision
+        assert "tier_fallback_from" not in decision
+
+    @pytest.mark.asyncio
+    async def test_a_best_effort_climb_records_both_facts(self):
+        """The two facts are independent: an exhausted ladder can both climb to a
+        configured tier and be serving something nothing confirmed was up."""
+        router = ComplexityRouter(
+            model_name="test-ladder-router",
+            litellm_router_instance=StubRouter(live=set()),
+            complexity_router_config={
+                "tiers": {"MEDIUM": "medium-model", "COMPLEX": "complex-model"},
+                "session_affinity": False,
+            },
+        )
+        decision = (await _route(router, "What is 2+2?")).routing_decision
+        assert decision["tier"] == "MEDIUM"
+        assert decision["tier_fallback_from"] == "SIMPLE"
+        assert decision["resolved_by"] == "best_effort"
+
+    @pytest.mark.asyncio
+    async def test_a_healthy_tier_is_inspected_and_no_higher_tier_is(self):
+        """The ladder stops at the first servable tier instead of pricing out every tier on
+        every request."""
+        router = _ladder_router(live={"simple-a", "simple-b"})
+        stub = router.litellm_router_instance
+        await _route(router, "What is 2+2?")
+        assert set(stub.listed) <= {"simple-a", "simple-b"}
+
+    @pytest.mark.asyncio
+    async def test_resolution_reads_the_cooldown_view_once_per_request(self):
+        """The cooldown set is Redis-backed in production. Asking per pool member, or per
+        tier the ladder walks, would put N round trips in front of every completion, so it
+        is read once and the rest of resolution is in-process."""
+        router = _ladder_router(live={"reasoning-model"})
+        stub = router.litellm_router_instance
+        await _route(router, "What is 2+2?")
+        assert stub.cooldown_cache.reads == 1
+        # ...even though this request walked all four tiers to find a live model
+        assert stub.listed == ["simple-a", "simple-b", "medium-model", "complex-model", "reasoning-model"]
+
+    @pytest.mark.asyncio
+    async def test_an_unregistered_model_is_not_servable(self):
+        """A tier naming a model group the router has never heard of cannot answer, and is
+        passed over exactly like one whose deployments are all cooling."""
+        router = ComplexityRouter(
+            model_name="test-ladder-router",
+            litellm_router_instance=StubRouter(live={"medium-model"}, registered={"medium-model"}),
+            complexity_router_config={"tiers": dict(LADDER_TIERS), "session_affinity": False},
+        )
+        response = await _route(router, "What is 2+2?")
+        assert response.model == "medium-model"
+        assert response.routing_decision["tier_fallback_from"] == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_a_deployment_with_no_id_counts_as_live(self):
+        """Cooldowns are keyed by deployment id, so one without an id can never be known to
+        be cooling. It counts as live, matching the rule everywhere else that an absent
+        health signal means live; excluding it would let missing metadata empty a tier and
+        push traffic to a pricier one."""
+
+        class IdlessRouter(StubRouter):
+            def get_model_list(self, model_name=None, team_id=None):
+                self.listed.append(model_name)
+                return [{"model_info": {}}] if model_name in self.registered else []
+
+        router = ComplexityRouter(
+            model_name="test-ladder-router",
+            litellm_router_instance=IdlessRouter(live=set()),
+            complexity_router_config={"tiers": dict(LADDER_TIERS), "session_affinity": False},
+        )
+        response = await _route(router, "What is 2+2?")
+        assert response.model in {"simple-a", "simple-b"}
+        assert "tier_fallback_from" not in response.routing_decision
+        assert "resolved_by" not in response.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_health_lookup_failure_keeps_the_classified_tier(self):
+        """A health view that cannot be read must not empty every tier and push traffic up
+        the ladder; it degrades to serving the configured pool."""
+
+        class BrokenCooldownCache(StubCooldownCache):
+            async def async_get_active_cooldowns(self, model_ids, parent_otel_span=None):
+                raise RuntimeError("cooldown cache unavailable")
+
+        class BrokenRouter(StubRouter):
+            def __init__(self, live: set[str]):
+                super().__init__(live)
+                self.cooldown_cache = BrokenCooldownCache(frozenset())
+
+        router = ComplexityRouter(
+            model_name="test-ladder-router",
+            litellm_router_instance=BrokenRouter(live=set()),
+            complexity_router_config={"tiers": dict(LADDER_TIERS), "session_affinity": False},
+        )
+        response = await _route(router, "What is 2+2?")
+        assert response.model in {"simple-a", "simple-b"}
+        assert "tier_fallback_from" not in response.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_an_explicitly_empty_pool_still_raises(self):
+        """Distinct from an unservable tier: an empty pool is a config error, and climbing
+        past it would hide the misconfiguration behind a more expensive model."""
+        router = ComplexityRouter(
+            model_name="test-ladder-router",
+            litellm_router_instance=StubRouter(live={"medium-model"}),
+            complexity_router_config={
+                "tiers": {"SIMPLE": [], "MEDIUM": "medium-model"},
+                "session_affinity": False,
+            },
+        )
+        with pytest.raises(ValueError, match="Empty model pool for tier SIMPLE"):
+            await _route(router, "What is 2+2?")
+
+    @pytest.mark.asyncio
+    async def test_plugins_run_against_the_tier_that_actually_serves(self):
+        """The ladder climbs before plugins run, so a plugin still vets whatever is served
+        rather than being handed a tier that cannot answer."""
+        seen: list[list[str]] = []
+
+        class RecordingPlugin:
+            async def run(self, context):
+                seen.append(list(context.candidate_models))
+                return context
+
+        router = _ladder_router(live={"complex-model"}, plugins=[RecordingPlugin()])
+        response = await _route(router, "What is 2+2?")
+        assert response.model == "complex-model"
+        assert seen == [["complex-model"]]
+
+    @pytest.mark.asyncio
+    async def test_default_model_does_not_rescue_an_exhausted_ladder_under_plugins(self):
+        """default_model is not vetted by the plugins, so it cannot serve when they are
+        configured. With nothing live on the ladder the request fails rather than routing
+        around the policy, and the error says which condition it hit."""
+
+        class NoOpPlugin:
+            async def run(self, context):
+                return context
+
+        router = _ladder_router(live=set(), default_model="fallback-model", plugins=[NoOpPlugin()])
+        with pytest.raises(ValueError, match="with routing plugins configured"):
+            await _route(router, "What is 2+2?")
+
+    @pytest.mark.asyncio
+    async def test_a_plugin_narrowing_to_zero_still_fails_closed(self):
+        """Unchanged policy: a plugin refusing every candidate is a decision, so the ladder
+        must not climb past it and serve what the plugin just refused."""
+
+        class DenyAllPlugin:
+            async def run(self, context):
+                context.candidate_models = []
+                return context
+
+        router = _ladder_router(live={"simple-a", "medium-model"}, plugins=[DenyAllPlugin()])
+        with pytest.raises(ValueError, match="No candidate models left for tier SIMPLE"):
+            await _route(router, "What is 2+2?")
