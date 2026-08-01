@@ -47,15 +47,42 @@ def _input_and_cache_read_cost(model: str | None, custom_llm_provider: str | Non
     return input_cost, float(cache_read_cost)
 
 
-def _cost_of_usage(model: str, custom_llm_provider: str | None, usage: Usage) -> float | None:
+class _ModelIdentity(NamedTuple):
+    model: str
+    provider: str
+
+
+def _resolve_model(model: str | None, custom_llm_provider: str | None) -> _ModelIdentity | None:
+    """Canonical ``(model, provider)``, or ``None`` when the model cannot be resolved.
+
+    The two sides of the comparison arrive spelled differently: the spend log records a
+    normalized model name alongside its provider, while the baseline arrives as the
+    operator wrote it in config, with the provider prefixed, implied, or absent. Raw
+    string equality therefore reads `anthropic/claude-opus-5` as a switch away from
+    `claude-opus-5`, and pricing a bare name with no provider can resolve it to a
+    different vendor's rates than the deployment it names.
+    """
+    if not model:
+        return None
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception as e:  # noqa: BLE001  # get_llm_provider raises for unroutable names; degrade to zero savings
+        verbose_proxy_logger.debug(
+            "savings: cannot resolve provider for model=%s custom_llm_provider=%s (%s)", model, custom_llm_provider, e
+        )
+        return None
+    return _ModelIdentity(model=resolved_model, provider=provider)
+
+
+def _cost_of_usage(model: _ModelIdentity, usage: Usage) -> float | None:
     """What ``usage`` costs on ``model``, or ``None`` when the model has no pricing."""
     try:
         prompt_cost, completion_cost = generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider=custom_llm_provider or ""
+            model=model.model, usage=usage, custom_llm_provider=model.provider
         )
     except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; degrade to zero savings
         verbose_proxy_logger.debug(
-            "savings: cannot price usage for provider=%s model=%s (%s)", custom_llm_provider, model, e
+            "savings: cannot price usage for provider=%s model=%s (%s)", model.provider, model.model, e
         )
         return None
     return prompt_cost + completion_cost
@@ -107,12 +134,15 @@ def compute_autorouter_savings(
     Signed on purpose. Switching models leaves the new one with a cold cache, so the
     request pays a cache-creation charge that staying on one model would not have
     incurred; when that charge outweighs the cheaper rates, routing lost money and the
-    dashboard has to be able to say so. Zero when the model is unchanged or unpriced.
+    dashboard has to be able to say so. Zero when both sides resolve to the same
+    deployment, or when either cannot be resolved or priced.
     """
-    if not baseline_model or not selected_model or baseline_model == selected_model:
+    baseline = _resolve_model(baseline_model, baseline_provider)
+    selected = _resolve_model(selected_model, selected_provider)
+    if baseline is None or selected is None or baseline == selected:
         return 0.0
-    baseline_cost = _cost_of_usage(baseline_model, baseline_provider, _baseline_usage(usage))
-    selected_cost = _cost_of_usage(selected_model, selected_provider, usage)
+    baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage))
+    selected_cost = _cost_of_usage(selected, usage)
     if baseline_cost is None or selected_cost is None:
         return 0.0
     return baseline_cost - selected_cost

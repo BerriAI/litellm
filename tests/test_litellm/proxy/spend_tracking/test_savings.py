@@ -264,3 +264,45 @@ def test_model_without_cache_read_pricing_yields_no_caching_savings():
         cache_read_input_tokens=5000,
     )
     assert result.prompt_caching == 0.0
+
+
+def test_the_same_deployment_spelled_two_ways_is_not_a_switch():
+    """The spend log records a normalized model name while the baseline arrives as the
+    operator wrote it in config. Comparing the raw strings makes a request that never
+    changed model look like a switch, and prices one deployment against itself."""
+    # Must be a cached request: the baseline arm is priced against a warm cache and the
+    # selected arm against what was actually paid, so treating one deployment as two
+    # charges it a cold-cache write it never took, inventing a loss on a request that
+    # never changed model. An uncached request prices identically either way and would
+    # make this assertion vacuous.
+    usage = _usage(fresh=3, cached=500, written=12304, out=500)
+    assert _savings("anthropic/claude-opus-5", "claude-opus-5", usage) == 0.0
+    assert _savings("claude-opus-5", "anthropic/claude-opus-5", usage) == 0.0
+
+
+def test_baseline_is_priced_under_its_own_provider():
+    """Two providers can serve the same bare model name at different rates, so dropping
+    the provider prices the baseline against a vendor the operator never named. Here it
+    decides whether routing reads as a saving or a loss."""
+    usage = Usage(prompt_tokens=100_000, completion_tokens=10_000, total_tokens=110_000)
+    azure = compute_autorouter_savings(
+        baseline_model="azure_ai/deepseek-r1",
+        selected_model="claude-haiku-4-5",
+        baseline_provider=None,
+        selected_provider="anthropic",
+        usage=usage,
+    )
+    deepseek = compute_autorouter_savings(
+        baseline_model="deepseek/deepseek-r1",
+        selected_model="claude-haiku-4-5",
+        baseline_provider=None,
+        selected_provider="anthropic",
+        usage=usage,
+    )
+    assert azure != pytest.approx(deepseek)
+    assert azure > 0 > deepseek
+
+
+def test_unresolvable_baseline_fails_open_to_zero():
+    usage = _usage(fresh=2000, cached=0, written=0, out=500)
+    assert _savings("no-such-provider-xyz/no-such-model", "claude-haiku-4-5", usage) == 0.0

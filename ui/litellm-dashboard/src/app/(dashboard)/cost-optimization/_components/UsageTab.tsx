@@ -239,12 +239,14 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                 showDots={overTime.length <= MAX_POINTS_WITH_DOTS}
               />
             ) : (
+              // Not stacked: a driver can be negative once a model switch is charged
+              // for its cold cache, and stacking would draw that segment below the axis
+              // while the remaining bar still read as the day's total
               <BarChart
                 data={overTime}
                 index="date"
                 categories={SAVINGS_SERIES}
                 colors={SAVINGS_COLORS}
-                stack
                 valueFormatter={usd}
                 showLegend={false}
               />

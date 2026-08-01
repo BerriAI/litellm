@@ -29,12 +29,14 @@ vi.mock("@/components/shared/charts", () => ({
     colors,
     showLegend,
     maxBarSize,
+    stack,
   }: {
     data: unknown;
     categories: string[];
     colors?: readonly string[];
     showLegend?: boolean;
     maxBarSize?: number;
+    stack?: boolean;
   }) => (
     <div
       data-testid="bar-chart"
@@ -42,6 +44,7 @@ vi.mock("@/components/shared/charts", () => ({
       data-colors={(colors ?? []).join(",")}
       data-show-legend={String(showLegend ?? true)}
       data-max-bar-size={maxBarSize === undefined ? "" : String(maxBarSize)}
+      data-stack={String(stack ?? false)}
       data-series={JSON.stringify(data)}
     />
   ),
@@ -226,6 +229,24 @@ describe("UsageTab", () => {
 
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices).toEqual([{ driver: "Compression", usd: expect.closeTo(0.04, 5) }]);
+  });
+
+  it("does not stack the per-day drivers, because one of them can be negative", async () => {
+    // Stacking sums the series into one bar. Auto-router savings go negative when a
+    // model switch pays for a cold cache, and that segment would be drawn below the
+    // axis while the rest of the bar still read as the day's total.
+    const { getByRole, getByTestId } = renderWith([
+      day("2026-07-12", {
+        compression_savings_spend: 0.1,
+        prompt_caching_savings_spend: 0.02,
+        autorouter_savings_spend: -0.05,
+      }),
+    ]);
+
+    await userEvent.click(getByRole("tab", { name: "Per day" }));
+    const bars = getByTestId("bar-chart");
+    expect(bars.getAttribute("data-stack")).toBe("false");
+    expect(readSeries(bars)[0]).toMatchObject({ "Auto-router": -0.05 });
   });
 
   it("subtracts a losing auto-router route from the total and keeps it out of the donut", () => {
