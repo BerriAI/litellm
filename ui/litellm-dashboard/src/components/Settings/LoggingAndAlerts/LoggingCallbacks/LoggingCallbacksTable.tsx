@@ -52,9 +52,9 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   readOnly = false,
 }) => {
   const columns = useMemo(() => {
-    const deps = { availableCallbacks, onTest, onEdit, onDelete, onEditAccess };
-    const all = getLoggingCallbacksTableColumns(deps);
-    return readOnly ? all.filter((column) => column.id !== "actions") : all;
+    // A read-only admin keeps the actions column so Test stays reachable -- that role is
+    // backend-authorized for /health/services. Dropping the column removed it entirely.
+    return getLoggingCallbacksTableColumns({ availableCallbacks, onTest, onEdit, onDelete, onEditAccess, readOnly });
   }, [availableCallbacks, onTest, onEdit, onDelete, onEditAccess, readOnly]);
 
   return (

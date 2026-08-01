@@ -4246,6 +4246,17 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Op
         config = preset_fn(allow_missing_credentials=has_admin_dest)
     except Exception:
         return None
+    if not config.exporters and not has_admin_dest:
+        # An operator asked for this backend and nothing resolved to send spans to, so it
+        # would export nothing at all. v2 no longer degrades to a console exporter (that
+        # printed every span, prompt content included, synchronously on the request path),
+        # so without this the deployment is silently dark.
+        verbose_logger.warning(
+            "OTel v2: '%s' is enabled but no exporter is configured, so no spans will be "
+            "exported. Set OTEL_EXPORTER/OTEL_ENDPOINT, this backend's credentials, or "
+            "register a logging destination for it.",
+            callback_name,
+        )
     v2_logger = OpenTelemetryV2(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger

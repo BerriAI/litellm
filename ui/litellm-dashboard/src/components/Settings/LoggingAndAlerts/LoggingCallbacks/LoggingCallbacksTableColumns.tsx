@@ -74,13 +74,16 @@ function ScopeCell({ callback }: { callback: AlertingObject }) {
 
 interface CallbackRowActionsProps {
   callback: CallbackRow;
+  // A read-only admin keeps Test, which the backend authorizes for that role on
+  // /health/services, and loses everything that mutates.
+  readOnly?: boolean;
   onTest: (callback: AlertingObject) => void | Promise<void>;
   onEdit: (callback: AlertingObject) => void;
   onDelete: (callback: AlertingObject) => void;
   onEditAccess: (callback: AlertingObject) => void;
 }
 
-function CallbackRowActions({ callback, onTest, onEdit, onDelete, onEditAccess }: CallbackRowActionsProps) {
+function CallbackRowActions({ callback, onTest, onEdit, onDelete, onEditAccess, readOnly }: CallbackRowActionsProps) {
   const destination = isDestination(callback);
   return (
     <DropdownMenu>
@@ -93,31 +96,39 @@ function CallbackRowActions({ callback, onTest, onEdit, onDelete, onEditAccess }
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
         {destination ? (
-          <DropdownMenuItem data-testid="destination-action-edit-access" onClick={() => onEditAccess(callback)}>
-            <Pencil />
-            Edit scope
-          </DropdownMenuItem>
+          !readOnly && (
+            <DropdownMenuItem data-testid="destination-action-edit-access" onClick={() => onEditAccess(callback)}>
+              <Pencil />
+              Edit scope
+            </DropdownMenuItem>
+          )
         ) : (
           <>
             <DropdownMenuItem data-testid="callback-action-test" onClick={() => void onTest(callback)}>
               <Play />
               Test
             </DropdownMenuItem>
-            <DropdownMenuItem data-testid="callback-action-edit" onClick={() => onEdit(callback)}>
-              <Pencil />
-              Edit
+            {!readOnly && (
+              <DropdownMenuItem data-testid="callback-action-edit" onClick={() => onEdit(callback)}>
+                <Pencil />
+                Edit
+              </DropdownMenuItem>
+            )}
+          </>
+        )}
+        {!readOnly && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              data-testid={destination ? "destination-action-delete" : "callback-action-delete"}
+              onClick={() => onDelete(callback)}
+            >
+              <Trash2 />
+              Delete
             </DropdownMenuItem>
           </>
         )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          variant="destructive"
-          data-testid={destination ? "destination-action-delete" : "callback-action-delete"}
-          onClick={() => onDelete(callback)}
-        >
-          <Trash2 />
-          Delete
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -129,6 +140,7 @@ interface LoggingCallbacksTableColumnsDeps {
   onEdit: (callback: AlertingObject) => void;
   onDelete: (callback: AlertingObject) => void;
   onEditAccess: (callback: AlertingObject) => void;
+  readOnly?: boolean;
 }
 
 export const getLoggingCallbacksTableColumns = ({
@@ -137,6 +149,7 @@ export const getLoggingCallbacksTableColumns = ({
   onEdit,
   onDelete,
   onEditAccess,
+  readOnly,
 }: LoggingCallbacksTableColumnsDeps): ColumnDef<CallbackRow>[] => [
   {
     id: "name",
@@ -201,6 +214,7 @@ export const getLoggingCallbacksTableColumns = ({
           onEdit={onEdit}
           onDelete={onDelete}
           onEditAccess={onEditAccess}
+          readOnly={readOnly}
         />
       </div>
     ),

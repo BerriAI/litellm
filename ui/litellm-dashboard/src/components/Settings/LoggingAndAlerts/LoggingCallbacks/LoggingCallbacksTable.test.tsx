@@ -203,3 +203,32 @@ describe("LoggingCallbacksTable", () => {
     expect(within(row as HTMLElement).getByText("—")).toBeInTheDocument();
   });
 });
+
+describe("read-only admin actions", () => {
+  // Regression: readOnly dropped the whole actions column, so an Admin Viewer lost Test
+  // on pre-existing callback rows even though that role is backend-authorized for
+  // /health/services. Only the mutating actions belong behind readOnly.
+  const row = { name: "langfuse", variables: { ...baseVars }, type: "success" as const };
+
+  it("keeps Test and hides the mutating actions for a read-only admin", async () => {
+    const user = userEvent.setup();
+    render(<LoggingCallbacksTable callbacks={[row]} readOnly />);
+
+    await user.click(screen.getByTestId("callback-actions-langfuse-success"));
+
+    expect(await screen.findByTestId("callback-action-test")).toBeInTheDocument();
+    expect(screen.queryByTestId("callback-action-edit")).toBeNull();
+    expect(screen.queryByTestId("callback-action-delete")).toBeNull();
+  });
+
+  it("keeps every action for a full admin", async () => {
+    const user = userEvent.setup();
+    render(<LoggingCallbacksTable callbacks={[row]} />);
+
+    await user.click(screen.getByTestId("callback-actions-langfuse-success"));
+
+    expect(await screen.findByTestId("callback-action-test")).toBeInTheDocument();
+    expect(screen.getByTestId("callback-action-edit")).toBeInTheDocument();
+    expect(screen.getByTestId("callback-action-delete")).toBeInTheDocument();
+  });
+});

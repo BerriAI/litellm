@@ -4325,3 +4325,76 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_zero_config_v2_warns_instead_of_going_silently_dark(monkeypatch, caplog):
+    """Regression: v2 stopped folding a console exporter into the nothing-configured case,
+    which is right (it printed every span, prompt content included, on the request path)
+    but left an operator with no exporter and no signal. Base printed to stdout; head must
+    at least say so, or the deployment is silently dark.
+    """
+    import logging
+
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+    # every alias the config reads, not just the short names -- the OTEL_EXPORTER_OTLP_*
+    # spellings are equally load-bearing and leak in from neighbouring suites
+    for var in (
+        "OTEL_EXPORTER",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_HEADERS",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    monkeypatch.setattr(litellm, "credential_list", [])
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        logger = _maybe_construct_otel_v2("generic", [])
+    is_otel_v2_enabled.cache_clear()
+
+    assert logger is not None
+    assert logger.config.exporters == []
+    assert any("no exporter is configured" in record.getMessage() for record in caplog.records)
+
+
+def test_destination_backed_backend_does_not_warn_about_missing_exporters(monkeypatch, caplog):
+    """The counterpart: a backend built only because an admin registered a destination is
+    meant to have no global exporter -- it exports per-request. Warning there would fire on
+    every correctly-configured destination deployment."""
+    import logging
+    from types import SimpleNamespace
+
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+    for var in ("WANDB_API_KEY", "WANDB_PROJECT_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            SimpleNamespace(
+                credential_name="wb",
+                credential_values={"wandb_api_key": "k"},
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "weave_otel",
+                    "access": {"teams": ["team-a"]},
+                },
+            )
+        ],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        logger = _maybe_construct_otel_v2("weave_otel", [])
+    is_otel_v2_enabled.cache_clear()
+
+    assert logger is not None
+    assert not any("no exporter is configured" in record.getMessage() for record in caplog.records)
