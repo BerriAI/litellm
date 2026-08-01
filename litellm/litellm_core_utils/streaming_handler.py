@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import concurrent.futures
 import datetime
 import json
 import logging
@@ -63,18 +64,101 @@ _SYNC_ITER_EXHAUSTED = object()
 _GCHUNK_FIELDS: frozenset = frozenset(GChunk.__annotations__)
 
 
-def _next_sync_or_exhausted(it: Any) -> Any:
-    """
-    Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
+class _SyncToAsyncQueueIterator:
+    __slots__ = ("_sync_iter", "_queue", "_loop", "_exhausted", "_closed", "_done", "_producer_future")
 
-    asyncio.to_thread re-raises thread exceptions inside a coroutine, where PEP 479
-    converts StopIteration to RuntimeError before any except clause can catch it.
-    Returning a sentinel instead keeps StopIteration out of the coroutine boundary.
-    """
-    try:
-        return next(it)
-    except StopIteration:
-        return _SYNC_ITER_EXHAUSTED
+    def __init__(self, sync_iter: Any) -> None:
+        from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
+        from litellm.litellm_core_utils.sync_stream_producer_executor import (
+            sync_stream_producer_executor,
+        )
+
+        self._sync_iter = sync_iter
+        self._loop = asyncio.get_running_loop()
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
+        self._exhausted = False
+        self._closed = threading.Event()
+        self._done = threading.Event()
+        self._producer_future = sync_stream_producer_executor.submit(self._producer)
+
+    def _producer(self) -> None:
+        def _put(item: Any) -> None:
+            try:
+                future = asyncio.run_coroutine_threadsafe(self._queue.put(item), self._loop)
+                future.result()
+            except RuntimeError:
+                pass
+            except concurrent.futures.CancelledError:
+                pass
+
+        if self._closed.is_set():
+            self._done.set()
+            return
+
+        try:
+            for item in self._sync_iter:
+                if self._closed.is_set():
+                    break
+                _put(item)
+        except Exception as exc:  # noqa: BLE001 - forwarded to the async consumer, not swallowed
+            if not self._closed.is_set():
+                _put(exc)
+        finally:
+            if self._closed.is_set() and hasattr(self._sync_iter, "close"):
+                try:
+                    self._sync_iter.close()
+                except Exception:  # noqa: BLE001 - best-effort cleanup must not mask the real exhaustion signal
+                    pass
+            _put(_SYNC_ITER_EXHAUSTED)
+            self._done.set()
+
+    async def __anext__(self) -> Any:
+        if self._exhausted:
+            raise StopAsyncIteration
+        item = await self._queue.get()
+        if item is _SYNC_ITER_EXHAUSTED:
+            self._exhausted = True
+            raise StopAsyncIteration
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    def _drain_queue_nowait(self) -> None:
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    async def aclose(self) -> None:
+        self._exhausted = True
+        self._closed.set()
+
+        if self._producer_future.cancel():
+            # The producer task never ran, so it never touched the sync
+            # iterator - safe to close it directly here, no other thread
+            # is executing it.
+            if hasattr(self._sync_iter, "close"):
+                try:
+                    self._sync_iter.close()
+                except Exception:  # noqa: BLE001 - best-effort cleanup, aclose() must not raise
+                    pass
+            self._done.set()
+
+        async def _drain_until_done() -> None:
+            while True:
+                await self._queue.get()
+
+        drain_task = asyncio.ensure_future(_drain_until_done())
+        try:
+            await asyncio.to_thread(self._done.wait)
+        finally:
+            drain_task.cancel()
+            try:
+                await drain_task
+            except asyncio.CancelledError:
+                pass
+        self._drain_queue_nowait()
 
 
 def is_async_iterable(obj: Any) -> bool:
@@ -1982,9 +2066,9 @@ class CustomStreamWrapper:
                     if isinstance(self.completion_stream, str) or isinstance(self.completion_stream, bytes):
                         chunk = self.completion_stream
                     else:
-                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
-                        if chunk is _SYNC_ITER_EXHAUSTED:
-                            raise StopAsyncIteration
+                        if not isinstance(self.completion_stream, _SyncToAsyncQueueIterator):
+                            self.completion_stream = _SyncToAsyncQueueIterator(self.completion_stream)
+                        chunk = await self.completion_stream.__anext__()
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:

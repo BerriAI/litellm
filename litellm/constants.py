@@ -263,6 +263,10 @@ REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
+# Bounds the dedicated thread pool for bridging synchronous provider streams (e.g. boto3 Bedrock)
+# into async consumers, separate from the general-purpose executor so a burst of concurrent
+# streams cannot starve unrelated background work.
+MAX_SYNC_STREAM_PRODUCER_THREADS = int(os.getenv("MAX_SYNC_STREAM_PRODUCER_THREADS", 100))
 TOOL_POLICY_CACHE_TTL_SECONDS = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECONDS", 60))
 GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS = int(
     os.getenv("GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS", 24 * 60 * 60)
