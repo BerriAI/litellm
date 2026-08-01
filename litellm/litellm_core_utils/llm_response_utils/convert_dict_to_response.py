@@ -3,6 +3,7 @@ import json
 import re
 import time
 import traceback
+from collections.abc import Sequence
 from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union, cast
 
 import litellm
@@ -371,7 +372,9 @@ from collections import defaultdict
 
 
 def _handle_invalid_parallel_tool_calls(
-    tool_calls: List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]],
+    tool_calls: List[
+        Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]
+    ],  # mutable-ok: patched in place via slice assignment
 ):
     """
     Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653
@@ -532,7 +535,7 @@ class LiteLLMResponseObjectHandler:
 
 def _should_convert_tool_call_to_json_mode(
     tool_calls: (
-        list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | list[DatabricksTool] | None
+        Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | Sequence[DatabricksTool] | None
     ) = None,
     convert_tool_call_to_json_mode: Optional[bool] = None,
 ) -> bool:
