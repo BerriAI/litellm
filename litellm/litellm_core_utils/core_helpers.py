@@ -2,7 +2,7 @@
 ## Helper utilities
 import copy
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 import httpx
 
@@ -19,7 +19,7 @@ else:
     Span = Any
 
 
-def safe_divide_seconds(seconds: float, denominator: float, default: Optional[float] = None) -> Optional[float]:
+def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
     """
     Safely divide seconds by denominator, handling zero division.
 
@@ -38,10 +38,10 @@ def safe_divide_seconds(seconds: float, denominator: float, default: Optional[fl
 
 
 def safe_divide(
-    numerator: Union[int, float],
-    denominator: Union[int, float],
-    default: Union[int, float] = 0,
-) -> Union[int, float]:
+    numerator: float,
+    denominator: float,
+    default: float = 0,
+) -> int | float:
     """
     Safely divide two numbers, returning a default value if denominator is zero.
 
@@ -143,7 +143,7 @@ def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
 
 
 def remove_index_from_tool_calls(
-    messages: Optional[List[AllMessageValues]],
+    messages: list[AllMessageValues] | None,
 ):
     if messages is not None:
         for message in messages:
@@ -153,10 +153,8 @@ def remove_index_from_tool_calls(
                     if isinstance(tool_call, dict) and "index" in tool_call:  # Type guard to ensure it's a dict
                         tool_call.pop("index", None)
 
-    return
 
-
-def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) -> None:
+def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> None:
     """Remove items from a list in-place by index"""
     if items is None:
         return
@@ -237,7 +235,7 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
 
 def reconstruct_model_name(
     model_name: str,
-    custom_llm_provider: Optional[str],
+    custom_llm_provider: str | None,
     metadata: dict,
 ) -> str:
     """Reconstruct full model name with provider prefix for logging."""
@@ -256,8 +254,8 @@ def reconstruct_model_name(
 
 # Helper functions used for OTEL logging
 def _get_parent_otel_span_from_kwargs(
-    kwargs: Optional[dict] = None,
-) -> Union[Span, None]:
+    kwargs: dict | None = None,
+) -> Span | None:
     try:
         if kwargs is None:
             return None
@@ -280,7 +278,7 @@ def _get_parent_otel_span_from_kwargs(
 
 
 def process_response_headers(
-    response_headers: Union[httpx.Headers, dict],
+    response_headers: httpx.Headers | dict,
     preserve_litellm_internal_headers: bool = False,
 ) -> dict:
     """
@@ -357,7 +355,7 @@ def safe_deep_copy(data):
     if litellm.safe_memory_mode is True:
         return data
 
-    litellm_parent_otel_span: Optional[Any] = None
+    litellm_parent_otel_span: Any | None = None
     # Step 1: Remove the litellm_parent_otel_span
     litellm_parent_otel_span = None
     if isinstance(data, dict):
@@ -455,7 +453,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return data
 
 
-def filter_internal_params(data: dict, additional_internal_params: Optional[set] = None) -> dict:
+def filter_internal_params(data: dict, additional_internal_params: set | None = None) -> dict:
     """
     Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
 
@@ -488,8 +486,8 @@ def filter_internal_params(data: dict, additional_internal_params: Optional[set]
 
 
 def redact_nested_match_and_regex_keys(
-    payload: Union[dict, List[Any], str, None],
-) -> Union[dict, List[Any], str, None]:
+    payload: dict | list[Any] | str | None,
+) -> dict | list[Any] | str | None:
     """
     Deep-copy `payload` and replace every `match` / `regex` string field with
     "[REDACTED]" anywhere in nested dict/list structures.
@@ -499,14 +497,14 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Union[dict, List[Any], str, None] = copy.deepcopy(payload)
+        redacted: dict | list[Any] | str | None = copy.deepcopy(payload)
     except Exception:
         return payload
 
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
         seen: set = set()
-        stack: List[Any] = [redacted]
+        stack: list[Any] = [redacted]
         while stack:
             node = stack.pop()
             node_id = id(node)

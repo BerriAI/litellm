@@ -3,7 +3,7 @@ import json
 import os
 import time
 from collections.abc import Coroutine, Mapping
-from typing import Any, Optional, Tuple, Union
+from typing import Any
 from urllib.parse import unquote
 
 import httpx
@@ -76,8 +76,8 @@ class VertexAIFilesHandler(GCSBucketBase):
         self,
         file_id: str,
         configured_bucket_name: str,
-        litellm_params: Optional[dict] = None,
-    ) -> Tuple[str, str]:
+        litellm_params: dict | None = None,
+    ) -> tuple[str, str]:
         """
         Validate and extract bucket name and object path from file_id.
 
@@ -99,12 +99,12 @@ class VertexAIFilesHandler(GCSBucketBase):
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        litellm_params: Optional[dict] = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        litellm_params: dict | None = None,
     ) -> HttpxBinaryResponseContent:
         """
         Download file content from GCS bucket for VertexAI files.
@@ -186,14 +186,14 @@ class VertexAIFilesHandler(GCSBucketBase):
         self,
         _is_async: bool,
         file_content_request: FileContentRequest,
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        litellm_params: Optional[dict] = None,
-    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+        api_base: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        litellm_params: dict | None = None,
+    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
         """
         Download file content from GCS bucket for VertexAI files.
         Supports both sync and async operations.

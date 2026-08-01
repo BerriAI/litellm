@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Final, Protocol, Union, cast
+from typing import Final, Protocol, cast
 
 import httpx
 
@@ -106,7 +106,7 @@ def transcription(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_transcription = load_rust_transcription()
     if rust_transcription is None:
@@ -132,7 +132,7 @@ async def atranscription(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_atranscription = load_rust_atranscription()
     if rust_atranscription is None:

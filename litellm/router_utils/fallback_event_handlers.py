@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -44,7 +44,7 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
-def get_fallback_model_group(fallbacks: List[Any], model_group: str) -> Tuple[Optional[List[str]], Optional[int]]:
+def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
     """
     Returns:
     - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
@@ -55,9 +55,9 @@ def get_fallback_model_group(fallbacks: List[Any], model_group: str) -> Tuple[Op
     - stripped model group match
     - generic fallback
     """
-    generic_fallback_idx: Optional[int] = None
-    stripped_model_fallback: Optional[List[str]] = None
-    fallback_model_group: Optional[List[str]] = None
+    generic_fallback_idx: int | None = None
+    stripped_model_fallback: list[str] | None = None
+    fallback_model_group: list[str] | None = None
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
@@ -83,9 +83,9 @@ def get_fallback_model_group(fallbacks: List[Any], model_group: str) -> Tuple[Op
 
 
 async def run_async_fallback(
-    *args: Tuple[Any],
+    *args: tuple[Any],
     litellm_router: LitellmRouter,
-    fallback_model_group: List[str],
+    fallback_model_group: list[str],
     original_model_group: str,
     original_exception: Exception,
     max_fallbacks: int,
@@ -190,7 +190,7 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Error in log_success_fallback_event: {str(e)}")
+            verbose_router_logger.error(f"Error in log_success_fallback_event: {e!s}")
 
 
 async def log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
@@ -218,10 +218,10 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Error in log_failure_fallback_event: {str(e)}")
+            verbose_router_logger.error(f"Error in log_failure_fallback_event: {e!s}")
 
 
-def _check_non_standard_fallback_format(fallbacks: Optional[List[Any]]) -> bool:
+def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
     """
     Checks if the fallbacks list is a list of strings or a list of dictionaries.
 
@@ -247,5 +247,5 @@ def _check_non_standard_fallback_format(fallbacks: Optional[List[Any]]) -> bool:
     return False
 
 
-def run_non_standard_fallback_format(fallbacks: Union[List[str], List[Dict[str, Any]]], model_group: str):
+def run_non_standard_fallback_format(fallbacks: list[str] | list[dict[str, Any]], model_group: str):
     pass

@@ -5,7 +5,7 @@ Provides a class-based interface for A2A agent invocation.
 """
 
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING
 
 from litellm.types.agents import LiteLLMSendMessageResponse
 
@@ -51,7 +51,7 @@ class A2AClient:
         self,
         base_url: str,
         timeout: float = 60.0,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: dict[str, str] | None = None,
     ):
         """
         Initialize the A2A client wrapper.
@@ -64,7 +64,7 @@ class A2AClient:
         self.base_url = base_url
         self.timeout = timeout
         self.extra_headers = extra_headers
-        self._a2a_client: Optional["A2AClientType"] = None
+        self._a2a_client: A2AClientType | None = None
 
     async def _get_client(self) -> "A2AClientType":
         """Get or create the underlying A2A client."""

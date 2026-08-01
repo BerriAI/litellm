@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Optional, Union
+from typing import Any
 
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -20,7 +20,7 @@ class ResponseMetadata:
 
     def __init__(self, result: Any):
         self.result = result
-        self._hidden_params: Union[HiddenParams, dict] = getattr(result, "_hidden_params", {}) or {}
+        self._hidden_params: HiddenParams | dict = getattr(result, "_hidden_params", {}) or {}
 
     @property
     def supports_response_time(self) -> bool:
@@ -31,7 +31,7 @@ class ResponseMetadata:
             or isinstance(self.result, TranscriptionResponse)
         )
 
-    def set_hidden_params(self, logging_obj: LiteLLMLoggingObject, model: Optional[str], kwargs: dict) -> None:
+    def set_hidden_params(self, logging_obj: LiteLLMLoggingObject, model: str | None, kwargs: dict) -> None:
         """Set hidden parameters on the response"""
 
         ## ADD OTHER HIDDEN PARAMS
@@ -64,7 +64,7 @@ class ResponseMetadata:
             for key, value in new_params.items():
                 setattr(self._hidden_params, key, value)
 
-    def _get_value_from_hidden_params(self, key: str) -> Optional[Any]:
+    def _get_value_from_hidden_params(self, key: str) -> Any | None:
         """Get value from hidden params - handles when self._hidden_params is a dict or HiddenParams object"""
         if isinstance(self._hidden_params, dict):
             return self._hidden_params.get(key, None)
@@ -166,7 +166,7 @@ class ResponseMetadata:
 def update_response_metadata(
     result: Any,
     logging_obj: LiteLLMLoggingObject,
-    model: Optional[str],
+    model: str | None,
     kwargs: dict,
     start_time: datetime.datetime,
     end_time: datetime.datetime,

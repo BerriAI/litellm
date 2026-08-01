@@ -9,7 +9,7 @@ The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI
 """
 
 from collections.abc import Callable
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, cast
 
 import httpx
 
@@ -32,9 +32,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """
         Vertex AI Gemma models do not support streaming.
@@ -46,7 +46,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         self,
         model_response: ModelResponse,
         stream: bool,
-    ) -> Union[ModelResponse, Any]:
+    ) -> ModelResponse | Any:
         """
         Helper method to return fake stream iterator if streaming is requested.
 
@@ -66,7 +66,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -107,8 +107,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def _unwrap_predictions_response(
         self,
-        response_json: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        response_json: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Unwrap the Vertex Gemma predictions format to OpenAI format.
 
@@ -136,9 +136,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         optional_params: dict,
         acompletion: bool,
         litellm_params: dict,
-        logger_fn: Optional[Callable] = None,
-        client: Optional[httpx.Client] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        logger_fn: Callable | None = None,
+        client: httpx.Client | None = None,
+        timeout: float | httpx.Timeout | None = None,
         encoding=None,
         custom_llm_provider: str = "vertex_ai",
     ):
@@ -186,7 +186,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         logging_obj: Any,
         optional_params: dict,
         litellm_params: dict,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
         encoding: Any,
     ):
         """Synchronous completion request"""
@@ -276,7 +276,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         logging_obj: Any,
         optional_params: dict,
         litellm_params: dict,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
         encoding: Any,
     ):
         """Asynchronous completion request"""

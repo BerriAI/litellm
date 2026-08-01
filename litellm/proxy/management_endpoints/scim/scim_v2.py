@@ -9,13 +9,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import chain
 from typing import (
     TYPE_CHECKING,
-    Dict,
-    List,
     NamedTuple,
-    Optional,
     Protocol,
-    Set,
-    Tuple,
     overload,
 )
 
@@ -169,8 +164,8 @@ class UserProvisionerHelpers:
     async def handle_existing_user_by_email(
         prisma_client: PrismaClient,
         new_user_request: NewUserRequest,
-        admin_group: Optional[str] = None,
-    ) -> Optional[SCIMUser]:
+        admin_group: str | None = None,
+    ) -> SCIMUser | None:
         """
         Check if a user with the given email already exists and update them if found.
 
@@ -228,14 +223,14 @@ class UserProvisionerHelpers:
 class ScimUserData(TypedDict):
     """Typed structure for extracted SCIM user data."""
 
-    user_email: Optional[str]
-    user_alias: Optional[str]
-    sso_user_id: Optional[str]
-    teams: List[str]
-    given_name: Optional[str]
-    family_name: Optional[str]
-    active: Optional[bool]
-    enterprise: Optional[SCIMEnterpriseUser]
+    user_email: str | None
+    user_alias: str | None
+    sso_user_id: str | None
+    teams: list[str]
+    given_name: str | None
+    family_name: str | None
+    active: bool | None
+    enterprise: SCIMEnterpriseUser | None
     entitlements: list[SCIMMultiValuedAttribute] | None
     roles: list[SCIMMultiValuedAttribute] | None
 
@@ -247,9 +242,9 @@ class GroupMemberExtractionResult(BaseModel):
     so a repeated resolved id appears once in the former and twice in the latter.
     """
 
-    existing_member_ids: List[str]
-    created_users: List[NewUserResponse]
-    all_member_ids: List[str]  # existing + newly created
+    existing_member_ids: list[str]
+    created_users: list[NewUserResponse]
+    all_member_ids: list[str]  # existing + newly created
 
 
 scim_router = APIRouter(
@@ -322,10 +317,10 @@ def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
 
 
 def _build_scim_metadata(
-    given_name: Optional[str],
-    family_name: Optional[str],
-    active: Optional[bool] = None,
-    enterprise: Optional[SCIMEnterpriseUser] = None,
+    given_name: str | None,
+    family_name: str | None,
+    active: bool | None = None,
+    enterprise: SCIMEnterpriseUser | None = None,
     entitlements: list[SCIMMultiValuedAttribute] | None = None,
     roles: list[SCIMMultiValuedAttribute] | None = None,
 ) -> dict[str, object]:
@@ -392,7 +387,7 @@ def _default_scim_user_role() -> ScimUserRole:
     return LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
 
-async def _get_scim_admin_group() -> Optional[str]:
+async def _get_scim_admin_group() -> str | None:
     """
     Get the scim_admin_group setting from litellm_settings.
 
@@ -412,9 +407,9 @@ async def _get_scim_admin_group() -> Optional[str]:
 
 def _resolve_scim_user_role(
     groups: list[SCIMUserGroup],
-    admin_group: Optional[str],
+    admin_group: str | None,
     default_role: ScimUserRole,
-) -> Optional[LitellmUserRoles]:
+) -> LitellmUserRoles | None:
     """
     Resolve a user's global proxy role from their SCIM groups.
 
@@ -513,7 +508,7 @@ def _normalized_member_type(member: SCIMMember) -> str | None:
     return normalized or None
 
 
-_JSON_OBJECT_ADAPTER = TypeAdapter(Dict[str, object])
+_JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, object])
 
 
 def _json_object_fields(raw: object) -> Mapping[str, object] | None:
@@ -707,10 +702,10 @@ async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionRe
     )
 
 
-async def _get_team_members_display(member_ids: List[str]) -> List[SCIMMember]:
+async def _get_team_members_display(member_ids: list[str]) -> list[SCIMMember]:
     """Get SCIMMember objects with display names for a list of member IDs."""
     prisma_client = await _get_prisma_client_or_raise_exception()
-    members: List[SCIMMember] = []
+    members: list[SCIMMember] = []
 
     for member_id in member_ids:
         user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": member_id})
@@ -723,8 +718,8 @@ async def _get_team_members_display(member_ids: List[str]) -> List[SCIMMember]:
 
 async def _handle_team_membership_changes(
     user_id: str,
-    existing_teams: List[str],
-    new_teams: List[str],
+    existing_teams: list[str],
+    new_teams: list[str],
     raise_on_error: bool = False,
 ) -> None:
     """Handle adding/removing user from teams based on changes."""
@@ -833,7 +828,7 @@ async def _delete_rows_referencing_user(prisma_client: PrismaClient, *, user_id:
     await _table(TeamMembershipRepository(prisma_client)).delete_many(where={"user_id": user_id})
 
 
-def _scim_active_value(metadata: Optional[Mapping[str, object]]) -> Optional[bool]:
+def _scim_active_value(metadata: Mapping[str, object] | None) -> bool | None:
     """Read the SCIM active flag from a user's metadata dict, if present."""
     if not metadata:
         return None
@@ -843,13 +838,13 @@ def _scim_active_value(metadata: Optional[Mapping[str, object]]) -> Optional[boo
     return bool(value)
 
 
-def _user_scim_active(user: LiteLLM_UserTable) -> Optional[bool]:
+def _user_scim_active(user: LiteLLM_UserTable) -> bool | None:
     """Read the SCIM active flag off a user row's metadata, if present."""
     metadata: dict[str, object] | None = user.metadata
     return _scim_active_value(metadata)
 
 
-async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_group") -> Optional[NewUserResponse]:
+async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_group") -> NewUserResponse | None:
     """
     Helper function to create a user if they don't exist.
 
@@ -864,14 +859,15 @@ async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_grou
 
     try:
         # Get default role for new internal users
-        default_role: Optional[
+        default_role: (
             Literal[
                 LitellmUserRoles.PROXY_ADMIN,
                 LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
                 LitellmUserRoles.INTERNAL_USER,
                 LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             ]
-        ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+            | None
+        ) = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
         if litellm.default_internal_user_params:
             default_role = litellm.default_internal_user_params.get("user_role")
 
@@ -894,14 +890,14 @@ async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_grou
         return None
 
 
-async def _get_team_member_user_ids_from_team(team: LiteLLM_TeamTable) -> List[str]:
+async def _get_team_member_user_ids_from_team(team: LiteLLM_TeamTable) -> list[str]:
     """
     Get the IDs of the members from a team.
 
     Use one source of truth for the member IDs: team.members_with_roles
 
     """
-    member_user_ids: List[str] = []
+    member_user_ids: list[str] = []
     for member in team.members_with_roles or []:
         if hasattr(member, "user_id") and member.user_id is not None:
             member_user_ids.append(member.user_id)
@@ -1305,7 +1301,7 @@ async def get_service_provider_config(request: Request):
     return SCIMServiceProviderConfig(meta=meta)
 
 
-def _parse_scim_eq_filter(scim_filter: str) -> Optional[Tuple[str, str]]:
+def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
     """Parse the SCIM equality filters Okta uses before user lifecycle changes."""
     match = re.match(
         r"""\s*([\w.]+)\s+eq\s+(['"]?)(.*?)\2\s*$""",
@@ -1327,7 +1323,7 @@ def _parse_scim_eq_filter(scim_filter: str) -> Optional[Tuple[str, str]]:
 async def get_users(
     startIndex: int = Query(1, ge=1),
     count: int = Query(10, ge=1, le=100),
-    filter: Optional[str] = Query(None),
+    filter: str | None = Query(None),
 ):
     """
     Get a list of users according to SCIM v2 protocol
@@ -1369,7 +1365,7 @@ async def get_users(
         total_count = await _table(UserRepository(prisma_client)).count(where=where_conditions)
 
         # Convert to SCIM format
-        scim_users: List[SCIMUser] = []
+        scim_users: list[SCIMUser] = []
         for user in users:
             scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(user=user)
             scim_users.append(scim_user)
@@ -1652,12 +1648,12 @@ def _parse_member_entries(value: object) -> tuple[SCIMMember, ...]:
     return tuple(member for member in (_parse_member_entry(entry) for entry in entries) if member is not None)
 
 
-def _extract_group_values(value: object) -> List[str]:
+def _extract_group_values(value: object) -> list[str]:
     """Return group ids from a SCIM patch value."""
     return [member.value for member in _parse_member_entries(value)]
 
 
-def _extract_ids_from_path_filter(path: str | None, attribute: str) -> List[str]:
+def _extract_ids_from_path_filter(path: str | None, attribute: str) -> list[str]:
     """Return ids from a SCIM filtered path like ``members[value eq "id"]``.
 
     Okta commonly sends membership removals as a filtered path and omits the
@@ -1725,7 +1721,7 @@ def _handle_name_update(path: str, op_type: str, value: object, scim_metadata: d
             scim_metadata["familyName"] = str(value)
 
 
-def _handle_group_operations(op_type: str, value: object, teams_set: Set[str], path: str | None) -> Set[str] | None:
+def _handle_group_operations(op_type: str, value: object, teams_set: set[str], path: str | None) -> set[str] | None:
     """Handle group/team membership operations."""
     group_values = _extract_group_values(value)
     if not group_values and value is None:
@@ -1793,14 +1789,14 @@ def _handle_generic_metadata(path: str, op_type: str, value: object, metadata: d
 def _apply_patch_ops(
     existing_user: LiteLLM_UserTable,
     patch_ops: SCIMPatchOp,
-) -> Tuple[dict[str, object], Set[str]]:
+) -> tuple[dict[str, object], set[str]]:
     """Apply patch operations and return update data and final team set."""
     update_data: dict[str, object] = {}
     metadata = existing_user.metadata or {}
     scim_metadata = metadata.get("scim_metadata", {})
 
-    teams_set: Set[str] = set(existing_user.teams or [])
-    replace_team_set: Optional[Set[str]] = None
+    teams_set: set[str] = set(existing_user.teams or [])
+    replace_team_set: set[str] | None = None
 
     for op in patch_ops.Operations:
         path = (op.path or "").lower()
@@ -1863,8 +1859,8 @@ def _is_user_not_in_team_error(exc: HTTPException) -> bool:
 
 async def patch_team_membership(
     user_id: str,
-    teams_ids_to_add_user_to: List[str],
-    teams_ids_to_remove_user_from: List[str],
+    teams_ids_to_add_user_to: list[str],
+    teams_ids_to_remove_user_from: list[str],
     raise_on_error: bool = False,
 ) -> bool:
     """
@@ -2009,7 +2005,7 @@ class _TeamWhereConditions(TypedDict, total=False):
 async def get_groups(
     startIndex: int = Query(1, ge=1),
     count: int = Query(10, ge=1, le=100),
-    filter: Optional[str] = Query(None),
+    filter: str | None = Query(None),
 ):
     """
     Get a list of groups according to SCIM v2 protocol
@@ -2042,7 +2038,7 @@ async def get_groups(
         total_count = await _table(TeamRepository(prisma_client)).count(where=where_conditions)
 
         # Convert to SCIM format
-        scim_groups: List[SCIMGroup] = []
+        scim_groups: list[SCIMGroup] = []
         for team in teams:
             # Get team members with display names. members_with_roles is the
             # source of truth; the legacy `members` column is not populated by
@@ -2275,7 +2271,7 @@ async def delete_group(
 
 async def _process_group_patch_operations(
     patch_ops: SCIMPatchOp, existing_team: LiteLLM_TeamTable, prisma_client: PrismaClient
-) -> Tuple[dict[str, object], Set[str], Set[str] | None]:
+) -> tuple[dict[str, object], set[str], set[str] | None]:
     """Process patch operations for a group and return update data, final members
     and, when the request contained a member ``replace`` op, the absolute target
     roster it declared (``None`` otherwise).
@@ -2379,7 +2375,7 @@ async def _apply_group_patch_updates(group_id: str, update_data: dict[str, objec
     return await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
 
 
-async def _handle_group_membership_changes(group_id: str, current_members: Set[str], final_members: Set[str]):
+async def _handle_group_membership_changes(group_id: str, current_members: set[str], final_members: set[str]):
     """Handle adding/removing members from the group."""
     members_to_add = final_members - current_members
     members_to_remove = current_members - final_members

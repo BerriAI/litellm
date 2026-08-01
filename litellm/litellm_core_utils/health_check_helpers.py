@@ -3,7 +3,7 @@ Helper functions for health check calls.
 """
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Literal
 
 from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
@@ -117,9 +117,9 @@ class HealthCheckHelpers:
         model: str,
         custom_llm_provider: str,
         model_params: dict,
-        prompt: Optional[str] = None,
-        input: Optional[list] = None,
-    ) -> Dict[
+        prompt: str | None = None,
+        input: list | None = None,
+    ) -> dict[
         Literal[
             "chat",
             "completion",

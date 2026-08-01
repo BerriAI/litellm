@@ -6,7 +6,7 @@ credential values is the caller's responsibility (see ``CredentialHelperUtils``)
 so reads return the stored values verbatim.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from litellm.models.credentials import CredentialItem
 
@@ -28,7 +28,7 @@ class CredentialsRepository:
         return self.prisma_client.db.litellm_credentialstable
 
     @staticmethod
-    def _to_model(record: Any) -> Optional[CredentialItem]:
+    def _to_model(record: Any) -> CredentialItem | None:
         if record is None:
             return None
         data = record.dict() if hasattr(record, "dict") else dict(record)
@@ -41,14 +41,14 @@ class CredentialsRepository:
     async def find_all(self) -> Any:
         return await self.table.find_many()
 
-    async def create(self, data: Dict[str, Any]) -> Any:
+    async def create(self, data: dict[str, Any]) -> Any:
         return await self.table.create(data=data)
 
-    async def find_by_name(self, credential_name: str) -> Optional[CredentialItem]:
+    async def find_by_name(self, credential_name: str) -> CredentialItem | None:
         record = await self.table.find_unique(where={"credential_name": credential_name})
         return self._to_model(record)
 
-    async def update_by_name(self, credential_name: str, data: Dict[str, Any]) -> Any:
+    async def update_by_name(self, credential_name: str, data: dict[str, Any]) -> Any:
         return await self.table.update(where={"credential_name": credential_name}, data=data)
 
     async def delete_by_name(self, credential_name: str) -> Any:

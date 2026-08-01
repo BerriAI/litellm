@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import List, Literal, TypeGuard
+from typing import Literal, TypeGuard
 
 from fastapi import HTTPException
 from httpx import HTTPError
@@ -64,7 +64,7 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isin
 
 class RepelloAIGuardrail(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,

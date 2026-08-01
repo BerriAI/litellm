@@ -9,7 +9,7 @@ import copy
 import json
 import traceback
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
@@ -85,7 +85,7 @@ async def _emit_team_callback_audit_log(
     before_metadata: Any,
     after_metadata: Any,
     user_api_key_dict: UserAPIKeyAuth,
-    litellm_changed_by: Optional[str],
+    litellm_changed_by: str | None,
 ) -> None:
     """Emit an audit-log row for a team-callback mutation.
 
@@ -138,7 +138,7 @@ async def add_team_callbacks(
     http_request: Request,
     team_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
@@ -210,7 +210,7 @@ async def add_team_callbacks(
 
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata
-        team_callback_settings: List[dict] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
+        team_callback_settings: list[dict] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
         if team_callback_settings is None or not isinstance(team_callback_settings, list):
             team_callback_settings = []
 
@@ -257,9 +257,7 @@ async def add_team_callbacks(
     except ProxyException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {e!s}")
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
@@ -278,7 +276,7 @@ async def disable_team_logging(
     http_request: Request,
     team_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
@@ -375,7 +373,7 @@ async def disable_team_logging(
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {str(e)}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {e!s}")
         verbose_proxy_logger.debug(traceback.format_exc())
         raise ProxyException(
             message="Internal Server Error, " + str(e),
@@ -467,13 +465,11 @@ async def get_team_callbacks(
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {}".format(str(e))
-        )
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {e!s}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                message=getattr(e, "detail", f"Internal Server Error({e!s})"),
                 type=ProxyErrorTypes.internal_server_error.value,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),

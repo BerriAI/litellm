@@ -158,7 +158,7 @@ class OpenTelemetryV2(CustomLogger):
             event_recorder=self._init_events(logger_provider),
         )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
-        self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
+        self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
     def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":
@@ -669,9 +669,9 @@ class OpenTelemetryV2(CustomLogger):
         SDK dropped it, leaving the POST that actually failed unmarked."""
         span = mcp_message_transport_span() or request_root_span() or user_api_key_dict.parent_otel_span
         if span is None or not is_recordable_span(span):
-            return None
+            return
         stamp_error(span, _span_error_from_exception(original_exception, traceback_str=traceback_str))
-        return None
+        return
 
     def emit_guardrail_span(self, entry: "StandardLoggingGuardrailInformation") -> None:
         # Emitted by the guardrail-recording code the moment a guardrail finishes,

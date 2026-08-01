@@ -1,5 +1,5 @@
 from collections.abc import Coroutine
-from typing import Any, Optional, Union
+from typing import Any
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
@@ -27,14 +27,14 @@ class AzureAudioTranscription(AzureChatCompletion):
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        api_version: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        api_version: str | None = None,
         client=None,
-        azure_ad_token: Optional[str] = None,
+        azure_ad_token: str | None = None,
         atranscription: bool = False,
-        litellm_params: Optional[dict] = None,
-    ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+        litellm_params: dict | None = None,
+    ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data = {"model": model, "file": audio_file, **optional_params}
 
         if atranscription is True:
@@ -113,12 +113,12 @@ class AzureAudioTranscription(AzureChatCompletion):
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: Any,
-        api_version: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         client=None,
         max_retries=None,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> TranscriptionResponse:
         response = None
         try:

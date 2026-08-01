@@ -559,7 +559,7 @@ async def get_organization_daily_activity(
                 if org_id not in admin_org_ids:
                     raise HTTPException(
                         status_code=403,
-                        detail={"error": "User is not org_admin for Organization= {}.".format(org_id)},
+                        detail={"error": f"User is not org_admin for Organization= {org_id}."},
                     )
 
     # Fetch organization aliases for metadata
@@ -1261,7 +1261,7 @@ async def organization_member_add(
         verbose_proxy_logger.exception(f"Error adding member to organization: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                message=getattr(e, "detail", f"Authentication Error({e!s})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),

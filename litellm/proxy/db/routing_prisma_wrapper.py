@@ -39,7 +39,7 @@ class _RoutedActions:
     fails a recreate) is observed without re-fetching the actions accessor.
     """
 
-    __slots__ = ("_writer_actions", "_reader_actions", "_should_use_reader")
+    __slots__ = ("_reader_actions", "_should_use_reader", "_writer_actions")
 
     def __init__(
         self,

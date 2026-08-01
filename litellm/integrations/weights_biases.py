@@ -3,7 +3,7 @@ try:
     import io
     import logging
     import sys
-    from typing import Any, Dict, List, Optional, TypeVar
+    from typing import Any, TypeVar
 
     from wandb.sdk.data_types import trace_tree
 
@@ -25,15 +25,15 @@ try:
 
         def __getitem__(self, key: K) -> V: ...
 
-        def get(self, key: K, default: Optional[V] = None) -> Optional[V]: ...  # pragma: no cover
+        def get(self, key: K, default: V | None = None) -> V | None: ...  # pragma: no cover
 
     class OpenAIRequestResponseResolver:
         def __call__(
             self,
-            request: Dict[str, Any],
+            request: dict[str, Any],
             response: OpenAIResponse,
             time_elapsed: float,
-        ) -> Optional[trace_tree.WBTraceTree]:
+        ) -> trace_tree.WBTraceTree | None:
             try:
                 if response["object"] == "edit":
                     return self._resolve_edit(request, response, time_elapsed)
@@ -49,9 +49,9 @@ try:
 
         @staticmethod
         def results_to_trace_tree(
-            request: Dict[str, Any],
+            request: dict[str, Any],
             response: OpenAIResponse,
-            results: List[trace_tree.Result],
+            results: list[trace_tree.Result],
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
             """Converts the request, response, and results into a trace tree.
@@ -79,7 +79,7 @@ try:
 
         def _resolve_edit(
             self,
-            request: Dict[str, Any],
+            request: dict[str, Any],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
@@ -97,7 +97,7 @@ try:
 
         def _resolve_completion(
             self,
-            request: Dict[str, Any],
+            request: dict[str, Any],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
@@ -115,7 +115,7 @@ try:
 
         def _resolve_chat_completion(
             self,
-            request: Dict[str, Any],
+            request: dict[str, Any],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
@@ -140,10 +140,10 @@ try:
 
         def _request_response_result_to_trace(
             self,
-            request: Dict[str, Any],
+            request: dict[str, Any],
             response: OpenAIResponse,
             request_str: str,
-            choices: List[str],
+            choices: list[str],
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
             """Resolves the request and response objects for `openai.Completion`."""
@@ -196,4 +196,3 @@ class WeightsBiasesLogger:
                 print_verbose(f"W&B Logging Logging - final response object: {response_obj}")
         except Exception:
             print_verbose(f"W&B Logging Layer Error - {traceback.format_exc()}")
-            pass

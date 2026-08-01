@@ -2,7 +2,7 @@
 Base Search transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -47,8 +47,8 @@ class SearchResult(LiteLLMPydanticObjectBase):
     title: str
     url: str
     snippet: str
-    date: Optional[str] = None
-    last_updated: Optional[str] = None
+    date: str | None = None
+    last_updated: str | None = None
 
     model_config = {"extra": "allow"}
 
@@ -59,7 +59,7 @@ class SearchResponse(LiteLLMPydanticObjectBase):
     Standardized to Perplexity Search format - other providers should transform to this format.
     """
 
-    results: List[SearchResult]
+    results: list[SearchResult]
     object: str = "search"
 
     model_config = {"extra": "allow"}
@@ -167,11 +167,11 @@ class BaseSearchConfig:
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         Override in provider-specific implementations.
@@ -180,9 +180,9 @@ class BaseSearchConfig:
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -207,10 +207,10 @@ class BaseSearchConfig:
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Union[Dict, List[Dict]]:
+    ) -> dict | list[dict]:
         """
         Transform Search request to provider-specific format.
         Override in provider-specific implementations.

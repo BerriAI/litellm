@@ -12,7 +12,7 @@ user metrics from tag activity data and return time series for dashboard visuali
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -40,14 +40,14 @@ class TagActiveUsersResponse(BaseModel):
     tag: str
     active_users: int
     date: str  # The specific date or period identifier
-    period_start: Optional[str] = None  # For WAU/MAU, this will be the start of the period
-    period_end: Optional[str] = None  # For WAU/MAU, this will be the end of the period
+    period_start: str | None = None  # For WAU/MAU, this will be the start of the period
+    period_end: str | None = None  # For WAU/MAU, this will be the end of the period
 
 
 class ActiveUsersAnalyticsResponse(BaseModel):
     """Response for active users analytics"""
 
-    results: List[TagActiveUsersResponse]
+    results: list[TagActiveUsersResponse]
 
 
 class TagSummaryMetrics(BaseModel):
@@ -65,7 +65,7 @@ class TagSummaryMetrics(BaseModel):
 class TagSummaryResponse(BaseModel):
     """Response for tag summary analytics"""
 
-    results: List[TagSummaryMetrics]
+    results: list[TagSummaryMetrics]
 
 
 class DistinctTagResponse(BaseModel):
@@ -77,15 +77,15 @@ class DistinctTagResponse(BaseModel):
 class DistinctTagsResponse(BaseModel):
     """Response for all distinct user agent tags"""
 
-    results: List[DistinctTagResponse]
+    results: list[DistinctTagResponse]
 
 
 class PerUserMetrics(BaseModel):
     """Metrics for individual user"""
 
     user_id: str
-    user_email: Optional[str] = None
-    user_agent: Optional[str] = None
+    user_email: str | None = None
+    user_agent: str | None = None
     successful_requests: int = 0
     failed_requests: int = 0
     total_requests: int = 0
@@ -96,7 +96,7 @@ class PerUserMetrics(BaseModel):
 class PerUserAnalyticsResponse(BaseModel):
     """Response for per-user analytics"""
 
-    results: List[PerUserMetrics]
+    results: list[PerUserMetrics]
     total_count: int
     page: int
     page_size: int
@@ -150,7 +150,7 @@ async def get_distinct_user_agent_tags(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch distinct user agent tags: {str(e)}",
+            detail=f"Failed to fetch distinct user agent tags: {e!s}",
         )
 
 
@@ -161,11 +161,11 @@ async def get_distinct_user_agent_tags(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_daily_active_users(
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -243,7 +243,7 @@ async def get_daily_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch DAU analytics: {str(e)}",
+            detail=f"Failed to fetch DAU analytics: {e!s}",
         )
 
 
@@ -254,11 +254,11 @@ async def get_daily_active_users(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_weekly_active_users(
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -364,7 +364,7 @@ async def get_weekly_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch WAU analytics: {str(e)}",
+            detail=f"Failed to fetch WAU analytics: {e!s}",
         )
 
 
@@ -375,11 +375,11 @@ async def get_weekly_active_users(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_monthly_active_users(
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -485,7 +485,7 @@ async def get_monthly_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch MAU analytics: {str(e)}",
+            detail=f"Failed to fetch MAU analytics: {e!s}",
         )
 
 
@@ -498,11 +498,11 @@ async def get_monthly_active_users(
 async def get_tag_summary(
     start_date: str = Query(description="Start date in YYYY-MM-DD format"),
     end_date: str = Query(description="End date in YYYY-MM-DD format"),
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -585,12 +585,12 @@ async def get_tag_summary(
     except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid date format. Use YYYY-MM-DD: {str(e)}",
+            detail=f"Invalid date format. Use YYYY-MM-DD: {e!s}",
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch tag summary analytics: {str(e)}",
+            detail=f"Failed to fetch tag summary analytics: {e!s}",
         )
 
 
@@ -601,11 +601,11 @@ async def get_tag_summary(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_per_user_analytics(
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -648,7 +648,7 @@ async def get_per_user_analytics(
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build where clause with date range
-        where_clause: Dict[str, Any] = {"date": {"gte": start_date, "lte": end_date}}
+        where_clause: dict[str, Any] = {"date": {"gte": start_date, "lte": end_date}}
 
         # Add tag filtering if provided
         if tag_filters and len(tag_filters) > 0:
@@ -687,7 +687,7 @@ async def get_per_user_analytics(
         user_id_to_email = {record.user_id: record.user_email for record in user_records}
 
         # Aggregate metrics by user
-        user_metrics: Dict[str, PerUserMetrics] = {}
+        user_metrics: dict[str, PerUserMetrics] = {}
 
         for record in tag_records:
             if record.api_key in api_key_to_user_id:
@@ -740,5 +740,5 @@ async def get_per_user_analytics(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch per-user analytics: {str(e)}",
+            detail=f"Failed to fetch per-user analytics: {e!s}",
         )
