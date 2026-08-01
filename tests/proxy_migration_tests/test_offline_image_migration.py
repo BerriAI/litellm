@@ -26,6 +26,11 @@ POSTGRES_IMAGE = os.getenv("LITELLM_TEST_POSTGRES_IMAGE", "postgres:16-alpine")
 MIN_TABLES = int(os.getenv("LITELLM_TEST_MIN_TABLES", "20"))
 NON_ROOT_UID = "12345:0"  # arbitrary uid in GID 0, as OpenShift restricted-v2 assigns
 
+MIGRATION_INTERPRETER = os.getenv("LITELLM_MIGRATION_INTERPRETER", "python")
+MIGRATION_SCRIPT = os.getenv(
+    "LITELLM_MIGRATION_SCRIPT", "litellm/proxy/prisma_migration.py"
+)
+
 pytestmark = [
     pytest.mark.skipif(IMAGE is None, reason="requires a built image (set LITELLM_IMAGE)"),
     pytest.mark.skipif(shutil.which("docker") is None, reason="requires the docker CLI"),
@@ -108,8 +113,8 @@ def test_migration_offline_as_non_root_uid(offline_postgres):
         "-e", f"DATABASE_URL=postgresql://postgres:pw@{pg}:5432/litellm",
         "-e", "LITELLM_MASTER_KEY=sk-offline-migration-test",
         "-e", "DISABLE_SCHEMA_UPDATE=false",
-        "-w", "/app", "--entrypoint", "python",
-        IMAGE, "litellm/proxy/prisma_migration.py",
+        "-w", "/app", "--entrypoint", MIGRATION_INTERPRETER,
+        IMAGE, MIGRATION_SCRIPT,
         check=False,
     )
     tables = _table_count(pg)
