@@ -466,3 +466,77 @@ class TestUsageAiChatServiceAccountGuard:
                 is_admin=False,
             )
         assert "Endpoint-level guard missing" in str(exc_info.value)
+
+
+class TestUsageAiChatModelResolution:
+    """
+    Regression: the dashboard's model dropdown is populated from proxy model
+    groups (virtual aliases), which bare `litellm.acompletion` cannot resolve.
+    Those must be dispatched through the Router instead.
+    """
+
+    @staticmethod
+    def _text_response(content: str):
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.tool_calls = None
+        response.choices[0].message.content = content
+        return response
+
+    @pytest.mark.asyncio
+    async def test_configured_model_group_is_routed_through_router(self):
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [{"model_name": "my-usage-alias"}]
+        mock_router.acompletion = AsyncMock(return_value=self._text_response("Spend is $1.00"))
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+        ):
+            mock_litellm.acompletion = AsyncMock()
+
+            events = [
+                json.loads(event.replace("data: ", "").strip())
+                async for event in stream_usage_ai_chat(
+                    messages=[{"role": "user", "content": "What is my spend?"}],
+                    model="my-usage-alias",
+                    user_id="user-123",
+                    is_admin=True,
+                )
+            ]
+
+        assert [e for e in events if e["type"] == "error"] == []
+        assert [e["content"] for e in events if e["type"] == "chunk"] == ["Spend is $1.00"]
+        mock_litellm.acompletion.assert_not_called()
+        mock_router.get_model_list.assert_called_once_with(model_name="my-usage-alias")
+        assert mock_router.acompletion.call_args.kwargs["model"] == "my-usage-alias"
+
+    @pytest.mark.asyncio
+    async def test_unknown_model_falls_back_to_sdk(self):
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = None
+        mock_router.acompletion = AsyncMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+        ):
+            mock_litellm.acompletion = AsyncMock(return_value=self._text_response("hi"))
+
+            events = [
+                json.loads(event.replace("data: ", "").strip())
+                async for event in stream_usage_ai_chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="gpt-4o-mini",
+                    user_id="user-123",
+                    is_admin=True,
+                )
+            ]
+
+        assert [e for e in events if e["type"] == "error"] == []
+        mock_router.acompletion.assert_not_called()
+        assert mock_litellm.acompletion.call_args.kwargs["model"] == "gpt-4o-mini"
