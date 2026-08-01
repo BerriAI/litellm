@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from collections.abc import Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -137,6 +138,28 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN = 128
 # Keep these two channels strictly separate -- never stash internal
 # coordination state in ``optional_params``.
 ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY = "_anthropic_tool_name_map"
+
+
+def _reported_thinking_tokens(usage_object: Mapping[str, Any]) -> int | None:
+    """Read the provider-reported reasoning token count from an Anthropic usage object.
+
+    Anthropic (and Bedrock's Anthropic-compatible surface) reports extended-thinking
+    tokens as ``usage.output_tokens_details.thinking_tokens``; it is authoritative and
+    is present even when the thinking text is empty or redacted.
+    """
+    details = usage_object.get("output_tokens_details")
+    if not isinstance(details, Mapping):
+        return None
+    thinking_tokens = details.get("thinking_tokens")
+    if isinstance(thinking_tokens, bool) or not isinstance(thinking_tokens, int):
+        return None
+    return thinking_tokens
+
+
+def _sum_reported_thinking_tokens(iterations: Sequence[Any]) -> int | None:
+    reported = tuple(_reported_thinking_tokens(iteration) for iteration in iterations if isinstance(iteration, Mapping))
+    present = tuple(tokens for tokens in reported if tokens is not None)
+    return sum(present) if present else None
 
 
 def _basic_sanitize_anthropic_tool_name(name: str) -> str:
@@ -2201,10 +2224,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             text_tokens=raw_input_tokens,
         )
         # Always populate completion_token_details, not just when there's reasoning_content
-        estimated_reasoning_tokens = (
-            token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
+        reported_thinking_tokens = (
+            _sum_reported_thinking_tokens(iterations) if iterations else _reported_thinking_tokens(_usage)
         )
-        reasoning_tokens = min(estimated_reasoning_tokens, completion_tokens)
+        resolved_reasoning_tokens = (
+            reported_thinking_tokens
+            if reported_thinking_tokens is not None
+            else (token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0)
+        )
+        reasoning_tokens = min(resolved_reasoning_tokens, completion_tokens)
         completion_token_details = CompletionTokensDetailsWrapper(
             reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else 0,
             text_tokens=(completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens),

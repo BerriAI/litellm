@@ -1055,6 +1055,54 @@ class TestBuildCompleteStreamingResponseRobustness:
         assert result.choices[0].message.content == "The stream ends with [DONE]"
 
 
+class TestStreamingThinkingTokens:
+    """
+    A streamed thinking response must be logged with the reasoning token count
+    Anthropic/Bedrock reported in message_delta, not a token_counter estimate of
+    the thinking text (which is 0 when the thinking text is empty/redacted).
+    """
+
+    @staticmethod
+    def _chunks(thinking_text: str) -> List[str]:
+        return [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250929","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":70,"output_tokens":1}}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
+            "event: content_block_delta\ndata: "
+            + json.dumps(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": thinking_text},
+                }
+            ),
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"33 liters"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":70,"output_tokens":548,"output_tokens_details":{"thinking_tokens":275}}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+
+    def _build(self, thinking_text: str):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        return AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=self._chunks(thinking_text),
+            litellm_logging_obj=logging_obj,
+            model="claude-sonnet-4-5-20250929",
+        )
+
+    def test_reported_thinking_tokens_used_for_streamed_thinking_text(self):
+        result = self._build("Let me work through the fuel calculation step by step.")
+        assert result is not None
+        assert result.usage.completion_tokens_details.reasoning_tokens == 275
+
+    def test_reported_thinking_tokens_used_when_thinking_text_is_empty(self):
+        result = self._build("")
+        assert result is not None
+        assert result.usage.completion_tokens_details.reasoning_tokens == 275
+
+
 class TestPureTextFastPathParity:
     """
     The pure-text fast path in _build_complete_streaming_response must produce
@@ -1938,6 +1986,36 @@ class TestAnthropicUsageOnlyFallback:
         assert usage._cache_creation_input_tokens == 20
         assert usage.prompt_tokens_details.cached_tokens == 40
         assert usage.server_tool_use.web_search_requests == 2
+
+    def test_build_usage_only_recovers_provider_reported_thinking_tokens(self):
+        chunks = [
+            _sse_bytes(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": "claude-sonnet-4-5-20250929",
+                        "usage": {"input_tokens": 70, "output_tokens": 1},
+                    },
+                }
+            ),
+            _sse_bytes(
+                {
+                    "type": "message_delta",
+                    "usage": {
+                        "output_tokens": 548,
+                        "output_tokens_details": {"thinking_tokens": 275},
+                    },
+                }
+            ),
+        ]
+        response = (
+            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=chunks, model="claude-sonnet-4-5-20250929"
+            )
+        )
+        assert response is not None
+        assert response.usage.completion_tokens_details.reasoning_tokens == 275
+        assert response.usage.completion_tokens_details.text_tokens == 273
 
     def test_build_usage_only_returns_none_without_usage_events(self):
         chunks = [_sse_bytes({"type": "content_block_delta", "delta": {"text": "hi"}})]
