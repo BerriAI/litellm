@@ -23488,6 +23488,11 @@ export interface components {
              */
             total_api_requests: number;
             /**
+             * Total Autorouter Savings Spend
+             * @default 0
+             */
+            total_autorouter_savings_spend: number;
+            /**
              * Total Cache Creation Input Tokens
              * @default 0
              */
@@ -25936,6 +25941,8 @@ export interface components {
             auto_router_default_model?: string | null;
             /** Auto Router Embedding Model */
             auto_router_embedding_model?: string | null;
+            /** Auto Router Savings Baseline Model */
+            auto_router_savings_baseline_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Bedrock Project Id */
@@ -31389,6 +31396,11 @@ export interface components {
              */
             api_requests: number;
             /**
+             * Autorouter Savings Spend
+             * @default 0
+             */
+            autorouter_savings_spend: number;
+            /**
              * Cache Creation Input Tokens
              * @default 0
              */
@@ -34068,6 +34080,8 @@ export interface components {
             auto_router_default_model?: string | null;
             /** Auto Router Embedding Model */
             auto_router_embedding_model?: string | null;
+            /** Auto Router Savings Baseline Model */
+            auto_router_savings_baseline_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Bedrock Project Id */

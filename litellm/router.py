@@ -7673,6 +7673,7 @@ class Router:
             default_model=default_model,
             litellm_router_instance=self,
             complexity_router_config=complexity_router_config,
+            savings_baseline_model=deployment.litellm_params.auto_router_savings_baseline_model,
         )
         self._register_pre_routing_strategy(
             registry=self.complexity_routers,

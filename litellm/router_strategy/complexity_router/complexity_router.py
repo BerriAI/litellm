@@ -224,6 +224,33 @@ def _iter_human_asks_newest_first(messages: Sequence[Mapping[str, object]]) -> I
     )
 
 
+def _conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None) -> bool:
+    """Whether this request continues a conversation that was already underway.
+
+    The counterfactual the savings driver prices against is one model serving every
+    turn, so whether that model had this prompt cached is just whether an earlier turn
+    exists: a second human ask means it wrote the prompt then and would only read it
+    now, and the write this request paid is what switching models cost. A single ask is
+    a conversation's first turn, where nothing was cached for any model and the baseline
+    would have paid the same write.
+
+    Reading the conversation rather than remembering it keeps this free of a cache, a
+    session id and their failure modes, and it works for callers that send no session
+    header at all. It cannot see a model switch that happened to land on a turn the
+    router did not classify, and it reads a few-shot prompt's synthetic turns as prior
+    conversation; both err toward charging the write, which under-claims.
+
+    Defaults to continuing when the messages cannot be read, for the same reason.
+    """
+    if not messages:
+        return True
+    asks = len(tuple(islice(_iter_human_asks_newest_first(messages), 2)))
+    # Exactly one human ask is a first turn. Zero means the turns carry no readable ask,
+    # which says nothing about the baseline's cache and so is treated like every other
+    # unknown here: charge the write.
+    return asks != 1
+
+
 def _newest_turn_ask(messages: Sequence[Mapping[str, object]]) -> str | None:
     """The human ask on the newest user turn, or None when that turn carries only plumbing.
 
@@ -365,6 +392,7 @@ class ComplexityRouter(CustomLogger):
         litellm_router_instance: Router,
         complexity_router_config: dict[str, Any] | None = None,
         default_model: str | None = None,
+        savings_baseline_model: str | None = None,
     ):
         """
         Initialize ComplexityRouter.
@@ -377,6 +405,7 @@ class ComplexityRouter(CustomLogger):
         """
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
+        self.configured_savings_baseline_model: str | None = savings_baseline_model
 
         # Parse config - always create a new instance to avoid singleton mutation
         if complexity_router_config:
@@ -423,6 +452,36 @@ class ComplexityRouter(CustomLogger):
         self._adaptive_init_attempted = False
 
         verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
+
+    def _hardest_tier_models(self) -> tuple[str, ...]:
+        """The model or pool serving the hardest tier this router configures.
+
+        REASONING when it is configured, since that is the tier a request has to be
+        hard enough to reach; otherwise the highest-severity tier present, so a
+        deployment that only defines SIMPLE and MEDIUM is still measured against
+        the best it could actually have picked.
+        """
+        for tier in reversed(TIER_SEVERITY_ORDER):
+            models = self.config.tiers.get(tier.value)
+            if models:
+                return tuple(models) if isinstance(models, list) else (models,)
+        return ()
+
+    @property
+    def savings_baseline_model(self) -> str | None:
+        """The model this router's savings are measured against.
+
+        A complexity router's tier ladder already names the model an operator
+        would have had to run to serve the hardest request, so the counterfactual
+        is the priciest model in that tier rather than the priciest model the
+        router can reach; a cheap tier is a choice the router made, not a ceiling
+        it was bounded by.
+        """
+        from litellm.router_strategy.savings_baseline import resolve_baseline
+
+        return resolve_baseline(
+            self.configured_savings_baseline_model, self.litellm_router_instance, self._hardest_tier_models()
+        )
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -647,6 +706,7 @@ class ComplexityRouter(CustomLogger):
         escalation_keyword: str | None = None,
         escalated: bool = False,
         classifier_model: str | None = None,
+        conversation_continuing: bool = True,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -660,7 +720,11 @@ class ComplexityRouter(CustomLogger):
             router_type="complexity",
             routed_model=routed_model,
             cause=cause,
+            conversation_continuing=conversation_continuing,
         )
+        baseline_model = self.savings_baseline_model
+        if baseline_model is not None:
+            decision["savings_baseline_model"] = baseline_model
         if tier is not None:
             decision["tier"] = tier.value
         if score is not None:
@@ -1392,6 +1456,8 @@ class ComplexityRouter(CustomLogger):
             if isinstance(metadata, dict):
                 metadata[RETURN_RAW_MODEL_NAME_METADATA_KEY] = True
 
+        conversation_continuing = _conversation_is_continuing(self._resolve_messages(messages, request_kwargs))
+
         use_session_affinity = self.config.session_affinity and not self.config.plugins
         session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
@@ -1438,6 +1504,7 @@ class ComplexityRouter(CustomLogger):
                             cause=cause,
                             escalation_keyword=pin_escalation_keyword,
                             escalated=escalated,
+                            conversation_continuing=conversation_continuing,
                         ),
                     )
 
@@ -1482,6 +1549,7 @@ class ComplexityRouter(CustomLogger):
         from litellm.types.router import PreRoutingHookResponse
 
         resolved_messages = self._resolve_messages(messages, request_kwargs)
+        conversation_continuing = _conversation_is_continuing(resolved_messages)
 
         if not resolved_messages:
             verbose_router_logger.debug("ComplexityRouter: No messages could be resolved, skipping routing")
@@ -1509,7 +1577,11 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
-                routing_decision=self._build_routing_decision(routed_model=routed_model, cause="default_fallback"),
+                routing_decision=self._build_routing_decision(
+                    routed_model=routed_model,
+                    cause="default_fallback",
+                    conversation_continuing=conversation_continuing,
+                ),
             )
 
         newest_ask = _newest_turn_ask(resolved_messages)
@@ -1532,6 +1604,7 @@ class ComplexityRouter(CustomLogger):
                 messages=messages if has_original_messages else None,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
+                    conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
                     tier=routed_tier,
                     matched_keyword=override.matched_keyword,
@@ -1579,6 +1652,7 @@ class ComplexityRouter(CustomLogger):
             messages=messages if has_original_messages else None,
             routing_decision=self._build_routing_decision(
                 routed_model=routed_model,
+                conversation_continuing=conversation_continuing,
                 cause=outcome.cause,
                 tier=tier,
                 score=score,

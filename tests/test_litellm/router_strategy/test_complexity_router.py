@@ -4100,6 +4100,23 @@ class TestRecordRoutingDecision:
         assert request_kwargs == {}
 
 
+    def test_clearing_the_decision_takes_the_savings_facts_with_it(self):
+        """A fallback to a plain model group re-enters the hook with the same
+        `request_kwargs`. The baseline and the conversation shape ride inside the
+        decision rather than beside it, so one clear cannot leave either behind and
+        attribute an auto-router saving to a deployment that never routed."""
+        decision = {
+            "router_model_name": "smart-router",
+            "router_type": "complexity",
+            "routed_model": "gpt-4o-mini",
+            "savings_baseline_model": "anthropic/claude-opus-5",
+            "conversation_continuing": False,
+        }
+        request_kwargs: Dict = {"litellm_metadata": {"routing_decision": decision}}
+        Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
+        assert request_kwargs["litellm_metadata"] == {}
+
+
 class TestEscalationIsRecordedConsistently:
     """An escalation keyword records two separate facts on every path: that the caller
     asked, and whether the tier actually moved. Dropping the ask when there is nowhere
@@ -5045,3 +5062,154 @@ class TestClassifierTrustBoundary:
         assert "Classify only the current message" not in system_prompt
         assert "using the earlier turns quoted above it as context" in system_prompt
         assert "rate the work it approves rather than the reply itself" in system_prompt
+
+
+class TestSavingsBaselineModel:
+    """The counterfactual model a complexity router's savings are measured against."""
+    @staticmethod
+    def _router_with_tiers(tiers: dict, **kwargs) -> ComplexityRouter:
+        from litellm.router import Router
+        parent = Router(
+            model_list=[
+                {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+                {"model_name": "mid", "litellm_params": {"model": "anthropic/claude-sonnet-4-5"}},
+                {"model_name": "top", "litellm_params": {"model": "anthropic/claude-opus-4-5"}},
+            ]
+        )
+        return ComplexityRouter(
+            model_name="bench",
+            litellm_router_instance=parent,
+            complexity_router_config={"tiers": tiers},
+            default_model="mid",
+            **kwargs,
+        )
+    def test_baseline_is_the_reasoning_tier_not_the_priciest_reachable_model(self):
+        """The ladder names what an operator would have had to run for the hardest
+        request; a pricier model sitting in a lower tier is a choice, not a ceiling."""
+        router = self._router_with_tiers({"SIMPLE": "top", "MEDIUM": "cheap", "REASONING": "mid"})
+        assert router.savings_baseline_model == "anthropic/claude-sonnet-4-5"
+    def test_baseline_is_the_priciest_model_when_the_reasoning_tier_is_a_pool(self):
+        router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": ["cheap", "top", "mid"]})
+        assert router.savings_baseline_model == "anthropic/claude-opus-4-5"
+    def test_falls_back_to_the_hardest_configured_tier_when_reasoning_is_absent(self):
+        router = self._router_with_tiers({"SIMPLE": "cheap", "COMPLEX": "top"})
+        assert router.savings_baseline_model == "anthropic/claude-opus-4-5"
+    def test_a_configured_baseline_wins_and_is_provider_qualified(self):
+        router = self._router_with_tiers(
+            {"SIMPLE": "cheap", "REASONING": "mid"}, savings_baseline_model="claude-opus-4-5"
+        )
+        assert router.savings_baseline_model == "anthropic/claude-opus-4-5"
+    def test_an_unpriceable_tier_disables_the_driver_rather_than_inventing_a_baseline(self):
+        router = self._router_with_tiers({"REASONING": "not-a-real-model-anywhere"})
+        assert router.savings_baseline_model is None
+    def test_the_baseline_travels_on_every_pre_routing_response(self):
+        """A response without it silently zeroes the savings driver for that path."""
+        import inspect
+        from litellm.router_strategy.complexity_router import complexity_router as module
+        source = inspect.getsource(module.ComplexityRouter._build_routing_decision)
+        assert "self.savings_baseline_model" in source, (
+            "the baseline rides on the routing decision, so every path that builds one carries it"
+        )
+
+
+class TestConversationShapeDiscriminator:
+    """Whether the counterfactual single model would already have had the prompt cached."""
+
+    @staticmethod
+    def _router(mock_router_instance, basic_config) -> ComplexityRouter:
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "session_affinity": False},
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_single_ask_is_a_first_turn(self, mock_router_instance, basic_config):
+        """Nothing is cached for any model yet, so the baseline would have paid the same
+        cache write and the saving is the plain rate difference."""
+        mock_router_instance.cache = DualCache()
+        result = await self._router(mock_router_instance, basic_config).async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": {}},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result.routing_decision["conversation_continuing"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_second_ask_means_the_baseline_was_already_warm(self, mock_router_instance, basic_config):
+        """An earlier turn was served, so a single-model deployment wrote the prompt then
+        and would only read it now; this request's write is what switching cost."""
+        mock_router_instance.cache = DualCache()
+        result = await self._router(mock_router_instance, basic_config).async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": {}},
+            messages=[
+                {"role": "user", "content": "First question about the codebase"},
+                {"role": "assistant", "content": "Here is the answer"},
+                {"role": "user", "content": "Hello!"},
+            ],
+        )
+        assert result.routing_decision["conversation_continuing"] is True
+
+    @pytest.mark.asyncio
+    async def test_it_needs_no_session_id(self, mock_router_instance, basic_config):
+        """The whole point of reading the conversation rather than remembering it: a
+        caller that sends no session header is still classified correctly."""
+        mock_router_instance.cache = DualCache()
+        router = self._router(mock_router_instance, basic_config)
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "Hello!"}]
+        )
+        later = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {"role": "user", "content": "First question"},
+                {"role": "assistant", "content": "Answer"},
+                {"role": "user", "content": "Hello!"},
+            ],
+        )
+        assert first.routing_decision["conversation_continuing"] is False
+        assert later.routing_decision["conversation_continuing"] is True
+
+    @pytest.mark.asyncio
+    async def test_it_touches_no_cache(self, mock_router_instance, basic_config):
+        """Reading the request instead of remembering it is what removes the routing-path
+        round-trip, and with it a cache failure that would read as a first turn."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value=None)
+        mock_router_instance.cache = cache
+        result = await self._router(mock_router_instance, basic_config).async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": {}},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result.routing_decision["conversation_continuing"] is False
+        assert cache.async_get_cache.await_count == 0
+        assert cache.async_set_cache.await_count == 0
+
+    def test_unreadable_messages_stay_conservative(self):
+        """No messages says nothing about the baseline's cache, so it keeps charging the
+        write and under-claims rather than inflating."""
+        from litellm.router_strategy.complexity_router.complexity_router import _conversation_is_continuing
+
+        assert _conversation_is_continuing(None) is True
+        assert _conversation_is_continuing([]) is True
+        assert _conversation_is_continuing([{"role": "assistant", "content": "no human ask here"}]) is True
+
+    @pytest.mark.asyncio
+    async def test_the_shape_travels_on_every_pre_routing_response(self):
+        """A response without it defaults to charging the write, silently undoing the fix
+        for whichever routing path forgot it."""
+        import inspect
+
+        from litellm.router_strategy.complexity_router import complexity_router as module
+
+        source = inspect.getsource(module.ComplexityRouter.async_pre_routing_hook) + inspect.getsource(
+            module.ComplexityRouter._classify_and_route
+        )
+        builds = source.count("self._build_routing_decision(")
+        assert builds > 0
+        assert source.count("conversation_continuing=conversation_continuing") == builds, (
+            "every routing decision must carry the conversation shape, or that path silently charges the write"
+        )

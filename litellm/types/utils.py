@@ -2734,6 +2734,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    savings_baseline_model: str
+    conversation_continuing: bool
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2753,6 +2755,8 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "classifier_model",
         "escalated",
         "tier_boundaries",
+        "savings_baseline_model",
+        "conversation_continuing",
     }
 )
 
@@ -3401,6 +3405,7 @@ all_litellm_params = (
         "auto_router_config",
         "auto_router_default_model",
         "auto_router_embedding_model",
+        "auto_router_savings_baseline_model",
         "complexity_router_config",
         "complexity_router_default_model",
         "adaptive_router_config",
