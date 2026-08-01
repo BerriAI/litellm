@@ -7,6 +7,7 @@ import { exchangeLoginCode, getProxyBaseUrl, switchToWorkerUrl } from "@/compone
 import { clearTokenCookies, getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl, getLoginUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
+import { migratedHref } from "@/utils/migratedPages";
 import { InfoCircleOutlined, CloudServerOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Form, Input, Popover, Select, Space, Typography } from "antd";
 import { useRouter } from "next/navigation";
@@ -262,6 +263,10 @@ function LoginPageContent() {
                 size="large"
               />
             </Form.Item>
+
+            <div className="text-right mb-4">
+              <a href={migratedHref("forgot-password")}>Forgot password?</a>
+            </div>
 
             <Form.Item>
               <Button

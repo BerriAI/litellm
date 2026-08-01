@@ -1527,6 +1527,35 @@ export const claimOnboardingToken = async (
   }
 };
 
+export const forgotPasswordCall = async (email: string): Promise<{ message: string }> => {
+  try {
+    return await apiClient.post(`/user/forgot_password`, { body: { email } });
+  } catch (error) {
+    console.error("Failed to submit forgot password request:", error);
+    throw error;
+  }
+};
+
+export const validateResetTokenCall = async (token: string): Promise<{ user_email: string }> => {
+  try {
+    // POST (not GET query param) so the token never lands in a URL that gets written to
+    // server access logs.
+    return await apiClient.post(`/user/reset_password/validate`, { body: { token } });
+  } catch (error) {
+    console.error("Failed to validate reset token:", error);
+    throw error;
+  }
+};
+
+export const resetPasswordCall = async (token: string, newPassword: string): Promise<{ message: string }> => {
+  try {
+    return await apiClient.post(`/user/reset_password`, { body: { token, new_password: newPassword } });
+  } catch (error) {
+    console.error("Failed to reset password:", error);
+    throw error;
+  }
+};
+
 export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {
   try {
     const url = proxyBaseUrl

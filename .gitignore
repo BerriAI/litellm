@@ -1,4 +1,5 @@
 .python-version
+.superpowers/
 .venv
 .venv_policy_test
 .env

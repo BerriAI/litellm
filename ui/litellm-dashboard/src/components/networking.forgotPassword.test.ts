@@ -1,0 +1,50 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { forgotPasswordCall, validateResetTokenCall, resetPasswordCall } from "./networking";
+
+describe("forgot/reset password networking calls", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => JSON.stringify({ message: "ok" }),
+      }),
+    );
+  });
+
+  it("forgotPasswordCall posts the email as JSON", async () => {
+    await forgotPasswordCall("alice@example.com");
+    const [url, options] = (fetch as any).mock.calls[0];
+    expect(url).toContain("/user/forgot_password");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(options.body as string)).toEqual({ email: "alice@example.com" });
+  });
+
+  it("validateResetTokenCall posts the token as JSON, not a query param", async () => {
+    (fetch as any).mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ user_email: "alice@example.com" }),
+    });
+    await validateResetTokenCall("tok-123");
+    const [url, options] = (fetch as any).mock.calls[0];
+    expect(url).toContain("/user/reset_password/validate");
+    expect(url).not.toContain("tok-123");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(options.body as string)).toEqual({ token: "tok-123" });
+  });
+
+  it("resetPasswordCall posts token and new_password as JSON", async () => {
+    await resetPasswordCall("tok-123", "new-secret");
+    const [url, options] = (fetch as any).mock.calls[0];
+    expect(url).toContain("/user/reset_password");
+    expect(JSON.parse(options.body as string)).toEqual({ token: "tok-123", new_password: "new-secret" });
+  });
+
+  it("throws with the derived error message on a non-ok response", async () => {
+    (fetch as any).mockResolvedValueOnce({
+      ok: false,
+      text: async () => JSON.stringify({ detail: { error: "boom" } }),
+    });
+    await expect(forgotPasswordCall("alice@example.com")).rejects.toThrow();
+  });
+});

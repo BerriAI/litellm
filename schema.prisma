@@ -264,6 +264,7 @@ model LiteLLM_UserTable {
     invitations_created LiteLLM_InvitationLink[] @relation("CreatedBy")
     invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
     invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
+    password_reset_tokens LiteLLM_PasswordResetToken[]
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
 }
 
@@ -717,6 +718,19 @@ model LiteLLM_InvitationLink {
   liteLLM_user_table_updated LiteLLM_UserTable  @relation("UpdatedBy", fields: [updated_by], references: [user_id])
 }
 
+model LiteLLM_PasswordResetToken {
+  // self-service "forgot password" tokens; independent of LiteLLM_InvitationLink
+  token_hash   String    @id
+  user_id      String
+  requested_ip String?
+  created_at   DateTime  @default(now())
+  expires_at   DateTime
+  used_at      DateTime?
+
+  user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  @@index([user_id])
+}
 
 model LiteLLM_AuditLog {
   id                 String   @id @default(uuid())
