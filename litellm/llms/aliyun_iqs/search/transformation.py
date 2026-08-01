@@ -61,9 +61,7 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
             default_api_base=self.ALIYUN_IQS_API_BASE,
         )
         if not api_key:
-            raise ValueError(
-                "ALIYUN_IQS_API_KEY is not set. Set `ALIYUN_IQS_API_KEY` environment variable."
-            )
+            raise ValueError("ALIYUN_IQS_API_KEY is not set. Set `ALIYUN_IQS_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -78,11 +76,7 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = (
-            api_base
-            or get_secret_str("ALIYUN_IQS_API_BASE")
-            or self.ALIYUN_IQS_API_BASE
-        )
+        api_base = api_base or get_secret_str("ALIYUN_IQS_API_BASE") or self.ALIYUN_IQS_API_BASE
 
         # Append "/search/unified" to the api base if it's not already there
         if not api_base.endswith("/search/unified"):

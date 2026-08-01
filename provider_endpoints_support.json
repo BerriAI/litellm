@@ -120,6 +120,13 @@
         "interactions": true
       }
     },
+    "aliyun_iqs": {
+      "display_name": "Aliyun IQS (`aliyun_iqs`)",
+      "url": "https://help.aliyun.com/zh/document_detail/2883041.html",
+      "endpoints": {
+        "search": true
+      }
+    },
     "amazon_nova": {
       "display_name": "Amazon Nova (`amazon_nova`)",
       "url": "https://docs.litellm.ai/docs/providers/amazon_nova",
