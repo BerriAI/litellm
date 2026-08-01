@@ -28,6 +28,24 @@ pub(crate) const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 /// Provider attributed to realtime sessions in the logging payload.
 #[cfg(feature = "server")]
 pub(crate) const DEFAULT_PROVIDER: &str = "openai";
+pub(crate) const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+
+pub(crate) const VERTEXAI_CREDENTIALS_ENV: &str = "VERTEXAI_CREDENTIALS";
+
+pub(crate) const VERTEX_CREDENTIALS_CACHE_CAPACITY: usize = 64;
+
+pub(crate) const ENV_REFERENCE_PREFIX: &str = "os.environ/";
+
+pub(crate) const DEFAULT_OCR_REQUEST_TIMEOUT_SECS: u64 = 600;
+pub(crate) const DEFAULT_HTTP_CLIENT_TIMEOUT_SECS: u64 = 600;
+
+pub(crate) const OCR_ERROR_BODY_MAX_CHARS: usize = 256;
+
+pub(crate) const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
+
+pub(crate) const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
+
+pub(crate) const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
 
 pub(crate) const DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS: u64 = 10;
 pub(crate) const DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS: u64 = 300;

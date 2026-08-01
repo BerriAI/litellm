@@ -15,6 +15,7 @@
 
 pub mod audio_transcription;
 mod client;
+pub(crate) mod config;
 pub mod io;
 pub mod ocr;
 

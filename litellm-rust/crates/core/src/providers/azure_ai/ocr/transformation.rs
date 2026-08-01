@@ -362,14 +362,11 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
     ) -> CoreResult<OcrResponseData> {
         let response = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
+            .ok_or_else(|| CoreError::unexpected_response_type(&response_json))?;
         let status = response
             .get("status")
             .and_then(Value::as_str)
-            .ok_or(CoreError::MissingField("status"))?;
+            .ok_or(CoreError::missing_response_field("status"))?;
         if status != "succeeded" {
             return Err(CoreError::InvalidResponse(format!(
                 "Azure Document Intelligence analysis failed with status: {status}"
@@ -516,5 +513,25 @@ mod tests {
             response.usage_info,
             Some(json!({"pages_processed": 1, "doc_size_bytes": null}))
         );
+    }
+
+    #[test]
+    fn document_intelligence_response_missing_status_is_invalid_response() {
+        let err = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .transform_ocr_response("prebuilt-layout", json!({"analyzeResult": {"pages": []}}))
+            .expect_err("missing status should be rejected");
+
+        assert!(matches!(err, CoreError::InvalidResponse(_)));
+        assert_eq!(err.public_status_code(), Some(500));
+    }
+
+    #[test]
+    fn document_intelligence_response_non_object_is_invalid_response() {
+        let err = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .transform_ocr_response("prebuilt-layout", json!("boom"))
+            .expect_err("non-object provider response should be rejected");
+
+        assert!(matches!(err, CoreError::InvalidResponse(_)));
+        assert_eq!(err.public_status_code(), Some(500));
     }
 }

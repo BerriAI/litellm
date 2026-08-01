@@ -294,6 +294,7 @@ fn core_error_kind(error: &CoreError) -> &'static str {
         CoreError::MissingField(_) => "MissingField",
         CoreError::Http { .. } => "HttpError",
         CoreError::InvalidResponse(_) => "InvalidResponse",
+        CoreError::Timeout => "Timeout",
         CoreError::Network(_) => "NetworkError",
         CoreError::Routing(_) => "RoutingError",
     }
