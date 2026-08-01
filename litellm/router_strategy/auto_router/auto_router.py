@@ -57,17 +57,42 @@ class AutoRouter(CustomLogger):
         self._derived_savings_baseline_model: str | None = None
         self._savings_baseline_derived = False
 
+    @staticmethod
+    def _canonical_model(model: str, custom_llm_provider: str | None) -> str | None:
+        """``provider/model``, or ``None`` when the pair names no known provider.
+
+        A deployment may name its vendor either in the model prefix or in a separate
+        `custom_llm_provider`, and the bare name alone is not enough to price: it can
+        resolve to a different vendor's rates, or to nothing at all. Qualifying it here
+        means the baseline that reaches the spend writer resolves back to the same
+        vendor that served it.
+        """
+        import litellm
+
+        try:
+            resolved_model, provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception as e:  # noqa: BLE001  # an unroutable candidate cannot be the baseline
+            verbose_router_logger.debug("auto-router savings: cannot resolve candidate %s (%s)", model, e)
+            return None
+        return f"{provider}/{resolved_model}"
+
     def _deployment_model(self, index: int) -> str | None:
-        """The model a deployment actually calls."""
+        """The model a deployment calls, qualified by the provider it declares."""
         params = self.litellm_router_instance.model_list[index].get("litellm_params")
-        return params.get("model") if isinstance(params, dict) else None
+        if not isinstance(params, dict):
+            return None
+        model = params.get("model")
+        return self._canonical_model(model, params.get("custom_llm_provider")) if model else None
 
     def _models_for_group(self, group_name: str) -> tuple[str, ...]:
         """The models a route's model group actually calls, or the name itself when the
         parent router has no deployment under it."""
         indices = self.litellm_router_instance.model_name_to_deployment_indices.get(group_name)
         if not indices:
-            return (group_name,)
+            canonical = self._canonical_model(group_name, None)
+            return (canonical,) if canonical else ()
         return tuple(model for index in indices if (model := self._deployment_model(index)))
 
     def _candidate_models(self) -> tuple[str, ...]:
@@ -91,7 +116,15 @@ class AutoRouter(CustomLogger):
         except Exception as e:  # noqa: BLE001  # unmapped candidates simply cannot be the baseline
             verbose_router_logger.debug("auto-router savings: no pricing for candidate %s (%s)", model, e)
             return None
-        return (info.get("output_cost_per_token") or 0.0, info.get("input_cost_per_token") or 0.0, model)
+        output_rate = info.get("output_cost_per_token") or 0.0
+        input_rate = info.get("input_cost_per_token") or 0.0
+        if output_rate <= 0.0 and input_rate <= 0.0:
+            # A model that costs nothing per token cannot stand in for what the traffic
+            # would otherwise have cost, and as a baseline it would report the whole
+            # real spend as a loss.
+            verbose_router_logger.debug("auto-router savings: candidate %s has no per-token price", model)
+            return None
+        return (output_rate, input_rate, model)
 
     def _most_expensive_candidate(self) -> str | None:
         """The priciest candidate by output rate, input rate breaking the tie."""

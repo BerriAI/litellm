@@ -398,7 +398,8 @@ class TestSavingsBaselineModel:
     def _auto_router(group_to_model: dict, route_names: list, default_model: str, configured=None) -> AutoRouter:
         parent = MagicMock()
         parent.model_list = [
-            {"model_name": group, "litellm_params": {"model": model}} for group, model in group_to_model.items()
+            {"model_name": group, "litellm_params": dict(params) if isinstance(params, dict) else {"model": params}}
+            for group, params in group_to_model.items()
         ]
         parent.model_name_to_deployment_indices = {group: [i] for i, group in enumerate(group_to_model)}
 
@@ -486,3 +487,55 @@ class TestSavingsBaselineModel:
         auto_router.litellm_router_instance.model_list = []
         auto_router.litellm_router_instance.model_name_to_deployment_indices = {}
         assert auto_router.savings_baseline_model == "anthropic/claude-sonnet-5"
+
+    def test_a_deployment_naming_its_provider_separately_is_still_priced(self):
+        """A deployment may name its vendor in `custom_llm_provider` rather than in the
+        model prefix. Pricing the bare name then resolves to a different vendor's rates
+        or to nothing at all, so the candidate is mispriced or silently dropped and the
+        derived baseline is wrong. Vertex prices this model at $0 without its provider
+        and azure_ai raises outright, so neither could ever win as the priciest."""
+        auto_router = self._auto_router(
+            {
+                "cheap": {"model": "claude-haiku-4-5", "custom_llm_provider": "anthropic"},
+                "vertex-tier": {"model": "claude-sonnet-4@20250514", "custom_llm_provider": "vertex_ai"},
+            },
+            ["cheap", "vertex-tier"],
+            "cheap",
+        )
+        assert auto_router.savings_baseline_model == "vertex_ai/claude-sonnet-4@20250514"
+
+    def test_candidates_are_qualified_so_the_spend_writer_resolves_the_same_vendor(self):
+        """The baseline travels to the spend writer as a bare string, so it has to carry
+        its provider or the writer prices it under whichever vendor owns the bare name."""
+        from litellm.proxy.spend_tracking.savings import _resolve_model
+
+        auto_router = self._auto_router(
+            {"azure-tier": {"model": "deepseek-r1", "custom_llm_provider": "azure_ai"}},
+            ["azure-tier"],
+            "azure-tier",
+        )
+        baseline = auto_router.savings_baseline_model
+        assert baseline == "azure_ai/deepseek-r1"
+        assert _resolve_model(baseline, None) == ("deepseek-r1", "azure_ai")
+
+    def test_a_candidate_with_no_per_token_price_cannot_be_the_baseline(self):
+        """A model that costs nothing per token cannot stand in for what the traffic
+        would otherwise have cost. Left in, it would report the whole real spend as a
+        loss the moment it won the priciest-candidate contest."""
+        auto_router = self._auto_router(
+            {"images": {"model": "dall-e-2", "custom_llm_provider": "openai"}},
+            ["images"],
+            "images",
+        )
+        assert auto_router.savings_baseline_model is None
+
+    def test_a_priced_candidate_still_wins_over_an_unpriced_one(self):
+        auto_router = self._auto_router(
+            {
+                "images": {"model": "dall-e-2", "custom_llm_provider": "openai"},
+                "chat": {"model": "claude-haiku-4-5", "custom_llm_provider": "anthropic"},
+            },
+            ["images", "chat"],
+            "chat",
+        )
+        assert auto_router.savings_baseline_model == "anthropic/claude-haiku-4-5"
