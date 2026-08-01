@@ -10,10 +10,10 @@ from .gpt_transformation import AzureFoundryGPTImageGenerationConfig
 from .mai_transformation import AzureFoundryMAIImageGenerationConfig
 
 __all__ = [
-    "AzureFoundryFluxImageGenerationConfig",
-    "AzureFoundryGPTImageGenerationConfig",
     "AzureFoundryDallE2ImageGenerationConfig",
     "AzureFoundryDallE3ImageGenerationConfig",
+    "AzureFoundryFluxImageGenerationConfig",
+    "AzureFoundryGPTImageGenerationConfig",
     "AzureFoundryMAIImageGenerationConfig",
 ]
 

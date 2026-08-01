@@ -18,7 +18,7 @@ Endpoints:
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -87,7 +87,7 @@ async def get_marketplace():
                 verbose_proxy_logger.warning(f"Plugin {plugin.name} has no source field, skipping")
                 continue
 
-            entry: Dict[str, Any] = {
+            entry: dict[str, Any] = {
                 "name": plugin.name,
                 "source": manifest["source"],
             }
@@ -121,7 +121,7 @@ async def get_marketplace():
         verbose_proxy_logger.exception(f"Error generating marketplace: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to generate marketplace: {str(e)}"},
+            detail={"error": f"Failed to generate marketplace: {e!s}"},
         )
 
 
@@ -132,7 +132,7 @@ async def get_marketplace():
 _VALID_GIT_SUBDIR_PATH_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
 
 
-def _validate_plugin_source(source: Dict[str, Any]) -> None:
+def _validate_plugin_source(source: dict[str, Any]) -> None:
     """Validate plugin source format, raising HTTPException on invalid input."""
     source_type = source.get("source")
     if source_type == "github":
@@ -231,7 +231,7 @@ async def register_plugin(
         _validate_plugin_source(source)
 
         # Build manifest for storage
-        manifest: Dict[str, Any] = {
+        manifest: dict[str, Any] = {
             "name": request.name,
             "source": request.source,
         }
@@ -304,7 +304,7 @@ async def register_plugin(
         verbose_proxy_logger.exception(f"Error registering plugin: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Registration failed: {str(e)}"},
+            detail={"error": f"Registration failed: {e!s}"},
         )
 
 

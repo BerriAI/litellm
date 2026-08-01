@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -7,12 +7,12 @@ from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 class VertexAITokenCounter(GoogleAIStudioTokenCounter, VertexBase):
     async def validate_environment(
         self,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        headers: Optional[Dict[str, Any]] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        headers: dict[str, Any] | None = None,
         model: str = "",
-        litellm_params: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Dict[str, Any], str]:
+        litellm_params: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], str]:
         """
         Returns a Tuple of headers and url for the Vertex AI countTokens endpoint.
         """

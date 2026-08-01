@@ -7,7 +7,7 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 import asyncio
 import contextlib
 import json
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import TypeAdapter
 
@@ -32,20 +32,20 @@ class BedrockRealtime(BaseAWSLLM):
         model: str,
         websocket: Any,
         logging_obj: LiteLLMLogging,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Optional[float] = None,
-        aws_region_name: Optional[str] = None,
-        aws_access_key_id: Optional[str] = None,
-        aws_secret_access_key: Optional[str] = None,
-        aws_session_token: Optional[str] = None,
-        aws_role_name: Optional[str] = None,
-        aws_session_name: Optional[str] = None,
-        aws_profile_name: Optional[str] = None,
-        aws_web_identity_token: Optional[str] = None,
-        aws_sts_endpoint: Optional[str] = None,
-        aws_bedrock_runtime_endpoint: Optional[str] = None,
-        aws_external_id: Optional[str] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = None,
+        aws_region_name: str | None = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+        aws_session_token: str | None = None,
+        aws_role_name: str | None = None,
+        aws_session_name: str | None = None,
+        aws_profile_name: str | None = None,
+        aws_web_identity_token: str | None = None,
+        aws_sts_endpoint: str | None = None,
+        aws_bedrock_runtime_endpoint: str | None = None,
+        aws_external_id: str | None = None,
         **kwargs,
     ):
         """
@@ -175,7 +175,7 @@ class BedrockRealtime(BaseAWSLLM):
         except Exception as e:
             verbose_proxy_logger.exception(f"Error in BedrockRealtime.async_realtime: {e}")
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal error: {str(e)}"))
+                await websocket.close(code=1011, reason=_redact_string(f"Internal error: {e!s}"))
             except Exception:
                 pass
             raise

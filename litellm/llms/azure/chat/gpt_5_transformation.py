@@ -1,7 +1,5 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
-from typing import List
-
 import litellm
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.openai.chat.gpt_5_transformation import (
@@ -56,7 +54,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "azure/"
         return ("gpt-5" in model and not _normalized.startswith("gpt-5-chat")) or "gpt5_series" in model
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
 
         Azure OpenAI GPT-5.2/5.4 models support logprobs, unlike OpenAI's GPT-5.
@@ -142,7 +140,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

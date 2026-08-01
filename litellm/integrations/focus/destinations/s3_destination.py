@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timezone
-from typing import Any, Optional
+from typing import Any
 
 import boto3
 
@@ -18,7 +18,7 @@ class FocusS3Destination(FocusDestination):
         self,
         *,
         prefix: str,
-        config: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         config = config or {}
         bucket_name = config.get("bucket_name")

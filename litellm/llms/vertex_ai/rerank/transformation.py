@@ -4,7 +4,7 @@ Translates from Cohere's `/v1/rerank` input format to Vertex AI Discovery Engine
 Why separate file? Make it easy to see how transformation works
 """
 
-from typing import Any, Dict, List, Union
+from typing import Any
 
 import httpx
 
@@ -38,7 +38,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         self,
         api_base: str | None,
         model: str,
-        optional_params: Dict | None = None,
+        optional_params: dict | None = None,
     ) -> str:
         """
         Get the complete URL for the Vertex AI Discovery Engine ranking API
@@ -73,7 +73,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: Dict | None = None,
+        optional_params: dict | None = None,
     ) -> dict:
         """
         Validate and set up authentication for Vertex AI Discovery Engine API
@@ -106,7 +106,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -225,15 +225,15 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Map Cohere rerank params to Vertex AI format
         """

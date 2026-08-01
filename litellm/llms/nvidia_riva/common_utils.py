@@ -2,7 +2,7 @@
 Common utilities and exceptions for the NVIDIA Riva STT provider
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -15,8 +15,6 @@ class NvidiaRivaException(BaseLLMException):
     gRPC ``StatusCode`` (when available) so that litellm's existing error
     classifiers (RateLimitError, AuthenticationError, etc.) keep working.
     """
-
-    pass
 
 
 # Mapping from grpc.StatusCode.name -> equivalent HTTP status code.
@@ -43,7 +41,7 @@ _GRPC_STATUS_CODE_TO_HTTP: dict = {
 }
 
 
-def _extract_grpc_status_name(error: Any) -> Optional[str]:
+def _extract_grpc_status_name(error: Any) -> str | None:
     """
     Best-effort extraction of a gRPC StatusCode name from an arbitrary error.
 
@@ -62,7 +60,7 @@ def _extract_grpc_status_name(error: Any) -> Optional[str]:
     return None
 
 
-def _extract_grpc_details(error: Any) -> Optional[str]:
+def _extract_grpc_details(error: Any) -> str | None:
     """Best-effort extraction of a human-readable detail string from a gRPC error."""
     details_fn = getattr(error, "details", None)
     if callable(details_fn):

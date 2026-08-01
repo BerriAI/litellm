@@ -2,17 +2,15 @@
 Cost calculation for search providers.
 """
 
-from typing import Optional, Tuple
-
 from litellm.utils import get_model_info
 
 
 def search_provider_cost_per_query(
     model: str,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     number_of_queries: int = 1,
-    optional_params: Optional[dict] = None,
-) -> Tuple[float, float]:
+    optional_params: dict | None = None,
+) -> tuple[float, float]:
     """
     Calculate cost for search-only providers.
 

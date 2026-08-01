@@ -1,6 +1,5 @@
 import os
 import sys
-from typing import Dict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -16,7 +15,7 @@ def can_modify_guardrails(team_obj: Optional[LiteLLM_TeamTable]) -> bool:
 
     team_metadata = team_obj.metadata or {}
 
-    if team_metadata.get("guardrails", None) is not None and isinstance(team_metadata.get("guardrails"), Dict):
+    if team_metadata.get("guardrails", None) is not None and isinstance(team_metadata.get("guardrails"), dict):
         if team_metadata.get("guardrails", {}).get("modify_guardrails", None) is False:
             return False
 

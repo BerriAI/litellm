@@ -3,8 +3,6 @@ This module is used to transform the request and response for the Voyage context
 This would be used for all the contextualized embeddings models in Voyage.
 """
 
-from typing import List, Optional, Union
-
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -20,7 +18,7 @@ class VoyageError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Union[dict, httpx.Headers] = {},
+        headers: dict | httpx.Headers = {},
     ):
         self.status_code = status_code
         self.message = message
@@ -43,12 +41,12 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base:
             if not api_base.endswith("/contextualizedembeddings"):
@@ -81,11 +79,11 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             api_key = (
@@ -100,7 +98,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
     def transform_embedding_request(
         self,
         model: str,
-        input: Union[AllEmbeddingInputValues, List[List[str]]],
+        input: AllEmbeddingInputValues | list[list[str]],
         optional_params: dict,
         headers: dict,
     ) -> dict:
@@ -116,7 +114,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -138,9 +136,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         model_response.usage = usage
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VoyageError(message=error_message, status_code=status_code, headers=headers)
 
     @staticmethod

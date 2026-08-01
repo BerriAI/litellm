@@ -37,13 +37,9 @@ _DEEPKEEP_GUARDRAIL_ENDPOINT = "/v3/openai/beta/litellm_basic_guardrail_api"
 class DeepKeepGuardrailMissingSecrets(Exception):
     """Exception raised when DeepKeep API key or firewall_id is missing."""
 
-    pass
-
 
 class DeepKeepGuardrailAPIError(Exception):
     """Exception raised when there's an error calling the DeepKeep API."""
-
-    pass
 
 
 class DeepKeepGuardrail(CustomGuardrail):
@@ -232,7 +228,7 @@ class DeepKeepGuardrail(CustomGuardrail):
                 **({"http_status_code": http_status_code} if http_status_code else {}),
             )
         verbose_proxy_logger.error("DeepKeep guardrail API error: %s", str(error))
-        raise DeepKeepGuardrailAPIError(f"DeepKeep guardrail API failed: {str(error)}")
+        raise DeepKeepGuardrailAPIError(f"DeepKeep guardrail API failed: {error!s}")
 
     @staticmethod
     def _build_return_inputs(

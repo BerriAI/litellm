@@ -5,7 +5,7 @@ Maps OpenAI TTS spec to MiniMax TTS API (WebSocket-based HTTP API)
 Reference: https://platform.minimax.io/docs
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from httpx import Headers
@@ -33,7 +33,7 @@ class MinimaxException(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[Union[dict, Headers]] = None,
+        headers: dict | Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -86,13 +86,13 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _resolve_voice_id(
         self,
-        voice: Optional[Union[str, Dict[str, Any]]],
-        params: Dict[str, Any],
+        voice: str | dict[str, Any] | None,
+        params: dict[str, Any],
     ) -> str:
         """
         Determine the MiniMax voice_id based on provided voice input or parameters.
         """
-        mapped_voice: Optional[str] = None
+        mapped_voice: str | None = None
 
         if isinstance(voice, str) and voice.strip():
             mapped_voice = self._extract_voice_id(voice)
@@ -119,15 +119,15 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: Dict,
-        voice: Optional[Union[str, Dict]] = None,
+        optional_params: dict,
+        voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Optional[str], Dict]:
+        kwargs: dict[str, Any] | None = None,
+    ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to MiniMax TTS parameters
         """
-        mapped_params: Dict[str, Any] = {}
+        mapped_params: dict[str, Any] = {}
 
         # Work on a copy so we don't mutate the caller's dictionary
         params = dict(optional_params) if optional_params else {}
@@ -180,8 +180,8 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate MiniMax environment and set up authentication headers
@@ -202,16 +202,16 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return MinimaxException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_text_to_speech_request(
         self,
         model: str,
         input: str,
-        voice: Optional[str],
-        optional_params: Dict,
-        litellm_params: Dict,
+        voice: str | None,
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:
         """
@@ -242,7 +242,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         # Output format: 'url' or 'hex' (default is 'hex')
         output_format = params.pop("output_format", "hex")
 
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "model": model,
             "text": input,
             "stream": False,  # HTTP endpoint doesn't support streaming
@@ -353,7 +353,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 except Exception as e:
                     raise MinimaxException(
                         status_code=500,
-                        message=f"Failed to decode audio data: {str(e)}",
+                        message=f"Failed to decode audio data: {e!s}",
                         headers=dict(raw_response.headers),
                     )
 
@@ -378,7 +378,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         except json.JSONDecodeError as e:
             raise MinimaxException(
                 status_code=500,
-                message=f"Failed to parse MiniMax response: {str(e)}",
+                message=f"Failed to parse MiniMax response: {e!s}",
                 headers=dict(raw_response.headers),
             )
         except Exception as e:
@@ -386,14 +386,14 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 raise
             raise MinimaxException(
                 status_code=500,
-                message=f"Error processing MiniMax response: {str(e)}",
+                message=f"Error processing MiniMax response: {e!s}",
                 headers=dict(raw_response.headers),
             )
 
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """

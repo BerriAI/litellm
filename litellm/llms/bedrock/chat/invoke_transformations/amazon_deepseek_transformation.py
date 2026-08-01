@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, cast
+from typing import Any, cast
 
 from httpx import Response
 
@@ -33,12 +33,12 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Extract the reasoning content, and return it as a separate field in the response.
@@ -56,8 +56,8 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
             api_key,
             json_mode,
         )
-        prompt = cast(Optional[str], request_data.get("prompt"))
-        message_content = cast(Optional[str], cast(Choices, response.choices[0]).message.get("content"))
+        prompt = cast(str | None, request_data.get("prompt"))
+        message_content = cast(str | None, cast(Choices, response.choices[0]).message.get("content"))
         if prompt and prompt.strip().endswith("<think>") and message_content:
             message_content_with_reasoning_token = "<think>" + message_content
             reasoning, content = _parse_content_for_reasoning(message_content_with_reasoning_token)

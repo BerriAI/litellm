@@ -10,7 +10,6 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 """
 
 import types
-from typing import List
 
 from litellm.types.llms.bedrock import (
     AmazonTitanG1EmbeddingRequest,
@@ -50,7 +49,7 @@ class AmazonTitanG1Config:
             and v is not None
         }
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return []
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
@@ -59,10 +58,10 @@ class AmazonTitanG1Config:
     def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanG1EmbeddingRequest:
         return AmazonTitanG1EmbeddingRequest(inputText=input)
 
-    def _transform_response(self, response_list: List[dict], model: str) -> EmbeddingResponse:
+    def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
         total_prompt_tokens = 0
 
-        transformed_responses: List[Embedding] = []
+        transformed_responses: list[Embedding] = []
         for index, response in enumerate(response_list):
             _parsed_response = AmazonTitanG1EmbeddingResponse(**response)  # type: ignore
             transformed_responses.append(

@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import List, Optional, Tuple
 
 import httpx
 
@@ -33,14 +32,14 @@ class PassThroughStreamingHandler:
     @staticmethod
     async def chunk_processor(
         response: httpx.Response,
-        request_body: Optional[dict],
+        request_body: dict | None,
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
         start_time: datetime,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
     ):
-        raw_bytes: List[bytes] = []
+        raw_bytes: list[bytes] = []
         logging_scheduled = False
         model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
@@ -90,7 +89,7 @@ class PassThroughStreamingHandler:
 
                     yield chunk
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in chunk_processor: {str(e)}")
+            verbose_proxy_logger.error(f"Error in chunk_processor: {e!s}")
             raise
         finally:
             # GeneratorExit (raised on client disconnect) is not caught by
@@ -116,7 +115,7 @@ class PassThroughStreamingHandler:
                         )
                     )
                 except Exception as e:
-                    verbose_proxy_logger.error(f"Error scheduling chunk_processor logging: {str(e)}")
+                    verbose_proxy_logger.error(f"Error scheduling chunk_processor logging: {e!s}")
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
@@ -126,9 +125,9 @@ class PassThroughStreamingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        raw_bytes: List[bytes],
+        raw_bytes: list[bytes],
         end_time: datetime,
-        model: Optional[str] = None,
+        model: str | None = None,
     ):
         """
         Route the logging for the collected chunks to the appropriate handler
@@ -166,7 +165,7 @@ class PassThroughStreamingHandler:
                 **kwargs,
             )
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in _route_streaming_logging_to_handler: {str(e)}")
+            verbose_proxy_logger.error(f"Error in _route_streaming_logging_to_handler: {e!s}")
 
     @staticmethod
     def _build_passthrough_logging_result(
@@ -176,10 +175,10 @@ class PassThroughStreamingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        raw_bytes: List[bytes],
+        raw_bytes: list[bytes],
         end_time: datetime,
-        model: Optional[str],
-    ) -> Tuple[PassThroughEndpointLoggingResultValues, dict]:
+        model: str | None,
+    ) -> tuple[PassThroughEndpointLoggingResultValues, dict]:
         """
         Synchronous, CPU-bound reconstruction of the standard logging payload
         from collected raw SSE bytes. Extracted from
@@ -188,7 +187,7 @@ class PassThroughStreamingHandler:
         loop; an off-loop dispatch is a future change, not part of this PR.
         """
         all_chunks = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
-        standard_logging_response_object: Optional[PassThroughEndpointLoggingResultValues] = None
+        standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         kwargs: dict = {}
         if endpoint_type == EndpointType.ANTHROPIC:
             anthropic_passthrough_logging_handler_result = (
@@ -245,11 +244,11 @@ class PassThroughStreamingHandler:
 
     @staticmethod
     def _extract_model_for_cost_injection(
-        request_body: Optional[dict],
+        request_body: dict | None,
         url_route: str,
         endpoint_type: EndpointType,
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Extract model name for cost injection from various sources.
         """
@@ -274,7 +273,7 @@ class PassThroughStreamingHandler:
         return None
 
     @staticmethod
-    def _convert_raw_bytes_to_str_lines(raw_bytes: List[bytes]) -> List[str]:
+    def _convert_raw_bytes_to_str_lines(raw_bytes: list[bytes]) -> list[str]:
         """
         Converts a list of raw bytes into a list of string lines, similar to aiter_lines()
 

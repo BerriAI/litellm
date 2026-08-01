@@ -1,12 +1,12 @@
 import click
 import rich
+
 from ... import UsersManagementClient
 
 
 @click.group()
 def users():
     """Manage users on your LiteLLM proxy server"""
-    pass
 
 
 @users.command("list")
@@ -20,8 +20,8 @@ def list_users(ctx: click.Context):
     if not users:
         click.echo("No users found.")
         return
-    from rich.table import Table
     from rich.console import Console
+    from rich.table import Table
 
     table = Table(title="Users")
     table.add_column("User ID", style="cyan")

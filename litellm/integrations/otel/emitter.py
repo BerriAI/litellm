@@ -126,7 +126,7 @@ class SpanEmitter:
         )
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.
-        self._emitted: "OrderedDict[tuple[str, SpanRole], None]" = OrderedDict()
+        self._emitted: OrderedDict[tuple[str, SpanRole], None] = OrderedDict()
 
     # -- low-level helpers --------------------------------------------------- #
 

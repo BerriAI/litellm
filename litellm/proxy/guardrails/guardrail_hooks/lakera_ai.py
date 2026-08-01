@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Dict, List, Literal, Optional, Union
+from typing import Literal
 
 import httpx
 from fastapi import HTTPException
@@ -48,7 +48,7 @@ INPUT_POSITIONING_MAP = {
 
 class lakeraAI_Moderation(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
@@ -57,9 +57,9 @@ class lakeraAI_Moderation(CustomGuardrail):
     def __init__(
         self,
         moderation_check: Literal["pre_call", "in_parallel"] = "in_parallel",
-        category_thresholds: Optional[LakeraCategoryThresholds] = None,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
+        category_thresholds: LakeraCategoryThresholds | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -77,7 +77,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             return
 
         flagged = _results[0].get("flagged", False)
-        category_scores: Optional[dict] = _results[0].get("category_scores", None)
+        category_scores: dict | None = _results[0].get("category_scores", None)
 
         if self.category_thresholds is not None:
             if category_scores is not None:
@@ -110,7 +110,7 @@ class lakeraAI_Moderation(CustomGuardrail):
                 },
             )
 
-        return None
+        return
 
     async def _check(
         self,
@@ -141,7 +141,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         text = ""
         _json_data: str = ""
         if "messages" in data and isinstance(data["messages"], list):
-            prompt_injection_obj: Optional[GuardrailItem] = litellm.guardrail_name_config_map.get("prompt_injection")
+            prompt_injection_obj: GuardrailItem | None = litellm.guardrail_name_config_map.get("prompt_injection")
             if prompt_injection_obj is not None:
                 enabled_roles = prompt_injection_obj.enabled_roles
             else:
@@ -150,16 +150,16 @@ class lakeraAI_Moderation(CustomGuardrail):
             if enabled_roles is None:
                 enabled_roles = default_roles
 
-            stringified_roles: List[str] = []
+            stringified_roles: list[str] = []
             if enabled_roles is not None:  # convert to list of str
                 for role in enabled_roles:
                     if isinstance(role, Role):
                         stringified_roles.append(role.value)
                     elif isinstance(role, str):
                         stringified_roles.append(role)
-            lakera_input_dict: Dict = {role: None for role in INPUT_POSITIONING_MAP.keys()}
+            lakera_input_dict: dict = {role: None for role in INPUT_POSITIONING_MAP}
             system_message = None
-            tool_call_messages: List = []
+            tool_call_messages: list = []
             for message in data["messages"]:
                 role = message.get("role")
                 if role in stringified_roles:
@@ -288,7 +288,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
-        data: Dict,
+        data: dict,
         call_type: Literal[
             "completion",
             "text_completion",
@@ -301,7 +301,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Optional[Union[Exception, str, Dict]]:
+    ) -> Exception | str | dict | None:
         from litellm.types.guardrails import GuardrailEventHooks
 
         if self.event_hook is None:

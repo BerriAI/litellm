@@ -4,7 +4,7 @@
 ### [BETA] this is in Beta. And might change.
 
 import traceback
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import HTTPException
 
@@ -17,7 +17,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 class _PROXY_BatchRedisRequests(CustomLogger):
     # Class variables or attributes
-    in_memory_cache: Optional[InMemoryCache] = None
+    in_memory_cache: InMemoryCache | None = None
 
     def __init__(self):
         if litellm.cache is not None:
@@ -26,9 +26,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             )  # map the litellm 'get_cache' function to our custom function
 
     def print_verbose(self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG"):
-        if debug_level == "DEBUG":
-            verbose_proxy_logger.debug(print_statement)
-        elif debug_level == "INFO":
+        if debug_level == "DEBUG" or debug_level == "INFO":
             verbose_proxy_logger.debug(print_statement)
         if litellm.set_verbose is True:
             print(print_statement)  # noqa: T201
@@ -86,7 +84,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                "litellm.proxy.hooks.batch_redis_get.py::async_pre_call_hook(): Exception occured - {}".format(str(e))
+                f"litellm.proxy.hooks.batch_redis_get.py::async_pre_call_hook(): Exception occured - {e!s}"
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 
@@ -100,7 +98,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             - return redis cache request
         """
         try:  # never block execution
-            cache_key: Optional[str] = None
+            cache_key: str | None = None
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             elif litellm.cache is not None:

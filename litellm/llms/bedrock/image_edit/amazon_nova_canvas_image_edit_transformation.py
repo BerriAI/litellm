@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -40,14 +40,14 @@ else:
 def _nova_canvas_task_body(
     *,
     image_b64: str,
-    mask_b64: Optional[str],
+    mask_b64: str | None,
     text: str,
-    negative_text: Optional[str],
-    similarity_strength: Optional[float],
-    task_type: Optional[str],
-    mask_prompt: Optional[str],
-    out_painting_mode: Optional[str],
-) -> Dict[str, Any]:
+    negative_text: str | None,
+    similarity_strength: float | None,
+    task_type: str | None,
+    mask_prompt: str | None,
+    out_painting_mode: str | None,
+) -> dict[str, Any]:
     """Build InvokeModel body task section (without imageGenerationConfig)."""
     if task_type == "BACKGROUND_REMOVAL":
         return {
@@ -60,7 +60,7 @@ def _nova_canvas_task_body(
                 "OUTPAINTING requires either a mask image or a mask prompt. "
                 "Pass mask=<file> or maskPrompt=<str> in the request."
             )
-        out_params: Dict[str, Any] = {
+        out_params: dict[str, Any] = {
             "image": image_b64,
             "text": text,
         }
@@ -79,7 +79,7 @@ def _nova_canvas_task_body(
     # Honour explicit IMAGE_VARIATION even when a mask is present (mask is ignored
     # for this task type; callers use INPAINTING when they want mask semantics).
     if task_type == "IMAGE_VARIATION":
-        var_params_explicit: Dict[str, Any] = {
+        var_params_explicit: dict[str, Any] = {
             "images": [image_b64],
             "text": text,
         }
@@ -100,7 +100,7 @@ def _nova_canvas_task_body(
                 "or omit taskType for automatic routing (mask → INPAINTING, else IMAGE_VARIATION)."
             )
     if mask_b64 is not None or mask_prompt is not None or task_type == "INPAINTING":
-        in_params: Dict[str, Any] = {"image": image_b64, "text": text}
+        in_params: dict[str, Any] = {"image": image_b64, "text": text}
         if mask_prompt is not None:
             in_params["maskPrompt"] = mask_prompt
         elif mask_b64 is not None:
@@ -114,7 +114,7 @@ def _nova_canvas_task_body(
                 "See https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html"
             )
         return {"taskType": "INPAINTING", "inPaintingParams": in_params}
-    var_params: Dict[str, Any] = {
+    var_params: dict[str, Any] = {
         "images": [image_b64],
         "text": text,
     }
@@ -128,7 +128,7 @@ def _nova_canvas_task_body(
     }
 
 
-def _file_types_to_b64(image: Optional[FileTypes]) -> str:
+def _file_types_to_b64(image: FileTypes | None) -> str:
     """Encode OpenAI image input to base64 string for Nova Canvas."""
     if image is None:
         raise ValueError("Nova Canvas image edit requires an image input")
@@ -165,9 +165,9 @@ def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
         return False
 
     seen: set[str] = set()
-    candidates: List[str] = []
+    candidates: list[str] = []
 
-    def _add(name: Optional[str]) -> None:
+    def _add(name: str | None) -> None:
         if name and name not in seen:
             seen.add(name)
             candidates.append(name)
@@ -220,7 +220,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
     """
 
     @classmethod
-    def _is_nova_canvas_image_edit_model(cls, model: Optional[str] = None) -> bool:
+    def _is_nova_canvas_image_edit_model(cls, model: str | None = None) -> bool:
         """
         Use model_cost.supports_nova_canvas_image_edit so new Nova Canvas inference IDs
         are added via model_prices_and_context_window.json only (not get_model_info, which
@@ -250,9 +250,9 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         supported = set(self.get_supported_openai_params(model))
-        mapped: Dict[str, Any] = dict(image_edit_optional_params)
+        mapped: dict[str, Any] = dict(image_edit_optional_params)
         _size = mapped.pop("size", None)
         if _size is not None and isinstance(_size, str) and "x" in _size:
             w, h = _size.split("x", 1)
@@ -298,17 +298,17 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, Any]:
+    ) -> tuple[dict, Any]:
         op = dict(image_edit_optional_request_params)
         image_b64 = _file_types_to_b64(image)
 
         mask_raw = op.pop("mask", None)
-        mask_b64: Optional[str] = None
+        mask_b64: str | None = None
         if mask_raw is not None:
             mask_b64 = _file_types_to_b64(mask_raw)  # type: ignore[arg-type]
 
@@ -327,7 +327,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         cfg_scale = op.pop("cfgScale", None)
         seed = op.pop("seed", None)
 
-        image_generation_config: Dict[str, Any] = {}
+        image_generation_config: dict[str, Any] = {}
         nested_igc = op.pop("imageGenerationConfig", None)
         if isinstance(nested_igc, dict):
             image_generation_config.update(nested_igc)
@@ -380,8 +380,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         try:
             response_data = raw_response.json()
@@ -399,7 +399,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        images: List[str] = response_data.get("images") or []
+        images: list[str] = response_data.get("images") or []
 
         if "errors" in response_data and not images:
             raise self.get_error_class(
@@ -462,7 +462,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         raise NotImplementedError(
@@ -475,9 +475,9 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if headers is None:
             headers = {}

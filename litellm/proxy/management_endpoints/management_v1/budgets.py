@@ -108,7 +108,7 @@ def _serialize(row: BudgetListItem) -> BudgetListItem:
 def _scope(caller: UserAPIKeyAuth) -> Scope:
     if user_api_key_has_admin_view(caller):
         return ScopeAll()
-    return ScopeDenied(reason="Only proxy admins can list budgets, your role={}".format(caller.user_role))
+    return ScopeDenied(reason=f"Only proxy admins can list budgets, your role={caller.user_role}")
 
 
 # budget_duration is deliberately absent from `sortable`: the column holds strings
@@ -191,9 +191,7 @@ async def list_budgets(
         raise
     except Exception as e:  # noqa: BLE001  # a driver error answers as a problem document, not the OpenAI error shape
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.management_v1.budgets.list_budgets(): Exception occured - {}".format(
-                str(e)
-            )
+            f"litellm.proxy.management_endpoints.management_v1.budgets.list_budgets(): Exception occured - {e!s}"
         )
         raise ManagementProblem(
             ProblemDetail(

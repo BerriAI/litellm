@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -15,7 +15,7 @@ oobabooga_config = OobaboogaConfig()
 def completion(
     model: str,
     messages: list,
-    api_base: Optional[str],
+    api_base: str | None,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -90,8 +90,8 @@ def embedding(
     model: str,
     input: list,
     model_response: EmbeddingResponse,
-    api_key: Optional[str],
-    api_base: Optional[str],
+    api_key: str | None,
+    api_base: str | None,
     logging_obj: Any,
     optional_params: dict,
     encoding=None,

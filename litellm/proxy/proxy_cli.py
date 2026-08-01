@@ -8,7 +8,7 @@ import sys
 import urllib.parse as urlparse
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import click
 import httpx
@@ -59,11 +59,11 @@ class LiteLLMDatabaseConnectionPool(Enum):
 
 def _build_db_connection_url_params(
     connection_limit: int,
-    pool_timeout: Optional[Union[int, float]],
-    connect_timeout: Optional[Union[int, float]] = None,
-    socket_timeout: Optional[Union[int, float]] = None,
+    pool_timeout: float | None,
+    connect_timeout: float | None = None,
+    socket_timeout: float | None = None,
     disable_prepared_statements: bool = False,
-    extra_params: Optional[dict] = None,
+    extra_params: dict | None = None,
 ) -> dict:
     """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
 
@@ -92,7 +92,7 @@ def _build_db_connection_url_params(
     return params
 
 
-def append_query_params(url: Optional[str], params: dict) -> str:
+def append_query_params(url: str | None, params: dict) -> str:
     from litellm._logging import verbose_proxy_logger
 
     verbose_proxy_logger.debug(f"url: {url}")
@@ -127,7 +127,7 @@ class ProxyInitializationHelpers:
         host: str,
         port: int,
         model: str,
-        test: Union[bool, str],
+        test: bool | str,
     ):
         request_model = model or "gpt-3.5-turbo"
         click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
@@ -176,9 +176,9 @@ class ProxyInitializationHelpers:
     def _get_default_unvicorn_init_args(
         host: str,
         port: int,
-        log_config: Optional[str] = None,
-        keepalive_timeout: Optional[int] = None,
-        timeout_worker_healthcheck: Optional[int] = None,
+        log_config: str | None = None,
+        keepalive_timeout: int | None = None,
+        timeout_worker_healthcheck: int | None = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
@@ -217,7 +217,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def _apply_uvicorn_max_requests_jitter(
         uvicorn_args: dict,
-        max_requests_before_restart: Optional[int],
+        max_requests_before_restart: int | None,
         jitter: int,
     ) -> None:
         """
@@ -243,7 +243,7 @@ class ProxyInitializationHelpers:
             )
 
     @staticmethod
-    def _get_reload_options(config_path: Optional[str]) -> dict:
+    def _get_reload_options(config_path: str | None) -> dict:
         """Build uvicorn reload kwargs so --reload also reacts to .env and YAML edits."""
         cwd = os.path.abspath(os.getcwd())
         reload_dirs = [cwd]
@@ -264,7 +264,7 @@ class ProxyInitializationHelpers:
         }
 
     @staticmethod
-    def _patch_statreload_extra_paths(paths: Iterable[Optional[str]]) -> bool:
+    def _patch_statreload_extra_paths(paths: Iterable[str | None]) -> bool:
         """Make uvicorn's StatReload reloader notice non-Python dev files
         (the --config YAML and .env).
 
@@ -305,7 +305,7 @@ class ProxyInitializationHelpers:
         return True
 
     @staticmethod
-    def _configure_dev_reload(uvicorn_args: dict, config_path: Optional[str]) -> None:
+    def _configure_dev_reload(uvicorn_args: dict, config_path: str | None) -> None:
         """Wire up --reload (dev only): watch *.py, the --config YAML, and .env,
         and signal reloaded workers to re-read .env with override so edits to
         existing keys actually take effect rather than staying masked by the
@@ -329,7 +329,7 @@ class ProxyInitializationHelpers:
         port: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
-        ciphers: Optional[str] = None,
+        ciphers: str | None = None,
     ):
         """
         Initialize litellm with `hypercorn`
@@ -360,11 +360,11 @@ class ProxyInitializationHelpers:
         host: str,
         port: int,
         num_workers: int,
-        ssl_certfile_path: Optional[str],
-        ssl_keyfile_path: Optional[str],
-        max_requests_before_restart: Optional[int],
-        ciphers: Optional[str],
-        granian_runtime_threads: Optional[int] = None,
+        ssl_certfile_path: str | None,
+        ssl_keyfile_path: str | None,
+        max_requests_before_restart: int | None,
+        ciphers: str | None,
+        granian_runtime_threads: int | None = None,
     ) -> None:
         """
         Run the proxy with Granian (Rust-backed ASGI server, HTTP/1 + HTTP/2).
@@ -413,8 +413,8 @@ class ProxyInitializationHelpers:
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
-        max_requests_before_restart: Optional[int] = None,
-        max_requests_before_restart_jitter: Optional[int] = None,
+        max_requests_before_restart: int | None = None,
+        max_requests_before_restart_jitter: int | None = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -545,7 +545,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def _maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
-        litellm_settings: Optional[dict],
+        litellm_settings: dict | None,
     ) -> None:
         """
         Auto-create PROMETHEUS_MULTIPROC_DIR when running with multiple workers
@@ -899,8 +899,8 @@ def run_server(
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
-    max_requests_before_restart_jitter: Optional[int],
-    limit_concurrency: Optional[int],
+    max_requests_before_restart_jitter: int | None,
+    limit_concurrency: int | None,
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
     reload: bool,
@@ -1003,11 +1003,11 @@ def run_server(
 
         db_connection_pool_limit = 100
         # Starts optional due to config fallback checks; guaranteed non-None before use.
-        db_connection_timeout: Optional[Union[int, float]] = 60
-        db_connect_timeout: Optional[Union[int, float]] = None
-        db_socket_timeout: Optional[Union[int, float]] = None
+        db_connection_timeout: int | float | None = 60
+        db_connect_timeout: int | float | None = None
+        db_socket_timeout: int | float | None = None
         db_disable_prepared_statements: bool = False
-        db_extra_connection_params: Optional[dict] = None
+        db_extra_connection_params: dict | None = None
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 

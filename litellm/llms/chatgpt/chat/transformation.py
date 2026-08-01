@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -16,8 +16,8 @@ from .streaming_utils import ChatGPTToolCallNormalizer
 class ChatGPTConfig(OpenAIConfig):
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         custom_llm_provider: str = "openai",
     ) -> None:
         super().__init__()
@@ -26,10 +26,10 @@ class ChatGPTConfig(OpenAIConfig):
     def _get_openai_compatible_provider_info(
         self,
         model: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         custom_llm_provider: str,
-    ) -> Tuple[Optional[str], Optional[str], str]:
+    ) -> tuple[str | None, str | None, str]:
         dynamic_api_base = self.authenticator.get_api_base()
         try:
             dynamic_api_key = self.authenticator.get_access_token()
@@ -45,11 +45,11 @@ class ChatGPTConfig(OpenAIConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         validated_headers = super().validate_environment(
             headers, model, messages, optional_params, litellm_params, api_key, api_base

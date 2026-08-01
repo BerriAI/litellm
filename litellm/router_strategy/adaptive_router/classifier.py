@@ -9,11 +9,10 @@ Order matters: we check more specific types first, falling back to GENERAL.
 
 import re
 from re import Pattern
-from typing import List, Tuple
 
 from litellm.types.router import RequestType
 
-_RULES: List[Tuple[Pattern[str], RequestType]] = [
+_RULES: list[tuple[Pattern[str], RequestType]] = [
     (
         re.compile(
             r"\b(write|create|generate|implement|build)\s+(?:a |an |the |me )?(?:python|javascript|typescript|java|rust|go|c\+\+|sql|bash|shell)\b",

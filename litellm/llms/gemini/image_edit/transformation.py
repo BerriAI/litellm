@@ -1,6 +1,6 @@
 import base64
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -34,9 +34,9 @@ else:
 
 class GeminiImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    SUPPORTED_PARAMS: List[str] = ["n", "size", "imageConfig"]
+    SUPPORTED_PARAMS: list[str] = ["n", "size", "imageConfig"]
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return list(self.SUPPORTED_PARAMS)
 
     def map_openai_params(
@@ -44,7 +44,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return map_openai_image_params_to_gemini(
             params=image_edit_optional_params,  # type: ignore[arg-type]
             model=model,
@@ -56,11 +56,11 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        final_api_key: Optional[str] = api_key or get_secret_str("GEMINI_API_KEY")
+        final_api_key: str | None = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
 
@@ -75,7 +75,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         base_url = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
@@ -85,12 +85,12 @@ class GeminiImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(  # type: ignore[override]
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict[str, Any],
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict[str, Any], Optional[RequestFiles]]:
+    ) -> tuple[dict[str, Any], RequestFiles | None]:
         inline_parts = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise ValueError("Gemini image edit requires at least one image.")
@@ -106,7 +106,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             }
         ]
 
-        request_body: Dict[str, Any] = {"contents": contents}
+        request_body: dict[str, Any] = {"contents": contents}
 
         request_body["generationConfig"] = get_gemini_image_generation_config(
             model=model,
@@ -133,7 +133,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             )
 
         candidates = response_json.get("candidates", [])
-        data_list: List[ImageObject] = []
+        data_list: list[ImageObject] = []
 
         for candidate in candidates:
             content = candidate.get("content", {})
@@ -148,19 +148,19 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                         )
                     )
 
-        model_response.data = cast(List[OpenAIImage], data_list)
+        model_response.data = cast(list[OpenAIImage], data_list)
         if "usageMetadata" in response_json:
             model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
         return model_response
 
-    def _prepare_inline_image_parts(self, image: Union[FileTypes, List[FileTypes]]) -> List[Dict[str, Any]]:
-        images: List[FileTypes]
+    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, Any]]:
+        images: list[FileTypes]
         if isinstance(image, list):
             images = image
         else:
             images = [image]
 
-        inline_parts: List[Dict[str, Any]] = []
+        inline_parts: list[dict[str, Any]] = []
         for img in images:
             if img is None:
                 continue

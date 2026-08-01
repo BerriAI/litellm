@@ -6,10 +6,9 @@ returns whatever the sandbox produced. The lifecycle is create container ->
 run code -> delete container; `code_interpreter_tool` combines all three.
 """
 
-from typing import Any, Union
+from typing import Any
 
 import httpx
-
 from pydantic import Field, PrivateAttr
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -64,7 +63,7 @@ class BaseSandboxConfig:
     async def arun_code(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         code: str,
         api_key: str | None = None,
         **kwargs,
@@ -74,7 +73,7 @@ class BaseSandboxConfig:
     async def adelete_sandbox(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         api_key: str | None = None,
         **kwargs,
     ) -> bool:

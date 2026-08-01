@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -42,7 +42,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         headers: dict,
         model: str,
-        litellm_params: Optional[GenericLiteLLMParams],
+        litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         try:
             access_token = self.authenticator.get_access_token()
@@ -144,13 +144,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             or "\ndata:" in body_text
         )
 
-    def _extract_completed_response_from_sse(
-        self, body_text: str
-    ) -> tuple[Optional[ResponsesAPIResponse], Optional[str]]:
+    def _extract_completed_response_from_sse(self, body_text: str) -> tuple[ResponsesAPIResponse | None, str | None]:
         completed_response = None
         error_message = None
-        streamed_output_items: Dict[int, dict] = {}
-        text_only_output_items: Dict[int, dict] = {}
+        streamed_output_items: dict[int, dict] = {}
+        text_only_output_items: dict[int, dict] = {}
         for chunk in body_text.splitlines():
             parsed_chunk = parse_sse_json_chunk(chunk)
             if parsed_chunk is None:
@@ -177,7 +175,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 # output_index, but text-only items at indices without a
                 # matching OUTPUT_ITEM_DONE must still be preserved (e.g.
                 # providers that emit only OUTPUT_TEXT_DONE for some indices).
-                merged_items: Dict[int, dict] = {**text_only_output_items}
+                merged_items: dict[int, dict] = {**text_only_output_items}
                 merged_items.update(streamed_output_items)
                 completed_response = self._build_completed_response_from_chunk(
                     parsed_chunk=parsed_chunk,
@@ -196,8 +194,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return completed_response, error_message
 
     def _build_completed_response_from_chunk(
-        self, parsed_chunk: Dict[str, Any], streamed_output_items: Dict[int, dict]
-    ) -> Optional[ResponsesAPIResponse]:
+        self, parsed_chunk: dict[str, Any], streamed_output_items: dict[int, dict]
+    ) -> ResponsesAPIResponse | None:
         response_payload = parsed_chunk.get("response")
         if not isinstance(response_payload, dict):
             return None
@@ -211,7 +209,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         except Exception:
             return ResponsesAPIResponse.model_construct(**response_payload)
 
-    def _extract_error_message(self, parsed_chunk: Dict[str, Any]) -> Optional[str]:
+    def _extract_error_message(self, parsed_chunk: dict[str, Any]) -> str | None:
         error_obj = parsed_chunk.get("error") or (parsed_chunk.get("response") or {}).get("error")
         if error_obj is None:
             return None
@@ -233,7 +231,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE

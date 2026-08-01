@@ -11,8 +11,6 @@ Each entrypoint is `@client`-decorated, so every operation is logged the same
 way `litellm.asearch` is.
 """
 
-from typing import Union
-
 import litellm
 from litellm.llms.base_llm.sandbox.transformation import (
     BaseSandboxConfig,
@@ -23,10 +21,10 @@ from litellm.types.utils import SandboxProviders
 from litellm.utils import ProviderConfigManager, client
 
 __all__ = [
-    "acreate_sandbox",
-    "arun_code",
-    "adelete_sandbox",
     "acode_interpreter_tool",
+    "acreate_sandbox",
+    "adelete_sandbox",
+    "arun_code",
 ]
 
 _LITELLM_INTERNAL_KWARGS = {
@@ -85,7 +83,7 @@ async def acreate_sandbox(
 @client
 async def arun_code(
     provider: str,
-    container: Union[ContainerHandle, str],
+    container: ContainerHandle | str,
     code: str,
     api_key: str | None = None,
     **kwargs,
@@ -102,7 +100,7 @@ async def arun_code(
 @client
 async def adelete_sandbox(
     provider: str,
-    container: Union[ContainerHandle, str],
+    container: ContainerHandle | str,
     api_key: str | None = None,
     api_base: str | None = None,
     **kwargs,

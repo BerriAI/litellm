@@ -55,9 +55,9 @@ def resolve_mappers(names: Iterable[str]) -> list[AttributeMapper]:
 
 
 __all__ = [
+    "AttrValue",
     "AttributeMap",
     "AttributeMapper",
-    "AttrValue",
     "GenAIMapper",
     "LangfuseMapper",
     "LangtraceMapper",

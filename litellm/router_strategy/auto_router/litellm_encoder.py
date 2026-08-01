@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import ConfigDict
 from semantic_router.encoders import DenseEncoder
@@ -49,7 +49,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         self,
         litellm_router_instance: "Router",
         model_name: str,
-        score_threshold: Union[float, None] = None,
+        score_threshold: float | None = None,
     ):
         """Initialize the LiteLLMEncoder.
 

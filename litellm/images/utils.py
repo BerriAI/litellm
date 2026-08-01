@@ -1,5 +1,5 @@
 from io import BufferedReader, BytesIO
-from typing import Any, Dict, List, Optional, cast, get_type_hints
+from typing import Any, cast, get_type_hints
 
 import litellm
 from litellm.litellm_core_utils.token_counter import get_image_type
@@ -14,9 +14,9 @@ class ImageEditRequestUtils:
         model: str,
         image_edit_provider_config: BaseImageEditConfig,
         image_edit_optional_params: ImageEditOptionalRequestParams,
-        drop_params: Optional[bool] = None,
-        additional_drop_params: Optional[List[str]] = None,
-    ) -> Dict:
+        drop_params: bool | None = None,
+        additional_drop_params: list[str] | None = None,
+    ) -> dict:
         """
         Get optional parameters for the image edit API.
 
@@ -61,7 +61,7 @@ class ImageEditRequestUtils:
 
     @staticmethod
     def get_requested_image_edit_optional_param(
-        params: Dict[str, Any],
+        params: dict[str, Any],
     ) -> ImageEditOptionalRequestParams:
         """
         Filter parameters to only include those defined in ImageEditOptionalRequestParams.

@@ -5,7 +5,7 @@ Docs - https://cloud.ibm.com/apidocs/watsonx-ai#text-rerank
 """
 
 import uuid
-from typing import Any, Dict, List, Union, cast
+from typing import Any, cast
 
 import httpx
 
@@ -60,7 +60,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
-    ) -> Dict:
+    ) -> dict:
         optional_params = optional_params or {}
 
         default_headers = {
@@ -94,15 +94,15 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Map Cohere rerank params to IBM watsonx.ai rerank params
         """
@@ -131,7 +131,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -164,19 +164,19 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
             raw_response_json = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Failed to parse response: {str(e)}",
+                error_message=f"Failed to parse response: {e!s}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
-        _results: List[dict] | None = raw_response_json.get("results")
+        _results: list[dict] | None = raw_response_json.get("results")
         if _results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
 
         transformed_results = []
 
         for result in _results:
-            transformed_result: Dict[str, Any] = {
+            transformed_result: dict[str, Any] = {
                 "index": result["index"],
                 "relevance_score": result["score"],
             }

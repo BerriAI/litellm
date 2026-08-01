@@ -9,7 +9,7 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 """
 
 import json
-from typing import Any, Dict, List, cast
+from typing import Any, cast
 
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -38,7 +38,7 @@ class FakeAnthropicMessagesStreamIterator:
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
-    def _create_content_block_chunks(self, block_dict: Dict[str, Any], index: int) -> List[bytes]:
+    def _create_content_block_chunks(self, block_dict: dict[str, Any], index: int) -> list[bytes]:
         """Build SSE chunks for a single content block."""
         chunks = []
         block_type = block_dict.get("type")
@@ -117,12 +117,12 @@ class FakeAnthropicMessagesStreamIterator:
         chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
         return chunks
 
-    def _create_streaming_chunks(self) -> List[bytes]:
+    def _create_streaming_chunks(self) -> list[bytes]:
         """Convert the non-streaming response to streaming chunks"""
         chunks = []
 
         # Cast response to dict for easier access
-        response_dict = cast(Dict[str, Any], self.response)
+        response_dict = cast(dict[str, Any], self.response)
 
         # 1. message_start event
         usage = response_dict.get("usage", {})
@@ -147,13 +147,13 @@ class FakeAnthropicMessagesStreamIterator:
         # 2-4. For each content block, send start/delta/stop events
         content_blocks = response_dict.get("content", [])
         for index, block in enumerate(content_blocks):
-            block_dict = cast(Dict[str, Any], block)
+            block_dict = cast(dict[str, Any], block)
             chunks.extend(self._create_content_block_chunks(block_dict, index))
 
         # 5. message_delta event (with final usage and stop_reason)
         # Include cache usage fields so clients that only read message_delta
         # (like Claude Code's SDK) see the full input token breakdown.
-        delta_usage: Dict[str, Any] = {
+        delta_usage: dict[str, Any] = {
             "output_tokens": usage.get("output_tokens", 0) if usage else 0,
         }
         if usage:

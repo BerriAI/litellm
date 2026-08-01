@@ -11,8 +11,6 @@ Endpoint
 Docs - https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api
 """
 
-from typing import List, Optional, Union
-
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -38,7 +36,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         # DashScope's compatible-mode embeddings API accepts the same params as OpenAI.
         # `dimensions` / `encoding_format` are only honored by text-embedding-v3 / v4;
         # earlier versions silently ignore them server-side.
@@ -66,11 +64,11 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("DASHSCOPE_API_KEY")
@@ -86,12 +84,12 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         base = api_base or get_secret_str("DASHSCOPE_API_BASE") or DEFAULT_API_BASE
         base = base.rstrip("/")
@@ -122,7 +120,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -132,7 +130,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         except Exception as e:
             raise DashScopeError(
                 status_code=raw_response.status_code,
-                message=f"Failed to parse DashScope response as JSON: {str(e)}",
+                message=f"Failed to parse DashScope response as JSON: {e!s}",
             )
 
         logging_obj.post_call(
@@ -176,7 +174,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         if isinstance(headers, dict):
             headers = httpx.Headers(headers)

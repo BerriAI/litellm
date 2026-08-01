@@ -5,7 +5,7 @@ Used to get the DataDogLogger for a given request.
 Handles Key/Team Based Datadog Logging, following the same pattern as LangFuseHandler.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
@@ -19,10 +19,10 @@ else:
 
 
 class DatadogLoggingConfig(TypedDict):
-    dd_api_key: Optional[str]
-    dd_site: Optional[str]
-    dd_agent_host: Optional[str]
-    dd_agent_port: Optional[str]
+    dd_api_key: str | None
+    dd_site: str | None
+    dd_agent_host: str | None
+    dd_agent_port: str | None
 
 
 class DataDogHandler:
@@ -63,7 +63,7 @@ class DataDogHandler:
 
     @staticmethod
     def _create_datadog_logger_from_credentials(
-        credentials: Dict,
+        credentials: dict,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> DataDogLogger:
         """

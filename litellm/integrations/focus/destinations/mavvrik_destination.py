@@ -9,7 +9,7 @@ Flow:
 from __future__ import annotations
 
 import gzip
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
@@ -56,7 +56,7 @@ class FocusMavvrikDestination(FocusDestination):
         self,
         *,
         prefix: str,
-        config: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         config = config or {}
         api_key = config.get("api_key")
@@ -100,7 +100,7 @@ class FocusMavvrikDestination(FocusDestination):
     def _auth_headers(self) -> dict[str, str]:
         return {"Content-Type": "application/json", "x-api-key": self.api_key}
 
-    async def _ensure_registered(self) -> Optional[int]:
+    async def _ensure_registered(self) -> int | None:
         """POST agent endpoint to register/initialize the connector (once per instance).
 
         Returns metricsMarker from the Mavvrik response — the last date index
@@ -264,7 +264,7 @@ class FocusMavvrikDestination(FocusDestination):
             )
         verbose_logger.debug("Mavvrik FOCUS destination: metricsMarker advanced to %s", date_epoch)
 
-    async def get_metrics_marker(self) -> Optional[int]:
+    async def get_metrics_marker(self) -> int | None:
         """Register with Mavvrik and return the current metricsMarker.
 
         Always calls the Mavvrik register API — unlike deliver() which skips

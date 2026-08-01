@@ -4,7 +4,7 @@ Response Polling Handler for Background Responses with Cache
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
@@ -18,7 +18,7 @@ class ResponsePollingHandler:
     CACHE_KEY_PREFIX = "litellm:polling:response:"
     POLLING_ID_PREFIX = "litellm_poll_"  # Clear prefix to identify polling IDs
 
-    def __init__(self, redis_cache: Optional[RedisCache] = None, ttl: int = 3600):
+    def __init__(self, redis_cache: RedisCache | None = None, ttl: int = 3600):
         self.redis_cache = redis_cache
         self.ttl = ttl  # Time-to-live for cache entries (default: 1 hour)
 
@@ -40,7 +40,7 @@ class ResponsePollingHandler:
     async def create_initial_state(
         self,
         polling_id: str,
-        request_data: Dict[str, Any],
+        request_data: dict[str, Any],
     ) -> ResponsesAPIResponse:
         """
         Create initial state in Redis for a polling request
@@ -84,26 +84,26 @@ class ResponsePollingHandler:
     async def update_state(
         self,
         polling_id: str,
-        status: Optional[ResponsesAPIStatus] = None,
-        usage: Optional[Dict] = None,
-        error: Optional[Dict] = None,
-        incomplete_details: Optional[Dict] = None,
-        reasoning: Optional[Dict] = None,
-        tool_choice: Optional[Any] = None,
-        tools: Optional[list] = None,
-        output: Optional[list] = None,
+        status: ResponsesAPIStatus | None = None,
+        usage: dict | None = None,
+        error: dict | None = None,
+        incomplete_details: dict | None = None,
+        reasoning: dict | None = None,
+        tool_choice: Any | None = None,
+        tools: list | None = None,
+        output: list | None = None,
         # Additional ResponsesAPIResponse fields
-        model: Optional[str] = None,
-        instructions: Optional[str] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        previous_response_id: Optional[str] = None,
-        text: Optional[Dict] = None,
-        truncation: Optional[str] = None,
-        parallel_tool_calls: Optional[bool] = None,
-        user: Optional[str] = None,
-        store: Optional[bool] = None,
+        model: str | None = None,
+        instructions: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        max_output_tokens: int | None = None,
+        previous_response_id: str | None = None,
+        text: dict | None = None,
+        truncation: str | None = None,
+        parallel_tool_calls: bool | None = None,
+        user: str | None = None,
+        store: bool | None = None,
     ) -> None:
         """
         Update the polling state in Redis
@@ -212,7 +212,7 @@ class ResponsePollingHandler:
             f"Updated polling state for {polling_id}: status={state['status']}, output_items={output_count}"
         )
 
-    async def get_state(self, polling_id: str) -> Optional[Dict[str, Any]]:
+    async def get_state(self, polling_id: str) -> dict[str, Any] | None:
         """Get current polling state from Redis"""
         if not self.redis_cache:
             return None
@@ -254,7 +254,7 @@ def should_use_polling_for_request(
     redis_cache,  # RedisCache or None
     model: str,
     llm_router,  # Router instance or None
-    native_background_mode: Optional[List[str]] = None,  # List of models that should use native background mode
+    native_background_mode: list[str] | None = None,  # List of models that should use native background mode
 ) -> bool:
     """
     Determine if polling via cache should be used for a request.

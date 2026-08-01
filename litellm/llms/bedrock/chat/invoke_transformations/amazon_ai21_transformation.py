@@ -1,5 +1,4 @@
 import types
-from typing import List, Optional
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
@@ -28,23 +27,23 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
     - `countPenalty` (object): Placeholder for count penalty object.
     """
 
-    maxTokens: Optional[int] = None
-    temperature: Optional[float] = None
-    topP: Optional[float] = None
-    stopSequences: Optional[list] = None
-    frequencePenalty: Optional[dict] = None
-    presencePenalty: Optional[dict] = None
-    countPenalty: Optional[dict] = None
+    maxTokens: int | None = None
+    temperature: float | None = None
+    topP: float | None = None
+    stopSequences: list | None = None
+    frequencePenalty: dict | None = None
+    presencePenalty: dict | None = None
+    countPenalty: dict | None = None
 
     def __init__(
         self,
-        maxTokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        topP: Optional[float] = None,
-        stopSequences: Optional[list] = None,
-        frequencePenalty: Optional[dict] = None,
-        presencePenalty: Optional[dict] = None,
-        countPenalty: Optional[dict] = None,
+        maxTokens: int | None = None,
+        temperature: float | None = None,
+        topP: float | None = None,
+        stopSequences: list | None = None,
+        frequencePenalty: dict | None = None,
+        presencePenalty: dict | None = None,
+        countPenalty: dict | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -72,7 +71,7 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
             and v is not None
         }
 
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "max_tokens",
             "temperature",

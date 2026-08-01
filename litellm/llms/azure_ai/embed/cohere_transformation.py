@@ -9,8 +9,6 @@ Convers
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
 """
 
-from typing import List, Optional, Tuple
-
 from litellm.types.llms.azure_ai import ImageEmbeddingInput, ImageEmbeddingRequest
 from litellm.types.llms.openai import EmbeddingCreateParams
 from litellm.types.utils import EmbeddingResponse, Usage
@@ -29,24 +27,24 @@ class AzureAICohereConfig:
 
         return model
 
-    def _transform_request_image_embeddings(self, input: List[str], optional_params: dict) -> ImageEmbeddingRequest:
+    def _transform_request_image_embeddings(self, input: list[str], optional_params: dict) -> ImageEmbeddingRequest:
         """
         Assume all str in list is base64 encoded string
         """
-        image_input: List[ImageEmbeddingInput] = []
+        image_input: list[ImageEmbeddingInput] = []
         for i in input:
             embedding_input = ImageEmbeddingInput(image=i)
             image_input.append(embedding_input)
         return ImageEmbeddingRequest(input=image_input, **optional_params)
 
     def _transform_request(
-        self, input: List[str], optional_params: dict, model: str
-    ) -> Tuple[ImageEmbeddingRequest, EmbeddingCreateParams, List[int]]:
+        self, input: list[str], optional_params: dict, model: str
+    ) -> tuple[ImageEmbeddingRequest, EmbeddingCreateParams, list[int]]:
         """
         Return the list of input to `/image/embeddings`, `/v1/embeddings`, list of image_embedding_idx for recombination
         """
-        image_embeddings: List[str] = []
-        image_embedding_idx: List[int] = []
+        image_embeddings: list[str] = []
+        image_embedding_idx: list[int] = []
         for idx, i in enumerate(input):
             """
             - is base64 -> route to image embeddings
@@ -68,10 +66,10 @@ class AzureAICohereConfig:
         return image_embeddings_request, v1_embeddings_request, image_embedding_idx
 
     def _transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
-        additional_headers: Optional[dict] = response._hidden_params.get("additional_headers")
+        additional_headers: dict | None = response._hidden_params.get("additional_headers")
         if additional_headers:
             # CALCULATE USAGE
-            input_tokens: Optional[str] = additional_headers.get("llm_provider-num_tokens")
+            input_tokens: str | None = additional_headers.get("llm_provider-num_tokens")
             if input_tokens:
                 if response.usage:
                     response.usage.prompt_tokens = int(input_tokens)
@@ -79,7 +77,7 @@ class AzureAICohereConfig:
                     response.usage = Usage(prompt_tokens=int(input_tokens))
 
             # SET MODEL
-            base_model: Optional[str] = additional_headers.get("llm_provider-azureml-model-group")
+            base_model: str | None = additional_headers.get("llm_provider-azureml-model-group")
             if base_model:
                 response.model = self._map_azure_model_group(base_model)
 

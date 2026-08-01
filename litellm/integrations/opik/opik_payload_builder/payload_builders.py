@@ -1,7 +1,7 @@
 """Payload builders for Opik traces and spans."""
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm import _logging
 from litellm.integrations.opik import utils
@@ -12,14 +12,14 @@ from . import types
 def build_trace_payload(
     project_name: str,
     trace_id: str,
-    response_obj: Dict[str, Any],
+    response_obj: dict[str, Any],
     start_time: datetime,
     end_time: datetime,
     input_data: Any,
     output_data: Any,
-    metadata: Dict[str, Any],
-    tags: List[str],
-    thread_id: Optional[str],
+    metadata: dict[str, Any],
+    tags: list[str],
+    thread_id: str | None,
 ) -> types.TracePayload:
     """Build a complete trace payload."""
     trace_name = response_obj.get("object", "unknown type")
@@ -41,17 +41,17 @@ def build_trace_payload(
 def build_span_payload(
     project_name: str,
     trace_id: str,
-    parent_span_id: Optional[str],
-    response_obj: Dict[str, Any],
+    parent_span_id: str | None,
+    response_obj: dict[str, Any],
     start_time: datetime,
     end_time: datetime,
     input_data: Any,
     output_data: Any,
-    metadata: Dict[str, Any],
-    tags: List[str],
-    usage: Dict[str, int],
-    provider: Optional[str] = None,
-    cost: Optional[float] = None,
+    metadata: dict[str, Any],
+    tags: list[str],
+    usage: dict[str, int],
+    provider: str | None = None,
+    cost: float | None = None,
 ) -> types.SpanPayload:
     """Build a complete span payload."""
     span_id = utils.create_uuid7()

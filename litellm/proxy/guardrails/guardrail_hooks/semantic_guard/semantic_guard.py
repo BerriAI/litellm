@@ -6,7 +6,7 @@ via embedding similarity. Smarter than regex (understands intent), lighter
 than an LLM call (~20-50ms per request for embedding).
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import (
@@ -48,11 +48,11 @@ class SemanticGuardrail(CustomGuardrail):
         llm_router: "Router",
         embedding_model: str,
         similarity_threshold: float,
-        route_templates: Optional[List[str]] = None,
-        custom_routes_file: Optional[str] = None,
-        custom_routes: Optional[List[Dict[str, Any]]] = None,
+        route_templates: list[str] | None = None,
+        custom_routes_file: str | None = None,
+        custom_routes: list[dict[str, Any]] | None = None,
         on_flagged_action: str = "block",
-        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
+        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
         **kwargs,
     ):
@@ -80,7 +80,7 @@ class SemanticGuardrail(CustomGuardrail):
         if not routes:
             raise ValueError("SemanticGuardrail: no routes configured. Provide route_templates or custom_routes.")
 
-        self.semantic_router: "SemanticRouter" = SemanticGuardRouteLoader.build_semantic_router(
+        self.semantic_router: SemanticRouter = SemanticGuardRouteLoader.build_semantic_router(
             routes=routes,
             litellm_router=llm_router,
             embedding_model=embedding_model,
@@ -94,7 +94,7 @@ class SemanticGuardrail(CustomGuardrail):
         )
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -111,11 +111,11 @@ class SemanticGuardrail(CustomGuardrail):
         """Check user messages against semantic routes before LLM call."""
         messages = self.get_guardrails_messages_for_call_type(call_type=CallTypes(call_type), data=data)
         if not messages:
-            return None
+            return
 
         user_text = _extract_user_text(messages)
         if not user_text:
-            return None
+            return
 
         route_choice = _get_top_route_choice(self.semantic_router(text=user_text))
         if route_choice is not None and route_choice.name:
@@ -127,7 +127,7 @@ class SemanticGuardrail(CustomGuardrail):
                 data=data,
             )
 
-        return None
+        return
 
     @log_guardrail_information
     async def async_post_call_success_hook(
@@ -166,7 +166,7 @@ def _get_top_route_choice(result: Any) -> Any:
     return result
 
 
-def _extract_user_text(messages: List) -> str:
+def _extract_user_text(messages: list) -> str:
     """Extract the latest user message text."""
     for msg in reversed(messages):
         if isinstance(msg, dict) and msg.get("role") == "user":
@@ -181,7 +181,7 @@ def _extract_user_text(messages: List) -> str:
 def _extract_response_text(response: Any) -> str:
     """Extract text from every LLM response choice."""
     if hasattr(response, "choices") and response.choices:
-        text_parts: List[str] = []
+        text_parts: list[str] = []
         for choice in response.choices:
             if hasattr(choice, "message") and choice.message:
                 text = _content_to_text(choice.message.content)
@@ -205,7 +205,7 @@ def _content_to_text(content: Any) -> str:
 def _handle_match(
     guardrail: SemanticGuardrail,
     route_name: str,
-    similarity_score: Optional[float],
+    similarity_score: float | None,
     user_text: str,
     data: dict,
 ) -> None:

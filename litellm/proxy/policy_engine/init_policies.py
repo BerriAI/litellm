@@ -6,7 +6,7 @@ Configuration structure:
 - policy_attachments: Define WHERE policies apply (teams, keys, models)
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
@@ -25,8 +25,8 @@ _reset_color_code = "\033[0m"
 
 
 def _print_policies_on_startup(
-    policies_config: Dict[str, Any],
-    policy_attachments_config: Optional[List[Dict[str, Any]]] = None,
+    policies_config: dict[str, Any],
+    policy_attachments_config: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Print loaded policies to console on startup (similar to model list).
@@ -96,8 +96,8 @@ def _print_policies_on_startup(
 
 
 async def init_policies(
-    policies_config: Dict[str, Any],
-    policy_attachments_config: Optional[List[Dict[str, Any]]] = None,
+    policies_config: dict[str, Any],
+    policy_attachments_config: list[dict[str, Any]] | None = None,
     prisma_client: Optional["PrismaClient"] = None,
     validate_db: bool = True,
     fail_on_error: bool = True,
@@ -167,7 +167,7 @@ async def init_policies(
         policy_registry.load_policies(policies_config)
         verbose_proxy_logger.info(f"Successfully loaded {len(policies_config)} policies")
     except Exception as e:
-        verbose_proxy_logger.error(f"Failed to load policies: {str(e)}")
+        verbose_proxy_logger.error(f"Failed to load policies: {e!s}")
         raise
 
     # Load attachments if provided
@@ -176,15 +176,15 @@ async def init_policies(
             attachment_registry.load_attachments(policy_attachments_config)
             verbose_proxy_logger.info(f"Successfully loaded {len(policy_attachments_config)} policy attachments")
         except Exception as e:
-            verbose_proxy_logger.error(f"Failed to load policy attachments: {str(e)}")
+            verbose_proxy_logger.error(f"Failed to load policy attachments: {e!s}")
             raise
 
     return validation_result
 
 
 def init_policies_sync(
-    policies_config: Dict[str, Any],
-    policy_attachments_config: Optional[List[Dict[str, Any]]] = None,
+    policies_config: dict[str, Any],
+    policy_attachments_config: list[dict[str, Any]] | None = None,
     fail_on_error: bool = True,
 ) -> None:
     """
@@ -217,7 +217,7 @@ def init_policies_sync(
     )
 
 
-def get_policies_summary() -> Dict[str, Any]:
+def get_policies_summary() -> dict[str, Any]:
     """
     Get a summary of loaded policies for debugging/display.
 
@@ -234,7 +234,7 @@ def get_policies_summary() -> Dict[str, Any]:
 
     resolved = PolicyResolver.get_all_resolved_policies()
 
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "initialized": True,
         "policy_count": len(resolved),
         "attachment_count": len(attachment_registry.get_all_attachments()),

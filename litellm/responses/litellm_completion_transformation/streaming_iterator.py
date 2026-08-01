@@ -313,7 +313,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _default_response_created_event_data(self) -> dict:
         # Use cached response ID if available, otherwise generate a new one
         if self._cached_response_id is None:
-            self._cached_response_id = f"resp_{str(uuid.uuid4())}"
+            self._cached_response_id = f"resp_{uuid.uuid4()!s}"
 
         response_created_event_data = {
             "id": self._cached_response_id,
@@ -386,7 +386,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def create_output_item_added_event(self) -> OutputItemAddedEvent:
         if self._cached_item_id is None:
-            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
+            self._cached_item_id = f"msg_{uuid.uuid4()!s}"
 
         self._sequence_number += 1
         event = OutputItemAddedEvent(
@@ -407,7 +407,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def create_content_part_added_event(self) -> ContentPartAddedEvent:
         if self._cached_item_id is None:
-            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
+            self._cached_item_id = f"msg_{uuid.uuid4()!s}"
 
         self._sequence_number += 1
         event = ContentPartAddedEvent(
@@ -528,7 +528,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def create_output_text_done_event(self, litellm_complete_object: ModelResponse) -> OutputTextDoneEvent:
         if self._cached_item_id is None:
-            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
+            self._cached_item_id = f"msg_{uuid.uuid4()!s}"
 
         return OutputTextDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
@@ -541,7 +541,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def create_output_content_part_done_event(self, litellm_complete_object: ModelResponse) -> ContentPartDoneEvent:
         if self._cached_item_id is None:
-            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
+            self._cached_item_id = f"msg_{uuid.uuid4()!s}"
 
         text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
         reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
@@ -577,7 +577,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def create_output_item_done_event(self, litellm_complete_object: ModelResponse) -> OutputItemDoneEvent:
         if self._cached_item_id is None:
-            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
+            self._cached_item_id = f"msg_{uuid.uuid4()!s}"
 
         text = self.litellm_model_response.choices[0].message.content or ""  # type: ignore
         annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)  # type: ignore

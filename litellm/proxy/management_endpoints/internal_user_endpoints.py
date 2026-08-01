@@ -181,9 +181,13 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         for key, value in litellm.default_internal_user_params.items():
             if key == "available_teams":
                 continue
-            elif key not in data_json or data_json[key] is None:
-                data_json[key] = value
-            elif key == "models" and isinstance(data_json[key], list) and len(data_json[key]) == 0:
+            elif (
+                key not in data_json
+                or data_json[key] is None
+                or key == "models"
+                and isinstance(data_json[key], list)
+                and len(data_json[key]) == 0
+            ):
                 data_json[key] = value
 
     ## INTERNAL USER ROLE ONLY DEFAULT PARAMS ##
@@ -326,9 +330,7 @@ async def _add_user_to_team(
     except HTTPException as e:
         if e.status_code == 400 and ("already exists" in str(e) or "doesn't exist" in str(e)):
             verbose_proxy_logger.debug(
-                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                    str(e)
-                )
+                f"litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {e!s}"
             )
         else:
             verbose_proxy_logger.error(
@@ -339,17 +341,14 @@ async def _add_user_to_team(
                 str(e),
             )
     except Exception as e:
-        if "already exists" in str(e) or "doesn't exist" in str(e):
+        if (
+            "already exists" in str(e)
+            or "doesn't exist" in str(e)
+            or isinstance(e, ProxyException)
+            and ProxyErrorTypes.team_member_already_in_team in e.type
+        ):
             verbose_proxy_logger.debug(
-                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                    str(e)
-                )
-            )
-        elif isinstance(e, ProxyException) and ProxyErrorTypes.team_member_already_in_team in e.type:
-            verbose_proxy_logger.debug(
-                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                    str(e)
-                )
+                f"litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {e!s}"
             )
         else:
             verbose_proxy_logger.error(
@@ -606,7 +605,7 @@ async def new_user(
 
         return new_user_response
     except Exception as e:
-        verbose_proxy_logger.exception("/user/new: Exception occured - {}".format(str(e)))
+        verbose_proxy_logger.exception(f"/user/new: Exception occured - {e!s}")
         raise handle_exception_on_proxy(e)
 
 
@@ -901,7 +900,7 @@ async def user_info(
 
         return response_data
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(str(e)))
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.user_info(): Exception occured - {e!s}")
         raise handle_exception_on_proxy(e)
 
 
@@ -1051,9 +1050,7 @@ async def user_info_v2(
             object_permission=user_data.get("object_permission"),
         )
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.user_info_v2(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.user_info_v2(): Exception occured - {e!s}")
         raise handle_exception_on_proxy(e)
 
 
@@ -1323,7 +1320,7 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
         try:
             await user_api_key_cache.async_delete_cache(key=key)
         except Exception as e:  # noqa: BLE001  # a cache we cannot clear still expires; never fail the write
-            verbose_proxy_logger.warning(f"Failed to invalidate cached entitlement key {key!r}: {str(e)}")
+            verbose_proxy_logger.warning(f"Failed to invalidate cached entitlement key {key!r}: {e!s}")
 
 
 async def _update_single_user_helper(
@@ -1492,9 +1489,10 @@ def can_user_call_user_update(
     """
     Helper to check if the user has access to the key's info
     """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
-        return True
-    elif user_api_key_dict.user_id == user_info.user_id:
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_id == user_info.user_id
+    ):
         return True
     return False
 
@@ -1571,13 +1569,11 @@ async def user_update(
         )
         return response
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.user_update(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.user_update(): Exception occured - {e!s}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                message=getattr(e, "detail", f"Authentication Error({e!s})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -2399,7 +2395,7 @@ async def add_internal_user_to_organization(
 
         return new_membership
     except Exception as e:
-        raise Exception(f"Failed to add user to organization: {str(e)}")
+        raise Exception(f"Failed to add user to organization: {e!s}")
 
 
 async def _resolve_org_filter_for_user_search(
@@ -2597,8 +2593,8 @@ async def ui_view_users(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error searching users: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
+        verbose_proxy_logger.exception(f"Error searching users: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error searching users: {e!s}")
 
 
 # Using shared metric helper implementations from common_daily_activity
@@ -2720,10 +2716,10 @@ async def get_user_daily_activity(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception("/spend/daily/analytics: Exception occured - {}".format(str(e)))
+        verbose_proxy_logger.exception(f"/spend/daily/analytics: Exception occured - {e!s}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to fetch analytics: {str(e)}"},
+            detail={"error": f"Failed to fetch analytics: {e!s}"},
         )
 
 
@@ -2812,8 +2808,8 @@ async def get_user_daily_activity_aggregated(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception("/user/daily/activity/aggregated: Exception occured - {}".format(str(e)))
+        verbose_proxy_logger.exception(f"/user/daily/activity/aggregated: Exception occured - {e!s}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to fetch analytics: {str(e)}"},
+            detail={"error": f"Failed to fetch analytics: {e!s}"},
         )

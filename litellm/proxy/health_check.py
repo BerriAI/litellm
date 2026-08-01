@@ -7,7 +7,6 @@ import sys
 import threading
 import time
 from collections.abc import Mapping
-from typing import List, Optional
 
 import litellm
 
@@ -87,7 +86,7 @@ def _should_inject_health_check_max_tokens(model_info: Mapping[str, object], mod
 _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT = frozenset((None, "chat", "completion"))
 
 
-def _get_process_rss_mb() -> Optional[float]:
+def _get_process_rss_mb() -> float | None:
     """
     Get process RSS memory in MB.
     On Linux, ru_maxrss is in KB. On macOS, ru_maxrss is in bytes.
@@ -119,7 +118,7 @@ def _get_random_llm_message():
     return [{"role": "user", "content": random.choice(messages)}]
 
 
-def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
+def _clean_endpoint_data(endpoint_data: dict, details: bool | None = True):
     """
     Clean the endpoint data for display to users.
     """
@@ -132,7 +131,7 @@ def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
 
 
 def health_check_filter_kwargs_from_general_settings(
-    general_settings: Optional[dict],
+    general_settings: dict | None,
 ) -> dict:
     """
     Build kwargs for ``perform_health_check`` from ``general_settings``.
@@ -150,8 +149,8 @@ def health_check_filter_kwargs_from_general_settings(
 
 
 def filter_deployments_by_id(
-    model_list: List,
-) -> List:
+    model_list: list,
+) -> list:
     seen_ids = set()
     filtered_deployments = []
 
@@ -268,9 +267,9 @@ async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_
 
 async def _perform_health_check(
     model_list: list,
-    details: Optional[bool] = True,
-    max_concurrency: Optional[int] = None,
-    instrumentation_context: Optional[dict] = None,
+    details: bool | None = True,
+    max_concurrency: int | None = None,
+    instrumentation_context: dict | None = None,
 ):
     """
     Perform a health check for each model in the list.
@@ -396,7 +395,7 @@ def _health_check_deployment_is_wildcard(litellm_params: dict) -> bool:
     return "*" in _deployment_model_string_for_health_check(litellm_params)
 
 
-def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> Optional[int]:
+def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> int | None:
     """
     Pick max_tokens for the health check request.
 
@@ -494,8 +493,7 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
 
         model = litellm_params["model"]
         # Strip only the bedrock/ prefix (preserve routes like converse/, invoke/)
-        if model.startswith("bedrock/"):
-            model = model[8:]  # len("bedrock/") = 8
+        model = model.removeprefix("bedrock/")  # len("bedrock/") = 8
 
         # Now check for region routing and strip it if present
         # Need to handle formats like:
@@ -524,12 +522,12 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
 
 async def perform_health_check(
     model_list: list,
-    model: Optional[str] = None,
-    cli_model: Optional[str] = None,
-    details: Optional[bool] = True,
-    model_id: Optional[str] = None,
-    max_concurrency: Optional[int] = None,
-    instrumentation_context: Optional[dict] = None,
+    model: str | None = None,
+    cli_model: str | None = None,
+    details: bool | None = True,
+    model_id: str | None = None,
+    max_concurrency: int | None = None,
+    instrumentation_context: dict | None = None,
     health_check_skip_disabled_background_models: bool = False,
 ):
     """

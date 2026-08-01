@@ -1,15 +1,15 @@
 import asyncio
 import json
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
-    DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+    DEFAULT_SHARED_HEALTH_CHECK_TTL,
 )
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.health_check import perform_health_check
 
 
@@ -26,7 +26,7 @@ class SharedHealthCheckManager:
 
     def __init__(
         self,
-        redis_cache: Optional[RedisCache] = None,
+        redis_cache: RedisCache | None = None,
         health_check_ttl: int = DEFAULT_SHARED_HEALTH_CHECK_TTL,
         lock_ttl: int = DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     ):
@@ -100,7 +100,7 @@ class SharedHealthCheckManager:
         except Exception as e:
             verbose_proxy_logger.error("Error releasing health check lock: %s", str(e))
 
-    async def get_cached_health_check_results(self) -> Optional[Dict[str, Any]]:
+    async def get_cached_health_check_results(self) -> dict[str, Any] | None:
         """
         Get cached health check results from Redis.
 
@@ -140,8 +140,8 @@ class SharedHealthCheckManager:
 
     async def cache_health_check_results(
         self,
-        healthy_endpoints: List[Dict[str, Any]],
-        unhealthy_endpoints: List[Dict[str, Any]],
+        healthy_endpoints: list[dict[str, Any]],
+        unhealthy_endpoints: list[dict[str, Any]],
     ) -> None:
         """
         Cache health check results in Redis.
@@ -181,11 +181,11 @@ class SharedHealthCheckManager:
 
     async def perform_shared_health_check(
         self,
-        model_list: List[Dict[str, Any]],
+        model_list: list[dict[str, Any]],
         details: bool = True,
-        max_concurrency: Optional[int] = None,
+        max_concurrency: int | None = None,
         health_check_skip_disabled_background_models: bool = False,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         """
         Perform health check with shared state coordination.
 
@@ -329,7 +329,7 @@ class SharedHealthCheckManager:
             verbose_proxy_logger.error("Error checking health check lock status: %s", str(e))
             return False
 
-    async def get_health_check_status(self) -> Dict[str, Any]:
+    async def get_health_check_status(self) -> dict[str, Any]:
         """
         Get the current status of health check coordination.
 

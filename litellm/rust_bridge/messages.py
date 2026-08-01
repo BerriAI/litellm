@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Final, Protocol, Union, cast
+from typing import Final, Protocol, cast
 
 import httpx
 
@@ -96,7 +96,7 @@ def messages(
     api_base: str | None,
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_messages = load_rust_messages()
     if rust_messages is None:
@@ -120,7 +120,7 @@ async def amessages(
     api_base: str | None,
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_amessages = load_rust_amessages()
     if rust_amessages is None:

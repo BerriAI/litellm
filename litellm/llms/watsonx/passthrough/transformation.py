@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
@@ -18,13 +18,13 @@ class WatsonxPassthroughConfig(IBMWatsonXMixin, BasePassthroughConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: Optional[dict],
+        request_query_params: dict | None,
         litellm_params: dict,
-    ) -> Tuple["URL", str]:
+    ) -> tuple["URL", str]:
         """
         Construct complete Watsonx URL with version parameter.
 
@@ -44,14 +44,14 @@ class WatsonxPassthroughConfig(IBMWatsonXMixin, BasePassthroughConfig):
 
     @staticmethod
     def get_api_base(
-        api_base: Optional[str] = None,
-    ) -> Optional[str]:
+        api_base: str | None = None,
+    ) -> str | None:
         return api_base or IBMWatsonXMixin()._get_base_url(api_base=api_base)
 
     @staticmethod
     def get_api_key(
-        api_key: Optional[str] = None,
-    ) -> Optional[str]:
+        api_key: str | None = None,
+    ) -> str | None:
         return (
             api_key
             or IBMWatsonXMixin.get_watsonx_credentials(optional_params=dict(), api_base=None, api_key=api_key)[
@@ -60,8 +60,8 @@ class WatsonxPassthroughConfig(IBMWatsonXMixin, BasePassthroughConfig):
         )
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         return model
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         return super().get_models(api_key, api_base)

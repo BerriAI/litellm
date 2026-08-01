@@ -1,7 +1,6 @@
 import asyncio
 import functools
 from collections.abc import Awaitable, Callable
-from typing import Optional
 
 import anyio
 import anyio.to_thread
@@ -23,7 +22,7 @@ def asyncify(
     function: Callable[T_ParamSpec, T_Retval],
     *,
     cancellable: bool = False,
-    limiter: Optional[anyio.CapacityLimiter] = None,
+    limiter: anyio.CapacityLimiter | None = None,
 ) -> Callable[T_ParamSpec, Awaitable[T_Retval]]:
     """
     Take a blocking function and create an async one that receives the same

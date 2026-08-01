@@ -10,4 +10,4 @@ guardrail_translation_mappings = {
     CallTypes.aspeech: OpenAITextToSpeechHandler,
 }
 
-__all__ = ["guardrail_translation_mappings", "OpenAITextToSpeechHandler"]
+__all__ = ["OpenAITextToSpeechHandler", "guardrail_translation_mappings"]

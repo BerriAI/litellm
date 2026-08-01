@@ -3,7 +3,6 @@ Functions for sending Email Alerts
 """
 
 import os
-from typing import List, Optional
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import WebhookEvent
@@ -14,7 +13,7 @@ LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
 LITELLM_SUPPORT_CONTACT = "support@berri.ai"
 
 
-async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
+async def get_all_team_member_emails(team_id: str | None = None) -> list:
     verbose_logger.debug("Email Alerting: Getting all team members for team_id=%s", team_id)
     if team_id is None:
         return []
@@ -38,7 +37,7 @@ async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
         team_id,
         _team_members,
     )
-    _team_member_user_ids: List[str] = []
+    _team_member_user_ids: list[str] = []
     for member in _team_members:
         if member and isinstance(member, dict):
             _user_id = member.get("user_id")

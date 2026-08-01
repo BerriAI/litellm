@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Union
+from typing import Literal
 
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
@@ -33,15 +33,7 @@ if os.getenv("LEGACY_MULTI_INSTANCE_RATE_LIMITING", "false").lower() == "true":
 
 
 def get_proxy_hook(
-    hook_name: Union[
-        Literal[
-            "max_budget_limiter",
-            "managed_files",
-            "parallel_request_limiter",
-            "cache_control_check",
-        ],
-        str,
-    ],
+    hook_name: Literal["max_budget_limiter", "managed_files", "parallel_request_limiter", "cache_control_check"] | str,
 ):
     """
     Factory method to get a proxy hook instance by name

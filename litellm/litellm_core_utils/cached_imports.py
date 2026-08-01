@@ -6,7 +6,7 @@ inside functions that are critical to performance.
 """
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional, Type
+from typing import TYPE_CHECKING, Optional
 
 # Type annotations for cached imports
 if TYPE_CHECKING:
@@ -14,12 +14,12 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
 # Global cache variables
-_LiteLLMLogging: Optional[Type["Logging"]] = None
+_LiteLLMLogging: type["Logging"] | None = None
 _coroutine_checker: Optional["CoroutineChecker"] = None
-_set_callbacks: Optional[Callable] = None
+_set_callbacks: Callable | None = None
 
 
-def get_litellm_logging_class() -> Type["Logging"]:
+def get_litellm_logging_class() -> type["Logging"]:
     """Get the cached LiteLLM Logging class, initializing if needed."""
     global _LiteLLMLogging
     if _LiteLLMLogging is not None:

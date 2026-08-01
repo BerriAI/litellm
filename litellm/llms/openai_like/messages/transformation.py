@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -30,9 +30,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> tuple[dict[str, str], Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict[str, str], str | None]:
         present = {key.lower() for key in headers}
         needs_auth = bool(api_key) and "authorization" not in present and "x-api-key" not in present
         defaults: dict[str, str] = {
@@ -55,20 +55,19 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if not api_base:
             raise ValueError("api_base is required to forward Anthropic /v1/messages to a native endpoint")
         base = api_base.rstrip("/")
         if base.endswith("/v1/messages"):
             return base
-        if base.endswith("/v1"):
-            base = base[: -len("/v1")]
+        base = base.removesuffix("/v1")
         return f"{base}/v1/messages"
 
 
@@ -86,16 +85,16 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         self._provider = provider
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return self._provider.slug
 
     def should_strip_billing_metadata(self) -> bool:
         return True
 
-    def _resolve_api_key(self, api_key: Optional[str]) -> Optional[str]:
+    def _resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or get_secret_str(self._provider.api_key_env) or litellm.api_key
 
-    def _resolve_api_base(self, api_base: Optional[str]) -> str:
+    def _resolve_api_base(self, api_base: str | None) -> str:
         env_api_base = get_secret_str(self._provider.api_base_env) if self._provider.api_base_env else None
         return api_base or env_api_base or self._provider.base_url
 
@@ -106,9 +105,9 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> tuple[dict[str, str], Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict[str, str], str | None]:
         return super().validate_anthropic_messages_environment(
             headers=headers,
             model=model,
@@ -121,12 +120,12 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         return super().get_complete_url(
             api_base=self._resolve_api_base(api_base),

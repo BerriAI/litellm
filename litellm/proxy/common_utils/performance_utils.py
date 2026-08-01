@@ -15,7 +15,7 @@ import inspect
 import threading
 from collections.abc import Callable
 from pathlib import Path as PathLib
-from typing import Any, Optional
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 
@@ -27,7 +27,7 @@ _sample_counter = 0
 _sample_counter_lock = threading.Lock()
 
 # Global line_profiler state
-_line_profiler: Optional[Any] = None
+_line_profiler: Any | None = None
 _line_profiler_lock = threading.Lock()
 _wrapped_functions: dict[str, Callable] = {}  # Store original functions
 
@@ -230,7 +230,7 @@ def wrap_function_directly(func: Callable) -> Callable:
     return profiled_function
 
 
-def collect_line_profiler_stats(output_file: Optional[str] = None) -> None:
+def collect_line_profiler_stats(output_file: str | None = None) -> None:
     """Collect and save line_profiler statistics.
 
     This can be called manually to collect stats at any time, or it's
@@ -264,7 +264,7 @@ def collect_line_profiler_stats(output_file: Optional[str] = None) -> None:
             verbose_proxy_logger.error(f"Error collecting line profiler stats: {e}")
 
 
-def register_shutdown_handler(output_file: Optional[str] = None) -> None:
+def register_shutdown_handler(output_file: str | None = None) -> None:
     """Register a shutdown handler to collect line_profiler stats.
 
     This registers an atexit handler that will automatically save profiling

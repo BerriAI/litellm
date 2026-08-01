@@ -1,6 +1,6 @@
 import base64
 import os
-from typing import Dict, Optional, Tuple, cast
+from typing import cast
 
 import httpx
 
@@ -20,8 +20,8 @@ class Oauth2Handler:
     @staticmethod
     def _is_introspection_endpoint(
         token_info_endpoint: str,
-        oauth_client_id: Optional[str],
-        oauth_client_secret: Optional[str],
+        oauth_client_id: str | None,
+        oauth_client_secret: str | None,
     ) -> bool:
         """
         Determine if this is an introspection endpoint (requires POST) or token info endpoint (uses GET).
@@ -43,9 +43,9 @@ class Oauth2Handler:
     @staticmethod
     def _prepare_introspection_request(
         token: str,
-        oauth_client_id: Optional[str],
-        oauth_client_secret: Optional[str],
-    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        oauth_client_id: str | None,
+        oauth_client_secret: str | None,
+    ) -> tuple[dict[str, str], dict[str, str]]:
         """
         Prepare headers and data for OAuth2 introspection endpoint (RFC 7662).
 
@@ -72,7 +72,7 @@ class Oauth2Handler:
         return headers, data
 
     @staticmethod
-    def _prepare_token_info_request(token: str) -> Dict[str, str]:
+    def _prepare_token_info_request(token: str) -> dict[str, str]:
         """
         Prepare headers for generic token info endpoint.
 
@@ -86,11 +86,11 @@ class Oauth2Handler:
 
     @staticmethod
     def _extract_user_info(
-        response_data: Dict,
+        response_data: dict,
         user_id_field_name: str,
         user_role_field_name: str,
         user_team_id_field_name: str,
-    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None, str | None]:
         """
         Extract user information from OAuth2 response.
 

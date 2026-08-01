@@ -4,7 +4,7 @@ Humanloop integration
 https://humanloop.com/
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, cast
 
 import httpx
 from typing_extensions import TypedDict
@@ -22,9 +22,9 @@ from .custom_logger import CustomLogger
 
 class PromptManagementClient(TypedDict):
     prompt_id: str
-    prompt_template: List[AllMessageValues]
-    model: Optional[str]
-    optional_params: Optional[Dict[str, Any]]
+    prompt_template: list[AllMessageValues]
+    model: str | None
+    optional_params: dict[str, Any] | None
 
 
 class HumanLoopPromptManager(DualCache):
@@ -32,12 +32,12 @@ class HumanLoopPromptManager(DualCache):
     def integration_name(self):
         return "humanloop"
 
-    def _get_prompt_from_id_cache(self, humanloop_prompt_id: str) -> Optional[PromptManagementClient]:
-        return cast(Optional[PromptManagementClient], self.get_cache(key=humanloop_prompt_id))
+    def _get_prompt_from_id_cache(self, humanloop_prompt_id: str) -> PromptManagementClient | None:
+        return cast(PromptManagementClient | None, self.get_cache(key=humanloop_prompt_id))
 
     def _compile_prompt_helper(
-        self, prompt_template: List[AllMessageValues], prompt_variables: Dict[str, Any]
-    ) -> List[AllMessageValues]:
+        self, prompt_template: list[AllMessageValues], prompt_variables: dict[str, Any]
+    ) -> list[AllMessageValues]:
         """
         Helper function to compile the prompt by substituting variables in the template.
 
@@ -48,7 +48,7 @@ class HumanLoopPromptManager(DualCache):
         Returns:
             list: A list of dictionaries with variables substituted.
         """
-        compiled_prompts: List[AllMessageValues] = []
+        compiled_prompts: list[AllMessageValues] = []
 
         for template in prompt_template:
             tc = template.get("content")
@@ -63,7 +63,7 @@ class HumanLoopPromptManager(DualCache):
     def _get_prompt_from_id_api(self, humanloop_prompt_id: str, humanloop_api_key: str) -> PromptManagementClient:
         client = _get_httpx_client()
 
-        base_url = "https://api.humanloop.com/v5/prompts/{}".format(humanloop_prompt_id)
+        base_url = f"https://api.humanloop.com/v5/prompts/{humanloop_prompt_id}"
 
         response = client.get(
             url=base_url,
@@ -93,7 +93,7 @@ class HumanLoopPromptManager(DualCache):
                 optional_params[k] = v
         return PromptManagementClient(
             prompt_id=humanloop_prompt_id,
-            prompt_template=cast(List[AllMessageValues], template_messages),
+            prompt_template=cast(list[AllMessageValues], template_messages),
             model=template_model,
             optional_params=optional_params,
         )
@@ -111,10 +111,10 @@ class HumanLoopPromptManager(DualCache):
 
     def compile_prompt(
         self,
-        prompt_template: List[AllMessageValues],
-        prompt_variables: Optional[dict],
-    ) -> List[AllMessageValues]:
-        compiled_prompt: Optional[Union[str, list]] = None
+        prompt_template: list[AllMessageValues],
+        prompt_variables: dict | None,
+    ) -> list[AllMessageValues]:
+        compiled_prompt: str | list | None = None
 
         if prompt_variables is None:
             prompt_variables = {}
@@ -130,7 +130,7 @@ class HumanLoopPromptManager(DualCache):
         if prompt_management_client["model"] is not None:
             return prompt_management_client["model"]
         else:
-            return model.replace("{}/".format(self.integration_name), "")
+            return model.replace(f"{self.integration_name}/", "")
 
 
 prompt_manager = HumanLoopPromptManager()
@@ -140,19 +140,19 @@ class HumanloopLogger(CustomLogger):
     def get_chat_completion_prompt(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         non_default_params: dict,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: Optional[PromptSpec] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
-        ignore_prompt_manager_model: Optional[bool] = False,
-        ignore_prompt_manager_optional_params: Optional[bool] = False,
-    ) -> Tuple[
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[
         str,
-        List[AllMessageValues],
+        list[AllMessageValues],
         dict,
     ]:
         humanloop_api_key = dynamic_callback_params.get("humanloop_api_key") or get_secret_str("HUMANLOOP_API_KEY")

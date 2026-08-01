@@ -6,7 +6,7 @@ Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 Docs: https://docs.together.ai/reference/completions-1
 """
 
-from typing import List, Union, cast
+from typing import cast
 
 from litellm.llms.openai.completion.utils import is_tokens_or_list_of_tokens
 from litellm.types.llms.openai import (
@@ -22,7 +22,7 @@ from ...openai.completion.utils import _transform_prompt
 class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
     def _transform_prompt(
         self,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
     ) -> AllPromptValues:
         """
         TogetherAI expects a string prompt.
@@ -43,7 +43,7 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
     def transform_text_completion_request(
         self,
         model: str,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
         optional_params: dict,
         headers: dict,
     ) -> dict:

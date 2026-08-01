@@ -18,7 +18,7 @@ until they're actually needed.
 import importlib
 import sys
 from collections.abc import Callable
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 # Import all the data structures that define what can be lazy-loaded
 # These are just lists of names and maps of where to find them
@@ -78,7 +78,7 @@ def _get_utils_globals() -> dict:
 # They're separate from the main lazy import system because they have specific use cases
 
 # Lazy loader for default encoding - avoids importing heavy tiktoken library at startup
-_default_encoding: Optional[Any] = None
+_default_encoding: Any | None = None
 
 
 def _get_default_encoding() -> Any:
@@ -100,7 +100,7 @@ def _get_default_encoding() -> Any:
 
 
 # Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time
-_get_modified_max_tokens_func: Optional[Any] = None
+_get_modified_max_tokens_func: Any | None = None
 
 
 def _get_modified_max_tokens() -> Any:
@@ -124,7 +124,7 @@ def _get_modified_max_tokens() -> Any:
 
 
 # Lazy loader for token_counter to avoid importing token_counter module at module import time
-_token_counter_new_func: Optional[Any] = None
+_token_counter_new_func: Any | None = None
 
 
 def _get_token_counter_new() -> Any:
@@ -154,7 +154,7 @@ def _get_token_counter_new() -> Any:
 # This registry maps attribute names (like "ModelResponse") to handler functions
 # It's built once the first time someone accesses a lazy-loaded attribute
 # Example: {"ModelResponse": _lazy_import_utils, "Cache": _lazy_import_caching, ...}
-_LAZY_IMPORT_REGISTRY: Optional[dict[str, Callable[[str], Any]]] = None
+_LAZY_IMPORT_REGISTRY: dict[str, Callable[[str], Any]] | None = None
 
 
 def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:

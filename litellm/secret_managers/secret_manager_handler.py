@@ -6,7 +6,7 @@ Handles retrieving secrets from different secret management systems.
 
 import base64
 import os
-from typing import Any, Optional
+from typing import Any
 
 import litellm
 from litellm._logging import print_verbose
@@ -27,8 +27,8 @@ def get_secret_from_manager(
     client: Any,
     key_manager: str,
     secret_name: str,
-    key_management_settings: Optional[Any] = None,
-) -> Optional[str]:
+    key_management_settings: Any | None = None,
+) -> str | None:
     """
     Get a secret from the configured secret manager.
 
@@ -81,7 +81,7 @@ def get_secret_from_manager(
         """
         encrypted_value = os.getenv(secret_name, None)
         if encrypted_value is None:
-            raise Exception("AWS KMS - Encrypted Value of Key={} is None".format(secret_name))
+            raise Exception(f"AWS KMS - Encrypted Value of Key={secret_name} is None")
         # Decode the base64 encoded ciphertext
         ciphertext_blob = base64.b64decode(encrypted_value)
 
@@ -119,7 +119,7 @@ def get_secret_from_manager(
             if secret is None:
                 raise ValueError(f"No secret found in Google Secret Manager for {secret_name}")
         except Exception as e:
-            print_verbose(f"An error occurred - {str(e)}")
+            print_verbose(f"An error occurred - {e!s}")
             raise e
 
     elif key_manager == KeyManagementSystem.HASHICORP_VAULT.value:
@@ -128,7 +128,7 @@ def get_secret_from_manager(
             if secret is None:
                 raise ValueError(f"No secret found in Hashicorp Secret Manager for {secret_name}")
         except Exception as e:
-            print_verbose(f"An error occurred - {str(e)}")
+            print_verbose(f"An error occurred - {e!s}")
             raise e
 
     elif key_manager == KeyManagementSystem.CYBERARK.value:
@@ -137,7 +137,7 @@ def get_secret_from_manager(
             if secret is None:
                 raise ValueError(f"No secret found in CyberArk Secret Manager for {secret_name}")
         except Exception as e:
-            print_verbose(f"An error occurred - {str(e)}")
+            print_verbose(f"An error occurred - {e!s}")
             raise e
 
     elif key_manager == KeyManagementSystem.CUSTOM.value:

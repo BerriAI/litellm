@@ -21,7 +21,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
@@ -33,7 +33,7 @@ RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 # ── Helpers ───────────────────────────────────────────────────────
 
 
-def _load_jsonl(filename: str) -> List[dict]:
+def _load_jsonl(filename: str) -> list[dict]:
     """Load eval cases from a JSONL file. One JSON object per line."""
     cases = []
     path = os.path.join(EVAL_DIR, filename)
@@ -60,7 +60,7 @@ def _run(checker, text: str) -> dict:
         return {"decision": "ALLOW", "score": 0.0, "matched_topic": None}
     except HTTPException as e:
         if e.status_code == 400:
-            detail: Dict[str, Any] = e.detail if isinstance(e.detail, dict) else {}
+            detail: dict[str, Any] = e.detail if isinstance(e.detail, dict) else {}
             return {
                 "decision": "BLOCK",
                 "score": detail.get("score", 1.0),
@@ -149,7 +149,7 @@ def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) 
     return result
 
 
-def _confusion_matrix(checker, cases: List[dict], label: str):
+def _confusion_matrix(checker, cases: list[dict], label: str):
     """Run all cases, print confusion matrix, save results JSON."""
     tp = fp = tn = fn = 0
     wrong = []

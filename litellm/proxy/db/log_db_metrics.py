@@ -8,13 +8,12 @@ import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
-from typing import Dict, Optional, Tuple
 
 from litellm._service_logger import ServiceTypes
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 
 
-def _safe_db_event_metadata(kwargs: Dict) -> Optional[Dict[str, str]]:
+def _safe_db_event_metadata(kwargs: dict) -> dict[str, str] | None:
     """Minimal, non-sensitive ``event_metadata`` for a DB service log.
 
     The raw ``kwargs``/``args`` carry live objects (Prisma client, OTel spans)
@@ -117,8 +116,8 @@ def _is_exception_related_to_db(e: Exception) -> bool:
 async def _handle_logging_db_exception(
     e: Exception,
     func: Callable,
-    kwargs: Dict,
-    args: Tuple,
+    kwargs: dict,
+    args: tuple,
     start_time: datetime,
     end_time: datetime,
 ) -> None:

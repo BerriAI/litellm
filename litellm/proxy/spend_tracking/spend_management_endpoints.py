@@ -7,14 +7,11 @@ from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
     Literal,
     NamedTuple,
     Protocol,
     TypedDict,
     TypeVar,
-    Union,
 )
 
 import fastapi
@@ -391,7 +388,7 @@ async def spend_user_fn(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
 )
 async def view_spend_tags(
@@ -443,7 +440,7 @@ async def view_spend_tags(
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"/spend/tags Error({str(e)})"),
+                message=getattr(e, "detail", f"/spend/tags Error({e!s})"),
                 type="internal_error",
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -493,7 +490,7 @@ async def get_global_activity_internal_user(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
     include_in_schema=False,
 )
@@ -635,7 +632,7 @@ async def get_global_activity_model_internal_user(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
     include_in_schema=False,
 )
@@ -787,7 +784,7 @@ async def get_global_activity_model(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
     include_in_schema=False,
 )
@@ -934,7 +931,7 @@ async def get_global_activity_exceptions_per_deployment(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
     include_in_schema=False,
 )
@@ -1043,7 +1040,7 @@ async def get_global_activity_exceptions(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
 )
 async def get_global_spend_provider(
@@ -1171,7 +1168,7 @@ async def get_global_spend_provider(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
 )
 async def get_global_spend_report(
@@ -1464,7 +1461,7 @@ async def get_global_spend_report(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
 )
 async def global_get_all_tag_names():
@@ -1495,7 +1492,7 @@ async def global_get_all_tag_names():
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"/spend/all_tag_names Error({str(e)})"),
+                message=getattr(e, "detail", f"/spend/all_tag_names Error({e!s})"),
                 type="internal_error",
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -1515,7 +1512,7 @@ async def global_get_all_tag_names():
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
 )
 async def global_view_spend_tags(
@@ -1651,7 +1648,7 @@ async def _get_spend_report_for_time_range(
 
         return response, spend_per_tag
     except Exception as e:
-        verbose_proxy_logger.error("Exception in _get_daily_spend_reports {}".format(str(e)))
+        verbose_proxy_logger.error(f"Exception in _get_daily_spend_reports {e!s}")
 
 
 @router.post(
@@ -1801,7 +1798,7 @@ async def calculate_spend(request: SpendCalculateRequest):
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
-        error_msg = f"{str(e)}"
+        error_msg = f"{e!s}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
@@ -1815,7 +1812,7 @@ async def calculate_spend(request: SpendCalculateRequest):
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": Dict[str, Any]},
+        200: {"model": dict[str, Any]},
     },
 )
 @router.get(
@@ -1824,7 +1821,7 @@ async def calculate_spend(request: SpendCalculateRequest):
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
 )
 async def ui_view_spend_logs(
@@ -2068,7 +2065,7 @@ async def ui_view_spend_logs(
                 user_api_key_dict=user_api_key_dict,
                 request_id=request_id,
             )
-        permitted_team_ids: List[str] | None = None
+        permitted_team_ids: list[str] | None = None
         if not is_request_id_lookup and not is_admin_view:
             if team_id is not None:
                 can_view_team = await _can_team_member_view_log(
@@ -2079,7 +2076,7 @@ async def ui_view_spend_logs(
                 if not can_view_team:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail={"error": "Not authorized to view team spend for team_id={}".format(team_id)},
+                        detail={"error": f"Not authorized to view team spend for team_id={team_id}"},
                     )
                 where_conditions["team_id"] = team_id
                 where_conditions.pop("user", None)
@@ -2111,7 +2108,7 @@ async def ui_view_spend_logs(
         # Build raw SQL to fetch paginated data WITHOUT heavy columns
         # (messages, response, proxy_server_request can be hundreds of KB per row).
         # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
-        sql_conditions: List[str] = []
+        sql_conditions: list[str] = []
         sql_params: list[object] = []
         p = 1  # parameter index counter
 
@@ -2269,15 +2266,15 @@ async def ui_view_spend_logs(
 
 
 class RequestResponsePayload(NamedTuple):
-    messages: Union[str, list, dict] | None
-    response: Union[str, list, dict] | None
-    proxy_server_request: Union[str, dict] | None
+    messages: str | list | dict | None
+    response: str | list | dict | None
+    proxy_server_request: str | dict | None
 
 
 _EMPTY_SPEND_LOG_VALUES = frozenset({"", "{}", "[]", "null"})
 
 
-def _spend_log_field_has_content(value: Union[str, list, dict] | None) -> bool:
+def _spend_log_field_has_content(value: str | list | dict | None) -> bool:
     if value is None:
         return False
     if isinstance(value, str):
@@ -2309,7 +2306,7 @@ def _hydrate_spend_log_metadata(rows: Sequence[Mapping[str, object]]) -> None:
 
 
 def _cold_storage_object_key_from_metadata(
-    metadata: Union[str, dict] | None,
+    metadata: str | dict | None,
 ) -> str | None:
     if isinstance(metadata, str):
         try:
@@ -2462,7 +2459,7 @@ async def ui_view_request_response_for_request_id(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
 )
 async def view_spend_logs(
@@ -2670,7 +2667,7 @@ async def view_spend_logs(
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"/spend/logs Error({str(e)})"),
+                message=getattr(e, "detail", f"/spend/logs Error({e!s})"),
                 type="internal_error",
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -2792,7 +2789,7 @@ async def global_spend_refresh():
             }
 
         except Exception as e:
-            verbose_proxy_logger.exception("Failed to refresh materialized view - {}".format(str(e)))
+            verbose_proxy_logger.exception(f"Failed to refresh materialized view - {e!s}")
             return {
                 "message": "Failed to refresh materialized view",
                 "status": "failure",
@@ -2833,7 +2830,7 @@ async def global_spend_for_internal_user(
 
         return response
     except Exception as e:
-        verbose_proxy_logger.error(f"/global/spend/logs Error: {str(e)}")
+        verbose_proxy_logger.error(f"/global/spend/logs Error: {e!s}")
         raise e
 
 
@@ -3377,7 +3374,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
         if router_budget_logger is None:
             raise ValueError("No router budget logger found")
 
-        provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
+        provider_budget_response_dict: dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
             _provider_spend = await router_budget_logger._get_current_provider_spend(_provider) or 0.0
             _provider_budget_ttl = await router_budget_logger._get_current_provider_budget_reset_at(_provider)
@@ -3390,7 +3387,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
             provider_budget_response_dict[_provider] = provider_budget_response_object
         return ProviderBudgetResponse(providers=provider_budget_response_dict)
     except Exception as e:
-        verbose_proxy_logger.exception("/provider/budgets: Exception occured - {}".format(str(e)))
+        verbose_proxy_logger.exception(f"/provider/budgets: Exception occured - {e!s}")
         raise handle_exception_on_proxy(e)
 
 
@@ -3425,7 +3422,7 @@ async def ui_get_spend_by_tags(
     # tags_str is a list of strings csv of tags
     # tags_str = tag1,tag2,tag3
     # convert to list if it's not None
-    tags_list: List[str] | None = None
+    tags_list: list[str] | None = None
     if tags_str is not None and len(tags_str) > 0:
         tags_list = tags_str.split(",")
 
@@ -3508,7 +3505,7 @@ async def ui_get_spend_by_tags(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": list[LiteLLM_SpendLogs]},
     },
 )
 async def ui_view_session_spend_logs(
@@ -3682,7 +3679,7 @@ async def _build_ui_spend_logs_response(
             counts = await _count_logs_per_session(prisma_client, session_ids)
             count_map = {r["session_id"]: r["_count"]["session_id"] for r in counts if r.get("session_id")}
 
-    session_spend_map: dict[str, dict[str, Union[int, float]]] = {}
+    session_spend_map: dict[str, dict[str, int | float]] = {}
     if enrich_session_counts and session_ids:
         from prisma.errors import PrismaError
 
@@ -3732,7 +3729,7 @@ async def _build_ui_spend_logs_response(
             )
 
     if enrich_session_counts:
-        enriched: List[dict] = []
+        enriched: list[dict] = []
         for row in data:
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
@@ -3872,14 +3869,14 @@ async def _assert_user_can_view_request_id(
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail={"error": "Not authorized to view spend log for request_id={}".format(request_id)},
+        detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
     )
 
 
 async def _get_permitted_team_ids_for_spend_logs(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
-) -> List[str]:
+) -> list[str]:
     """
     Return team IDs where the user is either a team admin or has the
     ``/spend/logs`` permission, allowing them to view team-wide spend logs.
@@ -3904,12 +3901,10 @@ async def _get_permitted_team_ids_for_spend_logs(
 
     team_rows = await _find_team_rows(prisma_client, user_obj.teams)
 
-    permitted: List[str] = []
+    permitted: list[str] = []
     for team_row in team_rows:
         team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-            permitted.append(team_obj.team_id)
-        elif _team_member_has_permission(
+        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or _team_member_has_permission(
             user_api_key_dict=user_api_key_dict,
             team_obj=team_obj,
             permission=KeyManagementRoutes.SPEND_LOGS.value,

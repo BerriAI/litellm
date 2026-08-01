@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from litellm.types.utils import StandardLoggingPayload
 
@@ -31,9 +31,9 @@ from litellm.llms.custom_httpx.http_handler import (
 class GcsPubSubLogger(CustomBatchLogger):
     def __init__(
         self,
-        project_id: Optional[str] = None,
-        topic_id: Optional[str] = None,
-        credentials_path: Optional[str] = None,
+        project_id: str | None = None,
+        topic_id: str | None = None,
+        credentials_path: str | None = None,
         **kwargs,
     ):
         """
@@ -60,9 +60,9 @@ class GcsPubSubLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[Union[SpendLogsPayload, StandardLoggingPayload]] = []
+        self.log_queue: list[SpendLogsPayload | StandardLoggingPayload] = []
 
-    async def construct_request_headers(self) -> Dict[str, str]:
+    async def construct_request_headers(self) -> dict[str, str]:
         """Construct authorization headers using Vertex AI auth"""
         from litellm import vertex_chat_completion
 
@@ -132,8 +132,7 @@ class GcsPubSubLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"PubSub Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
+            verbose_logger.exception(f"PubSub Layer Error - {e!s}\n{traceback.format_exc()}")
 
     async def async_send_batch(self):
         """
@@ -149,13 +148,11 @@ class GcsPubSubLogger(CustomBatchLogger):
                 await self.publish_message(message)
 
         except Exception as e:
-            verbose_logger.exception(f"PubSub Error sending batch - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"PubSub Error sending batch - {e!s}\n{traceback.format_exc()}")
         finally:
             self.log_queue.clear()
 
-    async def publish_message(
-        self, message: Union[SpendLogsPayload, StandardLoggingPayload]
-    ) -> Optional[Dict[str, Any]]:
+    async def publish_message(self, message: SpendLogsPayload | StandardLoggingPayload) -> dict[str, Any] | None:
         """
         Publish message to Google Cloud Pub/Sub using REST API
 
