@@ -1,4 +1,6 @@
-from typing import Any, Awaitable, Callable, Optional, Union
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any, Awaitable, Callable, Optional, Tuple, Type, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -11,6 +13,49 @@ from litellm.secret_managers.main import str_to_bool
 # Bounds the __cause__/__context__ walk in is_database_service_unavailable_error_in_chain.
 # Real exception chains are a few links deep; the cap also makes the walk cycle-safe.
 _MAX_EXCEPTION_CHAIN_DEPTH = 20
+
+
+@dataclass(frozen=True, slots=True)
+class _PrismaErrorTypes:
+    base: Type[Exception]
+    data_error: Type[Exception]
+    data_layer: Tuple[Type[Exception], ...]
+    transport: Tuple[Type[Exception], ...]
+
+
+@lru_cache(maxsize=1)
+def _prisma_error_types() -> Optional[_PrismaErrorTypes]:
+    """Return the prisma exception classes these classifiers branch on, or None
+    when prisma is not installed.
+
+    ``prisma`` is an optional dependency (the ``extra_proxy`` extra); a
+    master-key-only proxy started without a ``DATABASE_URL`` never installs it.
+    The classifiers below run on every auth failure, so importing it
+    unconditionally turned a plain 401 into a ``ModuleNotFoundError`` 500 on
+    such deployments. With prisma absent there is no prisma exception to
+    classify, so every prisma-specific branch is simply skipped.
+    """
+    try:
+        from prisma import errors
+    except ImportError:
+        return None
+    return _PrismaErrorTypes(
+        base=errors.PrismaError,
+        data_error=errors.DataError,
+        data_layer=(
+            errors.DataError,
+            errors.UniqueViolationError,
+            errors.ForeignKeyViolationError,
+            errors.MissingRequiredValueError,
+            errors.RawQueryError,
+            errors.TableNotFoundError,
+            errors.RecordNotFoundError,
+        ),
+        transport=(
+            errors.ClientNotConnectedError,
+            errors.HTTPClientClosedError,
+        ),
+    )
 
 
 class PrismaDBExceptionHandler:
@@ -47,24 +92,15 @@ class PrismaDBExceptionHandler:
         to True so genuine outages that don't match a specific subclass
         still trigger the fallback.
         """
-        import prisma
+        prisma_errors = _prisma_error_types()
 
         # Explicit data-layer exclusion: DB IS reachable, fallback must
         # NOT fire.
-        data_layer_errors = (
-            prisma.errors.DataError,
-            prisma.errors.UniqueViolationError,
-            prisma.errors.ForeignKeyViolationError,
-            prisma.errors.MissingRequiredValueError,
-            prisma.errors.RawQueryError,
-            prisma.errors.TableNotFoundError,
-            prisma.errors.RecordNotFoundError,
-        )
-        if isinstance(e, data_layer_errors):
+        if prisma_errors is not None and isinstance(e, prisma_errors.data_layer):
             return False
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
-        if isinstance(e, prisma.errors.PrismaError):
+        if prisma_errors is not None and isinstance(e, prisma_errors.base):
             return True
         if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
             return True
@@ -89,9 +125,10 @@ class PrismaDBExceptionHandler:
         per-row data rejection has to additionally consult
         ``is_database_service_unavailable_error`` before acting on a True here.
         """
-        import prisma
-
-        return type(e) is prisma.errors.DataError
+        prisma_errors = _prisma_error_types()
+        if prisma_errors is None:
+            return False
+        return type(e) is prisma_errors.data_error
 
     @staticmethod
     def is_database_transport_error(e: Exception) -> bool:
@@ -102,19 +139,13 @@ class PrismaDBExceptionHandler:
         Use this for reconnect logic — data-layer errors like UniqueViolationError
         mean the DB IS reachable, so reconnecting would be pointless.
         """
-        import prisma
+        prisma_errors = _prisma_error_types()
 
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
-        if isinstance(
-            e,
-            (
-                prisma.errors.ClientNotConnectedError,
-                prisma.errors.HTTPClientClosedError,
-            ),
-        ):
+        if prisma_errors is not None and isinstance(e, prisma_errors.transport):
             return True
-        if isinstance(e, prisma.errors.PrismaError):
+        if prisma_errors is not None and isinstance(e, prisma_errors.base):
             error_message = str(e).lower()
             connection_keywords = (
                 "can't reach database server",
@@ -154,9 +185,10 @@ class PrismaDBExceptionHandler:
         are already classified by type/keyword above, and data-layer ones
         (the DB IS reachable) must stay 401.
         """
-        import prisma
-
-        if isinstance(e, prisma.errors.PrismaError):
+        prisma_errors = _prisma_error_types()
+        if prisma_errors is None:
+            return False
+        if isinstance(e, prisma_errors.base):
             return False
         tb = getattr(e, "__traceback__", None)
         while tb is not None:
