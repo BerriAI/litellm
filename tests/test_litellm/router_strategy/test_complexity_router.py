@@ -4740,23 +4740,40 @@ class TestClassifierTrustBoundary:
         assert hostile in user_message["content"]
 
 
-class StubRouter:
-    """Router stand-in that reports which model groups are servable.
+class StubCooldownCache:
+    """The one piece of I/O tier resolution does, so tests can count it."""
 
-    `live` is the set of model groups with a healthy deployment; anything else is either
-    unknown to the router or entirely in cooldown, which the complexity router treats the
-    same way: it cannot serve this request now.
+    def __init__(self, cooled_ids: frozenset[str]):
+        self.cooled_ids = cooled_ids
+        self.reads = 0
+
+    async def async_get_active_cooldowns(self, model_ids, parent_otel_span=None):
+        self.reads += 1
+        return [(model_id, {"exception_received": "stubbed"}) for model_id in model_ids if model_id in self.cooled_ids]
+
+
+class StubRouter:
+    """Router stand-in over a fixed set of model groups, one deployment each.
+
+    A group is servable when the router knows it and its deployment is not in cooldown.
+    Those are the two real reasons a pool member cannot answer, so `live` names the ones
+    that can, and `registered` (defaulting to every model the tiers name) separates "the
+    router has never heard of this" from "everything behind it is down".
     """
 
-    def __init__(self, live: set[str]):
-        self.live = live
+    def __init__(self, live: set[str], registered: set[str] | None = None):
+        self.live = set(live)
+        self.registered = set(registered) if registered is not None else set(LADDER_MODELS)
         self.cache = DualCache()
-        self.probed: list[str] = []
+        self.cooldown_cache = StubCooldownCache(frozenset(f"{model}-0" for model in self.registered - self.live))
+        self.listed: list[str] = []
 
-    async def _async_get_healthy_deployments(self, model: str, parent_otel_span=None):
-        self.probed.append(model)
-        deployments = [{"model_info": {"id": f"{model}-0"}}] if model in self.live else []
-        return deployments, deployments
+    def get_model_ids(self):
+        return [f"{model}-0" for model in sorted(self.registered)]
+
+    def get_model_list(self, model_name=None, team_id=None):
+        self.listed.append(model_name)
+        return [{"model_info": {"id": f"{model_name}-0"}}] if model_name in self.registered else []
 
 
 LADDER_TIERS = {
@@ -4765,6 +4782,7 @@ LADDER_TIERS = {
     "COMPLEX": "complex-model",
     "REASONING": "reasoning-model",
 }
+LADDER_MODELS = ("simple-a", "simple-b", "medium-model", "complex-model", "reasoning-model")
 
 
 def _ladder_router(live: set[str], **overrides):
@@ -4882,22 +4900,52 @@ class TestTierFallbackLadder:
         assert decision["resolved_by"] == "best_effort"
 
     @pytest.mark.asyncio
-    async def test_a_healthy_tier_is_probed_and_no_higher_tier_is(self):
+    async def test_a_healthy_tier_is_inspected_and_no_higher_tier_is(self):
         """The ladder stops at the first servable tier instead of pricing out every tier on
         every request."""
         router = _ladder_router(live={"simple-a", "simple-b"})
         stub = router.litellm_router_instance
         await _route(router, "What is 2+2?")
-        assert set(stub.probed) <= {"simple-a", "simple-b"}
+        assert set(stub.listed) <= {"simple-a", "simple-b"}
+
+    @pytest.mark.asyncio
+    async def test_resolution_reads_the_cooldown_view_once_per_request(self):
+        """The cooldown set is Redis-backed in production. Asking per pool member, or per
+        tier the ladder walks, would put N round trips in front of every completion, so it
+        is read once and the rest of resolution is in-process."""
+        router = _ladder_router(live={"reasoning-model"})
+        stub = router.litellm_router_instance
+        await _route(router, "What is 2+2?")
+        assert stub.cooldown_cache.reads == 1
+        # ...even though this request walked all four tiers to find a live model
+        assert stub.listed == ["simple-a", "simple-b", "medium-model", "complex-model", "reasoning-model"]
+
+    @pytest.mark.asyncio
+    async def test_an_unregistered_model_is_not_servable(self):
+        """A tier naming a model group the router has never heard of cannot answer, and is
+        passed over exactly like one whose deployments are all cooling."""
+        router = ComplexityRouter(
+            model_name="test-ladder-router",
+            litellm_router_instance=StubRouter(live={"medium-model"}, registered={"medium-model"}),
+            complexity_router_config={"tiers": dict(LADDER_TIERS), "session_affinity": False},
+        )
+        response = await _route(router, "What is 2+2?")
+        assert response.model == "medium-model"
+        assert response.routing_decision["tier_fallback_from"] == "SIMPLE"
 
     @pytest.mark.asyncio
     async def test_health_lookup_failure_keeps_the_classified_tier(self):
         """A health view that cannot be read must not empty every tier and push traffic up
         the ladder; it degrades to serving the configured pool."""
 
-        class BrokenRouter(StubRouter):
-            async def _async_get_healthy_deployments(self, model: str, parent_otel_span=None):
+        class BrokenCooldownCache(StubCooldownCache):
+            async def async_get_active_cooldowns(self, model_ids, parent_otel_span=None):
                 raise RuntimeError("cooldown cache unavailable")
+
+        class BrokenRouter(StubRouter):
+            def __init__(self, live: set[str]):
+                super().__init__(live)
+                self.cooldown_cache = BrokenCooldownCache(frozenset())
 
         router = ComplexityRouter(
             model_name="test-ladder-router",

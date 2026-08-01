@@ -896,30 +896,52 @@ class ComplexityRouter(CustomLogger):
     def _tier_pools(self) -> dict[str, list[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
 
-    async def _has_live_deployment(self, model: str) -> bool:
-        healthy, _ = await self.litellm_router_instance._async_get_healthy_deployments(
-            model=model, parent_otel_span=None
-        )
-        return bool(healthy)
+    async def _cooled_down_deployment_ids(self) -> frozenset[str] | None:
+        """Deployment ids currently in cooldown, read once per request.
 
-    async def _live_models(self, pool: Sequence[str]) -> tuple[str, ...]:
+        This is the only I/O the ladder does. Asking the router per model instead would
+        re-read the whole cooldown set once per pool member, and that set is Redis-backed
+        in production, so it would put N round trips in front of every completion.
+
+        None means the view could not be read at all. Callers treat that as "assume the
+        pool is live", so a cache or router hiccup degrades to the previous behavior
+        instead of emptying every tier and pushing all traffic to the top of the ladder.
+        """
+        from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+
+        try:
+            return frozenset(
+                await _async_get_cooldown_deployments(
+                    litellm_router_instance=self.litellm_router_instance, parent_otel_span=None
+                )
+            )
+        except Exception as e:  # noqa: BLE001 -- the cooldown view can fail in many ways (cache, redis, a router without one); none of them should block routing
+            verbose_router_logger.debug(
+                f"ComplexityRouter: cooldown view unavailable ({e}), treating tier pools as servable"
+            )
+            return None
+
+    def _has_live_deployment(self, model: str, cooled_down: frozenset[str]) -> bool:
+        """Whether the router can serve this model group right now.
+
+        Reads the router's in-process deployment list, so it costs no I/O: the cooldown
+        set was already fetched once for the whole request.
+        """
+        deployments = self.litellm_router_instance.get_model_list(model_name=model) or ()
+        return any(self._deployment_id(deployment) not in cooled_down for deployment in deployments)
+
+    @staticmethod
+    def _deployment_id(deployment: Mapping[str, Any]) -> str | None:
+        model_info = deployment.get("model_info")
+        return model_info.get("id") if isinstance(model_info, Mapping) else None
+
+    def _live_models(self, pool: Sequence[str], cooled_down: frozenset[str] | None) -> tuple[str, ...]:
         """Pool members the router can serve right now: the model group exists and has at
         least one deployment that is not in cooldown.
-
-        The health view is advisory. If it cannot be read the whole pool is returned, so a
-        cache or router hiccup degrades to the previous behavior instead of emptying a tier
-        and pushing every request up the ladder.
         """
-        if not pool:
-            return ()
-        try:
-            live = await asyncio.gather(*(self._has_live_deployment(model) for model in pool))
-            return tuple(model for model, is_live in zip(pool, live) if is_live)
-        except Exception as e:  # noqa: BLE001 -- health lookup can fail in many ways (cache, redis, an unregistered model group); none of them should block routing
-            verbose_router_logger.debug(
-                f"ComplexityRouter: health view unavailable ({e}), treating the tier pool as servable"
-            )
+        if not pool or cooled_down is None:
             return tuple(pool)
+        return tuple(model for model in pool if self._has_live_deployment(model, cooled_down))
 
     async def _pick_model_for_tier(
         self,
@@ -935,13 +957,14 @@ class ComplexityRouter(CustomLogger):
         routing plugins are configured so their policy cannot be bypassed.
         """
         pools = self._tier_pools()
+        cooled_down = await self._cooled_down_deployment_ids()
         for candidate_tier in self._tier_ladder_from(tier):
             if candidate_tier.value not in pools:
                 continue
             pool = pools[candidate_tier.value]
             if not pool:
                 raise ValueError(f"Empty model pool for tier {candidate_tier.value}")
-            live = await self._live_models(pool)
+            live = self._live_models(pool, cooled_down)
             if not live:
                 continue
             candidates = (
