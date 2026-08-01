@@ -1,6 +1,7 @@
 import asyncio
 import json
 import random
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Protocol, cast  # noqa: TID251  # untyped prisma/redis boundary needs cast
@@ -28,6 +29,7 @@ class _ConfigSyncPubSubClient(Protocol):
 CONFIG_SYNC_CHANNEL = "litellm_proxy.config_change"
 CONFIG_SYNC_DEBOUNCE_SECONDS = 1.0
 CONFIG_SYNC_JITTER_MAX_SECONDS = 5.0
+CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS = 10.0
 _POLL_TIMEOUT_SECONDS = 1.0
 _BACKOFF_INITIAL_SECONDS = 5.0
 _BACKOFF_MAX_SECONDS = 60.0
@@ -52,6 +54,15 @@ _CONFIG_SYNCED_TABLE_NAMES: frozenset[str] = frozenset(
         "litellm_ssoconfig",
         "litellm_cacheconfig",
         "litellm_configoverrides",
+    }
+)
+
+_RESYNC_APPLIED_CONFIG_PARAM_NAMES: frozenset[str] = frozenset(
+    {
+        "general_settings",
+        "litellm_settings",
+        "model_cost_map_reload_config",
+        "anthropic_beta_headers_reload_config",
     }
 )
 
@@ -113,6 +124,16 @@ async def publish_config_change_for_object_type(object_type: str) -> None:
     await publish_config_change(redis_cache=coordination_redis_cache(), object_type=object_type)
 
 
+async def publish_config_param_change(param_name: str) -> None:
+    if param_name not in _RESYNC_APPLIED_CONFIG_PARAM_NAMES:
+        verbose_proxy_logger.debug(
+            "config sync publish for %s skipped: no resync callback applies this param outside proxy startup",
+            param_name,
+        )
+        return
+    await publish_config_change_for_object_type(param_name)
+
+
 class _PublishOnWriteActions:
     __slots__ = ("_actions", "_object_type", "_publish")
 
@@ -156,6 +177,9 @@ class ConfigSyncSubscriber:
         "_backoff_max_seconds",
         "_debounce_seconds",
         "_jitter_max_seconds",
+        "_last_resync_at",
+        "_min_resync_interval_seconds",
+        "_monotonic",
         "_redis_cache",
         "_resync_callbacks",
         "_rng",
@@ -169,20 +193,25 @@ class ConfigSyncSubscriber:
         resync_callbacks: tuple[Callable[[], Awaitable[None]], ...],
         debounce_seconds: float = CONFIG_SYNC_DEBOUNCE_SECONDS,
         jitter_max_seconds: float = CONFIG_SYNC_JITTER_MAX_SECONDS,
+        min_resync_interval_seconds: float = CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS,
         backoff_initial_seconds: float = _BACKOFF_INITIAL_SECONDS,
         backoff_max_seconds: float = _BACKOFF_MAX_SECONDS,
         rng: random.Random | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._redis_cache = redis_cache
         self._resync_callbacks = resync_callbacks
         self._debounce_seconds = debounce_seconds
         self._jitter_max_seconds = jitter_max_seconds
+        self._min_resync_interval_seconds = min_resync_interval_seconds
         self._backoff_initial_seconds = backoff_initial_seconds
         self._backoff_max_seconds = backoff_max_seconds
         self._rng = rng if rng is not None else random.Random()
         self._sleep = sleep
+        self._monotonic = monotonic
         self._task: asyncio.Task[None] | None = None
+        self._last_resync_at: float | None = None
 
     def start(self) -> None:
         if self._task is not None:
@@ -235,8 +264,22 @@ class ConfigSyncSubscriber:
             if message is None:
                 continue
             await self._sleep(self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds))
+            await self._wait_for_min_resync_interval()
             await self._drain_pending(pubsub)
             await self._run_resync_callbacks()
+            self._last_resync_at = self._monotonic()
+
+    async def _wait_for_min_resync_interval(self) -> None:
+        if self._last_resync_at is None:
+            return
+        seconds_until_next_resync = self._min_resync_interval_seconds - (self._monotonic() - self._last_resync_at)
+        if seconds_until_next_resync <= 0:
+            return
+        verbose_proxy_logger.debug(
+            "config sync resync throttled for %.1fs to cap fleet-wide reload rate",
+            seconds_until_next_resync,
+        )
+        await self._sleep(seconds_until_next_resync)
 
     @staticmethod
     async def _drain_pending(pubsub: _ConfigSyncPubSub) -> None:
