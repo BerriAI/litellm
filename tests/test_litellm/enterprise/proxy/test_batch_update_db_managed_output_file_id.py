@@ -1,5 +1,6 @@
 """Regression: update_batch_in_database must not persist raw provider output_file_id."""
 
+import base64
 import json
 from types import SimpleNamespace
 from typing import Optional
@@ -11,7 +12,28 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     ensure_batch_response_managed_file_ids,
     update_batch_in_database,
 )
-from litellm.types.utils import LiteLLMBatch
+from litellm.types.utils import LiteLLMBatch, SpecialEnums
+
+
+def _make_unified_file_id(
+    raw_output_file_id: str = "file-managed-output",
+    model_id: str = "my-model",
+    model_name: str = "openai/gpt-4o",
+) -> str:
+    """Build a base64 unified file id the way get_unified_output_file_id does, so
+    _is_base64_encoded_unified_file_id recognizes it (a fake id that fails that
+    check would be redacted as fail-closed)."""
+    plain = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/json",
+        "00000000-0000-0000-0000-000000000abc",
+        model_name,
+        raw_output_file_id,
+        model_id,
+    )
+    return base64.urlsafe_b64encode(plain.encode()).decode().rstrip("=")
+
+
+UNIFIED_FILE_ID = _make_unified_file_id()
 
 
 def _build_batch_response(
@@ -38,7 +60,7 @@ def _build_batch_response(
     return batch
 
 
-def _build_managed_files_mock(unified_id: str = "file-bWFuYWdlZF9vdXRwdXRfaWQ="):
+def _build_managed_files_mock(unified_id: str = UNIFIED_FILE_ID):
     mock = MagicMock()
     mock.get_unified_output_file_id = MagicMock(return_value=unified_id)
     mock.store_unified_file_id = AsyncMock()
@@ -55,7 +77,7 @@ def _build_prisma_mock():
 @pytest.mark.asyncio
 async def test_update_batch_in_database_stores_unified_output_file_id():
     raw_output_file_id = "file-rawoutput789"
-    unified_output_file_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
+    unified_output_file_id = UNIFIED_FILE_ID
     batch_id = "batch_managed_ids_test"
     unified_batch_id = (
         "litellm_proxy;model_id:my-model;llm_batch_id:batch_managed_ids_test"
@@ -92,7 +114,7 @@ async def test_update_batch_in_database_stores_unified_output_file_id():
 @pytest.mark.asyncio
 async def test_ensure_batch_response_normalizes_error_file_id():
     """Both output_file_id and error_file_id must be normalized to managed IDs."""
-    unified_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
+    unified_id = UNIFIED_FILE_ID
     response = _build_batch_response(
         output_file_id="file-raw-output",
         error_file_id="file-raw-error",
@@ -116,8 +138,9 @@ async def test_ensure_batch_response_normalizes_error_file_id():
 
 
 @pytest.mark.asyncio
-async def test_ensure_batch_response_swallows_conversion_errors():
-    """When the managed-files conversion raises, the failure is logged, not propagated."""
+async def test_ensure_batch_response_redacts_id_when_conversion_errors():
+    """Fail closed: when conversion raises, the raw provider id must be redacted,
+    not returned, so it can't be replayed against /v1/files to bypass ownership."""
     raw_output_file_id = "file-raw-output"
     response = _build_batch_response(
         output_file_id=raw_output_file_id,
@@ -139,14 +162,14 @@ async def test_ensure_batch_response_swallows_conversion_errors():
         user_api_key_dict=UserAPIKeyAuth(user_id="user-abc"),
     )
 
-    assert response.output_file_id == raw_output_file_id
+    assert response.output_file_id is None
     mock_logger.warning.assert_called()
 
 
 @pytest.mark.asyncio
 async def test_ensure_batch_response_builds_auth_from_db_batch_object():
     """If user_api_key_dict is omitted, fall back to created_by/team_id on db_batch_object."""
-    unified_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
+    unified_id = UNIFIED_FILE_ID
     response = _build_batch_response(
         output_file_id="file-raw-output",
         hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
@@ -175,7 +198,7 @@ async def test_ensure_batch_response_builds_auth_from_db_batch_object():
 @pytest.mark.asyncio
 async def test_ensure_batch_response_resolves_model_name_from_unified_file_id():
     """When hidden_params lacks model_name, derive it from unified_file_id."""
-    unified_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
+    unified_id = UNIFIED_FILE_ID
     response = _build_batch_response(
         output_file_id="file-raw-output",
         hidden_params={
@@ -208,7 +231,7 @@ async def test_ensure_batch_response_derives_model_id_from_unified_batch_id():
     ids as managed files by deriving model_id from the unified batch id, otherwise
     the terminal-retrieve short-circuit leaks raw provider file ids.
     """
-    unified_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
+    unified_id = UNIFIED_FILE_ID
     response = _build_batch_response(
         output_file_id="file-raw-output",
         error_file_id="file-raw-error",
@@ -235,8 +258,9 @@ async def test_ensure_batch_response_derives_model_id_from_unified_batch_id():
 
 
 @pytest.mark.asyncio
-async def test_ensure_batch_response_returns_early_without_managed_files_obj():
-    """Without managed_files_obj, the helper is a no-op (no conversion attempted)."""
+async def test_ensure_batch_response_redacts_raw_id_without_managed_files_obj():
+    """Fail closed: without the managed-files hook, conversion is impossible, so the
+    raw provider id must be redacted rather than returned."""
     response = _build_batch_response(
         output_file_id="file-raw-output",
         hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
@@ -250,12 +274,13 @@ async def test_ensure_batch_response_returns_early_without_managed_files_obj():
         user_api_key_dict=UserAPIKeyAuth(user_id="user-abc"),
     )
 
-    assert response.output_file_id == "file-raw-output"
+    assert response.output_file_id is None
 
 
 @pytest.mark.asyncio
-async def test_ensure_batch_response_returns_early_without_model_id():
-    """Without model_id in hidden_params, the helper cannot create managed IDs."""
+async def test_ensure_batch_response_redacts_raw_id_without_model_id():
+    """Fail closed: without a resolvable model_id no managed id can be built, so the
+    raw provider id must be redacted rather than returned."""
     response = _build_batch_response(
         output_file_id="file-raw-output",
         hidden_params={"model_name": "openai/gpt-4o"},
@@ -270,13 +295,14 @@ async def test_ensure_batch_response_returns_early_without_model_id():
         user_api_key_dict=UserAPIKeyAuth(user_id="user-abc"),
     )
 
-    assert response.output_file_id == "file-raw-output"
+    assert response.output_file_id is None
     mock_managed_files.get_unified_output_file_id.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_ensure_batch_response_returns_early_without_auth():
-    """Without user_api_key_dict or db_batch_object, no conversion is attempted."""
+async def test_ensure_batch_response_redacts_raw_id_without_auth():
+    """Fail closed: without any owner identity no row can be registered, so the raw
+    provider id must be redacted rather than returned."""
     response = _build_batch_response(
         output_file_id="file-raw-output",
         hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
@@ -290,5 +316,36 @@ async def test_ensure_batch_response_returns_early_without_auth():
         verbose_proxy_logger=MagicMock(),
     )
 
-    assert response.output_file_id == "file-raw-output"
+    assert response.output_file_id is None
     mock_managed_files.get_unified_output_file_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ensure_batch_response_owns_registered_files_by_batch_creator_not_requester():
+    """Regression for GH #33989 review: when a non-creator retrieves a terminal batch
+    before its files are registered, the new managed-file rows must be owned by the
+    batch creator (from db_batch_object), not the requester, otherwise the requester
+    could grant themselves access and the real creator couldn't manage the file."""
+    response = _build_batch_response(
+        output_file_id="file-raw-output",
+        hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
+    )
+    mock_managed_files = _build_managed_files_mock()
+
+    await ensure_batch_response_managed_file_ids(
+        response=response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=_build_prisma_mock(),
+        verbose_proxy_logger=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="attacker-user", team_id="attacker-team"),
+        db_batch_object=SimpleNamespace(
+            created_by="victim-user", team_id="victim-team", status="failed"
+        ),
+    )
+
+    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
+        "user_api_key_dict"
+    ]
+    assert forwarded_auth.user_id == "victim-user"
+    assert forwarded_auth.team_id == "victim-team"
+    assert response.output_file_id == UNIFIED_FILE_ID

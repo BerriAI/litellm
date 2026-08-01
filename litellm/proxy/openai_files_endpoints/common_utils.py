@@ -926,6 +926,41 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
             pass
 
 
+def _resolve_batch_file_owner_auth(db_batch_object, requester_api_key_dict):
+    """Return the auth whose identity should own lazily-registered managed-file rows.
+
+    These rows must belong to the batch creator (as the async poller / live path
+    would have written them), never to whoever happens to retrieve the terminal
+    batch first, so ownership is taken from the stored batch object when available
+    and only falls back to the requester when there is no stored object.
+    """
+    if db_batch_object is not None:
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        return UserAPIKeyAuth(
+            user_id=getattr(db_batch_object, "created_by", None) or "default-user-id",
+            team_id=getattr(db_batch_object, "team_id", None),
+        )
+    return requester_api_key_dict
+
+
+def _redact_unconverted_batch_output_file_ids(response, verbose_proxy_logger) -> None:
+    """Fail closed: never return a raw provider output/error file ID.
+
+    Any ID that could not be rewritten to a managed unified ID (hook missing,
+    model metadata unresolved, or registration raised) is dropped so it can't be
+    replayed against /v1/files to bypass the managed-file ownership check.
+    """
+    for file_attr in ("output_file_id", "error_file_id"):
+        file_id = getattr(response, file_attr, None)
+        if file_id and not _is_base64_encoded_unified_file_id(file_id):
+            setattr(response, file_attr, None)
+            verbose_proxy_logger.warning(
+                f"Redacted unconverted raw batch {file_attr}={file_id!r} to avoid leaking a provider file ID "
+                "that bypasses the managed-file ownership check"
+            )
+
+
 async def ensure_batch_response_managed_file_ids(
     response,
     managed_files_obj,
@@ -935,10 +970,36 @@ async def ensure_batch_response_managed_file_ids(
     db_batch_object=None,
     unified_batch_id: Optional[str] = None,
 ) -> None:
-    """Normalize batch file IDs to managed unified IDs before DB persistence."""
+    """Normalize batch file IDs to managed unified IDs before returning/persisting.
+
+    Registers missing managed-file rows for raw provider output/error IDs (owned
+    by the batch creator) and rewrites them to unified IDs. Any raw ID that still
+    could not be converted is redacted so a raw provider file ID never reaches the
+    client, where it would bypass the /v1/files ownership check.
+    """
     await resolve_input_file_id_to_unified(response, prisma_client)
     await resolve_output_file_ids_to_unified(response, prisma_client)
 
+    await _register_raw_batch_output_file_ids(
+        response=response,
+        managed_files_obj=managed_files_obj,
+        requester_api_key_dict=user_api_key_dict,
+        db_batch_object=db_batch_object,
+        unified_batch_id=unified_batch_id,
+        verbose_proxy_logger=verbose_proxy_logger,
+    )
+
+    _redact_unconverted_batch_output_file_ids(response, verbose_proxy_logger)
+
+
+async def _register_raw_batch_output_file_ids(
+    response,
+    managed_files_obj,
+    requester_api_key_dict,
+    db_batch_object,
+    unified_batch_id: Optional[str],
+    verbose_proxy_logger,
+) -> None:
     if managed_files_obj is None:
         return
 
@@ -957,15 +1018,16 @@ async def ensure_batch_response_managed_file_ids(
         if target_model_names:
             model_name = ",".join(target_model_names)
 
-    if user_api_key_dict is None and db_batch_object is not None:
-        from litellm.proxy._types import UserAPIKeyAuth
-
-        user_api_key_dict = UserAPIKeyAuth(
-            user_id=getattr(db_batch_object, "created_by", None) or "default-user-id",
-            team_id=getattr(db_batch_object, "team_id", None),
-        )
-    if user_api_key_dict is None:
+    owner_api_key_dict = _resolve_batch_file_owner_auth(
+        db_batch_object=db_batch_object,
+        requester_api_key_dict=requester_api_key_dict,
+    )
+    if owner_api_key_dict is None:
         return
+
+    parent_otel_span = getattr(requester_api_key_dict, "parent_otel_span", None) or getattr(
+        owner_api_key_dict, "parent_otel_span", None
+    )
 
     for file_attr in ("output_file_id", "error_file_id"):
         raw_file_id = getattr(response, file_attr, None)
@@ -980,9 +1042,9 @@ async def ensure_batch_response_managed_file_ids(
             await managed_files_obj.store_unified_file_id(
                 file_id=new_unified_file_id,
                 file_object=None,
-                litellm_parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+                litellm_parent_otel_span=parent_otel_span,
                 model_mappings={model_id: raw_file_id},
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_dict=owner_api_key_dict,
             )
             setattr(response, file_attr, new_unified_file_id)
             verbose_proxy_logger.debug(f"Converted batch {file_attr} {raw_file_id!r} to managed ID before DB write")
