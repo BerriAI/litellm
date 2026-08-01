@@ -1733,20 +1733,24 @@ class TestRouterPreRoutingAliasOverrides:
         ships raw to the real provider as extra_body - verified live via
         litellm.completion(..., complexity_router_config={...}) landing in
         extra_body before this list included it."""
+        import re
+
+        from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
         from litellm.types.utils import all_litellm_params
 
-        router_init_only_params = (
-            "auto_router_config_path",
-            "auto_router_config",
-            "auto_router_default_model",
-            "auto_router_embedding_model",
-            "complexity_router_config",
-            "complexity_router_default_model",
-            "adaptive_router_config",
-            "adaptive_router_default_model",
-            "quality_router_config",
-            "quality_router_default_model",
+        # Derived, not hand-listed: a hard-coded tuple can only catch a field being
+        # REMOVED from the strip list, never a newly added router param that was never
+        # registered in the first place, which is the way this actually goes wrong.
+        router_config_param = re.compile(r"^(auto|complexity|adaptive|quality)_router_")
+        router_init_only_params = tuple(
+            sorted(
+                field
+                for field in set(LiteLLM_Params.model_fields) | set(GenericLiteLLMParams.model_fields)
+                if router_config_param.match(field)
+            )
         )
+        assert len(router_init_only_params) >= 11, "expected the known router-strategy config params"
+
         for param in router_init_only_params:
             assert param in all_litellm_params, (
                 f"{param} must stay in litellm.types.utils.all_litellm_params - "

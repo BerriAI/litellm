@@ -128,7 +128,6 @@ def _baseline_usage(usage: Usage) -> Usage:
 def compute_autorouter_savings(
     baseline_model: str | None,
     selected_model: str | None,
-    baseline_provider: str | None,
     selected_provider: str | None,
     usage: Usage,
 ) -> float:
@@ -140,7 +139,10 @@ def compute_autorouter_savings(
     dashboard has to be able to say so. Zero when both sides resolve to the same
     deployment, or when either cannot be resolved or priced.
     """
-    baseline = _resolve_model(baseline_model, baseline_provider)
+    # No provider argument for the baseline on purpose: it arrives from the routing
+    # metadata as a single self-describing string, already qualified by the auto-router,
+    # so there is no second field that could disagree with it.
+    baseline = _resolve_model(baseline_model, None)
     selected = _resolve_model(selected_model, selected_provider)
     if baseline is None or selected is None or baseline == selected:
         return 0.0
@@ -168,7 +170,6 @@ def compute_savings_spend(
     compression_saved_tokens: int,
     cache_read_input_tokens: int,
     baseline_model: str | None = None,
-    baseline_provider: str | None = None,
     usage_object: dict | None = None,
 ) -> SavingsSpend:
     """
@@ -191,7 +192,6 @@ def compute_savings_spend(
     autorouter = compute_autorouter_savings(
         baseline_model=baseline_model,
         selected_model=model,
-        baseline_provider=baseline_provider,
         selected_provider=custom_llm_provider,
         usage=usage,
     )

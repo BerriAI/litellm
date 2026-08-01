@@ -132,7 +132,6 @@ def _savings(baseline: str, selected: str, usage: Usage) -> float:
     return compute_autorouter_savings(
         baseline_model=baseline,
         selected_model=selected,
-        baseline_provider="anthropic",
         selected_provider="anthropic",
         usage=usage,
     )
@@ -231,7 +230,6 @@ def test_compute_savings_spend_carries_a_losing_switch_through():
         compression_saved_tokens=0,
         cache_read_input_tokens=0,
         baseline_model="claude-sonnet-5",
-        baseline_provider="anthropic",
         usage_object=_cached_usage_object(),
     )
     assert result.autorouter < 0
@@ -288,14 +286,12 @@ def test_baseline_is_priced_under_its_own_provider():
     azure = compute_autorouter_savings(
         baseline_model="azure_ai/deepseek-r1",
         selected_model="claude-haiku-4-5",
-        baseline_provider=None,
         selected_provider="anthropic",
         usage=usage,
     )
     deepseek = compute_autorouter_savings(
         baseline_model="deepseek/deepseek-r1",
         selected_model="claude-haiku-4-5",
-        baseline_provider=None,
         selected_provider="anthropic",
         usage=usage,
     )

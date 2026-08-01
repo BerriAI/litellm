@@ -459,13 +459,25 @@ class TestSavingsBaselineModel:
         assert auto_router.savings_baseline_model == "anthropic/claude-opus-5"
 
     def test_an_explicit_baseline_overrides_the_derived_one(self):
+        """And is qualified like a derived one: the baseline reaches the spend writer as
+        a bare string with no provider beside it, so an operator who writes a name that
+        another vendor also owns would otherwise be priced against that vendor."""
         auto_router = self._auto_router(
             {"cheap-tier": "anthropic/claude-haiku-4-5"},
             ["cheap-tier"],
             "cheap-tier",
             configured="claude-opus-5",
         )
-        assert auto_router.savings_baseline_model == "claude-opus-5"
+        assert auto_router.savings_baseline_model == "anthropic/claude-opus-5"
+
+    def test_an_unresolvable_explicit_baseline_disables_the_driver(self):
+        auto_router = self._auto_router(
+            {"cheap-tier": "anthropic/claude-haiku-4-5"},
+            ["cheap-tier"],
+            "cheap-tier",
+            configured="no-such-provider-xyz/no-such-model",
+        )
+        assert auto_router.savings_baseline_model is None
 
     def test_nothing_priceable_disables_the_driver_rather_than_inventing_a_baseline(self):
         """A missing number beats a fabricated one."""

@@ -153,10 +153,18 @@ class AutoRouter(CustomLogger):
         honest: a fixed flagship credits savings against a model the operator would
         never have run, and drifts the moment the routes change.
 
+        Always provider-qualified, whether derived or configured, because it travels to
+        the spend writer as a bare string with no provider beside it; an operator who
+        writes `deepseek-r1` meaning Azure would otherwise be priced against whoever
+        owns that name.
+
         ``None`` when nothing can be priced, which zeroes the driver rather than
         inventing a baseline.
         """
-        return self.configured_savings_baseline_model or self._derived_savings_baseline_model
+        configured = self.configured_savings_baseline_model
+        if configured:
+            return self._canonical_model(configured, None)
+        return self._derived_savings_baseline_model
 
     def _load_semantic_routing_routes(self) -> List[Route]:
         from semantic_router.routers import SemanticRouter
