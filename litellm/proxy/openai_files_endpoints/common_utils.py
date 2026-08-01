@@ -938,7 +938,7 @@ def _resolve_batch_file_owner_auth(db_batch_object, requester_api_key_dict):
         from litellm.proxy._types import UserAPIKeyAuth
 
         return UserAPIKeyAuth(
-            user_id=getattr(db_batch_object, "created_by", None) or "default-user-id",
+            user_id=getattr(db_batch_object, "created_by", None),
             team_id=getattr(db_batch_object, "team_id", None),
         )
     return requester_api_key_dict

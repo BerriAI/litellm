@@ -79,9 +79,7 @@ async def test_update_batch_in_database_stores_unified_output_file_id():
     raw_output_file_id = "file-rawoutput789"
     unified_output_file_id = UNIFIED_FILE_ID
     batch_id = "batch_managed_ids_test"
-    unified_batch_id = (
-        "litellm_proxy;model_id:my-model;llm_batch_id:batch_managed_ids_test"
-    )
+    unified_batch_id = "litellm_proxy;model_id:my-model;llm_batch_id:batch_managed_ids_test"
 
     response = _build_batch_response(
         batch_id=batch_id,
@@ -102,11 +100,7 @@ async def test_update_batch_in_database_stores_unified_output_file_id():
         user_api_key_dict=UserAPIKeyAuth(user_id="user-abc"),
     )
 
-    stored = json.loads(
-        mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs["data"][
-            "file_object"
-        ]
-    )
+    stored = json.loads(mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs["data"]["file_object"])
     assert stored["output_file_id"] == unified_output_file_id
     assert stored["output_file_id"] != raw_output_file_id
 
@@ -148,9 +142,7 @@ async def test_ensure_batch_response_redacts_id_when_conversion_errors():
     )
 
     mock_managed_files = MagicMock()
-    mock_managed_files.get_unified_output_file_id = MagicMock(
-        side_effect=RuntimeError("boom")
-    )
+    mock_managed_files.get_unified_output_file_id = MagicMock(side_effect=RuntimeError("boom"))
     mock_managed_files.store_unified_file_id = AsyncMock()
 
     mock_logger = MagicMock()
@@ -176,9 +168,7 @@ async def test_ensure_batch_response_builds_auth_from_db_batch_object():
     )
 
     mock_managed_files = _build_managed_files_mock(unified_id=unified_id)
-    db_batch_object = SimpleNamespace(
-        created_by="user-from-db", team_id="team-from-db", status="completed"
-    )
+    db_batch_object = SimpleNamespace(created_by="user-from-db", team_id="team-from-db", status="completed")
 
     await ensure_batch_response_managed_file_ids(
         response=response,
@@ -188,9 +178,7 @@ async def test_ensure_batch_response_builds_auth_from_db_batch_object():
         db_batch_object=db_batch_object,
     )
 
-    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
-        "user_api_key_dict"
-    ]
+    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs["user_api_key_dict"]
     assert forwarded_auth.user_id == "user-from-db"
     assert forwarded_auth.team_id == "team-from-db"
 
@@ -218,8 +206,7 @@ async def test_ensure_batch_response_resolves_model_name_from_unified_file_id():
     )
 
     assert (
-        mock_managed_files.get_unified_output_file_id.call_args.kwargs["model_name"]
-        == "gpt-4o-mini,gemini-2.0-flash"
+        mock_managed_files.get_unified_output_file_id.call_args.kwargs["model_name"] == "gpt-4o-mini,gemini-2.0-flash"
     )
 
 
@@ -251,10 +238,7 @@ async def test_ensure_batch_response_derives_model_id_from_unified_batch_id():
     assert response.output_file_id == unified_id
     assert response.error_file_id == unified_id
     assert mock_managed_files.get_unified_output_file_id.call_count == 2
-    assert (
-        mock_managed_files.get_unified_output_file_id.call_args.kwargs["model_id"]
-        == "deployment-42"
-    )
+    assert mock_managed_files.get_unified_output_file_id.call_args.kwargs["model_id"] == "deployment-42"
 
 
 @pytest.mark.asyncio
@@ -338,14 +322,37 @@ async def test_ensure_batch_response_owns_registered_files_by_batch_creator_not_
         prisma_client=_build_prisma_mock(),
         verbose_proxy_logger=MagicMock(),
         user_api_key_dict=UserAPIKeyAuth(user_id="attacker-user", team_id="attacker-team"),
-        db_batch_object=SimpleNamespace(
-            created_by="victim-user", team_id="victim-team", status="failed"
-        ),
+        db_batch_object=SimpleNamespace(created_by="victim-user", team_id="victim-team", status="failed"),
     )
 
-    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
-        "user_api_key_dict"
-    ]
+    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs["user_api_key_dict"]
     assert forwarded_auth.user_id == "victim-user"
+    assert forwarded_auth.team_id == "victim-team"
+    assert response.output_file_id == UNIFIED_FILE_ID
+
+
+@pytest.mark.asyncio
+async def test_ensure_batch_response_mirrors_none_owner_instead_of_synthetic_default_user():
+    """Regression for GH #33989 review: a batch created by a key without a user
+    (created_by is None) must register its files with created_by=None so the
+    creator's team ACL still matches; a synthetic "default-user-id" owner matches
+    no real caller and locks the creator out of their own terminal batch files."""
+    response = _build_batch_response(
+        output_file_id="file-raw-output",
+        hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
+    )
+    mock_managed_files = _build_managed_files_mock()
+
+    await ensure_batch_response_managed_file_ids(
+        response=response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=_build_prisma_mock(),
+        verbose_proxy_logger=MagicMock(),
+        user_api_key_dict=None,
+        db_batch_object=SimpleNamespace(created_by=None, team_id="victim-team", status="failed"),
+    )
+
+    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs["user_api_key_dict"]
+    assert forwarded_auth.user_id is None
     assert forwarded_auth.team_id == "victim-team"
     assert response.output_file_id == UNIFIED_FILE_ID
