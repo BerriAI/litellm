@@ -982,3 +982,110 @@ def test_openai_handler_repairs_github_copilot_empty_choices(
     assert result.choices[0].message.content == "Hi there"
     assert result.choices[0].finish_reason == "stop"
     mock_request.assert_called_once()
+
+
+COPILOT_REASONING_SSE = (
+    'data: {"id":"c1","created":1,"model":"claude-sonnet-5","object":"chat.completion.chunk",'
+    '"choices":[{"index":0,"delta":{"role":"assistant","reasoning_text":"let me think"},"finish_reason":null}]}\n\n'
+    'data: {"id":"c1","created":1,"model":"claude-sonnet-5","object":"chat.completion.chunk",'
+    '"choices":[{"index":0,"delta":{"reasoning_text":" harder"},"finish_reason":null}]}\n\n'
+    'data: {"id":"c1","created":1,"model":"claude-sonnet-5","object":"chat.completion.chunk",'
+    '"choices":[{"index":0,"delta":{"reasoning_opaque":"opaque-sig"},"finish_reason":null}]}\n\n'
+    'data: {"id":"c1","created":1,"model":"claude-sonnet-5","object":"chat.completion.chunk",'
+    '"choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}\n\n'
+    'data: {"id":"c1","created":1,"model":"claude-sonnet-5","object":"chat.completion.chunk",'
+    '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+def _patch_copilot_authenticator():
+    authenticator = MagicMock()
+    authenticator.get_api_key.return_value = "gh.test-key-123456789"
+    authenticator.get_api_base.return_value = "https://api.githubcopilot.com"
+    return patch(
+        "litellm.llms.github_copilot.chat.transformation.Authenticator",
+        return_value=authenticator,
+    ), patch(
+        "litellm.llms.github_copilot.authenticator.Authenticator",
+        return_value=authenticator,
+    )
+
+
+def _assert_reasoning_stream(deltas):
+    assert [getattr(delta, "reasoning_content", None) for delta in deltas[:2]] == [
+        "let me think",
+        " harder",
+    ]
+    assert deltas[0].thinking_blocks == [{"type": "thinking", "thinking": "let me think"}]
+    assert deltas[2].thinking_blocks == [{"type": "thinking", "thinking": "", "signature": "opaque-sig"}]
+    assert deltas[2].provider_specific_fields["reasoning_opaque"] == "opaque-sig"
+    assert deltas[3].content == "hello"
+
+
+@pytest.mark.respx
+def test_github_copilot_streaming_surfaces_reasoning_text_and_opaque(respx_mock: MockRouter):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/35021
+
+    Copilot streams thinking as `delta.reasoning_text` plus a final `delta.reasoning_opaque`
+    signature; both were silently dropped on the chat completions streaming path
+    """
+    respx_mock.post("https://api.githubcopilot.com/chat/completions").mock(
+        return_value=httpx.Response(
+            200, text=COPILOT_REASONING_SSE, headers={"content-type": "text/event-stream"}
+        )
+    )
+    transformation_patch, authenticator_patch = _patch_copilot_authenticator()
+    with transformation_patch, authenticator_patch:
+        response = litellm.completion(
+            model="github_copilot/claude-sonnet-5",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+        deltas = [chunk.choices[0].delta for chunk in response]
+
+    _assert_reasoning_stream(deltas)
+
+
+@pytest.mark.respx
+@pytest.mark.asyncio
+async def test_github_copilot_async_streaming_surfaces_reasoning_text_and_opaque(
+    respx_mock: MockRouter, monkeypatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.githubcopilot.com/chat/completions").mock(
+        return_value=httpx.Response(
+            200, text=COPILOT_REASONING_SSE, headers={"content-type": "text/event-stream"}
+        )
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    transformation_patch, authenticator_patch = _patch_copilot_authenticator()
+    with transformation_patch, authenticator_patch:
+        response = await litellm.acompletion(
+            model="github_copilot/claude-sonnet-5",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+        deltas = [chunk.choices[0].delta async for chunk in response]
+
+    _assert_reasoning_stream(deltas)
+
+
+def test_github_copilot_streaming_chunk_without_reasoning_is_untouched():
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+
+    with patch.object(litellm.llms.github_copilot.chat.transformation, "Authenticator", MagicMock()):
+        config = GithubCopilotConfig()
+
+    assert (
+        config.transform_parsed_streaming_chunk_dict(
+            {
+                "id": "c1",
+                "created": 1,
+                "model": "claude-sonnet-5",
+                "choices": [{"index": 0, "delta": {"content": "hi"}}],
+            }
+        )
+        is None
+    )

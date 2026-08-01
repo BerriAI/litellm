@@ -10,6 +10,7 @@ from typing import (
     AsyncIterator,
     Iterator,
     List,
+    Mapping,
     Optional,
     Tuple,
     Type,
@@ -365,6 +366,19 @@ class BaseConfig(ABC):
         returning empty choices for Anthropic-native Claude responses).
         """
         return parsed_response
+
+    def transform_parsed_streaming_chunk_dict(
+        self,
+        parsed_chunk: dict,  # mutable-ok: mirrors transform_parsed_response_dict
+    ) -> Mapping[str, Any] | None:
+        """
+        Repair a parsed OpenAI-format streaming chunk dict before generic conversion.
+
+        Same rationale as transform_parsed_response_dict, for the streaming path: providers
+        routed through the OpenAI SDK handler never reach get_model_response_iterator, so
+        provider-specific delta keys are silently dropped. Return None to leave the chunk as is.
+        """
+        return None
 
     @abstractmethod
     def get_error_class(
