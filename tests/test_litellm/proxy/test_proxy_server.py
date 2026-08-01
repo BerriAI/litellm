@@ -6713,6 +6713,68 @@ async def test_update_general_settings_store_model_in_db_false():
         assert ps.general_settings["store_model_in_db"] is False
 
 
+def test_update_litellm_settings_ssrf_applies_documented_location():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch.object(litellm, "user_url_allowed_hosts", []):
+        proxy_config._update_litellm_settings_ssrf(
+            db_litellm_settings={"user_url_allowed_hosts": ["files.example.com"]}
+        )
+
+        assert litellm.user_url_allowed_hosts == ["files.example.com"]
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_wins_over_litellm_settings_for_ssrf_keys():
+    """general_settings wins on conflict, matching the YAML load order in load_config."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with (
+        patch.object(litellm, "user_url_allowed_hosts", []),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        proxy_config._update_litellm_settings_ssrf(
+            db_litellm_settings={"user_url_allowed_hosts": ["litellm-settings.example.com"]}
+        )
+        await proxy_config._update_general_settings(
+            db_general_settings={"user_url_allowed_hosts": ["general-settings.example.com"]}
+        )
+
+        assert litellm.user_url_allowed_hosts == ["general-settings.example.com"]
+
+
+@pytest.mark.asyncio
+async def test_add_deployment_applies_db_litellm_settings_ssrf():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    db_row = MagicMock()
+    db_row.param_name = "litellm_settings"
+    db_row.param_value = {"user_url_allowed_hosts": ["files.example.com"]}
+
+    async def fake_get_config_param(prisma_client, param_name):
+        return db_row if param_name == "litellm_settings" else None
+
+    with (
+        patch.object(litellm, "user_url_allowed_hosts", []),
+        patch("litellm.proxy.proxy_server.prefetch_config_params", new=AsyncMock()),
+        patch(
+            "litellm.proxy.proxy_server.get_config_param",
+            side_effect=fake_get_config_param,
+        ),
+        patch.object(proxy_config, "_should_load_db_object", return_value=False),
+        patch.object(proxy_config, "_init_non_llm_objects_in_db", new=AsyncMock()),
+    ):
+        await proxy_config.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock())
+
+        assert litellm.user_url_allowed_hosts == ["files.example.com"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "db_value,expected",

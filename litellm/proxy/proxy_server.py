@@ -3651,7 +3651,7 @@ def _normalize_user_url_validation(value: object) -> Optional[bool]:
     return bool(value)
 
 
-def _apply_ssrf_general_settings(settings: Mapping[str, object]) -> None:
+def _apply_ssrf_settings(settings: Mapping[str, object]) -> None:
     if "user_url_allowed_hosts" in settings:
         litellm.user_url_allowed_hosts = cast(list[str], settings["user_url_allowed_hosts"])
 
@@ -4923,7 +4923,7 @@ class ProxyConfig:
                 ]
 
             ### SSRF URL VALIDATION SETTINGS ###
-            _apply_ssrf_general_settings(general_settings)
+            _apply_ssrf_settings(general_settings)
 
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
@@ -5978,7 +5978,12 @@ class ProxyConfig:
         ):
             if key in _general_settings:
                 general_settings[key] = _general_settings[key]
-        _apply_ssrf_general_settings(_general_settings)
+        _apply_ssrf_settings(_general_settings)
+
+    def _update_litellm_settings_ssrf(self, db_litellm_settings: Optional[Json]):
+        if not isinstance(db_litellm_settings, Mapping):
+            return
+        _apply_ssrf_settings(db_litellm_settings)
 
     def _update_config_fields(
         self,
@@ -6187,6 +6192,13 @@ class ProxyConfig:
 
                 # update llm router
                 await self._update_llm_router(new_models=new_models, proxy_logging_obj=proxy_logging_obj)
+
+            db_litellm_settings = await get_config_param(prisma_client, "litellm_settings")
+
+            if db_litellm_settings is not None:
+                self._update_litellm_settings_ssrf(
+                    db_litellm_settings=db_litellm_settings.param_value,
+                )
 
             db_general_settings = await get_config_param(prisma_client, "general_settings")
 
@@ -14894,7 +14906,7 @@ async def update_config_general_settings(
 
     if data.field_name == "plugins":
         register_plugins_from_config(general_settings)
-    _apply_ssrf_general_settings(general_settings)
+    _apply_ssrf_settings(general_settings)
 
     return response
 

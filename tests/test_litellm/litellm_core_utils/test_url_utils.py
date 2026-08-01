@@ -130,6 +130,11 @@ class TestValidateUrl:
         with pytest.raises(SSRFError):
             validate_url("http://192.168.1.1/")
 
+    def test_blocked_address_error_names_documented_config_location(self):
+        """The docs place user_url_allowed_hosts under litellm_settings; the hint must match."""
+        with pytest.raises(SSRFError, match="`user_url_allowed_hosts` in litellm_settings"):
+            validate_url("http://10.0.1.5:8080/v1/completions")
+
     def test_blocks_file_scheme(self):
         with pytest.raises(SSRFError):
             validate_url("file:///etc/passwd")
