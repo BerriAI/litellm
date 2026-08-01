@@ -5,7 +5,8 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 """
 
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import quote
 
@@ -17,9 +18,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock_agentcore import (
     AgentCoreMessage,
@@ -46,6 +47,27 @@ else:
     LiteLLMLoggingObj = Any
     HTTPHandler = Any
     AsyncHTTPHandler = Any
+
+
+_SSE_SENTINEL_PAYLOADS = frozenset({"[DONE]"})
+
+
+@dataclass(frozen=True, slots=True)
+class _SseTextDelta:
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SseUsage:
+    usage: AgentCoreUsage
+
+
+@dataclass(frozen=True, slots=True)
+class _SseFinalMessage:
+    message: AgentCoreMessage
+
+
+_SseEvent = _SseTextDelta | _SseUsage | _SseFinalMessage
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -288,22 +310,95 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return bool(value)
         return False
 
-    def _extract_sse_json(self, line: str) -> Optional[Dict]:
-        """Extract and parse JSON from an SSE data line."""
-        if not line.startswith("data:"):
+    def _extract_sse_payload(self, line: str) -> Optional[str]:
+        """Strip the 'data:' prefix from an SSE line, returning the payload or None."""
+        stripped = line.strip()
+        if not stripped.startswith("data:"):
             return None
+        payload = stripped[5:].strip()
+        return payload or None
 
-        json_str = line[5:].strip()
-        if not json_str:
-            return None
+    def _text_or_sentinel(self, text: str) -> tuple[_SseEvent, ...]:
+        """Surface text as a content delta, dropping empty text and control sentinels."""
+        if not text or text in _SSE_SENTINEL_PAYLOADS:
+            return ()
+        return (_SseTextDelta(text),)
 
+    def _parse_sse_data(self, payload: str) -> tuple[_SseEvent, ...]:
+        """Turn one SSE data payload into typed events.
+
+        Strands runtimes emit bare-string payloads (JSON-quoted like `"hi"` or
+        plain text like `hi`); these surface as content deltas instead of being
+        dropped. Control sentinels (e.g. `[DONE]`) are filtered whether quoted
+        or bare. A payload that fails to parse but looks like intended JSON
+        (starts with `{`, `[`, or `"`) is a malformed/truncated frame: it is
+        logged and dropped rather than leaked as content.
+        """
         try:
-            data = json.loads(json_str)
-            # Skip non-dict data (some lines contain JSON strings)
-            return data if isinstance(data, dict) else None
+            data_obj = json.loads(payload)
         except json.JSONDecodeError:
-            verbose_logger.debug(f"Skipping non-JSON line: {line[:100]}")
-            return None
+            if payload not in _SSE_SENTINEL_PAYLOADS and payload[:1] in ("{", "[", '"'):
+                verbose_logger.debug(f"Skipping malformed JSON SSE line: {payload[:100]}")
+                return ()
+            return self._text_or_sentinel(payload)
+
+        if isinstance(data_obj, str):
+            return self._text_or_sentinel(data_obj)
+
+        if not isinstance(data_obj, dict):
+            return ()
+
+        return self._dict_to_sse_events(data_obj)
+
+    def _dict_to_sse_events(self, data_obj: dict[str, object]) -> tuple[_SseEvent, ...]:
+        event = data_obj.get("event")
+        text = self._extract_content_delta(data_obj) if isinstance(event, dict) else None
+        usage = self._extract_usage_from_event(data_obj) if isinstance(event, dict) else None
+        message = data_obj.get("message")
+        return (
+            *((_SseTextDelta(text),) if text else ()),
+            *((_SseUsage(usage),) if usage else ()),
+            *((_SseFinalMessage(cast(AgentCoreMessage, message)),) if isinstance(message, dict) else ()),
+        )
+
+    def _sse_event_to_chunk(self, event: _SseEvent, model: str) -> ModelResponseStream:
+        chunk = ModelResponseStream(
+            id=f"chatcmpl-{uuid.uuid4()}",
+            created=0,
+            model=model,
+            object="chat.completion.chunk",
+        )
+        match event:
+            case _SseTextDelta(text=text):
+                chunk.choices = [
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(content=text, role="assistant"),
+                    )
+                ]
+            case _SseUsage(usage=usage):
+                chunk.choices = [StreamingChoices(finish_reason="stop", index=0, delta=Delta())]
+                setattr(
+                    chunk,
+                    "usage",
+                    Usage(
+                        prompt_tokens=usage.get("inputTokens", 0),
+                        completion_tokens=usage.get("outputTokens", 0),
+                        total_tokens=usage.get("totalTokens", 0),
+                    ),
+                )
+            case _SseFinalMessage():
+                chunk.choices = [StreamingChoices(finish_reason="stop", index=0, delta=Delta())]
+        return chunk
+
+    def _line_to_chunks(self, line: str, model: str) -> Iterator[ModelResponseStream]:
+        """Parse one raw SSE line and yield the resulting stream chunks."""
+        payload = self._extract_sse_payload(line)
+        if payload is None:
+            return
+        for event in self._parse_sse_data(payload):
+            yield self._sse_event_to_chunk(event, model)
 
     def _extract_usage_from_event(self, event_data: Dict) -> Optional[AgentCoreUsage]:
         """Extract usage information from event metadata."""
@@ -476,51 +571,27 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return self._parse_sse_stream(response_text)
 
     def _parse_sse_stream(self, response_text: str) -> AgentCoreParsedResponse:
-        """
-        Parse Server-Sent Events (SSE) stream format.
-        Each line starts with 'data:' followed by JSON.
+        """Aggregate an SSE stream into a single parsed response."""
+        events = tuple(
+            event
+            for line in response_text.strip().split("\n")
+            if (payload := self._extract_sse_payload(line)) is not None
+            for event in self._parse_sse_data(payload)
+        )
 
-        Returns:
-            AgentCoreParsedResponse: Parsed response with content, usage, and message
-        """
-        final_message: Optional[AgentCoreMessage] = None
-        usage_data: Optional[AgentCoreUsage] = None
-        content_blocks: List[str] = []
-
-        for line in response_text.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-
-            data = self._extract_sse_json(line)
-            if not data:
-                continue
-
-            verbose_logger.debug(f"SSE event keys: {list(data.keys())}")
-
-            # Check for final complete message
-            if "message" in data and isinstance(data["message"], dict):
-                final_message = data["message"]  # type: ignore
-                verbose_logger.debug("Found final message")
-
-            # Process event data
-            if "event" in data and isinstance(data["event"], dict):
-                event_payload = data["event"]
-                verbose_logger.debug(f"Event payload keys: {list(event_payload.keys())}")
-
-                # Extract usage metadata
-                if usage := self._extract_usage_from_event(data):
-                    usage_data = usage
-                    verbose_logger.debug(f"Found usage data: {usage_data}")
-
-                # Collect content deltas
-                if text := self._extract_content_delta(data):
-                    content_blocks.append(text)
-
-        # Build final content
-        content = self._extract_content_from_message(final_message) if final_message else "".join(content_blocks)
-
-        verbose_logger.debug(f"Final usage_data: {usage_data}")
+        final_message = next(
+            (e.message for e in reversed(events) if isinstance(e, _SseFinalMessage)),
+            None,
+        )
+        usage_data = next(
+            (e.usage for e in reversed(events) if isinstance(e, _SseUsage)),
+            None,
+        )
+        content = (
+            self._extract_content_from_message(final_message)
+            if final_message
+            else "".join(e.text for e in events if isinstance(e, _SseTextDelta))
+        )
 
         return AgentCoreParsedResponse(content=content, usage=usage_data, final_message=final_message)
 
@@ -529,103 +600,17 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         response: httpx.Response,
         model: str,
     ):
-        """
-        Internal sync generator that parses SSE and yields ModelResponse chunks.
-        """
+        """Internal sync generator that parses SSE and yields ModelResponse chunks."""
         buffer = ""
         for text_chunk in response.iter_text():
             buffer += text_chunk
 
-            # Process complete lines
             while "\n" in buffer:
                 line, buffer = buffer.split("\n", 1)
-                line = line.strip()
+                yield from self._line_to_chunks(line, model)
 
-                if not line or not line.startswith("data:"):
-                    continue
-
-                json_str = line[5:].strip()
-                if not json_str:
-                    continue
-
-                try:
-                    data_obj = json.loads(json_str)
-                    if not isinstance(data_obj, dict):
-                        continue
-
-                    # Process contentBlockDelta events
-                    if "event" in data_obj and isinstance(data_obj["event"], dict):
-                        event_payload = data_obj["event"]
-                        content_block_delta = event_payload.get("contentBlockDelta")
-
-                        if content_block_delta:
-                            delta = content_block_delta.get("delta", {})
-                            text = delta.get("text", "")
-
-                            if text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(content=text, role="assistant"),
-                                    )
-                                ]
-                                yield chunk
-
-                        # Process metadata/usage
-                        metadata = event_payload.get("metadata")
-                        if metadata and "usage" in metadata:
-                            chunk = ModelResponseStream(
-                                id=f"chatcmpl-{uuid.uuid4()}",
-                                created=0,
-                                model=model,
-                                object="chat.completion.chunk",
-                            )
-                            chunk.choices = [
-                                StreamingChoices(
-                                    finish_reason="stop",
-                                    index=0,
-                                    delta=Delta(),
-                                )
-                            ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
-                            setattr(
-                                chunk,
-                                "usage",
-                                Usage(
-                                    prompt_tokens=usage_data.get("inputTokens", 0),
-                                    completion_tokens=usage_data.get("outputTokens", 0),
-                                    total_tokens=usage_data.get("totalTokens", 0),
-                                ),
-                            )
-                            yield chunk
-
-                    # Process final message
-                    if "message" in data_obj and isinstance(data_obj["message"], dict):
-                        chunk = ModelResponseStream(
-                            id=f"chatcmpl-{uuid.uuid4()}",
-                            created=0,
-                            model=model,
-                            object="chat.completion.chunk",
-                        )
-                        chunk.choices = [
-                            StreamingChoices(
-                                finish_reason="stop",
-                                index=0,
-                                delta=Delta(),
-                            )
-                        ]
-                        yield chunk
-
-                except json.JSONDecodeError:
-                    verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
-                    continue
+        if buffer:
+            yield from self._line_to_chunks(buffer, model)
 
     def get_sync_custom_stream_wrapper(
         self,
@@ -742,103 +727,19 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         response: httpx.Response,
         model: str,
     ) -> AsyncGenerator[ModelResponseStream, None]:
-        """
-        Internal async generator that parses SSE and yields ModelResponse chunks.
-        """
+        """Internal async generator that parses SSE and yields ModelResponse chunks."""
         buffer = ""
         async for text_chunk in response.aiter_text():
             buffer += text_chunk
 
-            # Process complete lines
             while "\n" in buffer:
                 line, buffer = buffer.split("\n", 1)
-                line = line.strip()
+                for chunk in self._line_to_chunks(line, model):
+                    yield chunk
 
-                if not line or not line.startswith("data:"):
-                    continue
-
-                json_str = line[5:].strip()
-                if not json_str:
-                    continue
-
-                try:
-                    data_obj = json.loads(json_str)
-                    if not isinstance(data_obj, dict):
-                        continue
-
-                    # Process contentBlockDelta events
-                    if "event" in data_obj and isinstance(data_obj["event"], dict):
-                        event_payload = data_obj["event"]
-                        content_block_delta = event_payload.get("contentBlockDelta")
-
-                        if content_block_delta:
-                            delta = content_block_delta.get("delta", {})
-                            text = delta.get("text", "")
-
-                            if text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(content=text, role="assistant"),
-                                    )
-                                ]
-                                yield chunk
-
-                        # Process metadata/usage
-                        metadata = event_payload.get("metadata")
-                        if metadata and "usage" in metadata:
-                            chunk = ModelResponseStream(
-                                id=f"chatcmpl-{uuid.uuid4()}",
-                                created=0,
-                                model=model,
-                                object="chat.completion.chunk",
-                            )
-                            chunk.choices = [
-                                StreamingChoices(
-                                    finish_reason="stop",
-                                    index=0,
-                                    delta=Delta(),
-                                )
-                            ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
-                            setattr(
-                                chunk,
-                                "usage",
-                                Usage(
-                                    prompt_tokens=usage_data.get("inputTokens", 0),
-                                    completion_tokens=usage_data.get("outputTokens", 0),
-                                    total_tokens=usage_data.get("totalTokens", 0),
-                                ),
-                            )
-                            yield chunk
-
-                    # Process final message
-                    if "message" in data_obj and isinstance(data_obj["message"], dict):
-                        chunk = ModelResponseStream(
-                            id=f"chatcmpl-{uuid.uuid4()}",
-                            created=0,
-                            model=model,
-                            object="chat.completion.chunk",
-                        )
-                        chunk.choices = [
-                            StreamingChoices(
-                                finish_reason="stop",
-                                index=0,
-                                delta=Delta(),
-                            )
-                        ]
-                        yield chunk
-
-                except json.JSONDecodeError:
-                    verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
-                    continue
+        if buffer:
+            for chunk in self._line_to_chunks(buffer, model):
+                yield chunk
 
     async def get_async_custom_stream_wrapper(
         self,
