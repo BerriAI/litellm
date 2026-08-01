@@ -18,6 +18,7 @@ import asyncio
 import datetime
 import inspect
 import time
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1015,6 +1016,8 @@ class LLMCachingHandler:
         """
         Sync internal method to add the result to the cache
         """
+        if litellm.cache is None:
+            return
 
         new_kwargs = kwargs.copy()
         new_kwargs.update(
@@ -1023,8 +1026,6 @@ class LLMCachingHandler:
                 args,
             )
         )
-        if litellm.cache is None:
-            return
 
         if self._should_store_result_in_cache(original_function=self.original_function, kwargs=new_kwargs):
             litellm.cache.add_cache(result, **new_kwargs)
@@ -1178,22 +1179,16 @@ class LLMCachingHandler:
         )
 
 
+@lru_cache(maxsize=1024)
+def _positional_param_names(original_function: Callable) -> tuple[str, ...]:
+    return tuple(inspect.signature(original_function).parameters.keys())
+
+
 def convert_args_to_kwargs(
     original_function: Callable,
     args: Optional[Tuple[Any, ...]] = None,
 ) -> Dict[str, Any]:
-    # Get the signature of the original function
-    signature = inspect.signature(original_function)
+    if not args:
+        return {}
 
-    # Get parameter names in the order they appear in the original function
-    param_names = list(signature.parameters.keys())
-
-    # Create a mapping of positional arguments to parameter names
-    args_to_kwargs = {}
-    if args:
-        for index, arg in enumerate(args):
-            if index < len(param_names):
-                param_name = param_names[index]
-                args_to_kwargs[param_name] = arg
-
-    return args_to_kwargs
+    return dict(zip(_positional_param_names(original_function), args))
