@@ -140,3 +140,25 @@ def test_get_fallback_errors_from_headers_invalid_json_returns_empty():
 def test_get_fallback_errors_from_headers_missing_key_returns_empty():
     result = get_fallback_errors_from_headers({})
     assert result == []
+
+
+def test_get_hidden_params_dict_with_dict_response():
+    response = {"id": "msg_1", "usage": {"input_tokens": 1, "output_tokens": 2}}
+    assert get_hidden_params_dict(response) == {}
+
+    hidden_params = get_hidden_params_dict(response, create=True)
+    assert hidden_params == {}
+    assert response["_hidden_params"] == {}
+
+    response["_hidden_params"] = {"additional_headers": {"x-test": "1"}}
+    assert get_hidden_params_dict(response) == {
+        "additional_headers": {"x-test": "1"},
+    }
+
+
+def test_add_fallback_headers_to_dict_response():
+    response = {"id": "msg_1"}
+    result = add_fallback_headers_to_response(response=response, attempted_fallbacks=1)
+
+    assert result is response
+    assert response["_hidden_params"]["additional_headers"]["x-litellm-attempted-fallbacks"] == 1

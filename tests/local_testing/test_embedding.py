@@ -765,6 +765,10 @@ def test_fireworks_embeddings():
         pass
     except litellm.InternalServerError as e:
         pass
+    except litellm.APIError as e:
+        if "suspended" in str(e):
+            pytest.skip(f"Fireworks account suspended: {e}")
+        pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

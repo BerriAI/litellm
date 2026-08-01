@@ -5,6 +5,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -24,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     _get_httpx_client,
 )
+from litellm.types.llms.bedrock import GuardrailConfigBlock
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
@@ -36,6 +38,38 @@ else:
     LiteLLMLoggingObj = Any
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+_GUARDRAIL_CONFIG_VALIDATOR: "TypeAdapter[GuardrailConfigBlock]" = TypeAdapter(GuardrailConfigBlock)
+
+_GUARDRAIL_CONFIG_EXPECTED_FORMAT = (
+    "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
+)
+
+
+def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
+    try:
+        guardrail_config = _GUARDRAIL_CONFIG_VALIDATOR.validate_python(raw_guardrail_config)
+    except ValidationError as e:
+        raise BedrockError(
+            status_code=400,
+            message="Invalid guardrailConfig={}. Expected format: {}. Error: {}".format(
+                raw_guardrail_config, _GUARDRAIL_CONFIG_EXPECTED_FORMAT, e
+            ),
+        )
+    if "guardrailIdentifier" not in guardrail_config:
+        raise BedrockError(
+            status_code=400,
+            message="guardrailConfig={} is missing 'guardrailIdentifier'. Expected format: {}".format(
+                raw_guardrail_config, _GUARDRAIL_CONFIG_EXPECTED_FORMAT
+            ),
+        )
+    trace = guardrail_config.get("trace")
+    candidate_headers = {
+        "X-Amzn-Bedrock-GuardrailIdentifier": guardrail_config.get("guardrailIdentifier"),
+        "X-Amzn-Bedrock-GuardrailVersion": guardrail_config.get("guardrailVersion"),
+        "X-Amzn-Bedrock-Trace": trace.upper() if trace is not None else None,
+    }
+    return {name: value for name, value in candidate_headers.items() if value is not None}
 
 
 class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
@@ -390,7 +424,16 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        return headers
+        raw_guardrail_config = optional_params.pop("guardrailConfig", None)
+        if raw_guardrail_config is None:
+            return headers
+        existing_header_names = frozenset(name.lower() for name in headers)
+        guardrail_headers = {
+            name: value
+            for name, value in _bedrock_invoke_guardrail_headers(raw_guardrail_config).items()
+            if name.lower() not in existing_header_names
+        }
+        return {**headers, **guardrail_headers}
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

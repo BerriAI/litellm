@@ -5,7 +5,7 @@ Tests for gateway repository layer.
 import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -203,23 +203,32 @@ class TestBaseRepository:
         assert len(budgets) == 1
 
     def test_record_to_dict_branches(self):
-        from litellm.repositories.base_repository import _record_to_dict
+        from litellm.repositories.base_repository import record_to_dict
 
-        assert _record_to_dict({"a": 1}) == {"a": 1}
+        assert record_to_dict({"a": 1}) == {"a": 1}
 
         class WithModelDump:
             def model_dump(self):
                 return {"src": "model_dump"}
 
-        assert _record_to_dict(WithModelDump()) == {"src": "model_dump"}
+        assert record_to_dict(WithModelDump()) == {"src": "model_dump"}
 
         class WithDict:
             def dict(self):
                 return {"src": "dict"}
 
-        assert _record_to_dict(WithDict()) == {"src": "dict"}
+        assert record_to_dict(WithDict()) == {"src": "dict"}
 
-        assert _record_to_dict([("k", "v")]) == {"k": "v"}
+        assert record_to_dict([("k", "v")]) == {"k": "v"}
+
+        class WithBoth:
+            def model_dump(self):
+                return {"src": "model_dump"}
+
+            def dict(self):
+                return {"src": "dict"}
+
+        assert record_to_dict(WithBoth()) == {"src": "model_dump"}
 
 
 class TestBudgetRepository:
@@ -498,6 +507,42 @@ class TestTeamRepository:
         )
         assert team.team_id == "team-123"
         assert team.team_alias == "Engineering"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_value, expected_ids",
+        [
+            (
+                [
+                    {"user_id": "a", "role": "user"},
+                    {"user_id": "b", "role": "admin"},
+                ],
+                ["a", "b"],
+            ),
+            (json.dumps([{"user_id": "a", "role": "user"}]), ["a"]),
+            ({}, []),
+            (None, []),
+        ],
+    )
+    async def test_get_members_with_roles_locked(self, repo, raw_value, expected_ids):
+        tx = MagicMock()
+        tx.query_raw = AsyncMock(return_value=[{"members_with_roles": raw_value}])
+
+        members = await repo.get_members_with_roles_locked(tx, "team-1")
+
+        assert [m.user_id for m in members] == expected_ids
+        sql = tx.query_raw.call_args.args[0]
+        assert "FOR UPDATE" in sql
+        assert tx.query_raw.call_args.args[1] == "team-1"
+
+    @pytest.mark.asyncio
+    async def test_get_members_with_roles_locked_missing_row(self, repo):
+        tx = MagicMock()
+        tx.query_raw = AsyncMock(return_value=[])
+
+        members = await repo.get_members_with_roles_locked(tx, "missing")
+
+        assert members == []
 
     @pytest.mark.asyncio
     async def test_create_team_all_fields(self, repo):
@@ -1860,6 +1905,28 @@ class TestUserRepositoryExtended:
         )
         assert updated.user_email == "new@example.com"
 
+    @pytest.mark.asyncio
+    async def test_find_by_id_decodes_only_the_json_encoded_columns(self, repo):
+        repo._prisma_client.db.litellm_usertable._records["user-json"] = {
+            "user_id": "user-json",
+            "user_email": "json@example.com",
+            "user_role": '{"not": "json"}',
+            "teams": [],
+            "models": [],
+            "metadata": '{"department": "engineering"}',
+            "model_spend": '{"gpt-4": 10.5}',
+            "model_max_budget": '{"gpt-4": 100.0}',
+        }
+
+        user = await repo.find_by_id("user-json")
+
+        assert user is not None
+        assert user.metadata == {"department": "engineering"}
+        assert user.model_spend == {"gpt-4": 10.5}
+        assert user.model_max_budget == {"gpt-4": 100.0}
+        assert user.user_email == "json@example.com"
+        assert user.user_role == '{"not": "json"}'
+
 
 class TestProjectRepositoryExtended:
     @pytest.fixture
@@ -2182,3 +2249,82 @@ class TestPrismaTableRepository:
             assert name not in seen, f"duplicate table_name {name}"
             seen.add(name)
             assert repo_cls(prisma_client).table is getattr(prisma_client.db, name)
+
+
+def _json_path_equals(
+    metadata: Optional[Dict[str, Any]], path: List[str], expected: Any
+) -> bool:
+    """Reproduce Postgres jsonb path-equals semantics: a missing path yields
+    SQL NULL, which never matches `equals`."""
+    value: Any = metadata
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return False
+        value = value[key]
+    return value == expected
+
+
+class _ScimAwareUserTable:
+    """Fake LiteLLM_UserTable whose count() applies the JSON `where` filter the
+    way Postgres would, so count_billable_users is checked against an
+    independent model of the filter rather than echoing its own where dict."""
+
+    def __init__(self, metadatas: List[Optional[Dict[str, Any]]]):
+        self._metadatas = metadatas
+
+    async def count(self, where: Optional[Dict[str, Any]] = None) -> int:
+        if where is None:
+            return len(self._metadatas)
+        json_filter = where["metadata"]
+        path = json_filter["path"]
+        expected = getattr(json_filter["equals"], "data", json_filter["equals"])
+        return sum(
+            1
+            for metadata in self._metadatas
+            if _json_path_equals(metadata, path, expected)
+        )
+
+
+class TestCountBillableUsers:
+    def _repo(self, metadatas: List[Optional[Dict[str, Any]]]) -> UserRepository:
+        client = MockPrismaClient()
+        client.db.litellm_usertable = _ScimAwareUserTable(metadatas)
+        return UserRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_excludes_only_scim_deactivated_users(self):
+        repo = self._repo(
+            [
+                {},
+                {"scim_active": True},
+                {"scim_active": True},
+                {"scim_active": None},
+                {"other": "x"},
+                {"scim_active": False},
+            ]
+        )
+        assert await repo.count_billable_users() == 5
+
+    @pytest.mark.asyncio
+    async def test_absent_null_and_true_all_count_as_billable(self):
+        repo = self._repo([{}, {"scim_active": None}, {"scim_active": True}])
+        assert await repo.count_billable_users() == 3
+
+    @pytest.mark.asyncio
+    async def test_all_deactivated_returns_zero(self):
+        repo = self._repo([{"scim_active": False}, {"scim_active": False}])
+        assert await repo.count_billable_users() == 0
+
+    @pytest.mark.asyncio
+    async def test_floors_at_zero_when_deactivated_exceeds_total(self):
+        """The total and deactivated counts are separate queries; a burst of
+        deactivations between them must never yield a negative seat count."""
+
+        class _RacyTable:
+            async def count(self, where=None):
+                return 5 if where is not None else 2
+
+        client = MockPrismaClient()
+        client.db.litellm_usertable = _RacyTable()
+        repo = UserRepository(client)
+        assert await repo.count_billable_users() == 0

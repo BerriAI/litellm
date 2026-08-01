@@ -73,6 +73,7 @@ def _get_guardrails_list_response(
         )
         guardrail_configs.append(
             GuardrailInfoResponse(
+                guardrail_id=guardrail.get("guardrail_id"),
                 guardrail_name=guardrail.get("guardrail_name"),
                 litellm_params=masked_params,
                 guardrail_info=guardrail.get("guardrail_info"),
@@ -178,13 +179,14 @@ async def list_guardrails_v2(
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Prisma client not initialized")
-
     is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     try:
-        guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(prisma_client=prisma_client)
+        guardrails = (
+            await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(prisma_client=prisma_client)
+            if prisma_client is not None
+            else []
+        )
 
         excluded_guardrail_ids: set = set()
         if not is_admin:
@@ -1228,13 +1230,12 @@ async def get_guardrail_info(guardrail_id: str):
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Prisma client not initialized")
-
     try:
         guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
-        result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
-            guardrail_id=guardrail_id, prisma_client=prisma_client
+        result = (
+            await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(guardrail_id=guardrail_id, prisma_client=prisma_client)
+            if prisma_client is not None
+            else None
         )
         if result is None:
             in_memory = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(guardrail_id=guardrail_id)
@@ -1296,21 +1297,27 @@ async def get_guardrail_ui_settings():
         get_available_content_categories,
         get_pattern_metadata,
     )
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
-    category_maps = []
-    for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
-        category_maps.append(
-            {
-                "category": category.value,
-                "entities": [entity.value for entity in entities],
-            }
-        )
+    category_maps = [
+        {
+            "category": category.value,
+            "entities": [entity.value for entity in entities],
+        }
+        for category, entities in PII_ENTITY_CATEGORIES_MAP.items()
+    ]
+
+    supported_modes_by_provider = {
+        provider: [hook.value for hook in hooks]
+        for provider, guardrail_class in guardrail_class_registry.items()
+        if (hooks := guardrail_class.get_supported_event_hooks()) is not None
+    }
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],
         supported_actions=[action.value for action in PiiAction],
         supported_modes=[mode.value for mode in GuardrailEventHooks],
+        supported_modes_by_provider=supported_modes_by_provider,
         pii_entity_categories=category_maps,
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),
@@ -2232,7 +2239,10 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        request_data: dict = {"messages": request.messages} if request.messages else {}
+        request_data: dict = {
+            **({"messages": request.messages} if request.messages is not None else {}),
+            **({"metadata": request.metadata} if request.metadata is not None else {}),
+        }
         _input_type = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},

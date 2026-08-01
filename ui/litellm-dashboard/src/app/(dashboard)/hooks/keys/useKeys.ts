@@ -90,7 +90,6 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
     }
 
     const data = await response.json();
-    console.log("/key/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list keys:", error);
@@ -102,13 +101,14 @@ export const useKeys = (
   page: number,
   pageSize: number,
   options: KeyListCallOptions = {},
+  enabled: boolean = true,
 ): UseQueryResult<KeysResponse> => {
   const { accessToken } = useAuthorized();
 
   return useQuery<KeysResponse>({
     queryKey: keyKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, options),
-    enabled: Boolean(accessToken),
+    enabled: Boolean(accessToken) && enabled,
     staleTime: 30000, // 30 seconds
     placeholderData: keepPreviousData,
   });
@@ -119,10 +119,10 @@ export const useDeletedKeys = (
   page: number,
   pageSize: number,
   options: KeyListCallOptions = {},
-): UseQueryResult<KeysResponse> => {
+): UseQueryResult<DeletedKeysResponse> => {
   const { accessToken } = useAuthorized();
 
-  return useQuery<KeysResponse>({
+  return useQuery<DeletedKeysResponse>({
     queryKey: deletedKeyKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, { ...options, status: "deleted" }),
     enabled: Boolean(accessToken),

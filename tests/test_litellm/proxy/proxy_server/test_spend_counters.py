@@ -20,6 +20,7 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -417,6 +418,191 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
         "redis_increment_called": True,
         "increment_calls": 4,
         "user_cache_used": True,
+    }
+
+
+class _ConcurrencyProbe:
+    """Stand-in for redis_cache.async_increment that pins concurrency.
+
+    Each call registers itself as in-flight and blocks on ``release`` until the
+    test lets it proceed. ``all_arrived`` fires once ``expected`` distinct scope
+    increments are simultaneously suspended here, which can only happen if the
+    per-scope increments are gathered rather than awaited one after another.
+    """
+
+    def __init__(self, expected_concurrency: int):
+        self.expected = expected_concurrency
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.all_arrived = asyncio.Event()
+        self.release = asyncio.Event()
+        self.values: dict[str, float] = {}
+
+    async def async_increment(self, *, key, value, refresh_ttl=True):
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        if self.in_flight >= self.expected:
+            self.all_arrived.set()
+        if not self.release.is_set():
+            await self.release.wait()
+        self.in_flight -= 1
+        self.values[key] = self.values.get(key, 0.0) + value
+        return self.values[key]
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_runs_scopes_concurrently(monkeypatch):
+    """The six independent scopes (key, team, team_member, user, end_user+tags,
+    org) must be incremented concurrently. The probe only fires once all six are
+    suspended in async_increment at the same time, which is impossible if the
+    awaits are chained sequentially."""
+    probe = _ConcurrencyProbe(expected_concurrency=6)
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_increment = probe.async_increment
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    task = asyncio.create_task(
+        ps.increment_spend_counters(
+            token="hashed-tok",
+            team_id="t1",
+            user_id="u1",
+            org_id="org1",
+            end_user_id="eu1",
+            tags=["a", "b"],
+            response_cost=5.0,
+        )
+    )
+
+    try:
+        await asyncio.wait_for(probe.all_arrived.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        probe.release.set()
+        await task
+        pytest.fail(
+            "scope increments did not run concurrently; sequential awaits "
+            f"detected (peak in-flight was {probe.max_in_flight}, expected 6)"
+        )
+
+    assert probe.in_flight == 6
+    assert probe.max_in_flight == 6
+    probe.release.set()
+    await task
+
+    assert probe.values == {
+        "spend:key:hashed-tok": 5.0,
+        "spend:team:t1": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+        "spend:tag:b": 5.0,
+        "spend:org:org1": 5.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_skips_reserved_counter_keys(monkeypatch):
+    """Counters already reserved by a budget reservation are skipped, every
+    other scope is still incremented exactly once, and the reservation is
+    finalized after the gathered work completes."""
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    reserved = {"spend:key:hashed-tok", "spend:org:org1"}
+    monkeypatch.setattr(
+        br, "get_reserved_counter_keys", MagicMock(return_value=set(reserved))
+    )
+    monkeypatch.setattr(br, "reconcile_budget_reservation", AsyncMock())
+
+    recorded: dict[str, float] = {}
+
+    async def _record_increment(*, key, value, refresh_ttl=True):
+        recorded[key] = recorded.get(key, 0.0) + value
+        return recorded[key]
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_increment = _record_increment
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    reservation = {"finalized": False}
+    await ps.increment_spend_counters(
+        token="hashed-tok",
+        team_id="t1",
+        user_id="u1",
+        org_id="org1",
+        end_user_id="eu1",
+        tags=["a"],
+        response_cost=5.0,
+        budget_reservation=reservation,
+    )
+
+    assert reservation["finalized"] is True
+    assert recorded == {
+        "spend:team:t1": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_failing_scope_propagates_after_siblings_settle(
+    monkeypatch,
+):
+    """A failure in one scope must propagate to the caller (so it can invalidate
+    reserved counters) while every other scope still settles rather than being
+    left as an orphaned background task, and the reservation is not finalized."""
+    recorded: dict[str, float] = {}
+
+    async def _increment(*, key, value, refresh_ttl=True):
+        if key == "spend:team:t1":
+            raise RuntimeError("redis increment failed")
+        recorded[key] = recorded.get(key, 0.0) + value
+        return recorded[key]
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_increment = _increment
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    reservation = {"finalized": False}
+    with pytest.raises(RuntimeError, match="redis increment failed"):
+        await ps.increment_spend_counters(
+            token="hashed-tok",
+            team_id="t1",
+            user_id="u1",
+            org_id="org1",
+            end_user_id="eu1",
+            tags=["a"],
+            response_cost=5.0,
+            budget_reservation=reservation,
+        )
+
+    assert reservation["finalized"] is False
+    assert recorded == {
+        "spend:key:hashed-tok": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+        "spend:org:org1": 5.0,
     }
 
 

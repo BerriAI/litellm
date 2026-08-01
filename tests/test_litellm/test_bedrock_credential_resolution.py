@@ -44,18 +44,14 @@ S3_CONFIG_FIELDS = {
     "s3_region_name": "us-east-1",
 }
 
-BATCH_ROLE_FIELD = {
-    "aws_batch_role_arn": "arn:aws:iam::123456789012:role/bedrock-batch"
-}
+BATCH_ROLE_FIELD = {"aws_batch_role_arn": "arn:aws:iam::123456789012:role/bedrock-batch"}
 
 
 class TestCredentialLiteLLMParamsBedrockFields:
     def test_aws_batch_role_arn_round_trips(self):
         from litellm.types.router import CredentialLiteLLMParams
 
-        dumped = CredentialLiteLLMParams(**BATCH_ROLE_FIELD).model_dump(
-            exclude_none=True
-        )
+        dumped = CredentialLiteLLMParams(**BATCH_ROLE_FIELD).model_dump(exclude_none=True)
         assert dumped["aws_batch_role_arn"] == BATCH_ROLE_FIELD["aws_batch_role_arn"], (
             "aws_batch_role_arn dropped by CredentialLiteLLMParams — POST /v1/batches "
             "fails 'AWS IAM role ARN is required'"
@@ -86,9 +82,7 @@ class TestCredentialLiteLLMParamsBedrockFields:
         None and excluded by ``exclude_none``."""
         from litellm.types.router import CredentialLiteLLMParams
 
-        dumped = CredentialLiteLLMParams(api_key="sk-static").model_dump(
-            exclude_none=True
-        )
+        dumped = CredentialLiteLLMParams(api_key="sk-static").model_dump(exclude_none=True)
         for field in {
             *AWS_CREDENTIAL_FIELDS,
             *S3_CONFIG_FIELDS,
@@ -120,9 +114,7 @@ class TestRouterBedrockCredentialResolution:
             ]
         )
 
-        credentials = router.get_deployment_credentials_with_provider(
-            model_id=deployment_id
-        )
+        credentials = router.get_deployment_credentials_with_provider(model_id=deployment_id)
         assert credentials is not None
         assert credentials["custom_llm_provider"] == "bedrock"
         for field, value in {
@@ -156,9 +148,7 @@ class TestRouterBedrockCredentialResolution:
             ]
         )
 
-        credentials = router.get_deployment_credentials_with_provider(
-            model_id=deployment_id
-        )
+        credentials = router.get_deployment_credentials_with_provider(model_id=deployment_id)
         assert credentials is not None
         assert credentials["aws_access_key_id"] == "AKIAEXAMPLE"
         for field in {*AWS_CREDENTIAL_FIELDS, *S3_CONFIG_FIELDS, *BATCH_ROLE_FIELD}:

@@ -20,6 +20,8 @@ from litellm.types.utils import LlmProviders
 
 from ..common_utils import OpenAIError
 
+OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS = 16
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -59,6 +61,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             key="supports_none_reasoning_effort",
         )
 
+    @staticmethod
+    def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
+        """Raise sub-minimum max_output_tokens up to the OpenAI Responses API minimum.
+
+        OpenAI's Responses API rejects max_output_tokens below 16 for every model
+        (not gpt-5 specific), so a client like Claude Code that sends a max_tokens=1
+        warmup probe on model switch would otherwise 400. Values that are None or
+        already at/above the minimum are returned unchanged.
+        """
+        if isinstance(max_output_tokens, int) and max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
+            return OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
+        return max_output_tokens
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Responses API params are supported
@@ -91,6 +106,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Apply the same validation used by the chat completions path.
         """
         params = dict(response_api_optional_params)
+
+        if "max_output_tokens" in params:
+            params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
 
         if self._is_gpt_5_model(model=model):
             temperature = params.get("temperature")
@@ -262,7 +280,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
         try:
-            response = ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
             verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
@@ -488,7 +506,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
-        response = ResponsesAPIResponse(**raw_response_json)
+        response = ResponsesAPIResponse.model_validate(raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
 
@@ -570,7 +588,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
 
-        response = ResponsesAPIResponse(**raw_response_json)
+        response = ResponsesAPIResponse.model_validate(raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
 
@@ -629,7 +647,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         processed_headers = process_response_headers(raw_response_headers)
 
         try:
-            response = ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
             verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
             response = ResponsesAPIResponse.model_construct(**raw_response_json)

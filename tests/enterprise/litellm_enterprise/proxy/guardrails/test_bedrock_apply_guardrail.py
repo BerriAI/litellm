@@ -329,12 +329,13 @@ def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
 @pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_blocked_with_disable_exception_on_block():
     """
-    Regression test for issue #20045: when disable_exception_on_block=True,
-    make_bedrock_api_request raises GuardrailInterventionNormalStringError.
-    apply_guardrail must let it propagate as-is so the proxy can handle it
-    properly instead of wrapping it in a generic Exception.
+    Regression test for LIT-4186: when disable_exception_on_block=True, a
+    Bedrock block raises ModifyResponseException. apply_guardrail must let it
+    propagate as-is so the endpoint handler (proxy_server.py) can turn it into
+    a 200 response with the block message as content, instead of the exception
+    surfacing as a bare 500.
     """
-    from litellm.exceptions import GuardrailInterventionNormalStringError
+    from litellm.exceptions import ModifyResponseException
 
     guardrail = BedrockGuardrail(
         guardrail_name="test-bedrock-guard",
@@ -346,18 +347,21 @@ async def test_bedrock_apply_guardrail_blocked_with_disable_exception_on_block()
     with patch.object(
         guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api:
-        mock_api.side_effect = GuardrailInterventionNormalStringError(
-            message="Sorry, your question in its current format is unable to be answered."
+        mock_api.side_effect = ModifyResponseException(
+            message="Sorry, your question in its current format is unable to be answered.",
+            model="bedrock-guardrail",
+            request_data={},
+            guardrail_name="test-bedrock-guard",
         )
 
-        with pytest.raises(GuardrailInterventionNormalStringError) as exc_info:
+        with pytest.raises(ModifyResponseException) as exc_info:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["harmful prompt content"]},
                 request_data={},
                 input_type="request",
             )
 
-        assert "unable to be answered" in str(exc_info.value.message)
+        assert "unable to be answered" in exc_info.value.message
 
 
 @pytest.mark.asyncio

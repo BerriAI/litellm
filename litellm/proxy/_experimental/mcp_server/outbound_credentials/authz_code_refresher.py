@@ -14,6 +14,11 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol
 
+from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    TokenEndpointAuthConfigError,
+)
+from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
@@ -22,7 +27,7 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 ServerLookup = Callable[[str], "MCPServer | None"]
-TokenEndpointPost = Callable[[str, dict[str, str]], Awaitable["dict[str, object] | None"]]
+TokenEndpointPost = Callable[[str, dict[str, str], dict[str, str]], Awaitable["dict[str, object] | None"]]
 
 
 class CredentialPersist(Protocol):
@@ -86,13 +91,22 @@ class AuthorizationCodeRefresher:
         if server is None or not server.token_url:
             return None
 
+        try:
+            token_request = build_upstream_oauth2_token_request(
+                server,
+                auth_method=server.token_endpoint_auth_method,
+                client_id=server.client_id,
+                client_secret=server.client_secret,
+            )
+        except TokenEndpointAuthConfigError as exc:
+            verbose_logger.warning("MCP OAuth refresh misconfigured for server %s: %s", server_id, exc)
+            return None
         form = {
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
-            **({"client_id": server.client_id} if server.client_id else {}),
-            **({"client_secret": server.client_secret} if server.client_secret else {}),
+            **token_request.body,
         }
-        body = await self._token_endpoint(server.token_url, form)
+        body = await self._token_endpoint(server.token_url, form, token_request.headers)
         if body is None:
             return None
         access_token = body.get("access_token")

@@ -45,6 +45,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
+    ResponsesAPIStreamEvents,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -196,12 +197,13 @@ class OpenAIResponsesHandler(BaseTranslation):
         return data
 
     def extract_request_tool_names(self, data: dict) -> List[str]:
-        """Extract tool names from Responses API request (tools[].name for function, tools[].server_label for mcp)."""
+        """Extract tool names from Responses API request (tools[].name for function
+        and custom, tools[].server_label for mcp)."""
         names: List[str] = []
         for tool in data.get("tools") or []:
             if not isinstance(tool, dict):
                 continue
-            if tool.get("type") == "function" and tool.get("name"):
+            if tool.get("type") in ("function", "custom") and tool.get("name"):
                 names.append(str(tool["name"]))
             elif tool.get("type") == "mcp" and tool.get("server_label"):
                 names.append(str(tool["server_label"]))
@@ -245,6 +247,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Merge remapped guardrailed tools with original tools that were not sent
         to the guardrail (e.g. web_search, web_search_preview), preserving order.
+        Tools a guardrail appended (``remapped`` longer than ``original_tools``)
+        have no original slot and are kept so an injected tool is not dropped.
         """
         if not original_tools:
             return remapped
@@ -260,6 +264,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if j < len(remapped):
                     result.append(remapped[j])
                     j += 1
+        # Keep guardrail-appended tools that matched no original slot above.
+        result.extend(remapped[j:])
         return result
 
     def _apply_guardrailed_tools_to_data(
@@ -586,7 +592,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Check if the streaming has ended.
         """
-        return all(response.choices[0].finish_reason is not None for response in responses_so_far)
+        if not responses_so_far:
+            return False
+        terminal_types = {
+            ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
+            ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
+            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
+        }
+        return responses_so_far[-1].get("type") in terminal_types
 
     def get_streaming_string_so_far(self, responses_so_far: List[Any]) -> str:
         """

@@ -11,14 +11,16 @@ from typing import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     collect,
-    drop_none,
     output_messages,
     serialize_messages,
+    tool_definition_attrs,
 )
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPListToolsSpanData,
     MCPToolCallSpanData,
     ServiceSpanData,
     ToolDefinition,
@@ -54,6 +56,7 @@ class GenAIMapper:
         GenAI.RESPONSE_MODEL: lambda d: d.response_model,
         GenAI.RESPONSE_ID: lambda d: d.response_id,
         GenAI.RESPONSE_FINISH_REASONS: lambda d: list(d.finish_reasons) if d.finish_reasons else None,
+        GenAI.RESPONSE_TIME_TO_FIRST_CHUNK: lambda d: d.time_to_first_chunk_seconds,
         GenAI.USAGE_INPUT_TOKENS: lambda d: d.usage.input_tokens,
         GenAI.USAGE_OUTPUT_TOKENS: lambda d: d.usage.output_tokens,
         Error.TYPE: lambda d: d.error.error_type if d.error else None,
@@ -100,6 +103,15 @@ class GenAIMapper:
         f"{LiteLLM.COST_PREFIX}total": lambda d: d.response_cost,
     }
 
+    # A tools/list discovery span: the method and session only. Per semconv it must
+    # NOT carry gen_ai.operation.name (execute_tool) or gen_ai.tool.name — those are
+    # for tool calls, and listing executes no tool.
+    _MCP_LIST_ATTRS: dict[str, Callable[[MCPListToolsSpanData], AttrValue | None]] = {
+        MCP.METHOD_NAME: lambda d: d.method,
+        MCP.SESSION_ID: lambda d: d.session_id,
+        LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
+    }
+
     _GUARDRAIL_ATTRS: dict[str, Callable[[GuardrailSpanData], AttrValue | None]] = {
         LiteLLM.GUARDRAIL_NAME: lambda d: d.guardrail_name,
         LiteLLM.GUARDRAIL_MODE: lambda d: d.mode,
@@ -124,12 +136,17 @@ class GenAIMapper:
         LiteLLM.SERVICE_CALL_TYPE: lambda d: d.call_type,
     }
 
+    def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
+        self._tool_attr_budget = tool_attr_budget
+
     def map(self, data: SpanData) -> AttributeMap:
         match data:
             case LLMCallSpanData():
                 return self._llm_call(data)
             case MCPToolCallSpanData():
                 return collect(self._MCP_ATTRS, data)
+            case MCPListToolsSpanData():
+                return collect(self._MCP_LIST_ATTRS, data)
             case GuardrailSpanData():
                 return self._guardrail(data)
             case ServiceSpanData():
@@ -137,18 +154,18 @@ class GenAIMapper:
             case _:
                 return {}
 
-    @classmethod
-    def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
-        attrs = collect(cls._LLM_CALL_ATTRS, data)
-        attrs.update(
-            drop_none(
-                {
-                    f"gen_ai.tool.{idx}.{suffix}": extract(tool)
-                    for idx, tool in enumerate(data.tools)
-                    for suffix, extract in cls._TOOL_ATTRS.items()
-                }
+    def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
+        attrs = collect(self._LLM_CALL_ATTRS, data)
+        if data.tools:
+            attrs[LiteLLM.TOOLS_DECLARED] = len(data.tools)
+            attrs.update(
+                tool_definition_attrs(
+                    lambda idx, suffix: f"gen_ai.tool.{idx}.{suffix}",
+                    data.tools,
+                    self._TOOL_ATTRS,
+                    self._tool_attr_budget,
+                )
             )
-        )
         return attrs
 
     @classmethod

@@ -50,6 +50,10 @@ GPT5_MODELS = [
     "gpt-5.5-pro",
     "gpt-5.5-2026-04-23",  # dated variant
     "gpt-5.5-pro-2026-04-23",  # dated variant
+    "gpt-5.6",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.1-chat",  # versioned chat — THE KEY REGRESSION CASE
     "gpt-5.2-chat",  # versioned chat — also a regression case
     "gpt-5.3-chat",  # versioned chat — THE KEY REGRESSION CASE
@@ -110,6 +114,45 @@ class TestOpenAIGPT5ConfigIsModelGpt5Model:
             assert not OpenAIGPT5Config.is_model_gpt_5_model(
                 model
             ), f"Expected '{model}' (gpt-5-chat family) NOT to be on the GPT-5 path"
+
+
+# Models that are gpt-5.4 or newer. main.py gates the automatic switch to the
+# /v1/responses bridge (when reasoning_effort is set and tools are passed) on
+# is_model_gpt_5_4_plus_model, so the gpt-5.6 family must land on the True side.
+GPT5_4_PLUS_MODELS = [
+    "gpt-5.4",
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-5.6",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "openai/gpt-5.6-sol",
+]
+
+GPT5_PRE_5_4_MODELS = [
+    "gpt-5",
+    "gpt-5.1",
+    "gpt-5.2",
+    "gpt-5.3",
+    "gpt-5.3-chat",
+    "gpt-4o",
+]
+
+
+class TestOpenAIGPT5ConfigIsModelGpt54PlusModel:
+
+    @pytest.mark.parametrize("model", GPT5_4_PLUS_MODELS)
+    def test_gpt5_4_plus_models_are_classified_as_5_4_plus(self, model: str):
+        assert OpenAIGPT5Config.is_model_gpt_5_4_plus_model(
+            model
+        ), f"Expected '{model}' to be classified as gpt-5.4-or-newer"
+
+    @pytest.mark.parametrize("model", GPT5_PRE_5_4_MODELS)
+    def test_pre_5_4_models_are_not_classified_as_5_4_plus(self, model: str):
+        assert not OpenAIGPT5Config.is_model_gpt_5_4_plus_model(
+            model
+        ), f"Expected '{model}' NOT to be classified as gpt-5.4-or-newer"
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,6 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
-import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import {
   emitLocalStorageChange,
   getLocalStorageItem,
@@ -20,6 +19,9 @@ import {
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { Button, Divider, Dropdown, Space, Switch, Tag, Tooltip, Typography } from "antd";
+import { ChevronsUpDown } from "lucide-react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { cn } from "@/lib/cva.config";
 import React, { useEffect, useState } from "react";
 
 const { Text } = Typography;
@@ -59,12 +61,16 @@ function initialsFromIdentity(email: string | null, userId: string | null): stri
 
 interface UserDropdownProps {
   onLogout: () => void;
+  // "navbar" (default): compact top-right trigger. "sidebar": full-width footer
+  // trigger whose menu opens upward, for the redesigned sidebar dock.
+  variant?: "navbar" | "sidebar";
+  // Sidebar rail mode: render the avatar only (no name/role).
+  collapsed?: boolean;
 }
 
-const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
+const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar", collapsed = false }) => {
   const { userId, userEmail, userRole, premiumUser } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
-  const disableUsageIndicator = useDisableUsageIndicator();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();
   const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
@@ -158,23 +164,6 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Usage Indicator</Text>
-        <Switch
-          size="small"
-          checked={disableUsageIndicator}
-          onChange={(checked) => {
-            if (checked) {
-              setLocalStorageItem("disableUsageIndicator", "true");
-              emitLocalStorageChange("disableUsageIndicator");
-            } else {
-              removeLocalStorageItem("disableUsageIndicator");
-              emitLocalStorageChange("disableUsageIndicator");
-            }
-          }}
-          aria-label="Toggle hide usage indicator"
-        />
-      </Space>
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
         <Text type="secondary">Hide Blog Posts</Text>
         <Switch
           size="small"
@@ -219,6 +208,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
   return (
     <Dropdown
       trigger={["click"]}
+      placement={variant === "sidebar" ? "topLeft" : "bottomRight"}
       menu={{ items: userItems }}
       popupRender={(menu) => (
         <div className="rounded-lg bg-white shadow-lg" data-testid="user-dropdown-panel">
@@ -230,24 +220,50 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
         </div>
       )}
     >
-      <Button
-        type="text"
-        className="!flex max-w-[min(200px,34vw)] items-center gap-2 !rounded-md !py-0.5 !pl-1 !pr-2 transition-colors hover:!bg-gray-100"
-        aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
-        aria-haspopup="menu"
-      >
-        <span
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white shadow-inner ring-1 ring-black/5"
-          style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}
-          aria-hidden
+      {variant === "sidebar" ? (
+        <button
+          type="button"
+          className={cn(
+            "flex w-full items-center rounded-lg border border-transparent transition-colors hover:bg-sidebar-accent",
+            collapsed ? "justify-center px-0 py-1" : "gap-2.5 px-2 py-1.5 text-left",
+          )}
+          aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
+          aria-haspopup="menu"
+          title={collapsed ? displayName : undefined}
         >
-          {initials}
-        </span>
-        <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-gray-900 md:inline">
-          {displayName}
-        </span>
-        <DownOutlined className="hidden shrink-0 text-[10px] text-gray-400 md:inline" aria-hidden />
-      </Button>
+          <Avatar className="size-[30px] shadow-inner ring-1 ring-black/5" aria-hidden>
+            <AvatarFallback className="font-semibold text-white" style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}>
+              {initials}
+            </AvatarFallback>
+          </Avatar>
+          {!collapsed && (
+            <>
+              <span className="min-w-0 flex-1 leading-tight">
+                <span className="block truncate text-[13px] font-medium text-sidebar-foreground">{displayName}</span>
+                {userRole && <span className="block truncate text-[11px] text-muted-foreground">{userRole}</span>}
+              </span>
+              <ChevronsUpDown size={16} strokeWidth={1.75} className="shrink-0 text-muted-foreground" aria-hidden />
+            </>
+          )}
+        </button>
+      ) : (
+        <Button
+          type="text"
+          className="flex! max-w-[min(200px,34vw)] items-center gap-2 rounded-md! py-0.5! pl-1! pr-2! transition-colors hover:bg-gray-100!"
+          aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
+          aria-haspopup="menu"
+        >
+          <Avatar className="shadow-inner ring-1 ring-black/5" aria-hidden>
+            <AvatarFallback className="font-semibold text-white" style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}>
+              {initials}
+            </AvatarFallback>
+          </Avatar>
+          <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-gray-900 md:inline">
+            {displayName}
+          </span>
+          <DownOutlined className="hidden shrink-0 text-[10px] text-gray-400 md:inline" aria-hidden />
+        </Button>
+      )}
     </Dropdown>
   );
 };
