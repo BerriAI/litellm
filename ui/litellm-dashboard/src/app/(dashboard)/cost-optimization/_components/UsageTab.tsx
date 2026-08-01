@@ -210,23 +210,23 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          {/* CardHeader is the row itself, matching SummaryCard: an inner wrapper that
-              wrapped on overflow moved the legend and the tab control onto a second line
-              whenever the subtitle grew, so they jumped between the two tabs */}
-          <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-4">
-            <div className="space-y-1.5">
+          {/* Title and controls share a fixed row; the subtitle gets its own line below.
+              Competing for one row made the header taller whenever the subtitle wrapped,
+              which differs between the two tabs, so the chart shifted down on one of them */}
+          <CardHeader className="space-y-1.5">
+            <div className="flex flex-row items-center justify-between gap-4">
               <CardTitle>Savings</CardTitle>
-              <p className="text-sm text-muted-foreground">{savingsSubtitle}</p>
+              <div className="flex shrink-0 items-center gap-4">
+                <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
+                <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
+                  <TabsList>
+                    <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
+                    <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </div>
             </div>
-            <div className="flex shrink-0 items-center gap-4">
-              <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
-              <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
-                <TabsList>
-                  <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
-                  <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </div>
+            <p className="text-sm text-muted-foreground">{savingsSubtitle}</p>
           </CardHeader>
           <CardContent>
             {accumulation === "cumulative" ? (

@@ -249,31 +249,40 @@ describe("UsageTab", () => {
     expect(readSeries(bars)[0]).toMatchObject({ "Auto-router": -0.05 });
   });
 
-  it("keeps the legend and the accumulation toggle in one place across both tabs", async () => {
-    // The subtitle is longer on Cumulative ("Running total saved") than on Per day
-    // ("Saved per day"). With a wrapping header the extra width pushed the legend and
-    // the toggle onto a second row, so they jumped whenever the tab changed.
+  it("keeps the header the same shape on both tabs so the chart cannot shift", async () => {
+    // The subtitle differs in length between the tabs ("Running total saved" vs "Saved
+    // per day"). Sharing a row with the title and controls made the header grow a line
+    // when it wrapped, moving the legend, the toggle and the chart below it.
     const { getByRole, getByTestId, container } = renderWith(twoDays());
 
-    const controlsOn = () => {
+    const layout = () => {
       const legend = getByTestId("chart-legend");
       const controls = legend.parentElement as HTMLElement;
-      // the toggle lives in the same box as the legend, so neither can move alone
+      // the toggle travels with the legend, so neither can move independently
       expect(controls.contains(getByRole("tablist"))).toBe(true);
-      return controls;
+      const titleRow = controls.parentElement as HTMLElement;
+      // by text, not by class: several cards render a muted <p>, and grabbing the first
+      // one silently asserts against a summary-card hint instead of this subtitle
+      const subtitle = Array.from(container.querySelectorAll("p")).find((el) =>
+        /Running total saved|Saved per day/.test(el.textContent ?? ""),
+      );
+      expect(subtitle, "savings subtitle should be rendered").toBeTruthy();
+      return { controls, titleRow, subtitle: subtitle as HTMLElement };
     };
 
-    const cumulative = controlsOn();
-    expect(cumulative.className).toContain("shrink-0");
-
-    const header = cumulative.parentElement as HTMLElement;
-    expect(header.className).not.toContain("flex-wrap");
+    const before = layout();
+    // the subtitle is a sibling BELOW the title row, never inside it, so its length
+    // cannot change that row's height
+    expect(before.titleRow.contains(before.subtitle)).toBe(false);
+    expect(before.titleRow.className).not.toContain("flex-wrap");
+    expect(before.controls.className).toContain("shrink-0");
 
     await userEvent.click(getByRole("tab", { name: "Per day" }));
 
-    // same container, same classes, after the subtitle changed length
-    expect(controlsOn()).toBe(cumulative);
-    expect((cumulative.parentElement as HTMLElement).className).not.toContain("flex-wrap");
+    const after = layout();
+    expect(after.controls).toBe(before.controls);
+    expect(after.titleRow).toBe(before.titleRow);
+    expect(after.titleRow.contains(after.subtitle)).toBe(false);
     expect(container.textContent).toContain("Saved per day");
   });
 
