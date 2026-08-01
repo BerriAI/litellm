@@ -2431,12 +2431,23 @@ async def _resolve_existing_member_user_ids(
     members: Sequence[Member],
     prisma_client: PrismaClient,
 ) -> frozenset[str]:
-    """Return the caller-supplied user_ids that already have a user row."""
-    user_repository = UserRepository(prisma_client)
-    found = await asyncio.gather(
-        *(user_repository.find_by_id(member.user_id) for member in members if member.user_id is not None)
+    """Return the caller-supplied user_ids that already have a user row.
+
+    Resolved with a single query so the number of members in the request does
+    not translate into that many concurrent connections.
+    """
+    requested_user_ids = frozenset(member.user_id for member in members if member.user_id is not None)
+    if not requested_user_ids:
+        return frozenset()
+
+    found = await UserRepository(prisma_client).table.find_many(
+        where={  # mutable-ok: Prisma query filters are dict-shaped
+            "user_id": {  # mutable-ok: Prisma query filters are dict-shaped
+                "in": sorted(requested_user_ids)
+            }
+        }
     )
-    return frozenset(user.user_id for user in found if user is not None and user.user_id is not None)
+    return frozenset(user.user_id for user in found or () if user.user_id is not None)
 
 
 def _pre_existing_user_ids(
@@ -2457,6 +2468,9 @@ def _pre_existing_user_ids(
         if member.user_id is not None and member.user_id not in caller_supplied_user_ids
     )
     return existing_user_ids | populated_user_ids
+
+
+_MAX_REPORTED_UNKNOWN_USER_IDS = 10
 
 
 def _validate_member_user_id_provisioning(
@@ -2481,13 +2495,15 @@ def _validate_member_user_id_provisioning(
     if not unknown_user_ids:
         return
 
+    listed = ", ".join(unknown_user_ids[:_MAX_REPORTED_UNKNOWN_USER_IDS])
+    remaining = len(unknown_user_ids) - _MAX_REPORTED_UNKNOWN_USER_IDS
     raise HTTPException(
         status_code=403,
         detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
             "error": (
-                "Only proxy admins can add a user_id that does not exist yet: {}. "
+                "Only proxy admins can add a user_id that does not exist yet: {}{}. "
                 "Add the member by user_email to invite a new user, or ask a proxy admin "
-                "to create the user first.".format(", ".join(unknown_user_ids))
+                "to create the user first.".format(listed, " and {} more".format(remaining) if remaining > 0 else "")
             )
         },
     )
@@ -2515,13 +2531,15 @@ async def _create_team_member_add_audit_logs(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> None:
-    """Record the membership change, and any user row it created, in the audit log."""
+    """Record the membership change, and any user row it created, in the audit log.
+
+    The entries are written concurrently so a request adding many members does
+    not pay for them one after another.
+    """
     from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 
-    for user in updated_users:
-        if user.user_id is None or user.user_id in existing_user_ids:
-            continue
-        await create_object_audit_log(
+    created_user_entries = tuple(
+        create_object_audit_log(
             object_id=user.user_id,
             action="created",
             litellm_changed_by=None,
@@ -2531,8 +2549,11 @@ async def _create_team_member_add_audit_logs(
             before_value=None,
             after_value=safe_dumps(user.model_dump(exclude_none=True)),
         )
+        for user in updated_users
+        if user.user_id is not None and user.user_id not in existing_user_ids
+    )
 
-    await create_object_audit_log(
+    membership_entry = create_object_audit_log(
         object_id=team_id,
         action="updated",
         litellm_changed_by=None,
@@ -2542,6 +2563,8 @@ async def _create_team_member_add_audit_logs(
         before_value=_members_audit_value(before_members),
         after_value=_members_audit_value(after_members),
     )
+
+    await asyncio.gather(*created_user_entries, membership_entry)
 
 
 async def _validate_and_populate_member_user_info(

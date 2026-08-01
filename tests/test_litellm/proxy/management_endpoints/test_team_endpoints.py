@@ -10440,20 +10440,18 @@ def test_validate_member_user_id_provisioning_reports_every_unknown_member():
 
 @pytest.mark.asyncio
 async def test_resolve_existing_member_user_ids_matches_caller_supplied_user_ids():
-    """Only caller-supplied user_ids are looked up; unknown ones resolve to nothing."""
+    """Caller-supplied user_ids resolve in one query; unknown ones resolve to nothing."""
     from litellm.proxy.management_endpoints.team_endpoints import (
         _resolve_existing_member_user_ids,
     )
 
     prisma_client = MagicMock()
-
-    async def find_by_id(user_id):
-        if user_id == "by-id":
-            return LiteLLM_UserTable(user_id="by-id", max_budget=None, spend=0.0, user_email=None, models=[])
-        return None
+    find_many = AsyncMock(
+        return_value=[LiteLLM_UserTable(user_id="by-id", max_budget=None, spend=0.0, user_email=None, models=[])]
+    )
 
     with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
-        repo.return_value.find_by_id = AsyncMock(side_effect=find_by_id)
+        repo.return_value.table.find_many = find_many
 
         resolved = await _resolve_existing_member_user_ids(
             members=[
@@ -10465,6 +10463,28 @@ async def test_resolve_existing_member_user_ids_matches_caller_supplied_user_ids
         )
 
     assert resolved == frozenset({"by-id"})
+    # one round-trip, and email-only members contribute no id to look up
+    find_many.assert_awaited_once()
+    assert find_many.await_args.kwargs["where"] == {"user_id": {"in": ["by-id", "missing"]}}
+
+
+@pytest.mark.asyncio
+async def test_resolve_existing_member_user_ids_skips_the_query_when_no_user_ids():
+    """An all-email payload must not hit the database at all."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _resolve_existing_member_user_ids,
+    )
+
+    with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
+        repo.return_value.table.find_many = AsyncMock()
+
+        resolved = await _resolve_existing_member_user_ids(
+            members=[Member(user_email="a@example.com", role="user")],
+            prisma_client=MagicMock(),
+        )
+
+    assert resolved == frozenset()
+    repo.return_value.table.find_many.assert_not_awaited()
 
 
 def test_pre_existing_user_ids_counts_ids_filled_in_by_member_resolution():
@@ -10574,3 +10594,26 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
 
     mock_audit.assert_called_once()
     assert created_user_id not in mock_audit.call_args.kwargs["existing_user_ids"]
+
+
+def test_validate_member_user_id_provisioning_caps_the_ids_it_echoes_back():
+    """A large member list must not echo every id back in the error body."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _MAX_REPORTED_UNKNOWN_USER_IDS,
+        _validate_member_user_id_provisioning,
+    )
+
+    members = [Member(user_id=f"u{i}", role="user") for i in range(500)]
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_member_user_id_provisioning(
+            members=members,
+            existing_user_ids=frozenset(),
+            user_api_key_dict=_provisioning_caller(LitellmUserRoles.INTERNAL_USER),
+        )
+
+    detail = str(exc_info.value.detail)
+    assert "u0" in detail
+    assert f"u{_MAX_REPORTED_UNKNOWN_USER_IDS}" not in detail
+    assert f"and {500 - _MAX_REPORTED_UNKNOWN_USER_IDS} more" in detail
+    assert len(detail) < 1000
