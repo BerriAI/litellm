@@ -323,6 +323,7 @@ jobs:
       - checkout
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Build the wheel
           environment:
