@@ -373,12 +373,22 @@ class TestModelSelection:
         assert empty.get_model_for_tier(ComplexityTier.SIMPLE) == absent.get_model_for_tier(ComplexityTier.SIMPLE)
         assert empty.get_model_for_tier(ComplexityTier.SIMPLE) == "mid"
 
-    def test_a_tier_with_no_models_and_nothing_to_fall_through_to_raises(self, mock_router_instance):
+    def test_a_tier_with_no_models_raises_only_where_nothing_can_stand_in(self, mock_router_instance):
+        """Under plugins the chain stops at the tier's own models, so an empty tier has
+        nothing to stand in for it. Without plugins this is unreachable by construction: a
+        config whose MEDIUM cannot be served is rejected at load, and a MEDIUM that can be
+        served is also what every other tier falls through to."""
+
+        class NoOpPlugin:
+            async def run(self, context):
+                return context
+
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={"tiers": {"SIMPLE": []}},
+            complexity_router_config={"tiers": {"SIMPLE": [], "MEDIUM": "mid"}, "plugins": [NoOpPlugin()]},
         )
+        assert router.get_model_for_tier(ComplexityTier.MEDIUM) == "mid"
         with pytest.raises(ValueError, match="No model can serve tier SIMPLE"):
             router.get_model_for_tier(ComplexityTier.SIMPLE)
 
@@ -1838,6 +1848,7 @@ class TestAdaptiveSoftFloors:
         config = ComplexityRouterConfig(
             adaptive=True,
             tiers={"SIMPLE": ["cheap"]},
+            default_tier=ComplexityTier.SIMPLE,
         )
         assert config.adaptive_weights.quality == pytest.approx(0.3)
         assert config.adaptive_weights.cost == pytest.approx(0.7)
@@ -3179,6 +3190,7 @@ class TestRoutingPlugins:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"]},
+                "default_tier": "SIMPLE",
                 "plugins": [ExcludeGpt4oMini()],
             },
         )
@@ -3207,6 +3219,7 @@ class TestRoutingPlugins:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "default_tier": "SIMPLE",
                 "default_model": "gpt-4o-fallback",
                 "plugins": [BlockEverything()],
             },
@@ -3230,6 +3243,7 @@ class TestRoutingPlugins:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "default_tier": "SIMPLE",
                 "plugins": [BlockEverything()],
             },
         )
@@ -3254,6 +3268,7 @@ class TestRoutingPlugins:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "default_tier": "SIMPLE",
                 "plugins": [CaptureMetadata()],
             },
         )
@@ -3278,6 +3293,7 @@ class TestRoutingPlugins:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"]},
+                "default_tier": "SIMPLE",
                 "keyword_tier_rules": [{"keywords": ["hello"], "tier": "SIMPLE"}],
                 "plugins": [ExcludeGpt4oMini()],
             },
@@ -3352,6 +3368,7 @@ class TestRoutingPlugins:
         with pytest.raises(ValidationError, match="plugins and adaptive=True cannot both be set"):
             ComplexityRouterConfig(
                 tiers={"SIMPLE": ["gpt-4o-mini"]},
+                default_tier=ComplexityTier.SIMPLE,
                 adaptive=True,
                 plugins=[_DummyPlugin()],
             )
@@ -3384,6 +3401,7 @@ class TestRoutingPlugins:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                "default_tier": "SIMPLE",
                 "session_affinity": True,
                 "plugins": [AllowAll()],
             },
@@ -3430,7 +3448,7 @@ class TestEscalationKeywords:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"}},
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"}, "default_tier": "SIMPLE"},
         )
         assert router._escalate_tier(ComplexityTier.SIMPLE) == ComplexityTier.REASONING
 
@@ -3438,7 +3456,7 @@ class TestEscalationKeywords:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={"tiers": {"SIMPLE": "shared", "COMPLEX": "shared", "REASONING": "top"}},
+            complexity_router_config={"tiers": {"SIMPLE": "shared", "COMPLEX": "shared", "REASONING": "top"}, "default_tier": "SIMPLE"},
         )
         assert router._tier_for_model("shared") == ComplexityTier.COMPLEX
         assert router._tier_for_model("top") == ComplexityTier.REASONING
@@ -3716,7 +3734,7 @@ class TestEscalationKeywords:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}},
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}, "default_tier": "SIMPLE"},
         )
         for pinned in ("o1-a", "o1-b", "o1-c"):
             assert router._escalated_pin(pinned) == pinned
@@ -3729,6 +3747,7 @@ class TestEscalationKeywords:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]},
+                "default_tier": "SIMPLE",
                 "session_affinity": True,
             },
         )
@@ -4122,6 +4141,7 @@ class TestEscalationIsRecordedConsistently:
 
     CEILING_CONFIG = {
         "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["o1-preview"]},
+        "default_tier": "SIMPLE",
         "session_affinity": False,
     }
 
@@ -4693,6 +4713,7 @@ class TestContextAwareClassifier:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": "gpt-4o-mini", "COMPLEX": "claude-sonnet-4-20250514"},
+                "default_tier": "SIMPLE",
                 "classifier_type": "llm",
                 "classifier_llm_config": {"model": "haiku-classifier"},
                 "classifier_context_window_size": 0,
@@ -4737,6 +4758,7 @@ class TestClassifierTrustBoundary:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"},
+                "default_tier": "SIMPLE",
                 "classifier_type": "llm",
                 "classifier_llm_config": {"model": "haiku-classifier"},
             },
@@ -4956,31 +4978,27 @@ class TestNoSignalDefaultTier:
                 },
             )
 
-    @pytest.mark.asyncio
-    async def test_an_unconfigured_default_tier_under_plugins_names_the_real_gap(self, mock_router_instance):
-        """The implicit MEDIUM default is deliberately not validated at load, so a partial
-        tiers map keeps loading. With plugins configured it has no fallback, so the request
-        fails; the error has to name the missing tier rather than blaming the plugins for a
-        filter they never applied."""
+    def test_an_unconfigured_default_tier_under_plugins_is_rejected_at_load(self, mock_router_instance):
+        """With plugins the chain stops at the tier's own models, so a map with no MEDIUM
+        cannot serve no-signal traffic at all; `default_model` is derived on every proxy
+        deployment but the plugins never vetted it. Before, this loaded and raised on the
+        first such request. The error names the missing tier rather than blaming the plugins
+        for a filter they never applied."""
 
         class NoOpPlugin:
             async def run(self, context):
                 return context
 
-        router = ComplexityRouter(
-            model_name="test-router",
-            litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                "tiers": {"SIMPLE": "simple-model", "COMPLEX": "complex-model"},
-                "plugins": [NoOpPlugin()],
-                "session_affinity": False,
-            },
-        )
-        with pytest.raises(ValueError, match="No model can serve tier MEDIUM: routing plugins are configured"):
-            await router.async_pre_routing_hook(
-                model="test-model",
-                request_kwargs={},
-                messages=[{"role": "user", "content": RIVER_CROSSING}],
+        with pytest.raises(ValidationError, match="default_tier MEDIUM is unservable"):
+            ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={
+                    "tiers": {"SIMPLE": "simple-model", "COMPLEX": "complex-model"},
+                    "plugins": [NoOpPlugin()],
+                    "session_affinity": False,
+                },
+                default_model="derived-from-tiers",
             )
 
     def test_default_tier_outside_tiers_is_allowed_with_default_model(self, mock_router_instance):
@@ -4995,15 +5013,30 @@ class TestNoSignalDefaultTier:
         )
         assert router.get_model_for_tier(router.classify(RIVER_CROSSING)[0]) == "fallback-model"
 
-    def test_partial_tiers_map_still_loads_without_an_explicit_default_tier(self, mock_router_instance):
-        """The implicit MEDIUM default must not turn an existing partial tiers map into a
-        startup failure; it keeps the same resolution chain every other tier already has."""
+    def test_a_partial_tiers_map_keeps_loading_when_default_model_backs_it(self, mock_router_instance):
+        """The implicit MEDIUM default must not turn an ordinary partial tiers map into a
+        startup failure. `router.py` always derives complexity_router_default_model, so on
+        the proxy this is every partial map, and MEDIUM resolves through the same chain any
+        classified tier does."""
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={"tiers": {"SIMPLE": "simple-model", "REASONING": "reasoning-model"}},
+            default_model="derived-from-tiers",
         )
         assert router.config.default_tier == ComplexityTier.MEDIUM
+        assert router.get_model_for_tier(ComplexityTier.MEDIUM) == "derived-from-tiers"
+
+    def test_an_implicit_default_tier_nothing_can_serve_is_rejected_at_load(self, mock_router_instance):
+        """The default is checked like any explicit value. Every prompt the scorer
+        recognises nothing in lands on this tier, so a config that cannot serve it is broken
+        for a whole class of traffic and has to say so at load."""
+        with pytest.raises(ValidationError, match="default_tier MEDIUM is unservable"):
+            ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={"tiers": {"SIMPLE": "simple-model", "REASONING": "reasoning-model"}},
+            )
 
     def test_abstain_does_not_consult_tier_boundaries(self, mock_router_instance):
         """Boundaries that would map 0.0 to COMPLEX must not reach the no-signal path."""

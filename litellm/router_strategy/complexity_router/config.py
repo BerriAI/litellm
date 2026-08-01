@@ -540,13 +540,16 @@ class ComplexityRouterConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_default_tier_is_servable(self) -> "ComplexityRouterConfig":
-        """Reject an explicit `default_tier` that nothing can serve.
+        """Reject a `default_tier` that nothing can serve, whether it was set or defaulted.
 
-        Left implicit it is not checked, so a partial `tiers` map keeps loading and MEDIUM
-        resolves through the same chain every other tier does.
+        Every prompt the scorer recognises nothing in lands on this tier, so a config that
+        cannot serve it is broken for a whole class of traffic and says so at load rather
+        than on the first such request. Exempting the implicit MEDIUM would only move that
+        failure to request time, and the check is not the blunt "must be its own entry in
+        tiers" it would need to be for that exemption to earn its keep: MEDIUM resolves
+        through the same chain as any classified tier, so a partial `tiers` map backed by
+        `default_model` still loads.
         """
-        if "default_tier" not in self.model_fields_set:
-            return self
         match self.resolve_tier(self.default_tier):
             case TierModels():
                 return self
