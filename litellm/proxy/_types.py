@@ -2414,6 +2414,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
     )
+    batch_input_file_read_timeout: Optional[float] = Field(
+        None,
+        description="Seconds the batch rate limiter may spend reading a batch input file to count tokens (default 10). The read runs inline in POST /v1/batches, so this must stay well inside client read timeouts. On timeout, keys whose model allowlist must be validated against the file are rejected; keys with unrestricted model access are admitted without rate limiting.",
+    )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",

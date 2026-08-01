@@ -7,12 +7,14 @@ VERIA-39 regression tests:
   models the caller is not authorized to use.
 """
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 
 
 def _models(file_content_as_dict):
@@ -1671,3 +1673,290 @@ async def test_count_input_file_usage_collects_models_after_malformed_line():
             )
 
     assert exc.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# LIT-5027: the input-file read must be bounded
+#
+# The read runs inline in POST /v1/batches and served two purposes with opposite
+# safe defaults: counting tokens for rate limiting, and validating every
+# body.model in the JSONL against the caller's allowlist. Unbounded, a stalled
+# Files API held the request open past any client deadline (63.6s observed on
+# stage against a 60s read timeout).
+#
+# These use a genuinely slow fetch against a short deadline rather than faking
+# asyncio.TimeoutError, so they fail if wait_for is removed and the await goes
+# back to being unbounded.
+# ---------------------------------------------------------------------------
+
+
+def _slow_fetch(delay: float = 10.0):
+    """A file read that outlives the test-scale deadline (0.05s) by 200x.
+
+    Paired with `@pytest.mark.timeout` on each test so that removing the bound
+    surfaces as a fast failure rather than a hung CI job: unbounded, the await
+    runs the full `delay` and pytest-timeout kills it well before that.
+    """
+
+    async def _fetch(*args, **kwargs):
+        await asyncio.sleep(delay)
+        raise AssertionError("slow fetch should have been abandoned, not awaited to completion")
+
+    return _fetch
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.asyncio
+async def test_input_file_read_is_abandoned_at_the_deadline():
+    """The read must not outlive its budget. Without the bound this awaits the
+    full 30s sleep (in prod, the SDK's 600s x 3) instead of giving up."""
+    from litellm.proxy.hooks.batch_rate_limiter import BatchInputFileReadTimeout
+
+    rate_limiter = _make_rate_limiter()
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+
+    with (
+        patch("litellm.afile_content", new=_slow_fetch()),
+        patch("litellm.proxy.proxy_server.general_settings", {"batch_input_file_read_timeout": 0.05}),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        started = time.monotonic()
+        with pytest.raises(BatchInputFileReadTimeout) as exc:
+            await rate_limiter.count_input_file_usage(
+                file_id="file-slow",
+                custom_llm_provider="openai",
+                user_api_key_dict=user,
+            )
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 5, f"read was not abandoned at its deadline (took {elapsed:.2f}s)"
+    assert exc.value.file_id == "file-slow"
+    assert exc.value.timeout_seconds == 0.05
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.asyncio
+async def test_managed_file_read_is_also_bounded():
+    """Managed files take a different code path (the managed-files hook, which
+    accepts no timeout kwarg), so it needs the same bound."""
+    from litellm.proxy.hooks.batch_rate_limiter import BatchInputFileReadTimeout
+
+    rate_limiter = _make_rate_limiter()
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+
+    with (
+        patch.object(rate_limiter, "_fetch_managed_file_content", new=_slow_fetch()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+            return_value="litellm_proxy/gpt-4o-mini",
+        ),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_models_from_unified_file_id",
+            return_value=["gpt-4o-mini"],
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {"batch_input_file_read_timeout": 0.05}),
+    ):
+        started = time.monotonic()
+        with pytest.raises(BatchInputFileReadTimeout):
+            await rate_limiter.count_input_file_usage(
+                file_id="file-managed-slow",
+                custom_llm_provider="openai",
+                user_api_key_dict=user,
+            )
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 5, f"managed-file read was not abandoned at its deadline (took {elapsed:.2f}s)"
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.asyncio
+async def test_timeout_rejects_batch_when_key_has_a_model_allowlist():
+    """A restricted key's batch cannot be admitted on timeout: the file read is
+    the only thing that validates the models inside the JSONL, so admitting it
+    unchecked would let the caller run models outside its allowlist under the
+    proxy's shared credentials."""
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
+    user = UserAPIKeyAuth(api_key="sk-restricted", models=["gpt-4o-mini"])
+
+    with (
+        patch("litellm.afile_content", new=_slow_fetch()),
+        patch("litellm.proxy.proxy_server.general_settings", {"batch_input_file_read_timeout": 0.05}),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=MagicMock(),
+                data={"input_file_id": "file-slow", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.code == "504"
+    assert "validate the models" in exc.value.message
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.asyncio
+async def test_timeout_admits_batch_when_key_has_unrestricted_model_access():
+    """With no allowlist to enforce, only rate-limit accuracy is at stake, so a
+    degraded Files API must not turn batch creation into an outage."""
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
+    rate_limiter._check_and_increment_batch_counters = AsyncMock()
+    user = UserAPIKeyAuth(api_key="sk-open", models=["*"])
+    data = {"input_file_id": "file-slow", "model": "gpt-4o-mini"}
+
+    with (
+        patch("litellm.afile_content", new=_slow_fetch()),
+        patch("litellm.proxy.proxy_server.general_settings", {"batch_input_file_read_timeout": 0.05}),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        result = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=user,
+            cache=MagicMock(),
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result is data
+    # Admitted unmetered: no counters were reserved, and no token count was
+    # stamped for the completion-side reconciliation to read.
+    rate_limiter._check_and_increment_batch_counters.assert_not_awaited()
+    assert "_batch_token_count" not in data
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.asyncio
+async def test_access_group_key_is_rejected_on_timeout():
+    """Access-group keys carry no literal model list but still require the JSONL
+    check (_key_requires_batch_model_access_check returns True), so they must
+    fail closed alongside allowlisted keys."""
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
+    user = UserAPIKeyAuth(api_key="sk-group", models=[], access_group_ids=["grp-1"])
+
+    with (
+        patch("litellm.afile_content", new=_slow_fetch()),
+        patch("litellm.proxy.proxy_server.general_settings", {"batch_input_file_read_timeout": 0.05}),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=MagicMock(),
+                data={"input_file_id": "file-slow", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.code == "504"
+
+
+def test_read_timeout_defaults_and_rejects_unusable_values():
+    """A zero/negative or non-numeric deadline must fall back to the default; a
+    0s budget would expire instantly and reject every restricted key's batch."""
+    from litellm.constants import DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS
+
+    rate_limiter = _make_rate_limiter()
+    resolve = rate_limiter._batch_input_file_read_timeout
+
+    for settings, expected in (
+        ({}, DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS),
+        ({"batch_input_file_read_timeout": 0}, DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS),
+        ({"batch_input_file_read_timeout": -5}, DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS),
+        ({"batch_input_file_read_timeout": "20"}, DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS),
+        ({"batch_input_file_read_timeout": True}, DEFAULT_BATCH_INPUT_FILE_READ_TIMEOUT_SECONDS),
+        ({"batch_input_file_read_timeout": 45}, 45.0),
+        ({"batch_input_file_read_timeout": 2.5}, 2.5),
+    ):
+        with patch("litellm.proxy.proxy_server.general_settings", settings):
+            assert resolve() == expected, f"unexpected deadline for {settings}"
+
+
+@pytest.mark.asyncio
+async def test_read_deadline_is_passed_to_the_upstream_file_fetch():
+    """wait_for alone only abandons the await; afile_content runs the sync client
+    in an executor thread that a cancelled await does not interrupt. The same
+    deadline must therefore reach afile_content so the HTTP request is capped and
+    the thread is released."""
+    captured: dict = {}
+
+    async def _capture(*args, **kwargs):
+        captured.update(kwargs)
+        return MagicMock(content=b'{"body": {"model": "gpt-4o-mini", "messages": []}}\n')
+
+    rate_limiter = _make_rate_limiter()
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+
+    with (
+        patch("litellm.afile_content", new=_capture),
+        patch("litellm.proxy.proxy_server.general_settings", {"batch_input_file_read_timeout": 3.5}),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        await rate_limiter.count_input_file_usage(
+            file_id="file-plain",
+            custom_llm_provider="openai",
+            user_api_key_dict=user,
+        )
+
+    assert captured.get("timeout") == 3.5, "read deadline never reached the upstream fetch"
+
+
+@pytest.mark.asyncio
+async def test_read_deadline_overrides_a_deployment_configured_timeout():
+    """`timeout` is one of _extract_file_access_credentials' credential keys, so a
+    deployment's litellm_params can already put it in fetch_kwargs. Passing the
+    limiter's deadline as a separate keyword alongside **fetch_kwargs then raises
+    TypeError for a duplicate kwarg, turning the hang into a 500. The limiter's
+    budget must win: a deployment timeout is sized for serving traffic, not for an
+    inline pre-call hook."""
+    captured: dict = {}
+
+    async def _capture(*args, **kwargs):
+        captured.update(kwargs)
+        return MagicMock(content=b'{"body": {"model": "gpt-4o-mini", "messages": []}}\n')
+
+    rate_limiter = _make_rate_limiter()
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+
+    # A deployment whose credentials carry their own `timeout`, which is what
+    # _extract_file_access_credentials merges into fetch_kwargs. Driven through the
+    # real resolver so the merge itself is under test, not a stubbed return value.
+    router = MagicMock(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_key": "sk-deployment",
+                    "timeout": 600,
+                    "custom_llm_provider": "openai",
+                },
+            }
+        ]
+    )
+
+    with (
+        patch("litellm.afile_content", new=_capture),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={"api_key": "sk-deployment", "timeout": 600, "custom_llm_provider": "openai"},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch("litellm.proxy.proxy_server.general_settings", {"batch_input_file_read_timeout": 4.0}),
+    ):
+        usage = await rate_limiter.count_input_file_usage(
+            file_id="file-plain",
+            custom_llm_provider="openai",
+            user_api_key_dict=user,
+            data={"model": "gpt-4o-mini"},
+        )
+
+    assert usage.request_count == 1
+    assert captured.get("timeout") == 4.0, "deployment timeout must not override the limiter's deadline"
