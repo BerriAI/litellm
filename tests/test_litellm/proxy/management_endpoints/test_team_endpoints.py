@@ -10990,3 +10990,112 @@ async def test_update_team_budget_raise_allowed_for_team_admin_who_is_also_org_a
     )
 
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_narrowing_a_bare_star_grant_allowed_for_team_admin():
+    """A team stored with "*" already reaches everything, so naming models narrows it."""
+    from litellm.proxy._types import UpdateTeamRequest
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["gpt-4"]),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(models=["*"]),
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_no_default_models_allowed_for_team_admin():
+    """Handing the team the no-default-models sentinel is the strictest narrowing there is."""
+    from litellm.proxy._types import UpdateTeamRequest
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["no-default-models"]),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(),
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_non_string_model_entry_is_refused_not_crashed():
+    """A junk element must land on the 403, not blow up inside the wildcard matcher."""
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_update_team(
+            update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=[123]),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(models=["openai/*"]),
+        )
+
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_update_team_access_group_member_is_reachable_for_team_admin():
+    """team.models may name a router access group; narrowing to one of its members is not a new grant."""
+    from litellm.proxy._types import UpdateTeamRequest
+
+    mock_router = MagicMock()
+    mock_router.get_model_access_groups.return_value = {"beta-models": ["gpt-4o", "o4-mini"]}
+
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+        result = await _run_update_team(
+            update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["gpt-4o"]),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(models=["beta-models"]),
+        )
+
+    assert result is not None
+
+
+def test_team_grant_gates_are_fail_closed_on_an_unknown_grant():
+    """A grant value that isn't a known enum member must not disable the gates."""
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _check_team_budget_update_authority,
+        _check_team_models_update_authority,
+    )
+
+    request = UpdateTeamRequest(team_id="doc-alignment-team", models=["claude-opus-4-5"], max_budget=999.0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_team_models_update_authority(
+            data=request,
+            team_access="team_admin",  # a plain string stands in for a stale or serialized grant
+            existing_team_models=["gpt-4"],
+        )
+    assert exc_info.value.status_code == 403
+
+    with pytest.raises(HTTPException) as budget_exc_info:
+        _check_team_budget_update_authority(
+            data=request,
+            team_access="team_admin",
+            existing_team_max_budget=30.0,
+        )
+    assert budget_exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_is_org_admin_for_team_or_false_degrades_instead_of_raising():
+    """A failed org lookup must withhold authority, never 500 the request."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.team_endpoints import _is_org_admin_for_team_or_false
+
+    caller = _team_admin_caller()
+    standalone_team = LiteLLM_TeamTable(team_id="t", organization_id=None)
+    org_team = LiteLLM_TeamTable(team_id="t", organization_id="org-1")
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+        new=AsyncMock(side_effect=ValueError("User doesn't exist in db")),
+    ) as mock_lookup:
+        assert await _is_org_admin_for_team_or_false(team_obj=standalone_team, user_api_key_dict=caller) is False
+        mock_lookup.assert_not_called()
+
+        assert await _is_org_admin_for_team_or_false(team_obj=org_team, user_api_key_dict=caller) is False
+        mock_lookup.assert_awaited_once()

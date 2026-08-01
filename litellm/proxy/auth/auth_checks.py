@@ -13,6 +13,7 @@ import asyncio
 import math
 import re
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import HTTPException, Request, status
@@ -4441,7 +4442,7 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
     return False
 
 
-def _model_matches_any_wildcard_pattern_in_list(model: str, allowed_model_list: list) -> bool:
+def _model_matches_any_wildcard_pattern_in_list(model: str, allowed_model_list: Sequence[str]) -> bool:
     """
     Returns True if a model matches any wildcard pattern in a list.
 

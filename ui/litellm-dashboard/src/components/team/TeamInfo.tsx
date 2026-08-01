@@ -254,8 +254,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
   const isTeamAdminForThisTeam = is_team_admin || isTeamAdminFromTeamData;
-  const holdsAuthorityOverTeam =
-    isProxyAdminRole(userRole) || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
+  const holdsAuthorityOverTeam = isProxyAdminRole(userRole) || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
   const canWidenTeamGrants = holdsAuthorityOverTeam || !isTeamAdminForThisTeam;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
@@ -1065,7 +1064,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           includeUserModels: !teamData?.team_info?.organization_id,
                           showAllProxyModelsOverride:
                             isProxyAdminRole(userRole) && !teamData?.team_info?.organization_id,
-                          restrictToCurrentTeamModels: !canWidenTeamGrants,
+                          restrictToModels: canWidenTeamGrants ? undefined : info.models ?? [],
                         }}
                         context="team"
                         dataTestId="models-select"

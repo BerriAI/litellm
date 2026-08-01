@@ -86,11 +86,14 @@ def _passthrough_routes_differ(requested: object, existing: Sequence[str] | None
     """
     if requested is None:
         return False
-    if not isinstance(requested, (list, tuple)):
+    if not _is_route_list(requested):
         return True
-    if any(not isinstance(route, str) for route in requested):
-        return True
-    return frozenset(requested) != frozenset(existing or ())
+    stored = existing if _is_route_list(existing) else ()
+    return frozenset(requested) != frozenset(stored)
+
+
+def _is_route_list(value: object) -> bool:
+    return isinstance(value, (list, tuple)) and all(isinstance(route, str) for route in value)
 
 
 def _check_passthrough_routes_caller_permission(
@@ -120,9 +123,16 @@ def _check_passthrough_routes_caller_permission(
             detail={"error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."},
         )
     metadata = getattr(data, "metadata", None)
-    if isinstance(metadata, dict) and _passthrough_routes_differ(
-        metadata.get("allowed_passthrough_routes"), existing_routes
-    ):
+    if not isinstance(metadata, dict) or "allowed_passthrough_routes" not in metadata:
+        return
+    requested_in_metadata = metadata["allowed_passthrough_routes"]
+    # an explicit null wipes the stored routes, so it is a change like any other
+    metadata_differs = (
+        bool(existing_routes)
+        if requested_in_metadata is None
+        else _passthrough_routes_differ(requested_in_metadata, existing_routes)
+    )
+    if metadata_differs:
         raise HTTPException(
             status_code=403,
             detail={"error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."},

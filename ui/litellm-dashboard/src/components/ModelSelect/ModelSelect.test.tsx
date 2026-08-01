@@ -578,12 +578,8 @@ describe("ModelSelect", () => {
       expect(screen.getByText(/\+5 more/)).toBeInTheDocument();
     });
   });
-  describe("restrictToCurrentTeamModels", () => {
-    const renderRestricted = (teamModels: string[], organizationModels?: string[]) => {
-      mockUseTeam.mockReturnValue({
-        data: { team_id: "team-1", team_alias: "Test Team", models: teamModels },
-        isLoading: false,
-      } as any);
+  describe("restrictToModels", () => {
+    const renderRestricted = (grantedModels: string[], organizationModels?: string[]) => {
       if (organizationModels) {
         mockUseOrganization.mockReturnValue({
           data: createMockOrganization(organizationModels),
@@ -597,12 +593,12 @@ describe("ModelSelect", () => {
           context="team"
           teamID="team-1"
           organizationID={organizationModels ? "org-1" : undefined}
-          options={{ includeSpecialOptions: true, restrictToCurrentTeamModels: true }}
+          options={{ includeSpecialOptions: true, restrictToModels: grantedModels }}
         />,
       );
     };
 
-    it("offers only the models the team already holds", async () => {
+    it("offers only the models the grant already covers", async () => {
       renderRestricted(["gpt-4"]);
 
       await waitFor(() => {
@@ -612,7 +608,7 @@ describe("ModelSelect", () => {
       expect(screen.queryByRole("option", { name: "All Proxy Models" })).not.toBeInTheDocument();
     });
 
-    it("hides All Proxy Models even when the team's org grants everything", async () => {
+    it("hides All Proxy Models even when the org grants everything", async () => {
       renderRestricted(["gpt-4"], ["all-proxy-models"]);
 
       await waitFor(() => {
@@ -622,16 +618,7 @@ describe("ModelSelect", () => {
       expect(screen.queryByRole("option", { name: "claude-3" })).not.toBeInTheDocument();
     });
 
-    it("does not restrict a team that already reaches every model", async () => {
-      renderRestricted(["all-proxy-models"]);
-
-      await waitFor(() => {
-        expect(screen.getByRole("option", { name: "gpt-4" })).toBeInTheDocument();
-      });
-      expect(screen.getByRole("option", { name: "claude-3" })).toBeInTheDocument();
-    });
-
-    it("keeps every model a team wildcard already reaches selectable", async () => {
+    it("keeps every model a wildcard grant already reaches selectable", async () => {
       mockUseAllProxyModels.mockReturnValue({
         data: {
           data: [
@@ -650,7 +637,16 @@ describe("ModelSelect", () => {
       expect(screen.queryByRole("option", { name: "anthropic/claude-opus-4-5" })).not.toBeInTheDocument();
     });
 
-    it("does not restrict a team holding the bare * grant", async () => {
+    it("does not restrict a grant that already reaches every model", async () => {
+      renderRestricted(["all-proxy-models"]);
+
+      await waitFor(() => {
+        expect(screen.getByRole("option", { name: "gpt-4" })).toBeInTheDocument();
+      });
+      expect(screen.getByRole("option", { name: "claude-3" })).toBeInTheDocument();
+    });
+
+    it("does not restrict a bare * grant", async () => {
       renderRestricted(["*"]);
 
       await waitFor(() => {
@@ -659,7 +655,7 @@ describe("ModelSelect", () => {
       expect(screen.getByRole("option", { name: "claude-3" })).toBeInTheDocument();
     });
 
-    it("does not restrict a team with an empty model list", async () => {
+    it("does not restrict when no grant list is given", async () => {
       renderRestricted([]);
 
       await waitFor(() => {

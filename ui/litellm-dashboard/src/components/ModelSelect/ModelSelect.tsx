@@ -3,6 +3,7 @@ import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrgani
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { Select, Skeleton, Tooltip, type SelectProps } from "antd";
+import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import { Organization, Team } from "../networking";
 import { splitWildcardModels } from "./modelUtils";
 
@@ -29,7 +30,7 @@ export interface ModelSelectProps {
     showAllTeamModelsOption?: boolean;
     showAllProxyModelsOverride?: boolean;
     includeSpecialOptions?: boolean;
-    restrictToCurrentTeamModels?: boolean;
+    restrictToModels?: string[];
   };
   context: "team" | "organization" | "user" | "global";
   dataTestId?: string;
@@ -47,25 +48,19 @@ type FilterContextArgs = {
 };
 
 /**
- * The team's own models, when the caller may only narrow that list (a team
- * admin can drop a model but not grant a new one — /team/update rejects it).
- * Returns null when the restriction doesn't apply, including when the team
- * already reaches every model, since nothing can widen it further.
+ * The models the caller may pick from when they can only narrow an existing
+ * grant (a team admin can drop a model but not add one — /team/update rejects
+ * it). Returns null when the restriction doesn't apply, including when the
+ * grant already reaches every model, since nothing can widen it further.
  */
-const keepOnlyCurrentTeamModels = (
-  selectedTeam: Team | undefined,
-  options: ModelSelectProps["options"],
-  allProxyModels: string[],
-): string[] | null => {
-  if (!options?.restrictToCurrentTeamModels) return null;
-  const teamModels = selectedTeam?.models ?? [];
-  if (teamModels.length === 0) return null;
-  if (teamModels.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) || teamModels.includes("*")) return null;
-  const wildcardPrefixes = teamModels.filter((m) => m.endsWith("/*")).map((m) => m.slice(0, -1));
-  const reachableProxyModels = allProxyModels.filter((model) =>
-    wildcardPrefixes.some((prefix) => model.startsWith(prefix)),
-  );
-  return Array.from(new Set([...teamModels, ...reachableProxyModels]));
+const restrictedModelOptions = (options: ModelSelectProps["options"], allProxyModels: string[]): string[] | null => {
+  const grantedModels = options?.restrictToModels;
+  if (!grantedModels || grantedModels.length === 0) return null;
+  if (grantedModels.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) || grantedModels.includes("*")) {
+    return null;
+  }
+  const reachable = unfurlWildcardModelsInList(grantedModels, allProxyModels);
+  return Array.from(new Set([...grantedModels, ...reachable]));
 };
 
 const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextArgs) => string[]> = {
@@ -76,8 +71,8 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
   },
 
   team: ({ allProxyModels, selectedTeam, selectedOrganization, userModels, options }) => {
-    const currentTeamModels = keepOnlyCurrentTeamModels(selectedTeam, options, allProxyModels);
-    if (currentTeamModels) return currentTeamModels;
+    const restrictedModels = restrictedModelOptions(options, allProxyModels);
+    if (restrictedModels) return restrictedModels;
 
     if (selectedOrganization) {
       if (
@@ -133,7 +128,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
     organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
     organization?.models.length === 0;
   const shouldShowAllProxyModels =
-    keepOnlyCurrentTeamModels(team, options, []) === null &&
+    restrictedModelOptions(options, []) === null &&
     (showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global");
 
   if (isLoading) {

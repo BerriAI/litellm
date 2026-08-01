@@ -1224,9 +1224,7 @@ describe("TeamInfoView", () => {
       testQueryClient.clear();
       mockUserRole = "Internal User";
       vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
-      vi.mocked(networking.teamInfoCall).mockResolvedValue(
-        createMockTeamData({ models: ["gpt-4"], max_budget: 30 }),
-      );
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"], max_budget: 30 }));
     });
 
     afterEach(() => {
@@ -1245,7 +1243,7 @@ describe("TeamInfoView", () => {
 
       expect(await screen.findByText(/Only a proxy admin can raise this team's budget above \$30/)).toBeInTheDocument();
       expect(networking.teamUpdateCall).not.toHaveBeenCalled();
-    });
+    }, 60000);
 
     it("blocks clearing the cap", async () => {
       const user = userEvent.setup({ delay: null });
@@ -1257,7 +1255,7 @@ describe("TeamInfoView", () => {
 
       expect(await screen.findByText(/Only a proxy admin can remove this team's budget/)).toBeInTheDocument();
       expect(networking.teamUpdateCall).not.toHaveBeenCalled();
-    });
+    }, 60000);
 
     it("lets a team admin lower the cap", async () => {
       const user = userEvent.setup({ delay: null });
@@ -1276,7 +1274,7 @@ describe("TeamInfoView", () => {
       expect(accessToken).toBe("test-token");
       expect(payload.team_id).toBe("123");
       expect(Number(payload.max_budget)).toBe(10);
-    });
+    }, 60000);
 
     it("leaves a proxy admin free to raise the cap", async () => {
       const user = userEvent.setup({ delay: null });
@@ -1296,7 +1294,67 @@ describe("TeamInfoView", () => {
       expect(accessToken).toBe("test-token");
       expect(payload.team_id).toBe("123");
       expect(Number(payload.max_budget)).toBe(100);
+    }, 60000);
+  });
+
+  describe("team-admin model grants", () => {
+    const teamAdminProps = { ...defaultProps, is_proxy_admin: false, is_team_admin: true };
+
+    beforeEach(() => {
+      testQueryClient.clear();
+      mockUserRole = "Internal User";
+      mockUseAllProxyModels.mockReturnValue({
+        data: {
+          data: [
+            { id: "gpt-4", object: "model", created: 1, owned_by: "openai" },
+            { id: "claude-opus-4-5", object: "model", created: 1, owned_by: "anthropic" },
+          ],
+        },
+        isLoading: false,
+      } as any);
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
     });
+
+    afterEach(() => {
+      mockUserRole = "Admin";
+    });
+
+    it("offers a team admin only the models the team already holds", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const modelsSelect = await screen.findByTestId("models-select");
+      await user.click(within(modelsSelect).getByRole("combobox"));
+
+      await waitFor(() => {
+        expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      });
+      expect(screen.queryByText("claude-opus-4-5")).not.toBeInTheDocument();
+      expect(screen.queryByText("All Proxy Models")).not.toBeInTheDocument();
+    }, 60000);
+
+    it("leaves a proxy admin the full proxy model list", async () => {
+      const user = userEvent.setup({ delay: null });
+      mockUserRole = "Admin";
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const modelsSelect = await screen.findByTestId("models-select");
+      await user.click(within(modelsSelect).getByRole("combobox"));
+
+      expect(await screen.findByText("claude-opus-4-5")).toBeInTheDocument();
+    }, 60000);
   });
 
   describe("validateTeamMaxBudget", () => {

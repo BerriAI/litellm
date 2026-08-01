@@ -1071,27 +1071,28 @@ def _check_team_budget_update_authority(
     Setting a finite budget on a team that has no cap is a restriction and is
     allowed. Org-scoped teams are additionally capped by _check_org_team_limits().
     """
-    if team_access is not TeamAccessGrant.TEAM_ADMIN:
+    if team_access in (TeamAccessGrant.PROXY_ADMIN, TeamAccessGrant.ORG_ADMIN):
         return
     if existing_team_max_budget is None:
         return
 
-    budget_explicitly_set = "max_budget" in (getattr(data, "model_fields_set", None) or set())
-    if budget_explicitly_set and data.max_budget is None:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": f"Only a proxy admin can remove a team's max_budget. Team's current max_budget={existing_team_max_budget}."
-            },
-        )
+    budget_explicitly_set = "max_budget" in (getattr(data, "model_fields_set", None) or frozenset())
+    removing_cap = budget_explicitly_set and data.max_budget is None
+    raising_cap = data.max_budget is not None and data.max_budget > existing_team_max_budget
+    if not removing_cap and not raising_cap:
+        return
 
-    if data.max_budget is not None and data.max_budget > existing_team_max_budget:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": f"Only a proxy admin can raise a team's max_budget. Team's current max_budget={existing_team_max_budget}, requested={data.max_budget}."
-            },
-        )
+    action = "remove" if removing_cap else "raise"
+    requested = "" if removing_cap else f", requested={data.max_budget}"
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                f"Only a proxy admin can {action} a team's max_budget. "
+                f"Team's current max_budget={existing_team_max_budget}{requested}."
+            )
+        },
+    )
 
 
 def _model_list_grants_every_model(models: Sequence[str]) -> bool:
@@ -1101,6 +1102,24 @@ def _model_list_grants_every_model(models: Sequence[str]) -> bool:
     "*", and the all-proxy-models sentinel are all unrestricted.
     """
     return len(models) == 0 or "*" in models or SpecialModelNames.all_proxy_models.value in models
+
+
+def _team_models_reachable_today(
+    existing_team_models: Sequence[str],
+    llm_router: Optional[Router],
+) -> tuple[str, ...]:
+    """The team's stored models plus the members of any access group it holds.
+
+    `team.models` may name a router access group; the auth path expands those
+    before deciding what the team can call, so the widening check has to expand
+    them too or a legitimate narrowing reads as a new grant.
+    """
+    if llm_router is None:
+        return tuple(existing_team_models)
+    access_groups = llm_router.get_model_access_groups()
+    return tuple(existing_team_models) + tuple(
+        model for name in existing_team_models for model in access_groups.get(name, ())
+    )
 
 
 def _check_team_models_update_authority(
@@ -1117,40 +1136,43 @@ def _check_team_models_update_authority(
     holding "openai/*" may be narrowed to "openai/gpt-4o", and a team that
     already reaches every model can be narrowed to anything.
     """
-    if team_access is not TeamAccessGrant.TEAM_ADMIN:
+    if team_access in (TeamAccessGrant.PROXY_ADMIN, TeamAccessGrant.ORG_ADMIN):
         return
     if data.models is None:
         return
     if _model_list_grants_every_model(existing_team_models):
         return
 
-    if _model_list_grants_every_model(data.models):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": (
-                    "Only a proxy admin can grant a team access to every proxy model. Team's current "
-                    f"models={sorted(set(existing_team_models))}."
-                )
-            },
-        )
-
     added_models = tuple(
         model
         for model in data.models
-        if model not in existing_team_models
-        and not _model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=list(existing_team_models))
-    )
-    if added_models:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": (
-                    f"Only a proxy admin can add models to a team. Models the team cannot already reach: "
-                    f"{sorted(set(added_models))}. Team's current models={sorted(set(existing_team_models))}."
+        if model != SpecialModelNames.no_default_models.value
+        and (
+            not isinstance(model, str)
+            or (
+                model not in existing_team_models
+                and not _model_matches_any_wildcard_pattern_in_list(
+                    model=model, allowed_model_list=existing_team_models
                 )
-            },
+            )
         )
+    )
+    if not _model_list_grants_every_model(data.models) and not added_models:
+        return
+
+    widening = (
+        "grant a team access to every proxy model"
+        if _model_list_grants_every_model(data.models)
+        else f"add models to a team. Models the team cannot already reach: {sorted(frozenset(added_models))}"
+    )
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                f"Only a proxy admin can {widening}. Team's current models={sorted(frozenset(existing_team_models))}."
+            )
+        },
+    )
 
 
 def _should_auto_add_team_creator(
@@ -1981,8 +2003,10 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
         )
 
-        existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-        stored_passthrough_routes = existing_metadata.get("allowed_passthrough_routes")
+        existing_metadata = existing_team_row.metadata
+        stored_passthrough_routes = (
+            existing_metadata.get("allowed_passthrough_routes") if isinstance(existing_metadata, dict) else None
+        )
         _check_passthrough_routes_caller_permission(
             data,
             user_api_key_dict,
@@ -1995,7 +2019,10 @@ async def update_team(
         _check_team_models_update_authority(
             data=data,
             team_access=team_access,
-            existing_team_models=existing_team_row.models or [],
+            existing_team_models=_team_models_reachable_today(
+                existing_team_models=existing_team_row.models or (),
+                llm_router=llm_router,
+            ),
         )
 
         if data.soft_budget is not None:
