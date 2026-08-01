@@ -50,9 +50,7 @@ def mock_budget_table():
 @pytest.mark.asyncio
 @patch("litellm.proxy.proxy_server.prisma_client")
 @patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
-async def test_update_customer_with_budget_id(
-    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
-):
+async def test_update_customer_with_budget_id(mock_prisma_client, mock_user_api_key_dict, mock_existing_customer):
     """
     Test updating a customer to link them to an existing budget using budget_id.
 
@@ -66,9 +64,7 @@ async def test_update_customer_with_budget_id(
         "litellm_budget_table": None,
     }
 
-    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
-        return_value=mock_existing_customer
-    )
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_existing_customer)
 
     mock_updated_user = MagicMock()
     mock_updated_user.model_dump.return_value = {
@@ -77,14 +73,10 @@ async def test_update_customer_with_budget_id(
         "blocked": False,
     }
 
-    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
-        return_value=mock_updated_user
-    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=mock_updated_user)
 
     # Create update request with only budget_id (no other budget fields)
-    update_request = UpdateCustomerRequest(
-        user_id="test-user", budget_id="existing-budget-123"
-    )
+    update_request = UpdateCustomerRequest(user_id="test-user", budget_id="existing-budget-123")
 
     # Act
     await update_end_user(update_request, mock_user_api_key_dict)
@@ -122,23 +114,17 @@ async def test_update_customer_creates_budget_with_proper_relations(
         "litellm_budget_table": None,
     }
 
-    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
-        return_value=mock_existing_customer
-    )
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_existing_customer)
 
     # Mock budget creation
     mock_created_budget = MagicMock()
     mock_created_budget.budget_id = "new-budget-456"
-    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
-        return_value=mock_created_budget
-    )
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=mock_created_budget)
 
     # Mock end user update
     mock_updated_user = MagicMock()
     mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
-    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
-        return_value=mock_updated_user
-    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=mock_updated_user)
 
     # Create update request with budget creation fields (not just budget_id)
     update_request = UpdateCustomerRequest(
@@ -180,23 +166,17 @@ async def test_update_customer_creates_budget_with_required_fields(
         "litellm_budget_table": None,
     }
 
-    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
-        return_value=mock_existing_customer
-    )
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_existing_customer)
 
     # Mock budget creation
     mock_created_budget = MagicMock()
     mock_created_budget.budget_id = "new-budget-789"
-    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
-        return_value=mock_created_budget
-    )
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=mock_created_budget)
 
     # Mock end user update
     mock_updated_user = MagicMock()
     mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
-    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
-        return_value=mock_updated_user
-    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=mock_updated_user)
 
     # Create update request with budget creation fields
     update_request = UpdateCustomerRequest(user_id="test-user", max_budget=200.0)
@@ -226,9 +206,7 @@ async def test_update_customer_creates_budget_with_required_fields(
 @pytest.mark.asyncio
 @patch("litellm.proxy.proxy_server.prisma_client")
 @patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
-async def test_update_customer_budget_creation_with_fallback_admin(
-    mock_prisma_client, mock_existing_customer
-):
+async def test_update_customer_budget_creation_with_fallback_admin(mock_prisma_client, mock_existing_customer):
     """
     Test budget creation falls back to admin name when user_id is not available.
 
@@ -245,23 +223,17 @@ async def test_update_customer_budget_creation_with_fallback_admin(
         "litellm_budget_table": None,
     }
 
-    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
-        return_value=mock_existing_customer
-    )
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_existing_customer)
 
     # Mock budget creation
     mock_created_budget = MagicMock()
     mock_created_budget.budget_id = "new-budget-fallback"
-    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
-        return_value=mock_created_budget
-    )
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=mock_created_budget)
 
     # Mock end user update
     mock_updated_user = MagicMock()
     mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
-    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
-        return_value=mock_updated_user
-    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=mock_updated_user)
 
     # Create update request with budget creation fields
     update_request = UpdateCustomerRequest(
@@ -302,23 +274,17 @@ async def test_update_customer_with_budget_id_and_creation_fields(
         "litellm_budget_table": None,
     }
 
-    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
-        return_value=mock_existing_customer
-    )
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_existing_customer)
 
     # Mock budget creation
     mock_created_budget = MagicMock()
     mock_created_budget.budget_id = "new-budget-combo"
-    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
-        return_value=mock_created_budget
-    )
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=mock_created_budget)
 
     # Mock end user update
     mock_updated_user = MagicMock()
     mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
-    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
-        return_value=mock_updated_user
-    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=mock_updated_user)
 
     # Create update request with both budget_id and budget creation fields
     update_request = UpdateCustomerRequest(
@@ -370,3 +336,262 @@ def test_new_budget_request_sets_budget_reset_at_when_duration_provided():
     expected_min = before + timedelta(days=30)
     expected_max = after + timedelta(days=30)
     assert expected_min <= result.budget_reset_at <= expected_max
+
+
+def test_update_customer_request_accepts_budget_duration():
+    """
+    Regression for #33941: UpdateCustomerRequest must declare budget_duration
+    (and related budget fields). Pydantic otherwise ignores them at parse time,
+    so /customer/update can only ever persist max_budget.
+    """
+    request = UpdateCustomerRequest(
+        user_id="test-bug-repro@example.com",
+        max_budget=50.0,
+        budget_duration="1mo",
+        rpm_limit=100,
+    )
+
+    dumped = request.model_dump()
+    assert dumped["budget_duration"] == "1mo"
+    assert dumped["max_budget"] == 50.0
+    assert dumped["rpm_limit"] == 100
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_creates_budget_with_duration_and_reset_at(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Regression for #33941: when /customer/update creates a budget for an
+    end-user that has none, budget_duration must be persisted and
+    budget_reset_at must be computed (mirrors /budget/new).
+    """
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "litellm_budget_table": None,
+    }
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_existing_customer)
+
+    mock_created_budget = MagicMock()
+    mock_created_budget.budget_id = "new-budget-with-duration"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=mock_created_budget)
+
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "budget_id": "new-budget-with-duration",
+    }
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=mock_updated_user)
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-bug-repro@example.com",
+        max_budget=50.0,
+        budget_duration="1mo",
+    )
+
+    await update_end_user(update_request, mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    creation_data = mock_prisma_client.db.litellm_budgettable.create.call_args[1]["data"]
+
+    assert creation_data["max_budget"] == 50.0
+    assert creation_data["budget_duration"] == "1mo"
+    assert creation_data["budget_reset_at"] is not None
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_persists_soft_budget_zero(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Regression: explicit soft_budget=0 must reach the budget row. The default
+    non_default_values filter treats 0 as unset for spend fields, but
+    /budget/update accepts non-negative soft budgets including zero.
+    """
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-soft-budget-zero@example.com",
+        "blocked": False,
+        "litellm_budget_table": None,
+    }
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+
+    mock_created_budget = MagicMock()
+    mock_created_budget.budget_id = "budget-soft-zero"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_created_budget
+    )
+
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {
+        "user_id": "test-soft-budget-zero@example.com",
+        "blocked": False,
+        "budget_id": "budget-soft-zero",
+    }
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-soft-budget-zero@example.com",
+        max_budget=50.0,
+        soft_budget=0,
+    )
+
+    await update_end_user(update_request, mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    creation_data = mock_prisma_client.db.litellm_budgettable.create.call_args[1]["data"]
+    assert creation_data["soft_budget"] == 0
+    assert creation_data["max_budget"] == 50.0
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_updates_existing_budget_with_duration_and_reset_at(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Regression for #33941: when /customer/update updates an existing linked
+    budget, budget_duration must be persisted and budget_reset_at computed.
+    """
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "litellm_budget_table": {
+            "budget_id": "existing-budget-123",
+            "max_budget": 100.0,
+        },
+    }
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock(
+        return_value=MagicMock(budget_id="existing-budget-123")
+    )
+
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "budget_id": "existing-budget-123",
+    }
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-bug-repro@example.com",
+        budget_duration="1mo",
+    )
+
+    await update_end_user(update_request, mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_budgettable.update.assert_called_once()
+    update_call = mock_prisma_client.db.litellm_budgettable.update.call_args
+    assert update_call[1]["where"] == {"budget_id": "existing-budget-123"}
+    update_data = update_call[1]["data"]
+    assert update_data["budget_duration"] == "1mo"
+    assert update_data["budget_reset_at"] is not None
+    assert not mock_prisma_client.db.litellm_budgettable.create.called
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_updates_existing_budget_max_budget_and_duration(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Regression for #33941 / Greptile P2: updating an existing linked budget via
+    /customer/update must persist both max_budget and budget_duration together.
+    """
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "litellm_budget_table": {
+            "budget_id": "existing-budget-123",
+            "max_budget": 25.0,
+            "budget_duration": "7d",
+        },
+    }
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock(
+        return_value=MagicMock(budget_id="existing-budget-123")
+    )
+
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "budget_id": "existing-budget-123",
+    }
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-bug-repro@example.com",
+        max_budget=100.0,
+        budget_duration="30d",
+    )
+
+    await update_end_user(update_request, mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_budgettable.update.assert_called_once()
+    update_data = mock_prisma_client.db.litellm_budgettable.update.call_args[1]["data"]
+    assert update_data["max_budget"] == 100.0
+    assert update_data["budget_duration"] == "30d"
+    assert update_data["budget_reset_at"] is not None
+    assert not mock_prisma_client.db.litellm_budgettable.create.called
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+@patch("litellm.proxy.proxy_server.premium_user", False)
+async def test_update_customer_rejects_model_max_budget_without_premium(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Mirror /budget/new: model_max_budget requires premium entitlement via
+    validate_model_max_budget. Without it, /customer/update must 400 before
+    writing a budget row.
+    """
+    from litellm.proxy._types import ProxyException
+
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-mmb@example.com",
+        "blocked": False,
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-mmb@example.com",
+        max_budget=50.0,
+        model_max_budget={"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_end_user(update_request, mock_user_api_key_dict)
+
+    assert int(exc_info.value.code) == 400
+    assert not mock_prisma_client.db.litellm_budgettable.create.called

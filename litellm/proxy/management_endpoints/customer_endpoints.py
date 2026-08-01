@@ -22,6 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -41,6 +42,51 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 )
 
 router = APIRouter()
+
+_CUSTOMER_UPDATE_ZERO_ALLOWED_BUDGET_FIELDS = frozenset(
+    (
+        "soft_budget",
+        "max_parallel_requests",
+        "tpm_limit",
+        "rpm_limit",
+    )
+)
+
+
+def _customer_update_non_default_values(data_json, explicit_fields):
+    non_default_values = {}
+    for k, v in data_json.items():
+        if v is None:
+            continue
+        if v in ([], {}, 0):
+            if k in _CUSTOMER_UPDATE_ZERO_ALLOWED_BUDGET_FIELDS and k in explicit_fields:
+                non_default_values[k] = v
+            continue
+        non_default_values[k] = v
+    return non_default_values
+
+
+def _prepare_customer_budget_table_data(budget_table_data) -> None:
+    model_max_budget = budget_table_data.get("model_max_budget")
+    if model_max_budget is not None and len(model_max_budget) > 0:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            validate_model_max_budget,
+        )
+
+        try:
+            validate_model_max_budget(model_max_budget)
+        except ValueError as e:
+            raise ProxyException(
+                message=str(e),
+                type="bad_request",
+                param="model_max_budget",
+                code=400,
+            )
+
+    if budget_table_data.get("budget_duration") is not None and "budget_reset_at" not in budget_table_data:
+        budget_table_data["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=budget_table_data["budget_duration"]
+        )
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -491,6 +537,12 @@ async def update_end_user(
     - alias: Optional[str] = None  # human-friendly alias
     - blocked: bool = False  # allow/disallow requests for this end-user
     - max_budget: Optional[float] = None
+    - soft_budget: Optional[float] = None
+    - max_parallel_requests: Optional[int] = None
+    - tpm_limit: Optional[int] = None
+    - rpm_limit: Optional[int] = None
+    - model_max_budget: Optional[dict] = None
+    - budget_duration: Optional[str] = None  # e.g. "30d", "1mo"; also sets budget_reset_at when creating/updating a budget
     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
     - allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
@@ -543,15 +595,7 @@ async def update_end_user(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        # get non default values for key
-        non_default_values = {}
-        for k, v in data_json.items():
-            if v is not None and v not in (
-                [],
-                {},
-                0,
-            ):  # models default to [], spend defaults to 0, we should not reset these values
-                non_default_values[k] = v
+        non_default_values = _customer_update_non_default_values(data_json, data.fields_set())
 
         ## Get end user table data ##
         end_user_table_data = await EndUserRepository(prisma_client).table.find_first(
@@ -594,6 +638,8 @@ async def update_end_user(
 
         ## Check if we need to create a new budget (only if budget fields are provided, not just budget_id) ##
         if budget_table_data:
+            _prepare_customer_budget_table_data(budget_table_data)
+
             if end_user_budget_table is None:
                 ## Create new budget ##
                 budget_table_data_record = await BudgetRepository(prisma_client).table.create(
