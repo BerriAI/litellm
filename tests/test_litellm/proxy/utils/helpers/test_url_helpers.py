@@ -8,7 +8,7 @@ from litellm.proxy.utils import (
     get_proxy_base_url,
     get_server_root_path,
     join_paths,
-    normalize_route_for_root_path,
+    strip_server_root_path,
 )
 
 
@@ -279,11 +279,11 @@ def test_get_custom_url_error_path_invalid_base_raises(monkeypatch):
         get_custom_url(None, "/v1/chat")
 
 
-def test_normalize_route_for_root_path_strips_prefix(monkeypatch):
+def test_strip_server_root_path_strips_prefix(monkeypatch):
     _clear_url_env(monkeypatch)
     monkeypatch.setenv("SERVER_ROOT_PATH", "/proxy")
     summary = {
-        "result": normalize_route_for_root_path("/proxy/v1/chat"),
+        "result": strip_server_root_path("/proxy/v1/chat"),
         "root_path": "/proxy",
         "input": "/proxy/v1/chat",
     }
@@ -294,10 +294,10 @@ def test_normalize_route_for_root_path_strips_prefix(monkeypatch):
     }
 
 
-def test_normalize_route_for_root_path_returns_route_when_no_root(monkeypatch):
+def test_strip_server_root_path_returns_route_when_no_root(monkeypatch):
     _clear_url_env(monkeypatch)
     summary = {
-        "result": normalize_route_for_root_path("/v1/chat"),
+        "result": strip_server_root_path("/v1/chat"),
         "root_path": "",
         "input": "/v1/chat",
     }
@@ -308,9 +308,15 @@ def test_normalize_route_for_root_path_returns_route_when_no_root(monkeypatch):
     }
 
 
-def test_normalize_route_for_root_path_error_path_when_route_not_under_root(
-    monkeypatch,
+@pytest.mark.parametrize("server_root_path", ["/proxy", "/proxy/"])
+def test_strip_server_root_path_returns_route_when_already_stripped(
+    monkeypatch, server_root_path
 ):
+    """
+    ``get_request_route()`` already strips ``scope["root_path"]``, so the common
+    input here carries no prefix and must be handed back untouched.
+    """
     _clear_url_env(monkeypatch)
-    monkeypatch.setenv("SERVER_ROOT_PATH", "/proxy")
-    assert normalize_route_for_root_path("/other/v1/chat") is None
+    monkeypatch.setenv("SERVER_ROOT_PATH", server_root_path)
+    assert strip_server_root_path("/other/v1/chat") == "/other/v1/chat"
+    assert strip_server_root_path("/proxy/v1/chat") == "/v1/chat"

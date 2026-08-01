@@ -3533,10 +3533,56 @@ def test_mapped_pass_through_routes_with_server_root_path():
             is True
         )
 
-        # bare route without prefix should not match when root is set
+
+@pytest.mark.parametrize(
+    "server_root_path",
+    ["", "/", "/api/v1"],
+)
+@pytest.mark.parametrize(
+    "bare_route",
+    [
+        "/anthropic/v1/messages",
+        "/bedrock/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+        "/vertex_ai/v1/projects/foo/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent",
+        "/gemini/v1beta/models/gemini-2.5-pro:generateContent",
+        "/cohere/v1/chat",
+    ],
+)
+def test_mapped_pass_through_routes_match_bare_route_under_root_path(
+    server_root_path, bare_route
+):
+    """
+    ``create_pass_through_route``'s handler resolves the route with
+    ``get_request_route()``, which has already stripped ``scope["root_path"]``.
+    The mapped-route allowlist has to match that bare route whether or not
+    SERVER_ROOT_PATH is set, otherwise every provider pass-through 404s.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
+    )
+
+    _registered_pass_through_routes.clear()
+
+    with patch(
+        "litellm.proxy.utils.get_server_root_path", return_value=server_root_path
+    ):
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(bare_route)
+            is True
+        )
+        prefixed_route = (
+            f"{server_root_path}{bare_route}" if server_root_path not in ("", "/") else bare_route
+        )
         assert (
             InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                "/vertex_ai/v1/projects/foo"
+                prefixed_route
+            )
+            is True
+        )
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/not_a_provider/v1/messages"
             )
             is False
         )

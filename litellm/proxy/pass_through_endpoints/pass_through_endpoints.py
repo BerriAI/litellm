@@ -66,7 +66,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.proxy.utils import strip_server_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -2648,18 +2648,6 @@ class InitPassThroughEndpointHelpers:
         return list(_registered_pass_through_routes.keys())
 
     @staticmethod
-    def _route_for_registry_lookup(route: str) -> str:
-        """
-        Normalize an incoming route to the bare path stored in the registry.
-
-        Registry keys store root-stripped paths. Callers should pass routes from
-        ``get_request_route()`` (already stripped); prefixed ``request.url.path``
-        values are stripped via ``normalize_route_for_root_path``.
-        """
-        normalized_route = normalize_route_for_root_path(route)
-        return normalized_route if normalized_route is not None else route
-
-    @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
         """
         Check if route is a registered pass-through endpoint from DB
@@ -2673,14 +2661,12 @@ class InitPassThroughEndpointHelpers:
         Returns:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
-        ## CHECK IF MAPPED PASS THROUGH ENDPOINT
-        normalized_route = normalize_route_for_root_path(route)
-        if normalized_route is not None:
-            for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-                if normalized_route.startswith(mapped_route):
-                    return True
+        comparison_route = strip_server_root_path(route)
 
-        comparison_route = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
+        ## CHECK IF MAPPED PASS THROUGH ENDPOINT
+        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if comparison_route.startswith(mapped_route):
+                return True
 
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
@@ -2702,7 +2688,7 @@ class InitPassThroughEndpointHelpers:
     @staticmethod
     def get_registered_pass_through_route(route: str, method: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get passthrough params for a given route and optionally filter by HTTP method"""
-        comparison_route = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
+        comparison_route = strip_server_root_path(route)
         for key in _registered_pass_through_routes.keys():
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
