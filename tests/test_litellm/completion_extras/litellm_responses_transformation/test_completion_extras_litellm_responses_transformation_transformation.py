@@ -1501,7 +1501,7 @@ def test_multiple_tool_calls_in_single_choice():
     print("✓ Multiple tool calls are correctly grouped in a single choice")
 
 
-def test_message_and_tool_call_are_merged_into_single_choice():
+def test_message_content_and_tool_call_are_merged_into_single_choice():
     from openai.types.responses import (
         ResponseFunctionToolCall,
         ResponseOutputMessage,
@@ -1514,7 +1514,13 @@ def test_message_and_tool_call_are_merged_into_single_choice():
         content=[
             ResponseOutputText(
                 annotations=[],
-                text="Let me check that.",
+                text="Let me check that. ",
+                type="output_text",
+                logprobs=[],
+            ),
+            ResponseOutputText(
+                annotations=[],
+                text="I am still checking.",
                 type="output_text",
                 logprobs=[],
             )
@@ -1540,7 +1546,7 @@ def test_message_and_tool_call_are_merged_into_single_choice():
     choice = choices[0]
     assert choice.index == 0
     assert choice.finish_reason == "tool_calls"
-    assert choice.message.content == "Let me check that."
+    assert choice.message.content == "Let me check that. I am still checking."
     assert choice.message.tool_calls is not None
     assert len(choice.message.tool_calls) == 1
     assert choice.message.tool_calls[0].id == "call_paris"

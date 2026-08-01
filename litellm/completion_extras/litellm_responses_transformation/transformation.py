@@ -497,35 +497,42 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 reasoning_content = " ".join(s["text"] for s in pending_reasoning_item["summary"] if s.get("text"))
 
             elif isinstance(item, ResponseOutputMessage):
+                response_text = ""
+                annotations: list[ChatCompletionAnnotation] | None = None
                 for content in item.content:
-                    response_text = getattr(content, "text", "")
-                    # Extract annotations from content if present
+                    response_text += getattr(content, "text", "")
                     raw_annotations = getattr(content, "annotations", None)
-                    annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                    content_annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
                         raw_annotations
                     )
-                    msg = Message(
-                        role=item.role,
-                        content=response_text if response_text else "",
-                        reasoning_content=reasoning_content,
-                        annotations=annotations,
-                        reasoning_items=cast(
-                            list[ChatCompletionReasoningItem] | None,
-                            ([pending_reasoning_item] if pending_reasoning_item is not None else None),
-                        ),
-                    )
+                    if content_annotations:
+                        if annotations is None:
+                            annotations = content_annotations
+                        else:
+                            annotations.extend(content_annotations)
 
-                    choices.append(
-                        Choices(
-                            message=msg,
-                            finish_reason="stop",
-                            index=index,
-                        )
-                    )
+                msg = Message(
+                    role=item.role,
+                    content=response_text,
+                    reasoning_content=reasoning_content,
+                    annotations=annotations,
+                    reasoning_items=cast(
+                        list[ChatCompletionReasoningItem] | None,
+                        ([pending_reasoning_item] if pending_reasoning_item is not None else None),
+                    ),
+                )
 
-                    reasoning_content = None  # flush
-                    pending_reasoning_item = None  # flush
-                    index += 1
+                choices.append(
+                    Choices(
+                        message=msg,
+                        finish_reason="stop",
+                        index=index,
+                    )
+                )
+
+                reasoning_content = None  # flush
+                pending_reasoning_item = None  # flush
+                index += 1
 
             elif isinstance(item, ResponseFunctionToolCall):
                 from litellm.responses.litellm_completion_transformation.transformation import (
