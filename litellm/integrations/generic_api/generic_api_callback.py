@@ -7,6 +7,7 @@ Callback to log events to a Generic API Endpoint
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -184,8 +185,27 @@ class GenericAPILogger(CustomBatchLogger):
         #########################################################
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
-        asyncio.create_task(self.periodic_flush())
+        self._flush_task = asyncio.create_task(self._run_periodic_flush())
         self.log_queue: List[Union[Dict, StandardLoggingPayload]] = []
+
+    async def _run_periodic_flush(self) -> None:
+        """Run the periodic flush loop; on cancellation, make a best-effort final
+        flush of any buffered logs before exiting. Prevents dropping the last batch
+        when this logger is evicted from the cache and cancelled via shutdown()."""
+        try:
+            await self.periodic_flush()
+        except asyncio.CancelledError:
+            # suppress(Exception) leaves a nested CancelledError (a BaseException) free to
+            # propagate, so a second cancellation during the final flush is still honored.
+            with contextlib.suppress(Exception):
+                await self.flush_queue()
+            raise
+
+    def shutdown(self) -> None:
+        """Cancel the background flush task. Called by LoggingCallbackManager when this
+        logger is evicted from the cache so its periodic_flush task does not leak."""
+        if not self._flush_task.done():
+            self._flush_task.cancel()
 
     def _get_headers(self, headers: Optional[dict] = None):
         """
