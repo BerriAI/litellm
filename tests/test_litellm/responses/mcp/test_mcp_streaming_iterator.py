@@ -257,3 +257,42 @@ async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
 
     assert iterator._initial_creation_error is not None
     assert "initial boom" in str(iterator._initial_creation_error)
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_error_leaves_completed_response_readable(monkeypatch):
+    """
+    Regression test: on a mid-stream provider error the Router's fallback path
+    reads `completed_response` off this iterator directly (see
+    Router._extract_partial_responses_usage). This iterator skips
+    super().__init__(), so that read used to raise AttributeError and mask the
+    provider error, stopping the fallback from running.
+    """
+    from litellm import Router
+    from litellm.exceptions import MidStreamFallbackError
+
+    _mock_mcp_environment(monkeypatch)
+
+    class _ErroringStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise MidStreamFallbackError(
+                message="provider overloaded",
+                model="gpt-4",
+                llm_provider="openai",
+            )
+
+    iterator = MCPEnhancedStreamingIterator(
+        base_iterator=_ErroringStream(),
+        mcp_events=[],
+        tool_server_map={},
+        original_request_params={"model": "gpt-4"},
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await iterator.__anext__()
+
+    assert iterator.completed_response is None
+    assert Router._extract_partial_responses_usage(iterator) is None
