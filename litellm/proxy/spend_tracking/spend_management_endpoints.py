@@ -11,6 +11,7 @@ from typing import (
     Literal,
     Mapping,
     NamedTuple,
+    Sequence,
     Union,
 )
 
@@ -2025,19 +2026,7 @@ async def ui_view_spend_logs(
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
-        # query_raw returns the JSONB `metadata` column as a string (the Prisma
-        # serialiser bypasses the model-layer JSON hydration we get on the ORM
-        # path). The UI reads `metadata.status` / `metadata.error_information`
-        # as object fields, so failure rows looked like successes (#29674).
-        # Re-hydrate to dict here.
-        for row in data:
-            if isinstance(row, dict):
-                md = row.get("metadata")
-                if isinstance(md, str):
-                    try:
-                        row["metadata"] = json.loads(md)
-                    except (ValueError, TypeError):
-                        row["metadata"] = {}
+        _hydrate_spend_log_metadata(data)
 
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
@@ -2076,6 +2065,27 @@ def _spend_log_field_has_content(value: Union[str, list, dict] | None) -> bool:
     if isinstance(value, (list, dict)):
         return len(value) > 0
     return True
+
+
+def _hydrate_spend_log_metadata(rows: Sequence[Any]) -> None:
+    """Re-hydrate the JSONB ``metadata`` column returned by ``query_raw`` as a string.
+
+    The Prisma serialiser bypasses the model-layer JSON hydration we get on the ORM
+    path, while the UI reads ``metadata.status`` / ``metadata.error_information`` /
+    ``metadata.internal_call_origin`` as object fields. Property access on a string
+    is silently undefined, so failure rows looked like successes (#29674). Every
+    ``query_raw`` reader of this column goes through here so a new one cannot
+    reintroduce that.
+    """
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        md = row.get("metadata")
+        if isinstance(md, str):
+            try:
+                row["metadata"] = json.loads(md)
+            except (ValueError, TypeError):
+                row["metadata"] = {}
 
 
 def _cold_storage_object_key_from_metadata(
@@ -3361,6 +3371,7 @@ async def ui_view_session_spend_logs(
             LIMIT $2 OFFSET $3
         """
         result = await prisma_client.db.query_raw(sql_query, session_id, page_size, skip, *scope_params)
+        _hydrate_spend_log_metadata(result)
 
         total_pages = (total_records + page_size - 1) // page_size
 

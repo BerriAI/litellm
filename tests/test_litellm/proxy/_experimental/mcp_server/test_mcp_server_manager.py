@@ -46,10 +46,13 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
+    LiteLLM_ObjectPermissionTable,
+    LitellmUserRoles,
     MCPApprovalStatus,
     MCPEnvVar,
     MCPEnvVarScope,
     MCPTransport,
+    UserAPIKeyAuth,
 )
 from litellm.types.mcp import MCPAuth, MCPAuthType
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
@@ -9718,3 +9721,75 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         assert result.isError is True
         assert "not found in registry" in result.content[0].text
+
+
+class TestToolAuthorizationIsNotConditionalOnLogging:
+    """`call_tool` used to run `pre_call_tool_check` — the only place tool-level
+    MCP entitlements are enforced — inside `if proxy_logging_obj:`, so a caller
+    reached with no logging object got no authorization decision at all. Both
+    production call sites pass the module-level `ProxyLogging` singleton, which
+    is never None, so this was not a live hole; the invariant being restored is
+    that an authorization decision cannot be skipped by an absent logger.
+    """
+
+    @staticmethod
+    def _manager_with_scoped_server() -> tuple[MCPServerManager, UserAPIKeyAuth]:
+        manager = MCPServerManager()
+        manager.registry["srv-gated"] = MCPServer(
+            server_id="srv-gated",
+            name="gated_server",
+            server_name="gated_server",
+            alias="gated_server",
+            url="http://127.0.0.1:1/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        for tool_name in ("read_only_tool", "delete_everything"):
+            manager.tool_name_to_mcp_server_name_mapping[tool_name] = "gated_server"
+        user = UserAPIKeyAuth(
+            api_key="sk-caller",
+            user_id="alice",
+            user_role=LitellmUserRoles.INTERNAL_USER.value,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-gated",
+                mcp_servers=["srv-gated"],
+                mcp_tool_permissions={"srv-gated": ["read_only_tool"]},
+            ),
+        )
+        return manager, user
+
+    @pytest.mark.asyncio
+    async def test_unentitled_tool_refused_without_proxy_logging_obj(self):
+        manager, user = self._manager_with_scoped_server()
+        upstream = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+
+        with patch.object(manager, "_call_regular_mcp_tool", new=upstream):
+            with pytest.raises(HTTPException) as exc:
+                await manager.call_tool(
+                    server_name="gated_server",
+                    name="delete_everything",
+                    arguments={},
+                    user_api_key_auth=user,
+                    proxy_logging_obj=None,
+                )
+
+        assert exc.value.status_code == 403
+        upstream.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_entitled_tool_still_dispatches_without_proxy_logging_obj(self):
+        """The gate must refuse only what the entitlement excludes; an allowed
+        tool still reaches the upstream when there is no logging object."""
+        manager, user = self._manager_with_scoped_server()
+        upstream = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+
+        with patch.object(manager, "_call_regular_mcp_tool", new=upstream):
+            await manager.call_tool(
+                server_name="gated_server",
+                name="read_only_tool",
+                arguments={},
+                user_api_key_auth=user,
+                proxy_logging_obj=None,
+            )
+
+        upstream.assert_awaited_once()
