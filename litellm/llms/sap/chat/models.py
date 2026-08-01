@@ -1,32 +1,24 @@
 from typing import Union, Literal, Optional
+from collections.abc import Sequence
 from enum import Enum
 import warnings
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-def validate_different_content(v: Union[str, dict, list]) -> str:
-    if v in ((), {}, []):
-        return ""
-    elif isinstance(v, dict) and "text" in v:
-        return v["text"]
-    elif isinstance(v, list):
-        new_v = []
-        for item in v:
-            if isinstance(item, dict) and "text" in item:
-                if item["text"]:
-                    new_v.append(item["text"])
-            elif isinstance(item, str):
-                new_v.append(item)
-        return "\n".join(new_v)
-    elif isinstance(v, str):
-        return v
-    raise ValueError("Content must be a string")
+class CacheControl(BaseModel):
+    """
+    Prompt caching breakpoint, as accepted by SAP orchestration for Anthropic Claude and Amazon Nova models.
+    """
+
+    type_: Literal["ephemeral"] = Field(default="ephemeral", alias="type")
+    ttl: Literal["5m", "1h"] | None = None
 
 
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
+    cache_control: CacheControl | None = None
 
 
 class ImageURLContent(BaseModel):
@@ -37,6 +29,45 @@ class ImageURLContent(BaseModel):
 class ImageContent(BaseModel):
     type_: Literal["image_url"] = Field(default="image_url", alias="type")
     image_url: ImageURLContent
+    cache_control: CacheControl | None = None
+
+
+def _to_text_content(item: object) -> TextContent | None:
+    if isinstance(item, str):
+        return TextContent(type="text", text=item)
+    if isinstance(item, dict) and item.get("text"):
+        return TextContent.model_validate({**item, "type": "text"})
+    return None
+
+
+def _to_content(items: tuple[object, ...]) -> str | Sequence[TextContent]:
+    blocks = tuple(block for block in map(_to_text_content, items) if block is not None)
+    if any(block.cache_control is not None for block in blocks):
+        return blocks
+    return "\n".join(block.text for block in blocks)
+
+
+def validate_different_content(v: object) -> str | Sequence[TextContent]:
+    """
+    Flatten content blocks into a plain string, unless a block carries a prompt caching breakpoint,
+    in which case the blocks are kept so that `cache_control` reaches the model.
+    """
+    if v in ((), {}, []):
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict) and "text" in v:
+        return _to_content((v,))
+    if isinstance(v, (list, tuple)):
+        return _to_content(tuple(v))
+    raise ValueError("Content must be a string")
+
+
+def flatten_content_to_text(v: object) -> str:
+    content = validate_different_content(v)
+    if isinstance(content, str):
+        return content
+    return "\n".join(block.text for block in content)
 
 
 class FunctionObj(BaseModel):
@@ -70,10 +101,14 @@ class FunctionTool(BaseModel):
 class ChatCompletionTool(BaseModel):
     type_: Literal["function"] = Field(default="function", alias="type")
     function: FunctionTool
+    cache_control: CacheControl | None = None
 
     def model_dump(self, **kwargs) -> dict:
         kwargs["exclude_unset"] = False
-        return super().model_dump(**kwargs)
+        dumped = super().model_dump(**kwargs)
+        if self.cache_control is None:
+            return {key: value for key, value in dumped.items() if key != "cache_control"}
+        return {**dumped, "cache_control": self.cache_control.model_dump(by_alias=True, exclude_none=True)}
 
 
 class MessageToolCall(BaseModel):
@@ -88,7 +123,7 @@ class SAPMessage(BaseModel):
     """
 
     role: Literal["system", "developer"] = "system"
-    content: str
+    content: str | Sequence[TextContent]
 
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
@@ -104,13 +139,13 @@ class SAPAssistantMessage(BaseModel):
     refusal: str = ""
     tool_calls: list[MessageToolCall] = []
 
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    _content_validator = field_validator("content", mode="before")(flatten_content_to_text)
 
 
 class SAPToolChatMessage(BaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
-    content: str
+    content: str | Sequence[TextContent]
 
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
