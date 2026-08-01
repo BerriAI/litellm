@@ -147,17 +147,19 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
 
 def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text():
     """
-    Test that tool messages with text content are correctly transformed to Responses API format.
+    Test that tool messages with plain string content pass through unchanged.
 
-    This is a regression test for the issue where tool results were being transformed
-    with type='output_text' instead of type='input_text', which caused OpenAI's Responses API
-    to reject the request with "Invalid value: 'output_text'".
+    The Responses API spec defines function_call_output.output as a plain string, and
+    some strict OpenAI-compatible backends reject the list form for simple text output.
+    This is a regression test for #34978: string tool output must stay a string rather
+    than being wrapped in a list of input_text items. It also guards against the earlier
+    #17507 regression where the list form used the invalid type='output_text'.
 
     Chat Completion format:
         {"role": "tool", "tool_call_id": "call_abc123", "content": "15 degrees"}
 
-    Responses API format should use input_text, not output_text:
-        {"type": "function_call_output", "call_id": "call_abc123", "output": [{"type": "input_text", "text": "15 degrees"}]}
+    Responses API format keeps output as a plain string:
+        {"type": "function_call_output", "call_id": "call_abc123", "output": "15 degrees"}
     """
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -206,23 +208,49 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
     ), "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
-    # Check that the output is correctly transformed to use input_text, not output_text
+    # Plain string tool output must pass through unchanged, matching the Responses API spec
     output = function_call_output["output"]
-    assert isinstance(output, list), "output should be a list"
-    assert len(output) == 1, "output should have one item"
-
-    text_item = output[0]
-    # Should be transformed to use input_text for tool results in Responses API format
-    assert (
-        text_item["type"] == "input_text"
-    ), f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
-    assert (
-        text_item["text"] == "15 degrees"
-    ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
+    assert isinstance(output, str), f"output should be a plain string, got {type(output)}"
+    assert output == "15 degrees", f"Expected '15 degrees', got '{output}'"
 
     print(
-        "✓ Tool result with text correctly transformed to use input_text for Responses API format"
+        "✓ Tool result with text passed through as a plain string for Responses API format"
     )
+
+
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_none_content():
+    """
+    Regression test for #34978: a tool message with None content produces an empty
+    string output, not an empty list, keeping function_call_output.output a plain string
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {"name": "noop", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_abc123", "content": None},
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    function_call_output = next(
+        item for item in response if item.get("type") == "function_call_output"
+    )
+    assert function_call_output["call_id"] == "call_abc123"
+    assert function_call_output["output"] == ""
 
 
 def test_openai_responses_chunk_parser_reasoning_summary():
@@ -1292,17 +1320,14 @@ def test_text_plus_tool_calls_sequence():
 # =============================================================================
 
 
-def test_tool_message_output_uses_input_text_not_output_text():
+def test_tool_message_string_output_passes_through_unchanged():
     """
-    Test that tool message content uses input_text type, not output_text.
+    Test that plain string tool message content passes through as a plain string.
 
-    This is a regression test for a bug where tool results were transformed to:
-        {"type": "function_call_output", "output": [{"type": "output_text", "text": "..."}]}
-
-    But the Responses API expects input_text for tool results:
-        {"type": "function_call_output", "output": [{"type": "input_text", "text": "..."}]}
-
-    The incorrect format caused OpenAI to reject with:
+    The Responses API spec defines function_call_output.output as a plain string, so
+    string tool results must not be wrapped in a list (see #34978). This also guards
+    against the earlier bug where the list form used the invalid type='output_text',
+    which OpenAI rejected with:
         "Invalid value: 'output_text'. Supported values are: 'input_text', 'input_image', and 'input_file'."
     """
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -1346,16 +1371,12 @@ def test_tool_message_output_uses_input_text_not_output_text():
     assert function_call_output is not None, "function_call_output not found"
     assert function_call_output["call_id"] == "call_abc123"
 
-    # The output should be a list with input_text type
+    # The output should stay a plain string, matching the Responses API spec
     output = function_call_output["output"]
-    assert isinstance(output, list), f"output should be a list, got {type(output)}"
-    assert len(output) == 1
-    assert (
-        output[0]["type"] == "input_text"
-    ), f"Expected input_text, got {output[0].get('type')}"
-    assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
+    assert isinstance(output, str), f"output should be a plain string, got {type(output)}"
+    assert output == '{"temperature": 15, "condition": "sunny"}'
 
-    print("✓ Tool message output correctly uses input_text type")
+    print("✓ Tool message string output passes through unchanged")
 
 
 def test_multiple_tool_calls_in_single_choice():

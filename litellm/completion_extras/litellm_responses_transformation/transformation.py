@@ -242,24 +242,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         }
                     )
             elif role == "tool":
-                # Convert tool message to function call output format
-                # The Responses API expects 'output' to be a list with input_text/input_image types
-                # Using list format for consistency across text and multimodal content
-                tool_output: List[Dict[str, Any]]
+                tool_output: Union[str, List[Dict[str, Any]]]
                 if content is None:
-                    tool_output = []
+                    tool_output = ""
                 elif isinstance(content, str):
-                    # Convert string to list with input_text
-                    tool_output = [{"type": "input_text", "text": content}]
+                    tool_output = content
                 elif isinstance(content, list):
-                    # Transform list content to Responses API format
                     tool_output = self._convert_content_to_responses_format(
                         content,
                         "user",  # Use "user" role to get input_* types
                     )
                 else:
-                    # Fallback: convert unexpected types to input_text
-                    tool_output = [{"type": "input_text", "text": str(content)}]
+                    tool_output = str(content)
                 input_items.append(
                     {
                         "type": "function_call_output",
