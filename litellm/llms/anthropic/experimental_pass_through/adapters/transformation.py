@@ -755,6 +755,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "input_schema",
             "description",
             "cache_control",
+            "strict",
             "type",
         ]
 
@@ -784,6 +785,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 function_chunk["parameters"] = tool["input_schema"]  # type: ignore
             if "description" in tool:
                 function_chunk["description"] = tool["description"]  # type: ignore
+            if "strict" in tool:
+                function_chunk["strict"] = tool["strict"]
 
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs

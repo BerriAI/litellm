@@ -47,6 +47,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     name: Required[str]
     description: str
     input_schema: Optional[AnthropicInputSchema]
+    strict: bool
     type: Literal["custom"]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     defer_loading: bool
