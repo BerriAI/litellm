@@ -52,15 +52,28 @@ class TestExtractRequestToolNames:
             "run_sql",
         ]
 
+    def test_openai_chat_builtin_web_search_tools(self):
+        data = {"tools": [{"type": "web_search"}, {"type": "web_search_premium"}]}
+        assert extract_request_tool_names("/v1/chat/completions", data) == [
+            "web_search",
+            "web_search_premium",
+        ]
+
+    def test_openai_chat_web_search_options_shorthand(self):
+        data = {"web_search_options": {}}
+        assert extract_request_tool_names("/v1/chat/completions", data) == ["web_search"]
+
+    def test_openai_chat_web_search_options_premium(self):
+        data = {"web_search_options": {"premium": True}}
+        assert extract_request_tool_names("/v1/chat/completions", data) == ["web_search_premium"]
+
     def test_openai_responses_function_tools(self):
         data = {
             "tools": [
                 {"type": "function", "name": "get_current_weather", "description": "x"},
             ]
         }
-        assert extract_request_tool_names("/v1/responses", data) == [
-            "get_current_weather"
-        ]
+        assert extract_request_tool_names("/v1/responses", data) == ["get_current_weather"]
 
     def test_openai_responses_mcp_tools(self):
         data = {
@@ -103,9 +116,7 @@ class TestExtractRequestToolNames:
                 },
             ]
         }
-        assert extract_request_tool_names("/generate_content", data) == [
-            "schedule_meeting"
-        ]
+        assert extract_request_tool_names("/generate_content", data) == ["schedule_meeting"]
 
     def test_mcp_call_tool_name(self):
         data = {"name": "my_tool", "arguments": {}}
@@ -172,6 +183,69 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"tools": [{"type": "web_search"}]},
+            {"tools": [{"type": "web_search_premium"}]},
+            {"web_search_options": {}},
+        ],
+    )
+    async def test_builtin_web_search_blocked_when_not_allowed(self, body):
+        """Regression: built-in web search must not bypass the tool allowlist."""
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "web_search" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_non_dict_tool_entries_skipped_without_masking_real_tools(self):
+        """Malformed tool entries must not crash extraction or shadow the real
+        tools that still need allowlist checking."""
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        body = {"tools": ["junk", 42, {"type": "web_search"}]}
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "web_search" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_builtin_web_search_allowed_when_listed(self):
+        token = _token(metadata={"allowed_tools": ["web_search"]})
+        await check_tools_allowlist(
+            request_body={"web_search_options": {}},
+            valid_token=token,
+            team_object=None,
+            route="/v1/chat/completions",
+        )
+
+    @pytest.mark.asyncio
+    async def test_premium_web_search_not_granted_by_standard_allowlist(self):
+        """Regression: allowing standard web_search must not grant the premium connector
+        via web_search_options={"premium": True}."""
+        token = _token(metadata={"allowed_tools": ["web_search"]})
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body={"web_search_options": {"premium": True}},
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "web_search_premium" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):

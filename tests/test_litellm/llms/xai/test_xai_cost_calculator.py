@@ -424,6 +424,26 @@ class TestXAICostCalculator:
         # Expected cost: No web search data = $0.0
         assert web_search_cost == 0.0
 
+    def test_get_cost_for_web_search_request_dispatches_for_xai(self):
+        """The shared dispatcher must route provider 'xai' to this cost calculator;
+        without the xai branch the surcharge silently becomes None."""
+        from litellm.llms import get_cost_for_web_search_request
+
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                web_search_requests=3,
+            ),
+        )
+
+        cost = get_cost_for_web_search_request("xai", usage=usage, model_info={})
+
+        assert cost is not None
+        assert math.isclose(cost, 0.075, rel_tol=1e-10)
+
     def test_grok_4_20_beta_reasoning_cost_calculation(self):
         """Test cost calculation for grok-4.20-beta-0309-reasoning model."""
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
