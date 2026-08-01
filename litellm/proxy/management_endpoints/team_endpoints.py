@@ -22,7 +22,6 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
-    Sequence,
     Tuple,
     TypeVar,
     Union,
