@@ -5035,17 +5035,20 @@ async def test_atomic_check_with_zero_increment_still_enforces_token_limit():
     await handler.async_increment_tokens_with_ttl_preservation(
         pipeline_operations=[
             RedisPipelineIncrementOperation(
-                key=counter_key, increment_value=150, ttl=60
+                key=counter_key, increment_value=100, ttl=60
             )
         ],
     )
 
-    over_limit = await handler.atomic_check_and_increment_by_n(
+    at_limit = await handler.atomic_check_and_increment_by_n(
         descriptors=[descriptor],
         increments=[zero_token_increment],
     )
-    assert over_limit["overall_code"] == "OVER_LIMIT"
-    blocked = over_limit["statuses"][0]
+    assert at_limit["overall_code"] == "OVER_LIMIT", (
+        "a check-only pass must block once recorded usage reaches the limit, "
+        "matching RPM's >= semantics; > would leak one extra request"
+    )
+    blocked = at_limit["statuses"][0]
     assert blocked["rate_limit_type"] == "tokens"
     assert blocked["current_limit"] == 100
 
@@ -5053,7 +5056,7 @@ async def test_atomic_check_with_zero_increment_still_enforces_token_limit():
         await handler.internal_usage_cache.async_get_cache(
             key=counter_key, litellm_parent_otel_span=None, local_only=True
         )
-        == 150
+        == 100
     )
 
     negative_increment: Dict[str, int] = {"requests": -1, "tokens": -50}
@@ -5067,5 +5070,33 @@ async def test_atomic_check_with_zero_increment_still_enforces_token_limit():
         await handler.internal_usage_cache.async_get_cache(
             key=counter_key, litellm_parent_otel_span=None, local_only=True
         )
-        == 150
+        == 100
     )
+
+
+@pytest.mark.asyncio
+async def test_reserve_tpm_tokens_never_evaluates_the_requests_dimension():
+    """The reservation path deliberately leaves RPM to the separate
+    should_rate_limit pass. Now that zero-increment counters are checked
+    instead of skipped, reserve_tpm_tokens must strip requests_per_unit from
+    its descriptors or an exhausted RPM budget would double-enforce here."""
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitDescriptor
+
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    descriptor = RateLimitDescriptor(
+        key="api_key",
+        value="reserve-test-key",
+        rate_limit={"requests_per_unit": 0, "tokens_per_unit": 1000, "window_size": 60},
+    )
+
+    response = await handler.reserve_tpm_tokens(
+        descriptors=[descriptor],
+        estimated_tokens=10,
+    )
+    assert response["overall_code"] == "OK", (
+        "an exhausted requests budget (limit 0) must not block the token "
+        f"reservation pass, got: {response}"
+    )
+    assert [s["rate_limit_type"] for s in response["statuses"]] == ["tokens"]
