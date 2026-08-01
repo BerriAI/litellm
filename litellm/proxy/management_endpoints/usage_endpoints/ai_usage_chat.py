@@ -5,16 +5,18 @@ usage/spend data by querying the aggregated daily activity endpoints.
 
 import json
 from datetime import date
-from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, cast
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Union, cast, overload
 
 from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.utils import ModelResponse
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -494,16 +496,60 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
+@overload
+async def _acompletion(
+    model: str,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    stream: Literal[True],
+    tools: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> CustomStreamWrapper: ...
+
+
+@overload
+async def _acompletion(
+    model: str,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    stream: Literal[False] = False,
+    tools: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> ModelResponse: ...
+
+
+async def _acompletion(
+    model: str,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    stream: bool = False,
+    tools: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> Union[ModelResponse, CustomStreamWrapper]:
+    """
+    Route through the proxy Router when `model` is a configured model group.
+
+    Bare `litellm.acompletion` only understands provider-prefixed model strings, so the
+    virtual model names the dashboard offers would fail with "LLM Provider NOT provided".
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    completion = (
+        llm_router.acompletion
+        if llm_router is not None and llm_router.get_model_list(model_name=model)
+        else litellm.acompletion
+    )
+    return await completion(
+        model=model,
+        messages=messages,
+        tools=tools,
+        stream=stream,
+        temperature=USAGE_AI_TEMPERATURE,
+    )
+
+
 async def _stream_final_response(model: str, chat_messages: List[Dict[str, Any]]) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response = await litellm.acompletion(
-        model=model,
-        messages=chat_messages,
-        stream=True,
-        temperature=USAGE_AI_TEMPERATURE,
-    )
+    response = await _acompletion(model, chat_messages, stream=True)
     async for chunk in response:
         delta = chunk.choices[0].delta.content
         if delta:
@@ -527,13 +573,8 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools = get_tools_for_role(is_admin)
-        response = await litellm.acompletion(
-            model=resolved_model,
-            messages=chat_messages,
-            tools=tools,
-            temperature=USAGE_AI_TEMPERATURE,
-        )
-        choice = response.choices[0]  # type: ignore
+        response = await _acompletion(resolved_model, chat_messages, tools=tools)
+        choice = response.choices[0]
 
         if not choice.message.tool_calls:
             if choice.message.content:
