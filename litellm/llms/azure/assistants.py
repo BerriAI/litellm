@@ -208,13 +208,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
             **message_data,  # type: ignore
         )
 
-        response_obj: Optional[OpenAIMessage] = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
-        else:
-            response_obj = OpenAIMessage(**thread_message.dict())
-        return response_obj
+        return OpenAIMessage.model_validate(thread_message.model_dump())
 
     # fmt: off
 
@@ -297,13 +293,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
             **message_data,  # type: ignore
         )
 
-        response_obj: Optional[OpenAIMessage] = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
-        else:
-            response_obj = OpenAIMessage(**thread_message.dict())
-        return response_obj
+        return OpenAIMessage.model_validate(thread_message.model_dump())
 
     async def async_get_messages(
         self,
@@ -442,7 +434,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         message_thread = await openai_client.beta.threads.create(**data)  # type: ignore
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.model_dump())
 
     # fmt: off
 
@@ -538,7 +530,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         message_thread = azure_openai_client.beta.threads.create(**data)  # type: ignore
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.model_dump())
 
     async def async_get_thread(
         self,
@@ -565,7 +557,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         response = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.model_dump())
 
     # fmt: off
 
@@ -641,7 +633,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         response = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.model_dump())
 
     # def delete_thread(self):
     #     pass

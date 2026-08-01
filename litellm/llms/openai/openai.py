@@ -2680,7 +2680,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         message_thread = await openai_client.beta.threads.create(**data)  # type: ignore
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.model_dump())
 
     # fmt: off
 
@@ -2766,7 +2766,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         message_thread = openai_client.beta.threads.create(**data)  # type: ignore
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.model_dump())
 
     async def async_get_thread(
         self,
@@ -2789,7 +2789,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         response = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.model_dump())
 
     # fmt: off
 
@@ -2855,7 +2855,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         response = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.model_dump())
 
     def delete_thread(self):
         pass

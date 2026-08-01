@@ -3132,12 +3132,12 @@ class SSOAuthenticationHandler:
             _team_request = deepcopy(default_team_params)
             _team_request["team_id"] = litellm_team_id
             _team_request["team_alias"] = litellm_team_name
-            team_request = NewTeamRequest(**_team_request)
+            team_request = NewTeamRequest.model_validate(_team_request)
         elif isinstance(litellm.default_team_params, DefaultTeamSSOParams):
             _default_team_params = deepcopy(litellm.default_team_params)
             _new_team_request = team_request.model_dump()
             _new_team_request.update(_default_team_params)
-            team_request = NewTeamRequest(**_new_team_request)
+            team_request = NewTeamRequest.model_validate(_new_team_request)
         return team_request
 
     @staticmethod
