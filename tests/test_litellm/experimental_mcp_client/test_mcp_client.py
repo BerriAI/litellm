@@ -409,6 +409,53 @@ class TestMCPClientInstructionsCapture:
 
 
 # ---------------------------------------------------------------------------
+# MCP list result tolerance
+# ---------------------------------------------------------------------------
+
+
+class TestMCPListOperations:
+    """MCP list operations should tolerate omitted empty list fields."""
+
+    async def _run_list_operation(self, method_name, result_type):
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        session = AsyncMock()
+
+        async def send_request(_request, actual_result_type):
+            assert actual_result_type is result_type
+            return actual_result_type.model_validate({})
+
+        session.send_request = AsyncMock(side_effect=send_request)
+
+        async def run_with_session(operation):
+            return await operation(session)
+
+        client.run_with_session = AsyncMock(side_effect=run_with_session)
+
+        result = await getattr(client, method_name)()
+
+        assert result == []
+        session.send_request.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_list_tools_tolerates_missing_tools_field(self):
+        await self._run_list_operation(
+            "list_tools", mcp_client_module._LenientListToolsResult
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_resources_tolerates_missing_resources_field(self):
+        await self._run_list_operation(
+            "list_resources", mcp_client_module._LenientListResourcesResult
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_prompts_tolerates_missing_prompts_field(self):
+        await self._run_list_operation(
+            "list_prompts", mcp_client_module._LenientListPromptsResult
+        )
+
+
+# ---------------------------------------------------------------------------
 # Transport error surfacing
 # ---------------------------------------------------------------------------
 

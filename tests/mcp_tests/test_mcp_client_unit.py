@@ -179,14 +179,41 @@ class TestMCPClientUnitTests:
         ]
         mock_result = MagicMock()
         mock_result.tools = mock_tools
-        mock_session_instance.list_tools.return_value = mock_result
+
+        async def send_request(_request, result_type):
+            assert result_type is mcp_client_module._LenientListToolsResult
+            return mock_result
+
+        mock_session_instance.send_request = AsyncMock(side_effect=send_request)
 
         client = MCPClient("http://example.com")
         result = await client.list_tools()
 
         assert result == mock_tools
         mock_session_instance.initialize.assert_called_once()
-        mock_session_instance.list_tools.assert_called_once()
+        mock_session_instance.send_request.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_list_tools_tolerates_missing_tools_field(self):
+        """Test listing tools when the upstream response omits empty tools."""
+        client = MCPClient("http://example.com")
+        mock_session = AsyncMock()
+
+        async def send_request(_request, result_type):
+            assert result_type is mcp_client_module._LenientListToolsResult
+            return result_type.model_validate({})
+
+        mock_session.send_request = AsyncMock(side_effect=send_request)
+
+        async def run_with_session(operation):
+            return await operation(mock_session)
+
+        client.run_with_session = AsyncMock(side_effect=run_with_session)
+
+        result = await client.list_tools()
+
+        assert result == []
+        mock_session.send_request.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")

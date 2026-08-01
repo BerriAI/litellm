@@ -18,6 +18,7 @@ from typing import (
     Union,
 )
 import httpx
+import mcp.types as types
 from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
@@ -39,7 +40,7 @@ from mcp.types import (
     TextContent,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl
+from pydantic import AnyUrl, Field
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
@@ -75,6 +76,18 @@ def _first_non_cancelled_cause(exc: BaseException) -> Optional[BaseException]:
         elif not isinstance(current, asyncio.CancelledError):
             return current
     return None
+
+
+class _LenientListPromptsResult(types.ListPromptsResult):
+    prompts: List[Prompt] = Field(default_factory=list)
+
+
+class _LenientListToolsResult(types.ListToolsResult):
+    tools: List[MCPTool] = Field(default_factory=list)
+
+
+class _LenientListResourcesResult(types.ListResourcesResult):
+    resources: List[Resource] = Field(default_factory=list)
 
 
 TSessionResult = TypeVar("TSessionResult")
@@ -498,7 +511,10 @@ class MCPClient:
         verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
 
         async def _list_tools_operation(session: ClientSession):
-            return await session.list_tools()
+            return await session.send_request(
+                types.ClientRequest(types.ListToolsRequest(params=None)),
+                _LenientListToolsResult,
+            )
 
         try:
             result = await self.run_with_session(_list_tools_operation, quiet_on_error=raise_on_error)
@@ -627,7 +643,10 @@ class MCPClient:
         verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
 
         async def _list_prompts_operation(session: ClientSession):
-            return await session.list_prompts()
+            return await session.send_request(
+                types.ClientRequest(types.ListPromptsRequest(params=None)),
+                _LenientListPromptsResult,
+            )
 
         try:
             result = await self.run_with_session(_list_prompts_operation)
@@ -704,7 +723,10 @@ class MCPClient:
         verbose_logger.debug(f"MCP client listing resources from {self.server_url or 'stdio'}")
 
         async def _list_resources_operation(session: ClientSession):
-            return await session.list_resources()
+            return await session.send_request(
+                types.ClientRequest(types.ListResourcesRequest(params=None)),
+                _LenientListResourcesResult,
+            )
 
         try:
             result = await self.run_with_session(_list_resources_operation)
