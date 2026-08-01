@@ -3,8 +3,11 @@ import { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export const usd = (value: number): string => {
-  const decimals = value > 0 && value < 1 ? 4 : 2;
-  return `$${formatNumberWithCommas(value, decimals)}`;
+  // Sized and signed off the magnitude: a driver can come out negative, and a small
+  // loss rendered at two decimals would read as "$-0.00"
+  const magnitude = Math.abs(value);
+  const decimals = magnitude > 0 && magnitude < 1 ? 4 : 2;
+  return `${value < 0 ? "-" : ""}$${formatNumberWithCommas(magnitude, decimals)}`;
 };
 
 export const pct = (ratio: number): string => `${formatNumberWithCommas(ratio * 100, 1)}%`;

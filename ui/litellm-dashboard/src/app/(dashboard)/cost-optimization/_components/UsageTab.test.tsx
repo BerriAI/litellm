@@ -228,6 +228,26 @@ describe("UsageTab", () => {
     expect(slices).toEqual([{ driver: "Compression", usd: expect.closeTo(0.04, 5) }]);
   });
 
+  it("subtracts a losing auto-router route from the total and keeps it out of the donut", () => {
+    // Switching models leaves the new one with a cold cache, so a route can cost more
+    // than the baseline would have. A negative slice is meaningless in a donut, but the
+    // total has to keep the loss or the page can only ever report good news.
+    const { getByText, getByTestId } = renderWith([
+      day("2026-07-12", {
+        compression_savings_spend: 0.1,
+        prompt_caching_savings_spend: 0.02,
+        autorouter_savings_spend: -0.05,
+      }),
+    ]);
+
+    expect(getByText("$0.0700")).toBeInTheDocument();
+    expect(getByText("-$0.0500")).toBeInTheDocument();
+
+    const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
+    expect(slices.map((d: { driver: string }) => d.driver)).toEqual(["Compression", "Prompt caching"]);
+    expect(getByTestId("donut-chart").getAttribute("data-label")).toBe("$0.1200");
+  });
+
   it("carries auto-router savings into the summary card, donut slice, and cumulative series", () => {
     const { getByText, getByTestId } = renderWith([
       day("2026-07-12", {

@@ -10,6 +10,7 @@ import {
   localIsoDay,
   toCumulative,
   topToolsBySpend,
+  usd,
   withStartAnchor,
 } from "./costOptimizationUtils";
 
@@ -314,5 +315,21 @@ describe("formatRangeLabel", () => {
   it("is empty until both ends are picked", () => {
     expect(formatRangeLabel(undefined, new Date(2026, 6, 23))).toBe("");
     expect(formatRangeLabel(new Date(2026, 6, 23), undefined)).toBe("");
+  });
+});
+
+describe("usd", () => {
+  it("keeps four decimals for sub-dollar amounts so small savings stay visible", () => {
+    expect(usd(0.05)).toBe("$0.0500");
+    expect(usd(1.5)).toBe("$1.50");
+    expect(usd(0)).toBe("$0.00");
+  });
+
+  it("signs a loss ahead of the symbol and keeps its precision", () => {
+    // A driver can be negative once a model switch is charged for its cold cache.
+    // Sizing decimals off the raw value would render this as "$-0.00".
+    expect(usd(-0.05)).toBe("-$0.0500");
+    expect(usd(-0.0004)).toBe("-$0.0004");
+    expect(usd(-12.4)).toBe("-$12.40");
   });
 });

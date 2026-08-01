@@ -13,7 +13,7 @@ from typing import NamedTuple
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import Usage
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 
 class SavingsSpend(NamedTuple):
@@ -61,6 +61,40 @@ def _cost_of_usage(model: str, custom_llm_provider: str | None, usage: Usage) ->
     return prompt_cost + completion_cost
 
 
+def _cache_token_split(usage: Usage) -> tuple[int, int]:
+    """``(cache_read_tokens, cache_creation_tokens)`` for a request."""
+    details = usage.prompt_tokens_details
+    if details is None:
+        return 0, 0
+    read = getattr(details, "cached_tokens", 0) or 0
+    created = (getattr(details, "cache_creation_tokens", 0) or 0) or (getattr(details, "cache_write_tokens", 0) or 0)
+    return int(read), int(created)
+
+
+def _baseline_usage(usage: Usage) -> Usage:
+    """The same request as a single-model baseline would have met it.
+
+    Staying on one model, the cache is written once and read from thereafter, so the
+    tokens the router forced a cold model to re-write would already have been cached.
+    A request that read nothing from cache is a genuine cold start that the baseline
+    would have paid to write too, so it is left alone.
+    """
+    cache_read, cache_creation = _cache_token_split(usage)
+    if cache_read <= 0 or cache_creation <= 0:
+        return usage
+    return Usage(
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        completion_tokens_details=usage.completion_tokens_details,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cache_read + cache_creation,
+            cache_creation_tokens=0,
+            text_tokens=max(usage.prompt_tokens - cache_read - cache_creation, 0),
+        ),
+    )
+
+
 def compute_autorouter_savings(
     baseline_model: str | None,
     selected_model: str | None,
@@ -68,19 +102,20 @@ def compute_autorouter_savings(
     selected_provider: str | None,
     usage: Usage,
 ) -> float:
-    """Net dollars saved by serving this request on ``selected_model`` rather than ``baseline_model``.
+    """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
 
-    Both arms price the same usage, so each token is charged once in its own
-    dimension; ``prompt_tokens`` already includes the cache tokens. Zero when the
-    model is unchanged or unpriced, and floored at zero on an escalation.
+    Signed on purpose. Switching models leaves the new one with a cold cache, so the
+    request pays a cache-creation charge that staying on one model would not have
+    incurred; when that charge outweighs the cheaper rates, routing lost money and the
+    dashboard has to be able to say so. Zero when the model is unchanged or unpriced.
     """
     if not baseline_model or not selected_model or baseline_model == selected_model:
         return 0.0
-    baseline_cost = _cost_of_usage(baseline_model, baseline_provider, usage)
+    baseline_cost = _cost_of_usage(baseline_model, baseline_provider, _baseline_usage(usage))
     selected_cost = _cost_of_usage(selected_model, selected_provider, usage)
     if baseline_cost is None or selected_cost is None:
         return 0.0
-    return max(baseline_cost - selected_cost, 0.0)
+    return baseline_cost - selected_cost
 
 
 def _usage_from_spend_log(usage_object: dict | None) -> Usage | None:

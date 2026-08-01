@@ -116,107 +116,101 @@ def test_negative_token_counts_clamp_to_zero():
     assert result.prompt_caching == 0.0
 
 
-def test_autorouter_savings_does_not_double_charge_cache_tokens():
-    """`prompt_tokens` already includes cache-read and cache-creation tokens.
-
-    Charging those tokens again at the full input rate, or subtracting a separate
-    cache-write penalty on top of them, prices the same tokens twice. Both arms go
-    through litellm's cost engine on the identical usage, so each token is priced
-    exactly once, in its own dimension.
-    """
-    usage_object = _cached_usage_object()
-    result = compute_autorouter_savings(
-        baseline_model="claude-opus-5",
-        selected_model="claude-haiku-4-5",
-        baseline_provider="anthropic",
-        selected_provider="anthropic",
-        usage=Usage(**usage_object),
+def _usage(fresh: int, cached: int, written: int, out: int) -> Usage:
+    """Usage as the spend log records it; `prompt_tokens` is the inclusive total."""
+    return Usage(
+        prompt_tokens=fresh + cached + written,
+        completion_tokens=out,
+        total_tokens=fresh + cached + written + out,
+        prompt_tokens_details={"cached_tokens": cached, "cache_creation_tokens": written, "text_tokens": fresh},
+        cache_read_input_tokens=cached,
+        cache_creation_input_tokens=written,
     )
 
-    expected = _cost_on("claude-opus-5", usage_object) - _cost_on("claude-haiku-4-5", usage_object)
-    assert result == pytest.approx(expected)
+
+def _savings(baseline: str, selected: str, usage: Usage) -> float:
+    return compute_autorouter_savings(
+        baseline_model=baseline,
+        selected_model=selected,
+        baseline_provider="anthropic",
+        selected_provider="anthropic",
+        usage=usage,
+    )
+
+
+def test_switching_models_mid_conversation_charges_the_cold_cache_write():
+    """Staying on one model writes the cache once and reads it thereafter. Switching
+    leaves the new model cold, so it pays to write the whole prompt again; when that
+    charge outweighs the cheaper rates the route lost money and must report a loss.
+
+    Pricing the baseline as if it too re-wrote the cache credits a charge it never
+    paid, which is how a losing switch used to read as the largest saving on the page.
+    """
+    usage = _usage(fresh=3, cached=500, written=12304, out=500)
+    result = _savings("claude-sonnet-5", "claude-haiku-4-5", usage)
+
+    sonnet = litellm.get_model_info("claude-sonnet-5", "anthropic")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    warm_baseline = (
+        3 * sonnet["input_cost_per_token"]
+        + 12804 * sonnet["cache_read_input_token_cost"]
+        + 500 * sonnet["output_cost_per_token"]
+    )
+    actually_paid = (
+        3 * haiku["input_cost_per_token"]
+        + 500 * haiku["cache_read_input_token_cost"]
+        + 12304 * haiku["cache_creation_input_token_cost"]
+        + 500 * haiku["output_cost_per_token"]
+    )
+    assert result == pytest.approx(warm_baseline - actually_paid)
+    assert result < 0, "a cache-thrashing switch must report a loss, not a saving"
+
+    phantom = 12304 * sonnet["cache_creation_input_token_cost"]
+    assert result != pytest.approx(warm_baseline + phantom - actually_paid)
+
+
+def test_cold_start_prices_a_cache_write_on_both_models():
+    """With nothing read from cache the request is a first turn: the baseline would
+    have paid to write too, so charging only the selected model would invent a loss."""
+    usage = _usage(fresh=3, cached=0, written=12304, out=500)
+    result = _savings("claude-sonnet-5", "claude-haiku-4-5", usage)
+
+    sonnet = litellm.get_model_info("claude-sonnet-5", "anthropic")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    assert result == pytest.approx(
+        (3 * sonnet["input_cost_per_token"] + 12304 * sonnet["cache_creation_input_token_cost"])
+        - (3 * haiku["input_cost_per_token"] + 12304 * haiku["cache_creation_input_token_cost"])
+        + 500 * (sonnet["output_cost_per_token"] - haiku["output_cost_per_token"])
+    )
     assert result > 0
 
-    # The double-counting formula this replaced: every prompt token (cache reads
-    # and cache writes included) charged at the flat input rate on both sides,
-    # minus a cache-write penalty already accounted for inside the selected arm.
-    base_in, base_out, base_write = _flat_rates("claude-opus-5")
-    sel_in, sel_out, sel_write = _flat_rates("claude-haiku-4-5")
-    prompt_tokens = usage_object["prompt_tokens"]
-    completion_tokens = usage_object["completion_tokens"]
-    double_counted = max(
-        (prompt_tokens * base_in + completion_tokens * base_out)
-        - (prompt_tokens * sel_in + completion_tokens * sel_out)
-        - usage_object["cache_creation_input_tokens"] * sel_write,
-        0.0,
-    )
-    assert result != pytest.approx(double_counted)
 
-
-def test_autorouter_savings_charges_cache_reads_at_the_cache_read_rate():
-    """A request served almost entirely from cache is cheap on both models, so the
-    routed saving must be far smaller than the same token count would suggest at
-    full input price."""
-    usage_object = {
-        "prompt_tokens": 10_000,
-        "completion_tokens": 0,
-        "total_tokens": 10_000,
-        "prompt_tokens_details": {"cached_tokens": 10_000, "text_tokens": 0},
-        "cache_read_input_tokens": 10_000,
-    }
-    result = compute_autorouter_savings(
-        baseline_model="claude-opus-5",
-        selected_model="claude-haiku-4-5",
-        baseline_provider="anthropic",
-        selected_provider="anthropic",
-        usage=Usage(**usage_object),
+def test_uncached_request_is_the_plain_rate_difference():
+    usage = _usage(fresh=2000, cached=0, written=0, out=500)
+    sonnet = litellm.get_model_info("claude-sonnet-5", "anthropic")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    assert _savings("claude-sonnet-5", "claude-haiku-4-5", usage) == pytest.approx(
+        2000 * (sonnet["input_cost_per_token"] - haiku["input_cost_per_token"])
+        + 500 * (sonnet["output_cost_per_token"] - haiku["output_cost_per_token"])
     )
 
-    base_read = litellm.get_model_info("claude-opus-5", "anthropic")["cache_read_input_token_cost"]
-    sel_read = litellm.get_model_info("claude-haiku-4-5", "anthropic")["cache_read_input_token_cost"]
-    assert result == pytest.approx(10_000 * (base_read - sel_read))
 
-    base_in = litellm.get_model_info("claude-opus-5", "anthropic")["input_cost_per_token"]
-    sel_in = litellm.get_model_info("claude-haiku-4-5", "anthropic")["input_cost_per_token"]
-    assert result < 10_000 * (base_in - sel_in)
+def test_escalation_reports_its_real_cost():
+    """Routing up to a pricier model is a real cost; hiding it behind a zero floor
+    would let the dashboard only ever move in one direction."""
+    usage = _usage(fresh=2000, cached=0, written=0, out=500)
+    assert _savings("claude-haiku-4-5", "claude-sonnet-5", usage) < 0
 
 
 def test_autorouter_savings_zero_when_model_unchanged():
-    result = compute_autorouter_savings(
-        baseline_model="claude-opus-5",
-        selected_model="claude-opus-5",
-        baseline_provider="anthropic",
-        selected_provider="anthropic",
-        usage=Usage(**_cached_usage_object()),
-    )
-    assert result == 0.0
-
-
-def test_autorouter_savings_floored_at_zero_on_escalation():
-    # Routing UP to a pricier model must never show as negative savings.
-    result = compute_autorouter_savings(
-        baseline_model="claude-haiku-4-5",
-        selected_model="claude-opus-5",
-        baseline_provider="anthropic",
-        selected_provider="anthropic",
-        usage=Usage(**_cached_usage_object()),
-    )
-    assert result == 0.0
+    assert _savings("claude-opus-5", "claude-opus-5", _usage(3, 500, 12304, 500)) == 0.0
 
 
 def test_autorouter_savings_unknown_baseline_fails_open_to_zero():
-    result = compute_autorouter_savings(
-        baseline_model="totally-made-up-model-xyz",
-        selected_model="claude-haiku-4-5",
-        baseline_provider="anthropic",
-        selected_provider="anthropic",
-        usage=Usage(**_cached_usage_object()),
-    )
-    assert result == 0.0
+    assert _savings("totally-made-up-model-xyz", "claude-haiku-4-5", _usage(3, 500, 12304, 500)) == 0.0
 
 
 def test_autorouter_savings_zero_without_baseline():
-    # No configured/produced baseline -> the driver contributes nothing.
     result = compute_savings_spend(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
@@ -228,36 +222,19 @@ def test_autorouter_savings_zero_without_baseline():
     assert result.autorouter == 0.0
 
 
-def test_compute_savings_spend_includes_autorouter_driver():
-    usage_object = _cached_usage_object()
+def test_compute_savings_spend_carries_a_losing_switch_through():
+    """The signed value must survive into SavingsSpend; clamping it here would put the
+    dashboard back to only ever showing gains."""
     result = compute_savings_spend(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
         cache_read_input_tokens=0,
-        baseline_model="claude-opus-5",
+        baseline_model="claude-sonnet-5",
         baseline_provider="anthropic",
-        usage_object=usage_object,
+        usage_object=_cached_usage_object(),
     )
-    expected = _cost_on("claude-opus-5", usage_object) - _cost_on("claude-haiku-4-5", usage_object)
-    assert result.autorouter == pytest.approx(expected)
-    assert result.autorouter > 0
-
-
-def test_compute_savings_spend_without_usage_object_keeps_other_drivers():
-    """A row with no recorded usage still prices compression and caching; only the
-    counterfactual driver needs the usage breakdown."""
-    input_cost, _ = _anthropic_costs("claude-sonnet-5")
-    result = compute_savings_spend(
-        model="claude-sonnet-5",
-        custom_llm_provider="anthropic",
-        compression_saved_tokens=1000,
-        cache_read_input_tokens=0,
-        baseline_model="claude-opus-5",
-        usage_object=None,
-    )
-    assert result.compression == pytest.approx(1000 * input_cost)
-    assert result.autorouter == 0.0
+    assert result.autorouter < 0
 
 
 def test_malformed_usage_object_does_not_fail_the_spend_write():

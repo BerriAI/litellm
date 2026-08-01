@@ -146,6 +146,9 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
     .filter(Boolean)
     .join(" \u00b7 ");
 
+  // A driver can come out negative (auto-router pays a cold-cache write on every
+  // model switch), and a negative slice has no meaning in a donut, so only drivers
+  // that actually saved are plotted; the range total keeps the signed truth.
   const byDriver = useMemo(
     () =>
       [
@@ -155,6 +158,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       ].filter((d) => d.usd > 0),
     [compressionTotal, cachingTotal, autorouterTotal],
   );
+  const plottedDriverTotal = useMemo(() => byDriver.reduce((sum, d) => sum + d.usd, 0), [byDriver]);
 
   const topTools = useMemo(() => topToolsBySpend(toolSpend?.by_tool ?? []), [toolSpend]);
   const topToolNames = useMemo(() => topTools.map((t) => t.tool_name), [topTools]);
@@ -200,7 +204,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           label="Auto-router savings"
           value={usd(autorouterTotal)}
           hint="vs. the router's baseline model"
-          info="Cost of the auto-router's configured baseline model minus the cost of the model it actually routed to, net of any cache-write cost from switching models."
+          info="What this traffic would have cost on the router's baseline model, minus what it actually cost. Switching models leaves the new one with a cold cache, so the cache-write it pays counts against the saving; a negative total means routing cost more than staying on the baseline would have."
         />
       </div>
 
@@ -260,7 +264,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
               colors={SAVINGS_COLORS}
               valueFormatter={usd}
               showLabel
-              label={usd(totalSaved)}
+              label={usd(plottedDriverTotal)}
             />
           </CardContent>
         </Card>
