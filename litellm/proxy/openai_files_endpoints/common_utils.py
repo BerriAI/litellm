@@ -968,7 +968,7 @@ async def ensure_batch_response_managed_file_ids(
     verbose_proxy_logger,
     user_api_key_dict=None,
     db_batch_object=None,
-    unified_batch_id: Optional[str] = None,
+    unified_batch_id: str | None = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before returning/persisting.
 
@@ -997,7 +997,7 @@ async def _register_raw_batch_output_file_ids(
     managed_files_obj,
     requester_api_key_dict,
     db_batch_object,
-    unified_batch_id: Optional[str],
+    unified_batch_id: str | None,
     verbose_proxy_logger,
 ) -> None:
     if managed_files_obj is None:
