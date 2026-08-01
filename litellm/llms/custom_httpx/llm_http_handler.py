@@ -2044,6 +2044,7 @@ class BaseLLMHTTPHandler:
                 "preset_cache_key": None,
                 "stream_response": {},
                 "model_info": kwargs.get("model_info"),
+                "cooldown_time": kwargs.get("cooldown_time"),
                 **anthropic_messages_optional_request_params,
             },
             custom_llm_provider=custom_llm_provider,

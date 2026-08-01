@@ -7,27 +7,27 @@ import litellm
 
 
 @pytest.mark.asyncio
-async def test_responses_api_uses_deployment_cooldown_time():
-    failing_deployment_id = "responses-deployment-rate-limited"
+async def test_anthropic_messages_uses_deployment_cooldown_time():
+    failing_deployment_id = "messages-deployment-rate-limited"
 
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "responses-model",
+                "model_name": "messages-model",
                 "litellm_params": {
-                    "model": "openai/gpt-4o-mini",
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
                     "api_key": "mock-api-key-1",
                     "cooldown_time": 0,
                 },
                 "model_info": {"id": failing_deployment_id},
             },
             {
-                "model_name": "responses-model",
+                "model_name": "messages-model",
                 "litellm_params": {
-                    "model": "openai/gpt-4o-mini",
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
                     "api_key": "mock-api-key-2",
                 },
-                "model_info": {"id": "responses-deployment-healthy"},
+                "model_info": {"id": "messages-deployment-healthy"},
             },
         ],
         num_retries=0,
@@ -36,11 +36,11 @@ async def test_responses_api_uses_deployment_cooldown_time():
 
     rate_limit_error = litellm.RateLimitError(
         message="upstream throttled",
-        llm_provider="openai",
-        model="openai/gpt-4o-mini",
+        llm_provider="anthropic",
+        model="anthropic/claude-3-5-sonnet-20240620",
         response=httpx.Response(
             status_code=429,
-            request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
         ),
     )
 
@@ -52,7 +52,7 @@ async def test_responses_api_uses_deployment_cooldown_time():
 
     with (
         patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_anthropic_messages_handler",
             new_callable=AsyncMock,
             side_effect=rate_limit_error,
         ),
@@ -63,9 +63,10 @@ async def test_responses_api_uses_deployment_cooldown_time():
         patch("litellm.router._set_cooldown_deployments") as mock_set_cooldown,
     ):
         with pytest.raises(litellm.RateLimitError):
-            await router.aresponses(
-                model="responses-model",
-                input="hi",
+            await router.aanthropic_messages(
+                model="messages-model",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=16,
             )
 
     mock_set_cooldown.assert_called_once()
