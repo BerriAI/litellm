@@ -66,7 +66,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     )
 
                 # Create ResponseReasoningItem object from the item data
-                reasoning_item = ResponseReasoningItem(**item_data)
+                reasoning_item = ResponseReasoningItem.model_validate(item_data)
 
                 # Convert back to dict with exclude_none=True to exclude None fields
                 dict_reasoning_item = reasoning_item.model_dump(exclude_none=True)
@@ -346,4 +346,4 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIError
 
             raise AzureOpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        return ResponsesAPIResponse(**raw_response_json)
+        return ResponsesAPIResponse.model_validate(raw_response_json)
