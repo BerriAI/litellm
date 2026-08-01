@@ -409,6 +409,124 @@ class TestMCPClientInstructionsCapture:
 
 
 # ---------------------------------------------------------------------------
+# Optional-capability gating for list_prompts / list_resources / list_resource_templates
+# ---------------------------------------------------------------------------
+
+
+class TestOptionalCapabilityGating:
+    """A server that does not advertise the prompts/resources capability in its initialize result
+    must not be sent the corresponding list_* request. This regresses issue #35460 where the gateway
+    re-probed list_prompts/list_resources on every aggregate request against servers that reject them
+    with "Method not found", wasting two round-trips per unsupporting server per request."""
+
+    @staticmethod
+    def _wire_session(mock_session_cls, mock_session, capabilities):
+        from mcp.types import Implementation, InitializeResult
+
+        init_result = InitializeResult(
+            protocolVersion="2025-06-18",
+            capabilities=capabilities,
+            serverInfo=Implementation(name="test-server", version="1.0.0"),
+        )
+        mock_session.initialize = AsyncMock(return_value=init_result)
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+    @staticmethod
+    def _patch_transport(client):
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+        return patch.object(client, "_create_transport_context", return_value=(transport_ctx, None))
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_list_prompts_skips_rpc_when_prompts_unsupported(self, mock_session_cls):
+        from mcp.types import ServerCapabilities, ToolsCapability
+
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        mock_session = AsyncMock()
+        self._wire_session(mock_session_cls, mock_session, ServerCapabilities(tools=ToolsCapability()))
+
+        with self._patch_transport(client):
+            result = await client.list_prompts()
+
+        assert result == []
+        mock_session.list_prompts.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_list_prompts_calls_rpc_when_prompts_supported(self, mock_session_cls):
+        from mcp.types import ListPromptsResult, Prompt, PromptsCapability, ServerCapabilities
+
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        mock_session = AsyncMock()
+        self._wire_session(mock_session_cls, mock_session, ServerCapabilities(prompts=PromptsCapability()))
+        mock_session.list_prompts = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="p1")]))
+
+        with self._patch_transport(client):
+            result = await client.list_prompts()
+
+        mock_session.list_prompts.assert_awaited_once()
+        assert [p.name for p in result] == ["p1"]
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_list_resources_skips_rpc_when_resources_unsupported(self, mock_session_cls):
+        from mcp.types import ServerCapabilities, ToolsCapability
+
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        mock_session = AsyncMock()
+        self._wire_session(mock_session_cls, mock_session, ServerCapabilities(tools=ToolsCapability()))
+
+        with self._patch_transport(client):
+            result = await client.list_resources()
+
+        assert result == []
+        mock_session.list_resources.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_list_resource_templates_skips_rpc_when_resources_unsupported(self, mock_session_cls):
+        from mcp.types import ServerCapabilities, ToolsCapability
+
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        mock_session = AsyncMock()
+        self._wire_session(mock_session_cls, mock_session, ServerCapabilities(tools=ToolsCapability()))
+
+        with self._patch_transport(client):
+            result = await client.list_resource_templates()
+
+        assert result == []
+        mock_session.list_resource_templates.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_list_resources_calls_rpc_when_resources_supported(self, mock_session_cls):
+        from mcp.types import ListResourcesResult, ResourcesCapability, ServerCapabilities
+
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        mock_session = AsyncMock()
+        self._wire_session(mock_session_cls, mock_session, ServerCapabilities(resources=ResourcesCapability()))
+        mock_session.list_resources = AsyncMock(return_value=ListResourcesResult(resources=[]))
+
+        with self._patch_transport(client):
+            await client.list_resources()
+
+        mock_session.list_resources.assert_awaited_once()
+
+    def test_unknown_capabilities_optimistically_attempts(self):
+        """With no initialize seen yet (capabilities unknown) we do not suppress the call."""
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        assert client._last_initialize_capabilities is None
+        assert client._server_declares_capability("prompts") is True
+        assert client._server_declares_capability("resources") is True
+
+
+# ---------------------------------------------------------------------------
 # Transport error surfacing
 # ---------------------------------------------------------------------------
 

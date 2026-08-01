@@ -12,6 +12,7 @@ from typing import (
     Dict,
     Generator,
     List,
+    Literal,
     Optional,
     Tuple,
     TypeVar,
@@ -36,6 +37,7 @@ from mcp.types import (
     GetPromptResult,
     Prompt,
     ResourceTemplate,
+    ServerCapabilities,
     TextContent,
 )
 from mcp.types import Tool as MCPTool
@@ -231,6 +233,7 @@ class MCPClient:
         # upstream client's auth= slot, taking precedence over the SigV4 aws_auth.
         self._resolved_auth: Optional[httpx.Auth] = resolved_auth
         self._last_initialize_instructions: Optional[str] = None
+        self._last_initialize_capabilities: Optional[ServerCapabilities] = None
         self._sampling_callback: Optional[Callable] = sampling_callback
         self._elicitation_callback: Optional[Callable] = elicitation_callback
         self._logging_callback: Optional[Callable] = logging_callback
@@ -360,10 +363,14 @@ class MCPClient:
             try:
                 init_result = await session.initialize()
                 self._last_initialize_instructions = None
+                self._last_initialize_capabilities = None
                 if init_result is not None:
                     ins = getattr(init_result, "instructions", None)
                     if isinstance(ins, str) and ins.strip():
                         self._last_initialize_instructions = ins.strip()
+                    capabilities = getattr(init_result, "capabilities", None)
+                    if isinstance(capabilities, ServerCapabilities):
+                        self._last_initialize_capabilities = capabilities
                 return await operation(session)
             finally:
                 try:
@@ -396,6 +403,7 @@ class MCPClient:
         http_client: Optional[httpx.AsyncClient] = None
         try:
             self._last_initialize_instructions = None
+            self._last_initialize_capabilities = None
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception:
@@ -622,15 +630,36 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
+    def _server_declares_capability(self, capability: Literal["prompts", "resources"]) -> bool:
+        """Whether the last upstream initialize advertised the given optional capability.
+
+        Per the MCP spec a server enumerates the feature groups it supports in
+        InitializeResult.capabilities, and a client must not send prompts/resources requests to a
+        server that does not declare them. When capabilities are unknown (no initialize seen yet)
+        we optimistically attempt the call so behavior is unchanged for servers we cannot classify.
+        """
+        capabilities = self._last_initialize_capabilities
+        if capabilities is None:
+            return True
+        return getattr(capabilities, capability, None) is not None
+
     async def list_prompts(self) -> List[Prompt]:
         """List available prompts from the server."""
         verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
 
         async def _list_prompts_operation(session: ClientSession):
+            if not self._server_declares_capability("prompts"):
+                return None
             return await session.list_prompts()
 
         try:
             result = await self.run_with_session(_list_prompts_operation)
+            if result is None:
+                verbose_logger.debug(
+                    f"MCP server {self.server_url or 'stdio'} does not advertise the prompts capability; "
+                    "skipping list_prompts"
+                )
+                return []
             prompt_count = len(result.prompts)
             prompt_names = [prompt.name for prompt in result.prompts]
             verbose_logger.info(
@@ -704,10 +733,18 @@ class MCPClient:
         verbose_logger.debug(f"MCP client listing resources from {self.server_url or 'stdio'}")
 
         async def _list_resources_operation(session: ClientSession):
+            if not self._server_declares_capability("resources"):
+                return None
             return await session.list_resources()
 
         try:
             result = await self.run_with_session(_list_resources_operation)
+            if result is None:
+                verbose_logger.debug(
+                    f"MCP server {self.server_url or 'stdio'} does not advertise the resources capability; "
+                    "skipping list_resources"
+                )
+                return []
             resource_count = len(result.resources)
             resource_names = [resource.name for resource in result.resources]
             verbose_logger.info(
@@ -740,10 +777,18 @@ class MCPClient:
         verbose_logger.debug(f"MCP client listing resource templates from {self.server_url or 'stdio'}")
 
         async def _list_resource_templates_operation(session: ClientSession):
+            if not self._server_declares_capability("resources"):
+                return None
             return await session.list_resource_templates()
 
         try:
             result = await self.run_with_session(_list_resource_templates_operation)
+            if result is None:
+                verbose_logger.debug(
+                    f"MCP server {self.server_url or 'stdio'} does not advertise the resources capability; "
+                    "skipping list_resource_templates"
+                )
+                return []
             resource_template_count = len(result.resourceTemplates)
             resource_template_names = [resourceTemplate.name for resourceTemplate in result.resourceTemplates]
             verbose_logger.info(
