@@ -13,7 +13,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_EndUserTable
 from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_and_sanitize, verbose_proxy_logger
 from fastapi import HTTPException
 
 
@@ -51,7 +51,7 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
 
         if litellm.set_verbose is True:
-            print(print_statement)  # noqa
+            print(redact_and_sanitize(print_statement))  # noqa
 
     async def async_pre_call_hook(
         self,

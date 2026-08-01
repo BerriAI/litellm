@@ -20,7 +20,7 @@ from typing import Literal, Optional
 from fastapi import HTTPException
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_and_sanitize, verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import CallTypesLiteral, Choices, ModelResponse
@@ -55,7 +55,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(print_statement)  # noqa
+                print(redact_and_sanitize(print_statement))  # noqa
         except Exception:
             pass
 

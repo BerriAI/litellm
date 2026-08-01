@@ -16,7 +16,7 @@ from litellm.proxy.guardrails._content_utils import (
     iter_message_text,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_and_sanitize, verbose_proxy_logger
 from fastapi import HTTPException
 
 
@@ -54,7 +54,7 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
 
         if litellm.set_verbose is True:
-            print(print_statement)  # noqa
+            print(redact_and_sanitize(print_statement))  # noqa
 
     def test_violation(self, test_str: str):
         for word in self.banned_keywords_list:
