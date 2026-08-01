@@ -15,3 +15,4 @@ class UsagePerChunk(TypedDict):
     completion_tokens_details: Optional[CompletionTokensDetails]
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper]
     cost: Optional[float]
+    inference_geo: str | None

@@ -82,6 +82,7 @@ async def make_call(
     timeout: Union[float, httpx.Timeout] | None,
     json_mode: bool,
     speed: str | None = None,
+    inference_geo: str | None = None,
     tool_name_reverse_map: Dict[str, str] | None = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
@@ -117,6 +118,7 @@ async def make_call(
         sync_stream=False,
         json_mode=json_mode,
         speed=speed,
+        inference_geo=inference_geo,
         tool_name_reverse_map=tool_name_reverse_map,
     )
 
@@ -142,6 +144,7 @@ def make_sync_call(
     timeout: Union[float, httpx.Timeout] | None,
     json_mode: bool,
     speed: str | None = None,
+    inference_geo: str | None = None,
     tool_name_reverse_map: Dict[str, str] | None = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
@@ -185,6 +188,7 @@ def make_sync_call(
         sync_stream=True,
         json_mode=json_mode,
         speed=speed,
+        inference_geo=inference_geo,
         tool_name_reverse_map=tool_name_reverse_map,
     )
 
@@ -240,6 +244,8 @@ class AnthropicChatCompletion(BaseLLM):
             timeout=timeout,
             json_mode=json_mode,
             speed=optional_params.get("speed") if optional_params else None,
+            inference_geo=AnthropicConfig.get_request_inference_geo(optional_params)
+            or AnthropicConfig.get_request_inference_geo(litellm_params if isinstance(litellm_params, dict) else None),
             tool_name_reverse_map=(
                 litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY) if isinstance(litellm_params, dict) else None
             ),
@@ -461,6 +467,10 @@ class AnthropicChatCompletion(BaseLLM):
                     timeout=timeout,
                     json_mode=json_mode,
                     speed=optional_params.get("speed") if optional_params else None,
+                    inference_geo=AnthropicConfig.get_request_inference_geo(optional_params)
+                    or AnthropicConfig.get_request_inference_geo(
+                        litellm_params if isinstance(litellm_params, dict) else None
+                    ),
                     tool_name_reverse_map=(
                         litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
                         if isinstance(litellm_params, dict)
@@ -530,6 +540,7 @@ class ModelResponseIterator:
         sync_stream: bool,
         json_mode: bool | None = False,
         speed: str | None = None,
+        inference_geo: str | None = None,
         tool_name_reverse_map: Dict[str, str] | None = None,
     ):
         self.streaming_response = streaming_response
@@ -538,6 +549,7 @@ class ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.speed = speed
+        self.inference_geo = inference_geo
         # rewritten-name -> caller's original. Built per-request from the
         # forward map in AnthropicConfig._build_request_tool_name_maps; only
         # contains entries we actually rewrote, so a tool legitimately named
@@ -608,6 +620,7 @@ class ModelResponseIterator:
             usage_object=cast(dict, anthropic_usage_chunk),
             reasoning_content=reasoning_content,
             speed=self.speed,
+            inference_geo=self.inference_geo,
         )
 
     def _content_block_delta_helper(

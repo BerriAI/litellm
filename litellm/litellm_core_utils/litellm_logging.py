@@ -3270,6 +3270,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ResponsesAPIResponse):
             return self._translate_responses_api_response_to_model_response(result)
 
+        request_params = self.model_call_details.get("optional_params") or {}
+        deployment_params = self.model_call_details.get("litellm_params") or {}
+
         httpx_response = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
             result = litellm.AnthropicConfig().transform_response(
@@ -3278,12 +3281,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=self.model,
                 messages=[],
                 logging_obj=self,
-                optional_params={},
+                optional_params=request_params,
                 api_key="",
                 request_data={},
                 encoding=litellm.encoding,
                 json_mode=False,
-                litellm_params={},
+                litellm_params=deployment_params,
             )
         else:
             from litellm.types.llms.anthropic import AnthropicResponse
@@ -3299,6 +3302,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
                 model_response=litellm.ModelResponse(),
                 json_mode=None,
+                speed=request_params.get("speed"),
+                inference_geo=litellm.AnthropicConfig.get_request_inference_geo(request_params)
+                or litellm.AnthropicConfig.get_request_inference_geo(deployment_params),
             )
         return result
 

@@ -73,6 +73,7 @@ class AnthropicPassthroughLoggingHandler:
             )
 
         model = response_body.get("model", "")
+        request_body = request_body or kwargs.get("request_body") or {}
         anthropic_config = get_anthropic_config(url_route)
         litellm_model_response: ModelResponse = anthropic_config().transform_response(
             raw_response=httpx_response,
@@ -80,7 +81,7 @@ class AnthropicPassthroughLoggingHandler:
             model=model,
             messages=[],
             logging_obj=logging_obj,
-            optional_params={},
+            optional_params=request_body,
             api_key="",
             request_data={},
             encoding=litellm.encoding,
@@ -334,6 +335,7 @@ class AnthropicPassthroughLoggingHandler:
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
+                request_inference_geo=AnthropicConfig.get_request_inference_geo(request_body),
             )
         except Exception as e:
             # stream_chunk_builder re-raises assembly failures (as litellm.APIError)
@@ -355,6 +357,7 @@ class AnthropicPassthroughLoggingHandler:
                 complete_streaming_response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
                     all_chunks=all_chunks,
                     model=model,
+                    request_inference_geo=AnthropicConfig.get_request_inference_geo(request_body),
                 )
             except Exception as e:
                 verbose_proxy_logger.warning(
@@ -419,6 +422,7 @@ class AnthropicPassthroughLoggingHandler:
         all_chunks: Sequence[Union[str, bytes]],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
+        request_inference_geo: str | None = None,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         """
         Builds complete response from raw Anthropic chunks.
@@ -438,16 +442,11 @@ class AnthropicPassthroughLoggingHandler:
         text run removes O(num_output_tokens) of it.
         """
         collapsed = AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(all_chunks)
-        if collapsed is not None:
-            return AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy(
-                all_chunks=collapsed,
-                litellm_logging_obj=litellm_logging_obj,
-                model=model,
-            )
         return AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy(
-            all_chunks=all_chunks,
+            all_chunks=collapsed if collapsed is not None else all_chunks,
             litellm_logging_obj=litellm_logging_obj,
             model=model,
+            request_inference_geo=request_inference_geo,
         )
 
     # Anthropic SSE block/delta types that the fast path is NOT allowed to
@@ -575,6 +574,7 @@ class AnthropicPassthroughLoggingHandler:
         all_chunks: Sequence[Union[str, bytes]],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
+        request_inference_geo: str | None = None,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         """
         Original reconstruction: convert every SSE event to a generic chunk
@@ -590,6 +590,7 @@ class AnthropicPassthroughLoggingHandler:
         anthropic_model_response_iterator = AnthropicModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
+            inference_geo=request_inference_geo,
         )
         all_openai_chunks = []
 
@@ -649,6 +650,7 @@ class AnthropicPassthroughLoggingHandler:
     def _build_usage_only_response_from_chunks(
         all_chunks: Sequence[Union[str, bytes]],
         model: str,
+        request_inference_geo: str | None = None,
     ) -> Optional[ModelResponse]:
         """
         Build a usage-bearing ModelResponse from Anthropic SSE token-usage events, for
@@ -667,7 +669,7 @@ class AnthropicPassthroughLoggingHandler:
         output_tokens = 0
         web_search_requests: Optional[int] = None
         tool_search_requests: Optional[int] = None
-        inference_geo: Optional[str] = None
+        inference_geo: str | None = request_inference_geo
         stop_reason: Optional[str] = None
         found_usage = False
         resolved_model = model
