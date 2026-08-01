@@ -13,7 +13,18 @@ import asyncio
 import math
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Type,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -273,6 +284,58 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
         if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
             return True
     return False
+
+
+def _is_positive_cost(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
+    for key, value in entry.items():
+        if "cost_per" not in key:
+            continue
+        if _is_positive_cost(value):
+            return True
+        if isinstance(value, dict) and any(_is_positive_cost(nested) for nested in value.values()):
+            return True
+    return False
+
+
+def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
+    """
+    Check every deployment behind a model group for a positive price on any billed
+    metric (tokens, characters, seconds, pages, images, queries, ...), so models that
+    are billed by a non-token metric are not treated as unpriced.
+    """
+    for deployment in llm_router.get_model_list(model_name=model) or []:
+        litellm_params = deployment.get("litellm_params") or {}
+        if _entry_has_priced_metric(litellm_params):
+            return True
+
+        model_id = (deployment.get("model_info") or {}).get("id")
+        if model_id is None:
+            continue
+
+        model_info = llm_router.get_deployment_model_info(
+            model_id=model_id, model_name=litellm_params.get("model") or ""
+        )
+        if model_info is not None and _entry_has_priced_metric(model_info):
+            return True
+
+    return False
+
+
+def model_has_no_cost_mapping(model: Optional[str], llm_router: Optional[Router]) -> bool:
+    if not model or llm_router is None:
+        return False
+
+    if llm_router.get_model_group_info(model_group=model) is None:
+        return False
+
+    if _model_group_has_pricing(model=model, llm_router=llm_router):
+        return False
+
+    return not _is_cost_explicitly_configured(model, llm_router)
 
 
 async def _run_project_checks(
@@ -544,6 +607,23 @@ async def common_checks(
         route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
         and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
     )
+
+    if (
+        litellm.block_requests_for_models_without_pricing
+        and isinstance(_model, str)
+        and RouteChecks.is_llm_api_route(route=route)
+        and model_has_no_cost_mapping(model=_model, llm_router=llm_router)
+    ):
+        raise ProxyException(
+            message=(
+                f"Model '{_model}' has no pricing in the cost map, so its spend would be tracked as $0. "
+                "Requests for unpriced models are blocked because 'block_requests_for_models_without_pricing' "
+                "is enabled. Add pricing for this model (input_cost_per_token/output_cost_per_token) to allow it."
+            ),
+            type=ProxyErrorTypes.model_cost_map_missing,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        )
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:

@@ -12,7 +12,7 @@ import {
   TabPanels,
   TabPanel,
 } from "@tremor/react";
-import { Modal, Form } from "antd";
+import { Modal, Form, Switch } from "antd";
 import { CostTrackingSettingsProps } from "./types";
 import ProviderDiscountTable from "./provider_discount_table";
 import AddProviderForm from "./add_provider_form";
@@ -24,6 +24,7 @@ import { DocsMenu } from "@/components/HelpLink";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";
+import { useBlockUnpricedConfig } from "./use_block_unpriced_config";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 const DOCS_LINKS = [
@@ -65,9 +66,16 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
     handleMarginChange,
   } = useMarginConfig({ accessToken });
 
+  const {
+    blockUnpriced,
+    isUpdating: isUpdatingBlockUnpriced,
+    fetchBlockUnpriced,
+    setBlockUnpriced,
+  } = useBlockUnpricedConfig({ accessToken });
+
   useEffect(() => {
     if (accessToken) {
-      Promise.all([fetchDiscountConfig(), fetchMarginConfig()]).finally(() => {
+      Promise.all([fetchDiscountConfig(), fetchMarginConfig(), fetchBlockUnpriced()]).finally(() => {
         setIsFetching(false);
       });
 
@@ -82,7 +90,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
       };
       loadModels();
     }
-  }, [accessToken, fetchDiscountConfig, fetchMarginConfig]);
+  }, [accessToken, fetchDiscountConfig, fetchMarginConfig, fetchBlockUnpriced]);
 
   const handleAddProvider = async () => {
     const success = await addProvider(selectedProvider, newDiscount);
@@ -293,7 +301,38 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
           </Accordion>
         )}
 
-        {/* Accordion 3: Pricing Calculator - Available to all roles */}
+        {isProxyAdmin && (
+          <Accordion>
+            <AccordionHeader className="px-6 py-4">
+              <div className="flex flex-col items-start w-full">
+                <Text className="text-lg font-semibold text-gray-900">Block Unpriced Models</Text>
+                <Text className="text-sm text-gray-500 mt-1">
+                  Reject requests for models that have no pricing in the cost map instead of logging them as $0 spend
+                </Text>
+              </div>
+            </AccordionHeader>
+            <AccordionBody className="px-0">
+              <div className="p-6">
+                <div className="flex items-center justify-between">
+                  <div className="pr-6">
+                    <Text className="text-gray-900 font-medium">Block requests for models without pricing</Text>
+                    <Text className="text-sm text-gray-500 mt-1">
+                      When enabled, a request whose resolved model has no cost mapping is rejected with a 403 so an
+                      admin can add pricing for it. Off by default
+                    </Text>
+                  </div>
+                  <Switch
+                    checked={blockUnpriced}
+                    loading={isUpdatingBlockUnpriced || isFetching}
+                    onChange={(checked) => setBlockUnpriced(checked)}
+                  />
+                </div>
+              </div>
+            </AccordionBody>
+          </Accordion>
+        )}
+
+        {/* Accordion 4: Pricing Calculator - Available to all roles */}
         <Accordion defaultOpen={true}>
           <AccordionHeader className="px-6 py-4">
             <div className="flex flex-col items-start w-full">
