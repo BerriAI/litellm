@@ -422,10 +422,13 @@ class TestSavingsBaselineModel:
             ["cheap-tier", "mid-tier"],
             "cheap-tier",
         )
-        assert sorted(auto_router._candidate_models()) == [
-            "anthropic/claude-haiku-4-5",
-            "anthropic/claude-sonnet-5",
-        ]
+        from litellm.router_strategy.savings_baseline import models_for_group
+
+        parent = auto_router.litellm_router_instance
+        resolved = sorted(
+            model for group in ("cheap-tier", "mid-tier") for model in models_for_group(parent, group)
+        )
+        assert resolved == ["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-5"]
 
     def test_baseline_is_the_priciest_model_this_router_could_have_picked(self):
         """Without the router a deployment picks one model that can carry the hardest

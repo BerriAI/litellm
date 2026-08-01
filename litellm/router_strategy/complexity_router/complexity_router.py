@@ -314,6 +314,7 @@ class ComplexityRouter(CustomLogger):
         litellm_router_instance: Router,
         complexity_router_config: dict[str, Any] | None = None,
         default_model: str | None = None,
+        savings_baseline_model: str | None = None,
     ):
         """
         Initialize ComplexityRouter.
@@ -323,9 +324,11 @@ class ComplexityRouter(CustomLogger):
             litellm_router_instance: The LiteLLM Router instance.
             complexity_router_config: Optional configuration dict from proxy config.
             default_model: Optional default model to use if tier cannot be determined.
+            savings_baseline_model: Overrides the counterfactual model the dashboard measures savings against; derived from the hardest configured tier when unset.
         """
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
+        self.configured_savings_baseline_model: str | None = savings_baseline_model
 
         # Parse config - always create a new instance to avoid singleton mutation
         if complexity_router_config:
@@ -372,6 +375,36 @@ class ComplexityRouter(CustomLogger):
         self._adaptive_init_attempted = False
 
         verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
+
+    def _hardest_tier_models(self) -> tuple[str, ...]:
+        """The model or pool serving the hardest tier this router configures.
+
+        REASONING when it is configured, since that is the tier a request has to be
+        hard enough to reach; otherwise the highest-severity tier present, so a
+        deployment that only defines SIMPLE and MEDIUM is still measured against
+        the best it could actually have picked.
+        """
+        for tier in reversed(TIER_SEVERITY_ORDER):
+            models = self.config.tiers.get(tier.value)
+            if models:
+                return tuple(models) if isinstance(models, list) else (models,)
+        return ()
+
+    @property
+    def savings_baseline_model(self) -> str | None:
+        """The model this router's savings are measured against.
+
+        A complexity router's tier ladder already names the model an operator
+        would have had to run to serve the hardest request, so the counterfactual
+        is the priciest model in that tier rather than the priciest model the
+        router can reach; a cheap tier is a choice the router made, not a ceiling
+        it was bounded by.
+        """
+        from litellm.router_strategy.savings_baseline import resolve_baseline
+
+        return resolve_baseline(
+            self.configured_savings_baseline_model, self.litellm_router_instance, self._hardest_tier_models()
+        )
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -1367,6 +1400,7 @@ class ComplexityRouter(CustomLogger):
                     return PreRoutingHookResponse(
                         model=routed_model,
                         messages=messages if has_original_messages else None,
+                        savings_baseline_model=self.savings_baseline_model,
                         routing_decision=self._build_routing_decision(
                             routed_model=routed_model,
                             cause=cause,
@@ -1443,6 +1477,7 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
+                savings_baseline_model=self.savings_baseline_model,
                 routing_decision=self._build_routing_decision(routed_model=routed_model, cause="default_fallback"),
             )
 
@@ -1464,6 +1499,7 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
+                savings_baseline_model=self.savings_baseline_model,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     cause=keyword_cause,
@@ -1511,6 +1547,7 @@ class ComplexityRouter(CustomLogger):
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages if has_original_messages else None,
+            savings_baseline_model=self.savings_baseline_model,
             routing_decision=self._build_routing_decision(
                 routed_model=routed_model,
                 cause=outcome.cause,

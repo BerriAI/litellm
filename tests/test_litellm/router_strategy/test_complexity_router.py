@@ -2185,6 +2185,8 @@ class FakeEmbeddingRouter:
     _CLUSTER_MARKERS = ("k8s", "kube", "container", "cluster", "orchestrat")
 
     def __init__(self):
+        self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
+        self.model_list: List[Dict] = []
         self.async_embedding_calls: List[List[str]] = []
         self.async_embedding_kwargs: List[Dict] = []
         # Every embedded batch (sync route-index build AND async query), so tests can count
@@ -4782,3 +4784,61 @@ class TestClassifierTrustBoundary:
         assert system_message["content"] == _CLASSIFICATION_SYSTEM_RUBRIC
         assert hostile not in system_message["content"]
         assert hostile in user_message["content"]
+
+
+class TestSavingsBaselineModel:
+    """The counterfactual model a complexity router's savings are measured against."""
+
+    @staticmethod
+    def _router_with_tiers(tiers: dict, **kwargs) -> ComplexityRouter:
+        from litellm.router import Router
+
+        parent = Router(
+            model_list=[
+                {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+                {"model_name": "mid", "litellm_params": {"model": "anthropic/claude-sonnet-4-5"}},
+                {"model_name": "top", "litellm_params": {"model": "anthropic/claude-opus-4-5"}},
+            ]
+        )
+        return ComplexityRouter(
+            model_name="bench",
+            litellm_router_instance=parent,
+            complexity_router_config={"tiers": tiers},
+            default_model="mid",
+            **kwargs,
+        )
+
+    def test_baseline_is_the_reasoning_tier_not_the_priciest_reachable_model(self):
+        """The ladder names what an operator would have had to run for the hardest
+        request; a pricier model sitting in a lower tier is a choice, not a ceiling."""
+        router = self._router_with_tiers({"SIMPLE": "top", "MEDIUM": "cheap", "REASONING": "mid"})
+        assert router.savings_baseline_model == "anthropic/claude-sonnet-4-5"
+
+    def test_baseline_is_the_priciest_model_when_the_reasoning_tier_is_a_pool(self):
+        router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": ["cheap", "top", "mid"]})
+        assert router.savings_baseline_model == "anthropic/claude-opus-4-5"
+
+    def test_falls_back_to_the_hardest_configured_tier_when_reasoning_is_absent(self):
+        router = self._router_with_tiers({"SIMPLE": "cheap", "COMPLEX": "top"})
+        assert router.savings_baseline_model == "anthropic/claude-opus-4-5"
+
+    def test_a_configured_baseline_wins_and_is_provider_qualified(self):
+        router = self._router_with_tiers(
+            {"SIMPLE": "cheap", "REASONING": "mid"}, savings_baseline_model="claude-opus-4-5"
+        )
+        assert router.savings_baseline_model == "anthropic/claude-opus-4-5"
+
+    def test_an_unpriceable_tier_disables_the_driver_rather_than_inventing_a_baseline(self):
+        router = self._router_with_tiers({"REASONING": "not-a-real-model-anywhere"})
+        assert router.savings_baseline_model is None
+
+    def test_the_baseline_travels_on_every_pre_routing_response(self):
+        """A response without it silently zeroes the savings driver for that path."""
+        import inspect
+
+        from litellm.router_strategy.complexity_router import complexity_router as module
+
+        source = inspect.getsource(module.ComplexityRouter.async_pre_routing_hook)
+        returns = source.count("return PreRoutingHookResponse(")
+        assert returns > 0
+        assert source.count("savings_baseline_model=self.savings_baseline_model") == returns
