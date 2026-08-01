@@ -1077,7 +1077,7 @@ def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:
     return additional_headers
 
 
-def create_anthropic_model_list_response(model_ids: List[str]) -> dict:
+def create_anthropic_model_list_response(model_ids: list[str]) -> dict:
     """Build the Anthropic-native /v1/models envelope for Claude Code gateway discovery.
 
     Claude Code 2.1.126+ queries the gateway root's /v1/models with an

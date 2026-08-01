@@ -8742,11 +8742,11 @@ async def model_list(
 
     settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
 
-    from litellm.proxy.management_endpoints.common_utils import (
-        _user_has_admin_privileges,
-    )
     from litellm.llms.anthropic.common_utils import (
         create_anthropic_model_list_response,
+    )
+    from litellm.proxy.management_endpoints.common_utils import (
+        _user_has_admin_privileges,
     )
     from litellm.proxy.utils import (
         create_model_info_response,
