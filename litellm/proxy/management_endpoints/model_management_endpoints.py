@@ -16,7 +16,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
@@ -39,6 +39,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
@@ -49,17 +50,17 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
-from litellm.types.proxy.management_endpoints.model_management_endpoints import (
-    UpdateUsefulLinksRequest,
-)
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
     validate_strategy_router_model_write,
+)
+from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
@@ -843,8 +844,8 @@ async def _get_team_public_model_names(
 async def _remove_unbacked_team_models(
     model_params: Deployment,
     prisma_client: PrismaClient,
-    user_api_key_cache: Any,
-    proxy_logging_obj: Any,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
     llm_router: Router | None = None,
 ) -> None:
     """
@@ -904,7 +905,7 @@ async def _remove_unbacked_team_models(
     if existing_team_row is None:
         return
 
-    updated_team_row = await prisma_client.db.litellm_teamtable.update(
+    updated_team_row: LiteLLM_TeamTable = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": team_id},
         data={"models": [model for model in existing_team_row.models if model not in names_to_remove]},
         include={"object_permission": True},  # type: ignore
