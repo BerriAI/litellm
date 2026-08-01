@@ -193,15 +193,15 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             if self._interaction_id is None:
                 self._interaction_id = interaction_id
 
-            events: List[InteractionsAPIStreamingResponse] = []
-            if not self.sent_interaction_start:
-                self.sent_interaction_start = True
-                events.append(self._build_interaction_start_event(interaction_id))
-            if not self.sent_content_start:
-                self.sent_content_start = True
-                events.append(self._build_content_start_event(interaction_id))
-            events.append(self._build_text_delta_event(interaction_id, delta_text))
-            return events
+            needs_interaction_start = not self.sent_interaction_start
+            needs_content_start = not self.sent_content_start
+            self.sent_interaction_start = True
+            self.sent_content_start = True
+            return [
+                *((self._build_interaction_start_event(interaction_id),) if needs_interaction_start else ()),
+                *((self._build_content_start_event(interaction_id),) if needs_content_start else ()),
+                self._build_text_delta_event(interaction_id, delta_text),
+            ]
 
         # Response created / in-progress: synthesize interaction start if we
         # haven't already sent one.
@@ -227,12 +227,11 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             response = responses_chunk.response
             response_id = self._interaction_id or getattr(response, "id", None) or f"interaction_{id(self)}"
 
-            terminal: List[InteractionsAPIStreamingResponse] = []
-            if self.sent_content_start:
-                terminal.append(self._build_content_stop_event(response_id))
-            terminal.append(self._build_completion_event(response_id))
             self._sent_completion_event = True
-            return terminal
+            return [
+                *((self._build_content_stop_event(response_id),) if self.sent_content_start else ()),
+                self._build_completion_event(response_id),
+            ]
 
         return []
 
@@ -248,13 +247,13 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             return []
 
         fallback_id = self._interaction_id or f"interaction_{id(self)}"
-        terminal: List[InteractionsAPIStreamingResponse] = []
-        if self.sent_content_start:
-            terminal.append(self._build_content_stop_event(fallback_id))
-        if self.sent_interaction_start or self.collected_text:
-            terminal.append(self._build_completion_event(fallback_id))
+        emit_completion = bool(self.sent_interaction_start or self.collected_text)
+        if emit_completion:
             self._sent_completion_event = True
-        return terminal
+        return [
+            *((self._build_content_stop_event(fallback_id),) if self.sent_content_start else ()),
+            *((self._build_completion_event(fallback_id),) if emit_completion else ()),
+        ]
 
     # ------------------------------------------------------------------
     # Iteration

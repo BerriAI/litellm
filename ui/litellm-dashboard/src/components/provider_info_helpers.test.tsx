@@ -94,6 +94,20 @@ describe("provider_info_helpers", () => {
       expect(result.displayName).toBe(Providers.ZAI);
     });
 
+    it("should map the poolside slug to the Poolside display name and logo", () => {
+      const result = getProviderLogoAndName("poolside");
+      expect(result.displayName).toBe(Providers.Poolside);
+      expect(result.logo).toBe(providerLogoMap[Providers.Poolside]);
+    });
+
+    it("should resolve the Poolside enum key to the Poolside logo", () => {
+      // The Add Model dropdown passes the provider_map key ("Poolside"), so the
+      // enum-key fallback must resolve it to the logo, not a blank fallback.
+      const result = getProviderLogoAndName("Poolside");
+      expect(result.displayName).toBe(Providers.Poolside);
+      expect(result.logo).toBe(providerLogoMap[Providers.Poolside]);
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);

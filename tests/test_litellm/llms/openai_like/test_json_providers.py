@@ -338,6 +338,172 @@ class TestDarkbloom:
             assert model_cost[model]["output_cost_per_token"] == output_cost
 
 
+class TestPoolside:
+    def test_poolside_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        poolside = JSONProviderRegistry.get("poolside")
+        assert poolside is not None
+        assert poolside.base_url == "https://inference.poolside.ai/v1"
+        assert poolside.api_key_env == "POOLSIDE_API_KEY"
+        assert poolside.api_base_env == "POOLSIDE_API_BASE"
+
+    def test_poolside_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="poolside/laguna-s-2.1",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "laguna-s-2.1"
+        assert provider == "poolside"
+        assert api_key is None
+        assert api_base == "https://inference.poolside.ai/v1"
+
+    def test_poolside_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("poolside")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, _ = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://inference.poolside.ai/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://custom.poolside.ai/v1", "test-key"
+        )
+        assert api_base == "https://custom.poolside.ai/v1"
+        assert api_key == "test-key"
+
+    def test_poolside_complete_url_appends_endpoint(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("poolside")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        url = config.get_complete_url(
+            api_base="https://inference.poolside.ai/v1",
+            api_key="test-key",
+            model="poolside/laguna-s-2.1",
+            optional_params={},
+            litellm_params={},
+            stream=True,
+        )
+
+        assert url == "https://inference.poolside.ai/v1/chat/completions"
+
+    def test_poolside_provider_config_manager(self):
+        from litellm import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="laguna-s-2.1", provider=LlmProviders.POOLSIDE
+        )
+
+        assert config is not None
+        assert config.custom_llm_provider == "poolside"
+
+    def test_poolside_transform_request_prepends_provider_slug(self):
+        """poolside's API expects the fully-qualified model id (``poolside/laguna-s-2.1``),
+        but litellm strips the provider prefix before transformation. The config must
+        re-attach it in the request body sent upstream."""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        config = create_config_class(JSONProviderRegistry.get("poolside"))()
+
+        data = config.transform_request(
+            model="laguna-s-2.1",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"max_tokens": 16},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["model"] == "poolside/laguna-s-2.1"
+
+    @pytest.mark.asyncio
+    async def test_poolside_async_transform_request_prepends_provider_slug(self):
+        """The proxy uses the async path, so async_transform_request must prepend too."""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        config = create_config_class(JSONProviderRegistry.get("poolside"))()
+
+        data = await config.async_transform_request(
+            model="laguna-s-2.1",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"max_tokens": 16},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["model"] == "poolside/laguna-s-2.1"
+
+    def test_poolside_transform_request_is_idempotent(self):
+        """An already-qualified model id must not be double-prefixed."""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        config = create_config_class(JSONProviderRegistry.get("poolside"))()
+
+        data = config.transform_request(
+            model="poolside/laguna-s-2.1",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["model"] == "poolside/laguna-s-2.1"
+
+    def test_provider_without_flag_does_not_prepend_slug(self):
+        """The prefixing is opt-in via special_handling; providers without the flag
+        (e.g. publicai) must keep the bare model id."""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        config = create_config_class(JSONProviderRegistry.get("publicai"))()
+
+        data = config.transform_request(
+            model="some-model",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["model"] == "some-model"
+
+    def test_poolside_model_cost_map(self):
+        with open(
+            os.path.join(workspace_path, "model_prices_and_context_window.json")
+        ) as f:
+            model_cost = json.load(f)
+
+        expected_models = {
+            "poolside/laguna-xs-2.1": (0, 0),
+            "poolside/laguna-s-2.1": (0, 0),
+        }
+        for model, (input_cost, output_cost) in expected_models.items():
+            assert model in model_cost
+            assert model_cost[model]["litellm_provider"] == "poolside"
+            assert model_cost[model]["max_input_tokens"] == 262144
+            assert model_cost[model]["max_output_tokens"] == 32768
+            assert model_cost[model]["supports_function_calling"] is True
+            assert model_cost[model]["supports_tool_choice"] is True
+            assert model_cost[model]["supports_reasoning"] is True
+            assert model_cost[model]["input_cost_per_token"] == input_cost
+            assert model_cost[model]["output_cost_per_token"] == output_cost
+
+
 class TestPublicAIIntegration:
     """Integration tests for PublicAI provider"""
 

@@ -32016,6 +32016,34 @@
         "max_tokens": 128000,
         "mode": "chat"
     },
+    "poolside/laguna-xs-2.1": {
+        "input_cost_per_token": 0,
+        "input_cost_per_token_cache_hit": 0,
+        "litellm_provider": "poolside",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://inference.poolside.ai"
+    },
+    "poolside/laguna-s-2.1": {
+        "input_cost_per_token": 0,
+        "input_cost_per_token_cache_hit": 0,
+        "litellm_provider": "poolside",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://inference.poolside.ai"
+    },
     "ovhcloud/DeepSeek-R1-Distill-Llama-70B": {
         "input_cost_per_token": 6.7e-07,
         "litellm_provider": "ovhcloud",

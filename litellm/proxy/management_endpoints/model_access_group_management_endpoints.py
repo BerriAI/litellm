@@ -17,10 +17,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 # Clear cache and reload models to pick up the access group changes
 from litellm.proxy.management_endpoints.model_management_endpoints import (
+    clear_cache,
     live_model_ids_snapshot,
     model_info_as_mapping,
     reload_serving_verdict,
-    clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
