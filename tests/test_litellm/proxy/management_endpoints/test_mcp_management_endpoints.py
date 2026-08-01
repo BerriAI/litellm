@@ -6044,7 +6044,7 @@ async def _run_edit(old_record, updated_record, purge_mock=None, allowed_tools=N
     ):
         mock_manager.update_server = AsyncMock()
         mock_manager.reload_servers_from_database = AsyncMock()
-        mock_manager.invalidate_toolset_cache = MagicMock()
+        mock_manager.invalidate_toolset_cache_for_server = AsyncMock()
         payload_kwargs = {"server_id": server_id, "alias": updated_record.alias, "url": updated_record.url}
         if allowed_tools is not None:
             payload_kwargs["allowed_tools"] = allowed_tools
@@ -6084,10 +6084,10 @@ async def test_edit_mcp_server_invalidates_toolset_cache_when_allowed_tools_chan
     """
     Regression test: a toolset that resolves this server's tools via
     resolve_toolset_tool_permissions() caches the result in user_api_key_cache,
-    keyed only by toolset_id. Re-enabling a tool on the server (allowed_tools
-    change) must invalidate that cache so the toolset immediately reflects the
-    change, instead of serving a stale permission set (403 on the re-enabled
-    tool) until the cache's TTL expires.
+    keyed by toolset_id. Re-enabling a tool on the server (allowed_tools
+    change) must invalidate every toolset's cached entry for this server so
+    the toolset immediately reflects the change, instead of serving a stale
+    permission set (403 on the re-enabled tool) until the cache's TTL expires.
     """
     server_id = str(uuid.uuid4())
     old = generate_mock_mcp_server_db_record(server_id=server_id, alias="Same")
@@ -6096,7 +6096,7 @@ async def test_edit_mcp_server_invalidates_toolset_cache_when_allowed_tools_chan
     result, _, mock_manager = await _run_edit(old, updated, allowed_tools=["add", "add1", "add2"])
 
     assert result.server_id == server_id
-    mock_manager.invalidate_toolset_cache.assert_called_once_with()
+    mock_manager.invalidate_toolset_cache_for_server.assert_called_once_with(server_id)
 
 
 @pytest.mark.asyncio
@@ -6110,7 +6110,7 @@ async def test_edit_mcp_server_skips_toolset_cache_invalidation_when_allowed_too
     result, _, mock_manager = await _run_edit(old, updated)
 
     assert result.server_id == server_id
-    mock_manager.invalidate_toolset_cache.assert_not_called()
+    mock_manager.invalidate_toolset_cache_for_server.assert_not_called()
 
 
 @pytest.mark.asyncio

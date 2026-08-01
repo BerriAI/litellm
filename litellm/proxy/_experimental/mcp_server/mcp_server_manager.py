@@ -2602,6 +2602,24 @@ class MCPServerManager:
             )
             return list(dict.fromkeys(allow_all_server_ids + submitted_server_ids))
 
+    @staticmethod
+    def _toolset_perms_cache_key(toolset_id: str) -> str:
+        return f"toolset_perms:{toolset_id}"
+
+    @staticmethod
+    def _tools_by_server(
+        toolset: Any,
+    ) -> dict[str, list[str]]:  # mutable-ok: matches the toolset_perms cache contract
+        tool_permissions: dict[str, list[str]] = {}  # mutable-ok: same cache contract
+        for tool in toolset.tools:
+            allowed_names = tool_permissions.setdefault(
+                tool["server_id"],
+                [],  # mutable-ok: same cache contract
+            )
+            if tool["tool_name"] not in allowed_names:
+                allowed_names.append(tool["tool_name"])
+        return tool_permissions
+
     async def resolve_toolset_tool_permissions(
         self,
         toolset_ids: list[str],
@@ -2610,9 +2628,12 @@ class MCPServerManager:
         Resolve a list of toolset IDs into a mcp_tool_permissions dict.
 
         Returns: {server_id: [tool_name, ...]} — the union of all tools across
-        the given toolsets.  Results are cached via ``user_api_key_cache`` (a
-        Redis-backed ``DualCache`` in production) so that cache entries are
-        shared across workers and cold-cache DB hits are minimised.
+        the given toolsets.  Each toolset's own resolution is cached under its
+        own key (``toolset_perms:{toolset_id}``) in ``user_api_key_cache`` (a
+        Redis-backed ``DualCache`` in production), so a single toolset can be
+        invalidated precisely — in both the in-memory layer and Redis — via
+        ``invalidate_toolset_cache(toolset_id)`` without evicting every other
+        toolset's cache entry.
 
         A row names a tool on the server identified by ``server_id``, so the
         stored name is the tool's own name and is used as written.  It is never
@@ -2627,41 +2648,84 @@ class MCPServerManager:
         if not toolset_ids or prisma_client is None:
             return {}
 
-        cache_key = "toolset_perms:" + ",".join(sorted(toolset_ids))
-        cached = await user_api_key_cache.async_get_cache(key=cache_key)
-        if cached is not None:
-            return cached
+        per_toolset: dict[str, dict[str, list[str]]] = {}  # mutable-ok: per-toolset result accumulator
+        uncached_ids: list[str] = []  # mutable-ok: cache-miss accumulator
+        for toolset_id in toolset_ids:
+            cached = await user_api_key_cache.async_get_cache(key=self._toolset_perms_cache_key(toolset_id))
+            if cached is not None:
+                per_toolset[toolset_id] = cached
+            else:
+                uncached_ids.append(toolset_id)
 
+        if uncached_ids:
+            try:
+                toolsets = await list_mcp_toolsets(prisma_client, toolset_ids=uncached_ids)
+                ttl = get_management_object_ttl(user_api_key_cache)
+                for toolset in toolsets:
+                    toolset_perms = self._tools_by_server(toolset)
+                    await user_api_key_cache.async_set_cache(
+                        key=self._toolset_perms_cache_key(toolset.toolset_id),
+                        value=toolset_perms,
+                        ttl=ttl,
+                    )
+                    per_toolset[toolset.toolset_id] = toolset_perms
+            except Exception as e:  # noqa: BLE001 - best-effort resolution; a DB blip must not break tool listing/calls
+                verbose_logger.warning(f"Failed to resolve toolset permissions: {e!s}")
+
+        merged: dict[str, list[str]] = {}  # mutable-ok: union-across-toolsets accumulator
+        for toolset_perms in per_toolset.values():
+            for server_id, tool_names in toolset_perms.items():
+                existing = merged.setdefault(server_id, [])  # mutable-ok: same accumulator
+                for tool_name in tool_names:
+                    if tool_name not in existing:
+                        existing.append(tool_name)
+        return merged
+
+    async def invalidate_toolset_cache_for_server(self, server_id: str) -> None:
+        """Invalidate the cached tool permissions of every toolset that references
+        ``server_id``, precisely and across workers (memory + Redis).
+
+        Call this after an MCP server edit that changes tool availability
+        (``allowed_tools``) for that server, so a toolset built on top of it
+        re-resolves permissions instead of serving a stale cached set.
+        """
+        from litellm.proxy._experimental.mcp_server.toolset_db import list_mcp_toolsets
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
         try:
-            toolsets = await list_mcp_toolsets(prisma_client, toolset_ids=toolset_ids)
-            tool_permissions: dict[str, list[str]] = {}
-            for toolset in toolsets:
-                for tool in toolset.tools:
-                    allowed_names = tool_permissions.setdefault(tool["server_id"], [])
-                    if tool["tool_name"] not in allowed_names:
-                        allowed_names.append(tool["tool_name"])
-            await user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=tool_permissions,
-                ttl=get_management_object_ttl(user_api_key_cache),
-            )
-            return tool_permissions
-        except Exception as e:
-            verbose_logger.warning(f"Failed to resolve toolset permissions: {e!s}")
-            return {}
+            all_toolsets = await list_mcp_toolsets(prisma_client)
+        except Exception as e:  # noqa: BLE001 - best-effort invalidation; a DB blip must not fail the server edit
+            verbose_logger.warning(f"invalidate_toolset_cache_for_server: failed to list toolsets: {e}")
+            return
+        affected_ids = (
+            toolset.toolset_id
+            for toolset in all_toolsets
+            if any(tool["server_id"] == server_id for tool in toolset.tools)
+        )
+        for toolset_id in affected_ids:
+            await self.invalidate_toolset_cache(toolset_id)
 
-    def invalidate_toolset_cache(self, toolset_id: str | None = None) -> None:
+    async def invalidate_toolset_cache(self, toolset_id: str | None = None) -> None:
         """Evict cached toolset permission entries.
 
-        Called after create/update/delete of a toolset so stale data is not served.
-        The in-memory layer of ``user_api_key_cache`` is cleared immediately;
-        Redis entries expire naturally after the configured TTL.
-        Pass toolset_id to evict only entries containing that ID, or None to clear all.
+        Called after create/update/delete of a toolset, or (via
+        ``invalidate_toolset_cache_for_server``) after an MCP server edit that
+        changes tool availability for toolsets referencing it.
+
+        Pass toolset_id to evict exactly that toolset's ``toolset_perms``
+        entry from both the in-memory layer and Redis (correct across
+        workers). Pass None to clear every in-memory ``toolset_``-prefixed
+        entry on this worker only — Redis keys can't be enumerated by
+        pattern, so a full cross-worker clear isn't attempted; callers that
+        know the affected toolset_id should prefer that precise path.
         """
-        # Clear the in-memory layer of the shared DualCache for affected keys.
-        # We can't enumerate Redis keys by pattern, so Redis entries expire via TTL.
         try:
             from litellm.proxy.proxy_server import user_api_key_cache
+
+            if toolset_id is not None:
+                await user_api_key_cache.async_delete_cache(key=self._toolset_perms_cache_key(toolset_id))
 
             in_mem: InMemoryCache | None = getattr(user_api_key_cache, "in_memory_cache", None)
             if in_mem is None:
@@ -2670,19 +2734,16 @@ class MCPServerManager:
             if toolset_id is None:
                 keys_to_remove = [k for k in cache_dict if k.startswith("toolset_")]
             else:
-                # Evict permission-cache entries that reference this toolset ID.
                 # Also evict ALL name-cache entries (toolset_name:*): we can't map
                 # toolset_id → toolset_name without a DB call, and the name may have
                 # changed in an update anyway.
-                keys_to_remove = [
-                    k
-                    for k in cache_dict
-                    if (k.startswith("toolset_perms:") and toolset_id in k) or k.startswith("toolset_name:")
+                keys_to_remove = [  # mutable-ok: transient, discarded below
+                    k for k in cache_dict if k.startswith("toolset_name:")
                 ]
             for k in keys_to_remove:
                 cache_dict.pop(k, None)
-        except Exception as e:
-            verbose_logger.warning(f"invalidate_toolset_cache: failed to evict in-memory entries: {e}")
+        except Exception as e:  # noqa: BLE001 - best-effort cache eviction must not fail the caller's primary action
+            verbose_logger.warning(f"invalidate_toolset_cache: failed to evict cache entries: {e}")
 
     async def get_toolset_by_name_cached(
         self,

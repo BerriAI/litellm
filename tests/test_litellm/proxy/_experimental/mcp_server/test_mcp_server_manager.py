@@ -8909,6 +8909,7 @@ async def test_resolve_toolset_tool_permissions_single_db_fetch_across_checks():
 
     manager = MCPServerManager()
     toolset = MagicMock()
+    toolset.toolset_id = "ts-1"
     toolset.tools = [{"server_id": "server-a", "tool_name": "lookup_status"}]
     list_toolsets_mock = AsyncMock(return_value=[toolset])
 

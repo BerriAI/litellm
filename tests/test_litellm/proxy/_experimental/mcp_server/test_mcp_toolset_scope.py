@@ -358,7 +358,7 @@ class TestToolsetPrefixResolution:
             global_mcp_server_manager,
         )
 
-        toolset = SimpleNamespace(tools=[{"server_id": server_id, "tool_name": stored}])
+        toolset = SimpleNamespace(toolset_id="ts-1", tools=[{"server_id": server_id, "tool_name": stored}])
         cache = MagicMock(
             async_get_cache=AsyncMock(return_value=None),
             async_set_cache=AsyncMock(),
