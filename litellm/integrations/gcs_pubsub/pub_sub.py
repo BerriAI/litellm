@@ -132,7 +132,7 @@ class GcsPubSubLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"PubSub Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"PubSub Layer Error - {e}\n{traceback.format_exc()}")
 
     async def async_send_batch(self):
         """
@@ -148,7 +148,7 @@ class GcsPubSubLogger(CustomBatchLogger):
                 await self.publish_message(message)
 
         except Exception as e:
-            verbose_logger.exception(f"PubSub Error sending batch - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"PubSub Error sending batch - {e}\n{traceback.format_exc()}")
         finally:
             self.log_queue.clear()
 

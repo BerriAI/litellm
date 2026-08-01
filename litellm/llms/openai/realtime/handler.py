@@ -178,7 +178,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e!s}"))
+                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     # The WebSocket is already closed or the response is completed, so we can ignore this error

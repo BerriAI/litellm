@@ -177,7 +177,7 @@ def _request_token_sync(
     except httpx.RequestError as e:
         raise GigaChatAuthError(
             status_code=500,
-            message=f"GigaChat authentication request failed: {e!s}",
+            message=f"GigaChat authentication request failed: {e}",
         )
 
 
@@ -212,7 +212,7 @@ async def _request_token_async(
     except httpx.RequestError as e:
         raise GigaChatAuthError(
             status_code=500,
-            message=f"GigaChat authentication request failed: {e!s}",
+            message=f"GigaChat authentication request failed: {e}",
         )
 
 

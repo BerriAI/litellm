@@ -208,7 +208,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             completion_response = raw_response.json()
         except Exception as e:
             raise BedrockError(
-                message=f"Error parsing response: {raw_response.text}, error: {e!s}",
+                message=f"Error parsing response: {raw_response.text}, error: {e}",
                 status_code=raw_response.status_code,
             )
 
@@ -237,7 +237,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 raise Exception("Unable to set message content")
         except Exception as e:
             raise BedrockError(
-                message=f"Error setting response content: {e!s}. Response: {completion_response}",
+                message=f"Error setting response content: {e}. Response: {completion_response}",
                 status_code=raw_response.status_code,
             )
 

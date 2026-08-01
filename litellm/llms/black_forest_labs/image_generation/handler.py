@@ -156,7 +156,7 @@ class BlackForestLabsImageGeneration:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {e!s}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result
@@ -262,7 +262,7 @@ class BlackForestLabsImageGeneration:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {e!s}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result

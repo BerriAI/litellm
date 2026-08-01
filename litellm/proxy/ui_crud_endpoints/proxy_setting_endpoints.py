@@ -966,7 +966,7 @@ async def update_sso_settings(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Error updating environment_variables: {e!s}"},
+            detail={"error": f"Error updating environment_variables: {e}"},
         )
 
     return {

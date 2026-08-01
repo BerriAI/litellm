@@ -130,7 +130,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         except Exception as e:
             raise DashScopeError(
                 status_code=raw_response.status_code,
-                message=f"Failed to parse DashScope response as JSON: {e!s}",
+                message=f"Failed to parse DashScope response as JSON: {e}",
             )
 
         logging_obj.post_call(

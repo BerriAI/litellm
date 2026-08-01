@@ -351,7 +351,7 @@ class ZscalerAIGuard(CustomGuardrail):
             return self._handle_response(response, direction)
         except Exception as e:
             verbose_proxy_logger.error(f"{e}. Blocking request.")
-            user_facing_error = self._create_user_facing_error(f"{e!s}")
+            user_facing_error = self._create_user_facing_error(f"{e}")
             raise HTTPException(status_code=500, detail=user_facing_error)
 
     @staticmethod

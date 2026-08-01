@@ -153,7 +153,7 @@ class CloudZeroLogger(CustomLogger):
             verbose_logger.debug(f"CloudZero Logger: Successfully exported {len(cbf_data)} records to CloudZero")
 
         except Exception as e:
-            verbose_logger.error(f"CloudZero Logger: Error exporting usage data: {e!s}")
+            verbose_logger.error(f"CloudZero Logger: Error exporting usage data: {e}")
             raise
 
     async def dry_run_export_usage_data(self, limit: int | None = 10000):
@@ -244,8 +244,8 @@ class CloudZeroLogger(CustomLogger):
             }
 
         except Exception as e:
-            verbose_logger.error(f"CloudZero Logger: Error in dry run export: {e!s}")
-            verbose_logger.error(f"CloudZero Dry Run Error: {e!s}")
+            verbose_logger.error(f"CloudZero Logger: Error in dry run export: {e}")
+            verbose_logger.error(f"CloudZero Dry Run Error: {e}")
             raise
 
     def _display_cbf_data_on_screen(self, cbf_data):

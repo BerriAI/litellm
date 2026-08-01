@@ -1420,7 +1420,7 @@ async def get_category_yaml(category_name: str):
             "file_type": file_type,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading category file: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error reading category file: {e}")
 
 
 @router.get(
@@ -1452,7 +1452,7 @@ async def get_major_airlines():
             airlines = json.load(f)
         return {"airlines": airlines}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e!s}") from e
+        raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e}") from e
 
 
 @router.post(
@@ -1540,10 +1540,10 @@ async def validate_blocked_words_file(request: dict[str, str]):
             "message": f"Valid YAML file with {len(blocked_words_list)} blocked word(s)",
         }
     except yaml.YAMLError as e:
-        return {"valid": False, "error": f"Invalid YAML syntax: {e!s}"}
+        return {"valid": False, "error": f"Invalid YAML syntax: {e}"}
     except Exception as e:
         verbose_proxy_logger.exception("Error validating blocked words file")
-        return {"valid": False, "error": f"Validation error: {e!s}"}
+        return {"valid": False, "error": f"Validation error: {e}"}
 
 
 def _get_field_type_from_annotation(field_annotation: Any) -> str:

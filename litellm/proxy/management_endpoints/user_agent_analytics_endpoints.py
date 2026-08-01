@@ -150,7 +150,7 @@ async def get_distinct_user_agent_tags(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch distinct user agent tags: {e!s}",
+            detail=f"Failed to fetch distinct user agent tags: {e}",
         )
 
 
@@ -243,7 +243,7 @@ async def get_daily_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch DAU analytics: {e!s}",
+            detail=f"Failed to fetch DAU analytics: {e}",
         )
 
 
@@ -364,7 +364,7 @@ async def get_weekly_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch WAU analytics: {e!s}",
+            detail=f"Failed to fetch WAU analytics: {e}",
         )
 
 
@@ -485,7 +485,7 @@ async def get_monthly_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch MAU analytics: {e!s}",
+            detail=f"Failed to fetch MAU analytics: {e}",
         )
 
 
@@ -585,12 +585,12 @@ async def get_tag_summary(
     except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid date format. Use YYYY-MM-DD: {e!s}",
+            detail=f"Invalid date format. Use YYYY-MM-DD: {e}",
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch tag summary analytics: {e!s}",
+            detail=f"Failed to fetch tag summary analytics: {e}",
         )
 
 
@@ -740,5 +740,5 @@ async def get_per_user_analytics(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch per-user analytics: {e!s}",
+            detail=f"Failed to fetch per-user analytics: {e}",
         )

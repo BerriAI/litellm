@@ -182,10 +182,10 @@ async def create_fallback(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error creating fallback: {e!s}", exc_info=True)
+        verbose_proxy_logger.error(f"Error creating fallback: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to create fallback: {e!s}"},
+            detail={"error": f"Failed to create fallback: {e}"},
         )
 
 
@@ -239,10 +239,10 @@ async def get_fallback(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting fallback: {e!s}", exc_info=True)
+        verbose_proxy_logger.error(f"Error getting fallback: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to get fallback: {e!s}"},
+            detail={"error": f"Failed to get fallback: {e}"},
         )
 
 
@@ -350,8 +350,8 @@ async def delete_fallback(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error deleting fallback: {e!s}", exc_info=True)
+        verbose_proxy_logger.error(f"Error deleting fallback: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to delete fallback: {e!s}"},
+            detail={"error": f"Failed to delete fallback: {e}"},
         )

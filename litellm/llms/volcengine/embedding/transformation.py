@@ -162,7 +162,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         try:
             response_json = raw_response.json()
         except Exception as e:
-            raise ValueError(f"Failed to parse Volcengine response as JSON: {e!s}")
+            raise ValueError(f"Failed to parse Volcengine response as JSON: {e}")
 
         # Volcengine response format matches OpenAI format closely
         # Just need to ensure all required fields are present
