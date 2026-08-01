@@ -28,6 +28,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import (
+    _CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
     encrypt_callback_vars,
     is_sensitive_callback_key,
@@ -81,6 +82,11 @@ def _mask_sensitive_callback_vars(callbacks: TeamCallbackMetadata) -> None:
     what makes a read of this endpoint useful, so only the sensitive keys are
     replaced, using the same marker as the audit-log redaction above.
 
+    A value that still carries the encrypted prefix here failed to decrypt, so
+    it is masked too. Handing back a ciphertext blob under a key that is not
+    classified as sensitive would give the caller something it cannot use and
+    cannot tell apart from a real value.
+
     Masking in place rather than rebuilding the mapping keeps this under the
     LIT002 mutable-collection-construction budget. It is safe because the only
     caller passes an object it just built from a decrypted deep copy of the
@@ -89,7 +95,8 @@ def _mask_sensitive_callback_vars(callbacks: TeamCallbackMetadata) -> None:
     if not callbacks.callback_vars:
         return
     for key in tuple(callbacks.callback_vars):
-        if is_sensitive_callback_key(key):
+        value = callbacks.callback_vars[key]
+        if is_sensitive_callback_key(key) or str(value).startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
             callbacks.callback_vars[key] = _CALLBACK_VARS_REDACTED
 
 

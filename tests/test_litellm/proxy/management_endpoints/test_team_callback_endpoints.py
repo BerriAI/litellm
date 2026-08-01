@@ -626,6 +626,48 @@ async def test_get_team_callbacks_decrypts_vars_stored_under_non_sensitive_keys(
 
 
 @pytest.mark.asyncio
+async def test_get_team_callbacks_masks_values_that_fail_to_decrypt(monkeypatch):
+    """A value that cannot be decrypted must never leave as ciphertext.
+
+    After a salt-key rotation an existing value no longer decrypts, and the
+    shared helper passes it through untouched. Under a key that is not
+    classified as sensitive it would otherwise reach the caller as an opaque
+    blob that is indistinguishable from a real value.
+    """
+    from litellm.proxy.common_utils.callback_utils import _CALLBACK_VAR_ENCRYPTED_PREFIX
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    stale = _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper("tenant-project")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-bbbbbbbbbbbbbb")
+
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langsmith",
+                "callback_type": "success",
+                "callback_vars": {"langsmith_project": stale},
+            }
+        ]
+    }
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata=metadata))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        response = await get_team_callbacks(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+        )
+
+    assert response["data"]["success_callbacks"] == ["langsmith"]
+    assert response["data"]["callback_vars"]["langsmith_project"] == "***REDACTED***"
+    assert _CALLBACK_VAR_ENCRYPTED_PREFIX not in json.dumps(response)
+
+
+@pytest.mark.asyncio
 async def test_get_team_callbacks_falls_back_to_deprecated_callback_settings():
     """Teams that never used the API keep working: with no logging slot, the
     deprecated callback_settings shape is still reported, exactly as the
