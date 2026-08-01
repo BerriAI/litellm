@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import datetime
 import json
@@ -15,6 +16,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -1344,6 +1346,150 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
                 f"Bedrock payload exceeded Anthropic's 4 cache_control block limit "
                 f"when mixing message and tool_config injection: found {cache_points}"
             )
+
+
+@pytest.mark.asyncio
+async def test_tool_config_injection_point_visible_to_logging_callbacks():
+    """Regression test for #34758.
+
+    A tool_config injection point used to be applied only inside the Bedrock
+    transform, so logging callbacks (which log ``optional_params["tools"]``)
+    never saw the tool-level breakpoint, unlike message-level cache_control.
+    The stamped tool must reach the callbacks, and the Bedrock payload must
+    still carry exactly one tool cachePoint (no double injection).
+    """
+    logged_kwargs: dict = {}
+
+    class CaptureLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            logged_kwargs.update(kwargs)
+
+    with patch.dict(
+        os.environ,
+        {
+            "AWS_ACCESS_KEY_ID": "fake_access_key_id",
+            "AWS_SECRET_ACCESS_KEY": "fake_secret_access_key",
+            "AWS_REGION_NAME": "us-east-1",
+        },
+    ):
+        litellm.callbacks = [CaptureLogger()]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "output": {"message": {"role": "assistant", "content": "ok"}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 100, "outputTokens": 4, "totalTokens": 104},
+        }
+        mock_response.status_code = 200
+
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            await litellm.acompletion(
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                messages=[{"role": "user", "content": "What is the weather?"}],
+                max_tokens=32,
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get weather for a location",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"location": {"type": "string"}},
+                                "required": ["location"],
+                            },
+                        },
+                    }
+                ],
+                cache_control_injection_points=[
+                    {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+                ],
+                client=client,
+            )
+
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+
+        request_tools = request_body["toolConfig"]["tools"]
+        assert [tool for tool in request_tools if "cachePoint" in tool] == [
+            {"cachePoint": {"type": "default", "ttl": "1h"}}
+        ]
+
+        for _ in range(100):
+            if logged_kwargs:
+                break
+            await asyncio.sleep(0.1)
+
+        logged_tools = logged_kwargs["optional_params"]["tools"]
+        assert logged_tools[-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+
+def test_apply_tool_config_injection_points_leaves_non_bedrock_providers_alone():
+    """Only Bedrock turns a tool-level cache_control into a provider cache breakpoint.
+
+    Stamping tools for other providers would forward an unsupported field
+    upstream, so the point stays untouched for them.
+    """
+    tools = [{"type": "function", "function": {"name": "get_weather"}}]
+    non_default_params = {"cache_control_injection_points": [{"location": "tool_config"}]}
+
+    updated_tools, updated_params = AnthropicCacheControlHook.apply_tool_config_injection_points(
+        tools=tools,
+        non_default_params=non_default_params,
+        custom_llm_provider="openai",
+    )
+
+    assert updated_tools == tools
+    assert updated_params == non_default_params
+
+
+def test_apply_tool_config_injection_points_keeps_message_points():
+    tools = [{"type": "function", "function": {"name": "get_weather"}}]
+    message_point = {"location": "message", "role": "system"}
+
+    updated_tools, updated_params = AnthropicCacheControlHook.apply_tool_config_injection_points(
+        tools=tools,
+        non_default_params={"cache_control_injection_points": [message_point, {"location": "tool_config"}]},
+        custom_llm_provider="bedrock",
+    )
+
+    assert updated_tools[-1]["cache_control"] == {"type": "ephemeral"}
+    assert list(updated_params["cache_control_injection_points"]) == [message_point]
+
+
+def test_apply_tool_config_injection_points_defers_to_client_marked_tool():
+    """A client-marked tool already yields a cachePoint; don't add a second one."""
+    tools = [
+        {"type": "function", "function": {"name": "get_weather"}, "cache_control": {"type": "ephemeral"}},
+    ]
+
+    updated_tools, updated_params = AnthropicCacheControlHook.apply_tool_config_injection_points(
+        tools=tools,
+        non_default_params={"cache_control_injection_points": [{"location": "tool_config"}]},
+        custom_llm_provider="bedrock",
+    )
+
+    assert updated_tools == tools
+    assert "cache_control_injection_points" not in updated_params
+
+
+def test_apply_tool_config_injection_points_defers_to_transform_for_bedrock_tool_blocks():
+    """Pre-formatted Bedrock tool blocks pass the transform untouched.
+
+    A stamp on them would be dropped, so the point must survive for the
+    transform to append its trailing cachePoint.
+    """
+    tools = [{"systemTool": {"name": "nova_grounding"}}]
+    non_default_params = {"cache_control_injection_points": [{"location": "tool_config"}]}
+
+    updated_tools, updated_params = AnthropicCacheControlHook.apply_tool_config_injection_points(
+        tools=tools,
+        non_default_params=non_default_params,
+        custom_llm_provider="bedrock",
+    )
+
+    assert updated_tools == tools
+    assert updated_params == non_default_params
 
 
 class TestApplyToAnthropicMessagesRequest:
