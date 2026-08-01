@@ -19,6 +19,15 @@ class OtelDestination(BaseModel):
     headers: Mapping[str, str] = Field(default_factory=dict)
     resource_attributes: Mapping[str, str] = Field(default_factory=dict)
     callback_name: str | None = None
+    protocol: str | None = Field(
+        default=None,
+        description=(
+            "OTLP transport for this endpoint (``otlp_http`` / ``otlp_grpc``). The "
+            "backend's intrinsic default is used when unset. A backend whose own cloud "
+            "endpoint is gRPC can still be pointed at an HTTP collector, which the "
+            "scheme alone cannot express: Arize's own ``https://otlp.arize.com/v1`` is gRPC."
+        ),
+    )
 
     def header_string(self) -> str:
         """Render headers as the ``k=v,k2=v2`` form an ``ExporterSpec`` expects."""

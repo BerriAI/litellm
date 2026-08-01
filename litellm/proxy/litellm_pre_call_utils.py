@@ -694,6 +694,7 @@ async def _resolve_logging_exporters(
             "endpoint": destination.endpoint,
             "headers": destination.headers,
             "resource_attributes": destination.resource_attributes,
+            "protocol": destination.protocol,
         }
         for backend, destination in deduped.values()
     )
@@ -739,6 +740,12 @@ async def _apply_admin_logging_exporters(
     destinations on this request (the FastAPI path), reuse the result instead of
     running the resolver a second time. The SDK path passes ``None`` and the
     resolver runs here.
+
+    An empty resolution is published too, matching ``_hoist_request_destinations``.
+    Returning early instead would leave a previous message's destinations standing on
+    a ContextVar this request never overwrites: a stateful MCP session runs every
+    message on the task its ``initialize`` spawned, so a revoked grant would keep
+    exporting for the life of that session.
     """
     if cached_destinations is not None:
         destinations = tuple(cached_destinations)
@@ -752,9 +759,9 @@ async def _apply_admin_logging_exporters(
             destinations, backends = await _resolve_logging_exporters(user_api_key_dict)
         except Exception:  # noqa: BLE001  # best-effort telemetry setup must never break the request
             return
+    _set_request_otel_destinations(destinations)
     if not destinations:
         return
-    _set_request_otel_destinations(destinations)
     existing_success = data.get("success_callback") or []
     data["success_callback"] = list(dict.fromkeys([*existing_success, *backends]))
     existing_failure = data.get("failure_callback") or []

@@ -65,6 +65,46 @@ def test_arize_space_and_api_key_headers(monkeypatch):
     assert dest is not None
     assert dest.endpoint == "https://otlp.arize.com/v1"
     assert dest.headers == {"space_id": "S", "api_key": "K"}
+    assert dest.protocol is None, "Arize's own endpoint keeps the backend's intrinsic gRPC default"
+
+
+def test_arize_http_endpoint_selects_http_transport(monkeypatch):
+    """Regression: transport was chosen from the backend name alone, so an Arize
+    destination pointed at an HTTP collector was still exported over gRPC -- the
+    collector received nothing and every request drove an exponential-backoff retry
+    storm. The URL scheme cannot express this, since Arize's own gRPC endpoint is
+    also https://, so the destination carries the transport explicitly.
+    """
+    monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+    dest = build_destination(
+        "arize",
+        {
+            "arize_space_id": "S",
+            "arize_api_key": "K",
+            "arize_http_endpoint": "http://collector.internal/v1/traces",
+        },
+    )
+    assert dest is not None
+    assert dest.endpoint == "http://collector.internal/v1/traces"
+    assert dest.protocol == "otlp_http"
+
+
+def test_arize_grpc_endpoint_wins_over_http_endpoint(monkeypatch):
+    """Mirrors the global config's precedence: ARIZE_ENDPOINT (gRPC) is checked before
+    ARIZE_HTTP_ENDPOINT, so a destination supplying both keeps the gRPC default."""
+    monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+    dest = build_destination(
+        "arize",
+        {
+            "arize_space_id": "S",
+            "arize_api_key": "K",
+            "arize_endpoint": "https://grpc.internal/v1",
+            "arize_http_endpoint": "http://collector.internal/v1/traces",
+        },
+    )
+    assert dest is not None
+    assert dest.endpoint == "https://grpc.internal/v1"
+    assert dest.protocol is None
 
 
 # --- per-backend Resource declaration -------------------------------------- #

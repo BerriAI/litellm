@@ -97,6 +97,63 @@ def test_update_db_credential_preserves_untouched_access_subfields():
     }
 
 
+def test_update_db_credential_treats_empty_access_as_a_revocation():
+    """`{"access": {}}` is the natural spelling of "grant nobody" and the endpoint
+    answers 200, so it must actually revoke. Merging it subfield-by-subfield is a
+    no-op that leaves every grant standing while reporting success -- a revocation
+    the admin believes happened and didn't.
+    """
+    from litellm.proxy.credential_endpoints.endpoints import update_db_credential
+
+    db = CredentialItem(
+        credential_name="dest",
+        credential_values={},
+        credential_info={
+            "credential_type": "logging",
+            "description": "langfuse_otel",
+            "access": {"global": True, "orgs": ["org-1"], "teams": ["team-A"]},
+        },
+    )
+    patch = CredentialItem(
+        credential_name="dest",
+        credential_values={},
+        credential_info={"access": {}},
+    )
+
+    merged = update_db_credential(db, patch)
+
+    assert merged.credential_info["access"] == {}
+    # the sibling metadata the patch never named is still untouched
+    assert merged.credential_info["description"] == "langfuse_otel"
+
+
+def test_update_db_credential_omitting_access_leaves_grants_alone():
+    """The counterpart to the empty-access revoke: omitting `access` entirely is how a
+    patch says "don't touch the grants", so it must not be read as a revocation.
+    """
+    from litellm.proxy.credential_endpoints.endpoints import update_db_credential
+
+    db = CredentialItem(
+        credential_name="dest",
+        credential_values={},
+        credential_info={
+            "credential_type": "logging",
+            "description": "langfuse_otel",
+            "access": {"global": True, "teams": ["team-A"]},
+        },
+    )
+    patch = CredentialItem(
+        credential_name="dest",
+        credential_values={},
+        credential_info={"host": "new-host"},
+    )
+
+    merged = update_db_credential(db, patch)
+
+    assert merged.credential_info["access"] == {"global": True, "teams": ["team-A"]}
+    assert merged.credential_info["host"] == "new-host"
+
+
 # --- provider credentials keep base replace semantics (merge is logging-only) ---
 
 def test_update_db_credential_replaces_info_for_provider_credential():

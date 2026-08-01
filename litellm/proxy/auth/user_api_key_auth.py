@@ -1036,6 +1036,7 @@ async def _hoist_request_destinations(request: Request, user_api_key_dict: UserA
                 endpoint=item.get("endpoint", ""),
                 headers=item.get("headers") or {},
                 resource_attributes=item.get("resource_attributes") or {},
+                protocol=item.get("protocol"),
             )
             for item in destinations_raw
             if isinstance(item, dict) and item.get("endpoint")

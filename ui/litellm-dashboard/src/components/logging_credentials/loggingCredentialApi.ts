@@ -2,12 +2,16 @@ import { CredentialAccess } from "../Settings/LoggingAndAlerts/LoggingCallbacks/
 import { credentialCreateCall } from "../networking";
 import { LOGGING_DESTINATION_BACKENDS } from "./loggingDestinationFields";
 
-// The OTEL trace-destination backend ids. These are managed as admin-owned logging
-// destinations (credentials): the unified Add modal branches on this set, and they never
-// appear as global callback rows or dropdown options. The `langfuse` v2 SDK logger and
-// the generic `otel` callback are deliberately not here; they keep their existing
-// global-callback behavior untouched.
+// The OTEL trace-destination backend ids, managed as admin-owned logging destinations
+// (credentials). The `langfuse` v2 SDK logger and the generic `otel` callback are
+// deliberately not here; they keep their existing global-callback behavior untouched.
 export const LOGGING_BACKEND_IDS: ReadonlySet<string> = new Set(LOGGING_DESTINATION_BACKENDS.map((b) => b.id));
+
+// These backends are reachable two ways from the Add modal, so the dropdown carries a
+// prefixed option id for the destination branch. Without it a bare `arize` would be
+// ambiguous, and picking it would silently create an inert credential instead of the
+// proxy-wide callback the same label used to produce.
+export const DESTINATION_OPTION_PREFIX = "destination:";
 
 export const backendLabel = (id?: string): string =>
   LOGGING_DESTINATION_BACKENDS.find((b) => b.id === id)?.label ?? id ?? "-";

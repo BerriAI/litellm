@@ -4102,9 +4102,11 @@ def test_credential_mandatory_backend_global_misconfig_stays_loud(monkeypatch):
         [
             SimpleNamespace(
                 credential_name="wb-poc",
+                credential_values={"wandb_api_key": "wb-key"},
                 credential_info={
                     "credential_type": "logging",
                     "description": "weave_otel",
+                    "access": {"teams": ["team-a"]},
                 },
             )
         ],
@@ -4113,6 +4115,63 @@ def test_credential_mandatory_backend_global_misconfig_stays_loud(monkeypatch):
     is_otel_v2_enabled.cache_clear()
     assert isinstance(logger, OpenTelemetryV2)
     assert logger.callback_name == "weave_otel"
+
+
+@pytest.mark.parametrize(
+    "credential_info, credential_values, why",
+    [
+        ({"credential_type": "logging", "description": "weave_otel"}, {"wandb_api_key": "k"}, "no access at all"),
+        (
+            {"credential_type": "logging", "description": "weave_otel", "access": {}},
+            {"wandb_api_key": "k"},
+            "empty access grants nobody",
+        ),
+        (
+            {
+                "credential_type": "logging",
+                "description": "weave_otel",
+                "access": {"global": False, "teams": [], "orgs": []},
+            },
+            {"wandb_api_key": "k"},
+            "explicitly revoked",
+        ),
+        (
+            {"credential_type": "logging", "description": "weave_otel", "access": {"teams": ["team-a"]}},
+            {},
+            "granted but unbuildable",
+        ),
+    ],
+)
+def test_inert_destination_does_not_degrade_the_backend(monkeypatch, credential_info, credential_values, why):
+    # Regression: relaxing the preset's missing-credentials check changes how the backend
+    # is built for EVERY request on the proxy. A destination that routes to nobody -- no
+    # access, empty access, revoked access, or values that build no destination -- must
+    # not trigger it. Otherwise registering an inert row degrades the backend proxy-wide
+    # and silently drops the exports of teams carrying their own callback_vars for it.
+    from types import SimpleNamespace
+
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+    for var in ("WANDB_API_KEY", "WANDB_PROJECT_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            SimpleNamespace(
+                credential_name="inert",
+                credential_values=credential_values,
+                credential_info=credential_info,
+            )
+        ],
+    )
+    result = _maybe_construct_otel_v2("weave_otel", [])
+    is_otel_v2_enabled.cache_clear()
+    assert result is None, f"{why}: an inert destination must not relax the credential check"
 
 
 def test_generic_admin_destination_needs_flag_to_build_otel_v2_logger(monkeypatch):

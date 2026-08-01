@@ -309,6 +309,11 @@ def _merge_credential_info(
     subfield-by-subfield instead, so a partial patch keeps the untouched
     subfields intact. The DB write and the in-memory cache sync both call this
     so the two stores can't drift.
+
+    An empty ``access`` object is a revocation, not a no-op merge: ``{"access": {}}``
+    is the natural spelling of "grant nobody", and merging it subfield-by-subfield
+    would leave every grant in place while the endpoint answered 200. Omit ``access``
+    entirely to leave the stored grants untouched.
     """
     patch_copy = dict(patch)
     patch_access = patch_copy.pop("access", None)
@@ -316,7 +321,7 @@ def _merge_credential_info(
     if patch_access is None:
         return
     existing_access = into.get("access")
-    if isinstance(existing_access, dict) and isinstance(patch_access, dict):
+    if patch_access and isinstance(existing_access, dict) and isinstance(patch_access, dict):
         existing_access.update(patch_access)
     else:
         into["access"] = patch_access

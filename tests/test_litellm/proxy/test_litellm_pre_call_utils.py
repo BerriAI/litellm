@@ -5044,6 +5044,9 @@ async def test_resolve_logging_exporters_carries_arize_project(_seeded_logging_c
                 "model_id": "tenant-arize",
                 "arize.project.name": "tenant-arize",
             },
+            # Arize's own endpoint is gRPC, so the destination carries no transport
+            # override and the backend's intrinsic default applies.
+            "protocol": None,
         },
     )
 
@@ -5119,6 +5122,40 @@ async def test_apply_admin_logging_exporters_swallows_resolver_failure(monkeypat
         await pcu._apply_admin_logging_exporters(data, _auth(), cached_destinations=None)
         assert data == {}
         assert request_destinations() == ()
+    finally:
+        _request_destinations.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_empty_resolution_clears_a_previous_messages_destinations(monkeypatch):
+    """Regression: an empty resolution must be published, not skipped.
+
+    A stateful streamable-HTTP MCP session runs every message on the task its
+    ``initialize`` POST spawned, so the destination ContextVar is shared across
+    messages on that task. Returning early on an empty resolution leaves the previous
+    message's destinations standing, and a revoked grant keeps exporting for the life
+    of the session. ``_hoist_request_destinations`` already sets unconditionally; this
+    is the same contract on the other path.
+    """
+    import litellm.proxy.litellm_pre_call_utils as pcu
+    from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.integrations.otel.plumbing.context import (
+        _request_destinations,
+        request_destinations,
+    )
+
+    stale = (OtelDestination(endpoint="http://revoked.internal/v1/traces", callback_name="generic"),)
+
+    async def _grants_nothing(_uapk):
+        return (), ()
+
+    monkeypatch.setattr(pcu, "_resolve_logging_exporters", _grants_nothing)
+    token = _request_destinations.set(stale)
+    data: dict = {}
+    try:
+        await pcu._apply_admin_logging_exporters(data, _auth(), cached_destinations=None)
+        assert request_destinations() == (), "a revoked identity must not inherit the previous message's destinations"
+        assert "success_callback" not in data
     finally:
         _request_destinations.reset(token)
 

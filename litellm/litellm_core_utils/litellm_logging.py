@@ -4184,21 +4184,37 @@ def _init_custom_logger_compatible_class(
 
 
 def _has_admin_owned_logging_destination(callback_name: str) -> bool:
-    """Whether an admin has registered a logging destination for this backend.
+    """Whether a destination that actually routes somewhere is registered for this backend.
 
     Admin-owned trace destinations (``logging`` credentials, created from the UI)
     are an OTEL v2 feature, gated on the ``LITELLM_OTEL_V2`` flag like the rest of
     v2. When the flag is on and one exists for ``callback_name``, the preset's
     missing-global-credentials check is relaxed: the destination carries its own
     credentials, so the v2 logger need not find global env credentials to build.
+
+    Existence alone is not enough: relaxing the check changes how the backend is built
+    for every request on the proxy, so a destination whose ``access`` grants nobody --
+    or whose values don't build a destination at all -- must not trigger it. Otherwise
+    registering an inert row degrades the backend proxy-wide and drops the exports of
+    teams that carry their own ``callback_vars`` credentials for it.
     """
     import litellm
-
-    return any(
-        (info := credential.credential_info or {}).get("credential_type") == "logging"
-        and info.get("description") == callback_name
-        for credential in litellm.credential_list
+    from litellm.proxy.management_endpoints.logging_exporter_access import (
+        destination_for_credential,
+        parse_credential_info,
     )
+
+    for credential in litellm.credential_list:
+        raw = credential.credential_info or {}
+        if raw.get("credential_type") != "logging" or raw.get("description") != callback_name:
+            continue
+        info = parse_credential_info(raw)
+        access = info.access if info is not None else None
+        if access is None or not (access.global_ or access.teams or access.orgs):
+            continue
+        if destination_for_credential(credential) is not None:
+            return True
+    return False
 
 
 def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Optional[Any]:

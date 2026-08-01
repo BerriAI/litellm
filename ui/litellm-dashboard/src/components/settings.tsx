@@ -47,7 +47,11 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import EditLoggingCredentialModal from "./logging_credentials/EditLoggingCredentialModal";
 import AccessControlFields from "./logging_credentials/AccessControlFields";
-import { backendLabel, createLoggingCredential, LOGGING_BACKEND_IDS } from "./logging_credentials/loggingCredentialApi";
+import {
+  backendLabel,
+  createLoggingCredential,
+  DESTINATION_OPTION_PREFIX,
+} from "./logging_credentials/loggingCredentialApi";
 import { LOGGING_DESTINATION_BACKENDS } from "./logging_credentials/loggingDestinationFields";
 import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
@@ -265,8 +269,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [editAccessFor, setEditAccessFor] = useState<{ name: string; access?: CredentialAccess } | null>(null);
   // access for the destination branch of the unified Add modal
   const [addAccess, setAddAccess] = useState<CredentialAccess>({});
-  const addingDestination = selectedCallback != null && LOGGING_BACKEND_IDS.has(selectedCallback);
-  const addingDestinationFields = LOGGING_DESTINATION_BACKENDS.find((b) => b.id === selectedCallback)?.fields ?? [];
+  const addingDestination = selectedCallback != null && selectedCallback.startsWith(DESTINATION_OPTION_PREFIX);
+  const selectedDestinationBackend = addingDestination
+    ? selectedCallback.slice(DESTINATION_OPTION_PREFIX.length)
+    : null;
+  const addingDestinationFields =
+    LOGGING_DESTINATION_BACKENDS.find((b) => b.id === selectedDestinationBackend)?.fields ?? [];
 
   const teamAlias = (id: string): string => {
     const t = (teamsData ?? []).find((team) => team.team_id === id);
@@ -434,8 +442,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     if (!new_callback) {
       return;
     }
-    if (LOGGING_BACKEND_IDS.has(new_callback) && accessToken) {
-      const backendDef = LOGGING_DESTINATION_BACKENDS.find((b) => b.id === new_callback);
+    if (new_callback.startsWith(DESTINATION_OPTION_PREFIX) && accessToken) {
+      const backendId = new_callback.slice(DESTINATION_OPTION_PREFIX.length);
+      const backendDef = LOGGING_DESTINATION_BACKENDS.find((b) => b.id === backendId);
       const fields = backendDef?.fields ?? [];
       const values = Object.fromEntries(
         fields.filter((f) => formValues[f.name]).map((f) => [f.name, formValues[f.name]]),
@@ -445,7 +454,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       try {
         await createLoggingCredential(accessToken, {
           credentialName: formValues.credential_name,
-          backend: new_callback,
+          backend: backendId,
           values,
           host,
           access: hasAccess ? addAccess : undefined,
@@ -831,8 +840,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         >
           <CallbackSelector
             callbackConfigs={[
-              ...callbackConfigs.filter((c: { id: string }) => !LOGGING_BACKEND_IDS.has(c.id)),
-              ...LOGGING_DESTINATION_BACKENDS.map((b) => ({ id: b.id, displayName: b.label, logo: "" })),
+              ...callbackConfigs,
+              ...LOGGING_DESTINATION_BACKENDS.map((b) => ({
+                id: `${DESTINATION_OPTION_PREFIX}${b.id}`,
+                displayName: `${b.label} (scoped destination)`,
+                logo: "",
+              })),
             ]}
             selectedCallback={selectedCallback}
             onCallbackChange={handleSelectedCallbackChange}

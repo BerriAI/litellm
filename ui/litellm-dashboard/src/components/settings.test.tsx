@@ -319,3 +319,45 @@ describe("CallbackSelector logos", () => {
     expect(screen.getByText("N")).toBeInTheDocument();
   });
 });
+
+describe("Add Callback dropdown", () => {
+  // Regression: the four OTEL backend ids were filtered out of the config-owned
+  // callback list and re-added as destinations under the SAME ids, so picking "Arize"
+  // silently switched from creating a proxy-wide callback (/config/update) to creating
+  // a by-default-inert logging credential (/credentials). Both paths must be offered,
+  // and distinguishable, so the pre-existing flow still exists.
+  const defaultProps = {
+    accessToken: "token",
+    userRole: "Admin",
+    userID: "user-123",
+    premiumUser: false,
+  };
+
+  it("offers the config-owned OTEL callback and the scoped destination as separate options", async () => {
+    vi.clearAllMocks();
+    vi.mocked(alertingSettingsCall).mockResolvedValue([]);
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      callbacks: [],
+      available_callbacks: {
+        arize: {
+          litellm_callback_name: "arize",
+          litellm_callback_params: ["ARIZE_SPACE_ID", "ARIZE_API_KEY"],
+          ui_callback_name: "Arize",
+        },
+      },
+      alerts: [],
+    });
+    vi.mocked(getCallbackConfigsCall).mockResolvedValue([{ id: "arize", displayName: "Arize", dynamic_params: {} }]);
+
+    const { getByText } = renderSettings(defaultProps);
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+
+    fireEvent.click(getByText("Add Callback"));
+    fireEvent.mouseDown(await screen.findByRole("combobox"));
+
+    expect(await screen.findByText("Arize")).toBeInTheDocument();
+    expect(screen.getByText("Arize (scoped destination)")).toBeInTheDocument();
+  });
+});

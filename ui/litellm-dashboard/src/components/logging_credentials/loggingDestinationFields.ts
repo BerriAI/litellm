@@ -74,10 +74,17 @@ export const LOGGING_DESTINATION_BACKENDS: LoggingDestinationBackend[] = [
       },
       {
         name: "arize_endpoint",
-        label: "Endpoint",
+        label: "Endpoint (gRPC)",
         type: "text",
         optional: true,
         placeholder: "https://otlp.arize.com/v1",
+      },
+      {
+        name: "arize_http_endpoint",
+        label: "Endpoint (HTTP)",
+        type: "text",
+        optional: true,
+        placeholder: "http://collector.internal/v1/traces",
       },
     ],
     hostField: "arize_endpoint",

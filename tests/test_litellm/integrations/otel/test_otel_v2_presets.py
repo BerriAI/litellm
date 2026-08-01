@@ -62,6 +62,68 @@ def test_arize_preset_without_credentials_still_appends_exporter(monkeypatch):
     assert [e for e in cfg.exporters if e.owner == ExporterOwner.ARIZE_AX] != []
 
 
+@pytest.mark.parametrize(
+    "preset_name, owner_name, env",
+    [
+        ("arize", "ARIZE_AX", ("ARIZE_SPACE_ID", "ARIZE_SPACE_KEY", "ARIZE_API_KEY", "ARIZE_ENDPOINT", "ARIZE_HTTP_ENDPOINT")),
+        ("agentops", "AGENTOPS", ("AGENTOPS_API_KEY",)),
+    ],
+)
+def test_credential_optional_presets_add_no_vendor_exporter_for_a_destination(monkeypatch, preset_name, owner_name, env):
+    # Regression: registering a team-scoped destination builds the backend proxy-wide with
+    # allow_missing_credentials=True. A credential-optional preset must then contribute NO
+    # global exporter: appending its public vendor endpoint anyway ships that tenant's spans
+    # to a vendor account nobody granted (and Arize additionally stamps the operator's own
+    # OTLP auth header onto that uninvited request).
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+
+    for var in env:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "authorization=Bearer OPERATOR-COLLECTOR-SECRET")
+
+    cfg = PRESET_BY_CALLBACK[preset_name](allow_missing_credentials=True)
+    owner = getattr(ExporterOwner, owner_name)
+    assert [e for e in cfg.exporters if e.owner == owner] == []
+    assert "OPERATOR-COLLECTOR-SECRET" not in str([e.headers for e in cfg.exporters])
+    assert cfg.mapper_names, "degrading must keep the preset's mappers"
+
+
+def test_arize_keeps_its_exporter_for_an_operators_own_collector(monkeypatch):
+    # The carve-out: ARIZE_ENDPOINT with no Arize credentials is a legitimate self-hosted,
+    # no-auth collector authenticated via the standard OTLP headers env var. Degrading must
+    # not take that away, so the exporter stays and keeps carrying those headers.
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.arize import arize_preset
+
+    for var in ("ARIZE_SPACE_ID", "ARIZE_SPACE_KEY", "ARIZE_API_KEY", "ARIZE_HTTP_ENDPOINT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ARIZE_ENDPOINT", "https://collector.internal/v1")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "authorization=Bearer OPERATOR-COLLECTOR-SECRET")
+
+    specs = [e for e in arize_preset(allow_missing_credentials=True).exporters if e.owner == ExporterOwner.ARIZE_AX]
+    assert len(specs) == 1
+    assert specs[0].endpoint == "https://collector.internal/v1"
+    assert specs[0].headers == "authorization=Bearer OPERATOR-COLLECTOR-SECRET"
+
+
+def test_arize_never_sends_the_operators_otlp_headers_to_the_public_endpoint(monkeypatch):
+    # A global arize callback with no credentials still exports (additive parity), but it
+    # must not fall back to the operator's OTLP auth header while pointed at Arize's public
+    # endpoint: that hands a collector credential to a vendor the operator has no account with.
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.arize import ARIZE_PUBLIC_OTLP_ENDPOINT, arize_preset
+
+    for var in ("ARIZE_SPACE_ID", "ARIZE_SPACE_KEY", "ARIZE_API_KEY", "ARIZE_ENDPOINT", "ARIZE_HTTP_ENDPOINT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "authorization=Bearer OPERATOR-COLLECTOR-SECRET")
+
+    specs = [e for e in arize_preset().exporters if e.owner == ExporterOwner.ARIZE_AX]
+    assert len(specs) == 1
+    assert specs[0].endpoint == ARIZE_PUBLIC_OTLP_ENDPOINT
+    assert specs[0].headers is None
+
+
 def test_phoenix_preset_without_config_appends_localhost_exporter(monkeypatch):
     # Additive parity: unconfigured Phoenix defaults to http://localhost:6006 and
     # the preset always contributes that exporter, so a local self-hosted Phoenix

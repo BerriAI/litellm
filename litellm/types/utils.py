@@ -3121,6 +3121,7 @@ class OtelDestinationParams(TypedDict, total=False):
     endpoint: str
     headers: Mapping[str, str]
     resource_attributes: Mapping[str, str]
+    protocol: str | None
 
 
 class StandardCallbackDynamicParams(TypedDict, total=False):

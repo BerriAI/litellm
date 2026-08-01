@@ -10,9 +10,9 @@ scope is the given set of team ids and org ids. The resolver passes a
 one-element scope built with ``identity_scope``.
 """
 
-from pydantic import BaseModel, ConfigDict, ValidationError
-
 from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm.integrations.otel.model.config import is_otel_v2_enabled

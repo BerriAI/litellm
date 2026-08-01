@@ -256,7 +256,7 @@ class TenantTracerCache:
         kind = self._owned_otlp_kind()
         appended = tuple(
             ExporterSpec(
-                kind=kind,
+                kind=d.protocol or kind,
                 endpoint=d.endpoint,
                 headers=d.header_string(),
                 owner=None,
@@ -281,8 +281,8 @@ _MAX_CACHED_PROCESSORS = 256
 _GENAI_SPAN_ATTR = "gen_ai.operation.name"
 
 
-def _processor_key(destination: OtelDestination) -> tuple:
-    return (destination.endpoint, tuple(sorted(destination.headers.items())))
+def _processor_key(destination: OtelDestination) -> "tuple[str, tuple[tuple[str, str], ...], str | None]":
+    return (destination.endpoint, tuple(sorted(destination.headers.items())), destination.protocol)
 
 
 def _is_genai_span(span: ReadableSpan) -> bool:
@@ -401,7 +401,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
         try:
             spec = ExporterSpec(
-                kind=default_otlp_kind_for_backend(destination.callback_name),
+                kind=destination.protocol or default_otlp_kind_for_backend(destination.callback_name),
                 endpoint=destination.endpoint,
                 headers=destination.header_string(),
                 owner=None,
