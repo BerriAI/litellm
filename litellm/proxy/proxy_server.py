@@ -122,6 +122,7 @@ from litellm.types.utils import (
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     load_credentials_from_list,
+    reapply_runtime_model_cost_registrations,
 )
 
 if TYPE_CHECKING:
@@ -3859,7 +3860,13 @@ def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
     # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
     # wildcard patterns like "anthropic/*" include any newly added models.
     litellm.add_known_models(model_cost_map=new_model_cost_map)
-    return len(new_model_cost_map) if new_model_cost_map else 0
+    # Counted before the re-apply below, which writes into this same dict, so the
+    # number reported describes the fetched price data alone.
+    fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
+    # The swap discards everything registered at runtime (deployment model_info,
+    # register_model overrides), so put it back on top of the fresh catalog.
+    reapply_runtime_model_cost_registrations()
+    return fetched_model_count
 
 
 class ProxyConfig:
