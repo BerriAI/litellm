@@ -77,6 +77,9 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
         "test_router_caching.py",
         # Hits the local fake OpenAI endpoint on 127.0.0.1; nothing to record.
         "test_fake_openai_endpoint.py",
+        # Drives a loopback server that poisons its own keep-alive connections;
+        # vcrpy patches the transport that behaviour lives in.
+        "test_handler_no_replay_on_dead_connection.py",
     }
 )
 
