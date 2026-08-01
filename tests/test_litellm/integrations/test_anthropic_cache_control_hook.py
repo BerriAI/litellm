@@ -1909,3 +1909,47 @@ class TestAnthropicPromptCachingEnvVars:
         """An unparseable TTL must fall back to Anthropic's 5m default, never reach the provider verbatim."""
         _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
         assert ttl is None
+
+
+def test_gemini_cache_control_non_contiguous_breakpoints_last_wins():
+    """
+    Anthropic allows multiple, non-contiguous cache_control breakpoints
+    (e.g. system prompt + a later turn re-marked as conversation grows).
+    Gemini only supports a single contiguous prefix cache, so LiteLLM must
+    resolve multiple breakpoints to one boundary at the LAST marked message
+    -- caching up to the last tag implicitly covers earlier tags too.
+
+    Regression test for GitHub issue #17201: LiteLLM currently uses a
+    "first-found" strategy (get_first_continuous_block_idx stops at the
+    first gap), which silently drops any breakpoint after the first
+    contiguous block. This causes the Gemini cache to stay "stuck" at the
+    system-prompt level for clients like Claude Code that re-mark later
+    turns as the conversation grows.
+    """
+    from litellm.llms.vertex_ai.context_caching.transformation import (
+        separate_cached_messages,
+    )
+
+    messages: List[AllMessageValues] = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "user", "content": "First question."},
+        {"role": "assistant", "content": "First answer."},
+        {
+            "role": "user",
+            "content": "Second question, now marked for caching too.",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    cached, non_cached = separate_cached_messages(messages)
+
+    # The last-marked message must be part of the cached prefix, since
+    # Gemini's cache boundary should extend to the last cache_control tag.
+    assert messages[3] in cached, (
+        "Second cache_control breakpoint was dropped -- only the first "
+        "contiguous block was cached, reproducing issue #17201"
+    )
