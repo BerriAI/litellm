@@ -6737,6 +6737,7 @@ def embedding(
                 litellm_params={},
                 client=client,
                 aembedding=aembedding,
+                headers=headers,
             )
         elif custom_llm_provider == "azure_ai":
             api_base = (

@@ -1667,3 +1667,44 @@ async def test_sap_embedding_required_headers(
                 f"Header '{header_name}' has incorrect value. "
                 f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
             )
+
+
+@pytest.mark.asyncio
+async def test_sap_embedding_forwards_extra_headers(
+    respx_mock,
+    sap_api_response,
+    fake_token_creator,
+    fake_deployment_url,
+):
+    import litellm
+
+    litellm.disable_aiohttp_transport = True
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        model = "sap/text-embedding-3-small"
+        input = "Hi"
+        route = respx_mock.post(f"{fake_deployment_url}/v2/embeddings")
+        route.respond(json=sap_api_response)
+
+        response = await litellm.aembedding(
+            model=model,
+            input=input,
+            extra_headers={"ai-inference-observability-persistence-mode": "all"},
+        )
+
+        assert response
+        assert route.called
+        request = route.calls[0].request
+        assert (
+            request.headers["ai-inference-observability-persistence-mode"] == "all"
+        )
+        assert request.headers["Authorization"] == "Bearer FAKE_TOKEN"
