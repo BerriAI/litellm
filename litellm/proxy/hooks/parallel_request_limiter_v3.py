@@ -1341,7 +1341,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else:
                 limit_value = rate_limit.get("tokens_per_unit")
                 inc_amount = int(increment_amounts.get("tokens", 0) or 0)
-            if limit_value is None:
+            if limit_value is None or inc_amount < 0:
                 continue
             counter_key = self.create_rate_limit_keys(descriptor_key, descriptor_value, rlt)
             # Counter-key TTL and window_size are conceptually distinct

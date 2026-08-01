@@ -5055,3 +5055,17 @@ async def test_atomic_check_with_zero_increment_still_enforces_token_limit():
         )
         == 150
     )
+
+    negative_increment: Dict[str, int] = {"requests": -1, "tokens": -50}
+    refund_attempt = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[negative_increment],
+    )
+    assert refund_attempt["overall_code"] == "OK"
+    assert refund_attempt["statuses"] == []
+    assert (
+        await handler.internal_usage_cache.async_get_cache(
+            key=counter_key, litellm_parent_otel_span=None, local_only=True
+        )
+        == 150
+    )
