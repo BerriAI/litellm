@@ -56,6 +56,7 @@ from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
+    AsyncCursorPage,
     FileExpiresAfter,
     OpenAIFileObject,
     OpenAIFilesPurpose,
@@ -1403,7 +1404,9 @@ async def list_files(
         _response = await proxy_logging_obj.post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response
         )
-        if _response is not None and isinstance(_response, OpenAIFileObject):
+        if _response is not None and isinstance(
+            _response, (OpenAIFileObject, AsyncCursorPage)
+        ):
             response = _response
 
         ### ALERTING ###

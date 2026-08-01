@@ -24,7 +24,11 @@ from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import 
     FileContentStreamingHandler,
 )
 from litellm.proxy.proxy_server import app
-from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
+from litellm.types.llms.openai import (
+    AsyncCursorPage,
+    HttpxBinaryResponseContent,
+    OpenAIFileObject,
+)
 
 client = TestClient(app)
 from litellm.caching.caching import DualCache
@@ -2542,6 +2546,91 @@ def test_list_files_prefers_team_byok_over_global_openai_deployment(
     assert response.status_code == 200, response.text
     assert captured_kwargs.get("api_key") == "team-byok-openai-key"
     assert captured_kwargs.get("custom_llm_provider") == "openai"
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_list_files_returns_hook_filtered_page_not_unfiltered_provider_response(
+    mocker: MockerFixture, monkeypatch
+):
+    """
+    GET /v1/files must return the managed-files hook's per-user filtered
+    AsyncCursorPage, not the provider's unfiltered response. Regression for
+    LIT-4850 (GH #28294): the endpoint narrowed the hook return to
+    OpenAIFileObject, so the filtered page was discarded and another user's
+    files leaked back to the caller.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "team-openai-key",
+                },
+            },
+        ]
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    def _file(file_id: str) -> OpenAIFileObject:
+        return OpenAIFileObject(
+            id=file_id,
+            bytes=1,
+            created_at=1,
+            filename=f"{file_id}.jsonl",
+            object="file",
+            purpose="batch",
+            status="processed",
+        )
+
+    caller_file = _file("file-caller")
+    other_user_file = _file("file-other-user")
+
+    unfiltered_page: AsyncCursorPage[OpenAIFileObject] = AsyncCursorPage(
+        data=[caller_file, other_user_file]
+    )
+    filtered_page: AsyncCursorPage[OpenAIFileObject] = AsyncCursorPage(
+        data=[caller_file]
+    )
+
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(
+        return_value=filtered_page
+    )
+
+    async def _mock_afile_list(**kwargs):
+        return unfiltered_page
+
+    monkeypatch.setattr(litellm, "afile_list", _mock_afile_list)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="caller-user",
+        team_id="test-team",
+        team_models=["openai/*"],
+    )
+
+    try:
+        response = client.get(
+            "/v1/files",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    returned_ids = [f["id"] for f in response.json()["data"]]
+    assert returned_ids == ["file-caller"]
+    assert "file-other-user" not in returned_ids
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
