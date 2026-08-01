@@ -141,7 +141,6 @@ class StreamingResponse(BaseModel):
     # quota) arrive as SSE error events inside an otherwise-successful response;
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
-    stream_done: bool = False
 
     @property
     def ok(self) -> bool:
@@ -242,11 +241,8 @@ def assert_client_error(result: StreamingResponse, context: str) -> None:
 
 
 def assert_error_or_server_known(result: StreamingResponse, context: str) -> None:
-    """Missing required fields may be 4xx or 5xx per known acceptable proxy behavior."""
-    assert result.status_code in range(400, 600), (
-        f"{context}: expected error status, got {result.status_code}: {result.body[:300]}"
-    )
-    assert result.status_code != 200
+    """Require a deliberate client error; 5xx crashes must not count as validation coverage."""
+    assert_client_error(result, context)
 
 
 def assert_auth_denied(result: StreamingResponse, context: str) -> None:

@@ -12,7 +12,7 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, unwrap, assert_client_error, assert_error_or_server_known
+from e2e_http import NoBody, unwrap, assert_client_error
 from lifecycle import ResourceManager
 from proxy_client import ProxyClient
 
@@ -57,10 +57,11 @@ class SearchResponse(BaseModel):
 
 
 def _search_credentials() -> tuple[str, str]:
-    if os.environ.get("PERPLEXITY_API_KEY"):
-        return "perplexity", os.environ["PERPLEXITY_API_KEY"]
+    if os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("PERPLEXITYAI_API_KEY"):
+        env_name = "PERPLEXITY_API_KEY" if os.environ.get("PERPLEXITY_API_KEY") else "PERPLEXITYAI_API_KEY"
+        return "perplexity", f"os.environ/{env_name}"
     if os.environ.get("TAVILY_API_KEY"):
-        return "tavily", os.environ["TAVILY_API_KEY"]
+        return "tavily", "os.environ/TAVILY_API_KEY"
     pytest.fail("set PERPLEXITY_API_KEY or TAVILY_API_KEY for /v1/search e2e coverage")
 
 
@@ -118,7 +119,10 @@ class TestSearch:
             )
         )
         assert result.object in (None, "search")
-        assert isinstance(result.results, list), f"expected results array: {result}"
+        assert result.results, f"search returned no results: {result}"
+        assert any(item.title or item.url for item in result.results), (
+            f"search results lack title/url: {result}"
+        )
 
     @pytest.mark.covers("llm.search.openai.basic.nonstream.works")
     @pytest.mark.parametrize("max_results", [1, 5, 10])
@@ -137,7 +141,10 @@ class TestSearch:
                 response_type=SearchResponse,
             )
         )
-        assert isinstance(result.results, list)
+        assert result.results, f"search returned no results for max_results={max_results}"
+        assert len(result.results) <= max_results, (
+            f"expected <= {max_results} results, got {len(result.results)}"
+        )
 
     @pytest.mark.covers("llm.search.openai.input_validation.nonstream.works")
     def test_missing_query_returns_error(
@@ -150,7 +157,7 @@ class TestSearch:
             headers=proxy.transport.bearer(key),
             json=SearchRequest(search_tool_name=tool, max_results=3),
         )
-        assert_error_or_server_known(result, "search missing query")
+        assert_client_error(result, "search missing query")
 
     @pytest.mark.covers("llm.search.openai.input_validation.nonstream.works")
     def test_empty_query_returns_client_error(

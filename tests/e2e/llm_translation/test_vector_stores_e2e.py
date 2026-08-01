@@ -13,7 +13,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
-from e2e_http import FileUploadForm, NoBody, unwrap, assert_error_or_server_known
+from e2e_http import FileUploadForm, NoBody, unwrap, assert_client_error
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -202,7 +202,7 @@ class TestVectorStores:
             headers=proxy.transport.bearer(key),
             json=VectorStoreSearchBody(max_num_results=10),
         )
-        assert_error_or_server_known(result, "vector store search missing query")
+        assert_client_error(result, "vector store search missing query")
 
     @pytest.mark.covers("llm.vector_stores.openai.basic.nonstream.works")
     def test_file_attach_poll_and_search(
@@ -314,7 +314,7 @@ class TestVectorStores:
             headers=proxy.transport.bearer(key),
             json=VectorStoreSearchBody(query="", max_num_results=10),
         )
-        assert result.status_code in (200, 400, 500), (
+        assert result.status_code in (200, 400), (
             f"empty search query unexpected status {result.status_code}: {result.body[:300]}"
         )
 
@@ -322,7 +322,7 @@ class TestVectorStores:
     def test_retrieve_invalid_id_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
-        from e2e_http import Success, UnauthorizedError, UnknownApiError
+        from e2e_http import Success, UnknownApiError
 
         key = _register_openai_model(proxy, resources)
         result = proxy.transport.get(
@@ -334,12 +334,16 @@ class TestVectorStores:
         match result:
             case Success():
                 pytest.fail("invalid vector store id must not succeed")
-            case UnknownApiError(status_code=status):
-                assert status in (400, 401, 404, 500), f"unexpected status {status}"
-            case UnauthorizedError():
+            case UnknownApiError(status_code=status) if 400 <= status < 500:
                 return
-            case _:
-                return
+            case UnknownApiError(status_code=status, body=body):
+                pytest.fail(
+                    f"invalid vector store id must be 4xx, got {status}: {body[:300]}"
+                )
+            case other:
+                pytest.fail(
+                    f"invalid vector store id must be a client error, got {other!r}"
+                )
 
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
     def test_invalid_chunking_returns_error(
@@ -365,4 +369,4 @@ class TestVectorStores:
                 },
             ),
         )
-        assert_error_or_server_known(result, "invalid chunking strategy")
+        assert_client_error(result, "invalid chunking strategy")

@@ -37,8 +37,14 @@ class SearchAPIRouter:
         Returns:
             Tuple of (api_key, api_base) from tool configuration
         """
+        from litellm.secret_managers.main import get_secret_str
+
         resolved_api_key: Optional[str] = tool_litellm_params.get("api_key")
         resolved_api_base: Optional[str] = tool_litellm_params.get("api_base")
+        if isinstance(resolved_api_key, str) and resolved_api_key.startswith("os.environ/"):
+            resolved_api_key = get_secret_str(resolved_api_key)
+        if isinstance(resolved_api_base, str) and resolved_api_base.startswith("os.environ/"):
+            resolved_api_base = get_secret_str(resolved_api_base)
 
         return resolved_api_key, resolved_api_base
 
