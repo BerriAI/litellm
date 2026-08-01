@@ -1,4 +1,6 @@
+import json
 import warnings
+
 import pytest
 from pydantic import ValidationError
 
@@ -639,3 +641,192 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+
+class TestSAPPromptCaching:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/34797"""
+
+    @pytest.fixture
+    def config(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+        config.token_creator = lambda: "Bearer TEST_TOKEN"
+        config._base_url = "https://api.test-sap.com"
+        config._resource_group = "test-group"
+        return config
+
+    @staticmethod
+    def _template(body):
+        return body["config"]["modules"]["prompt_templating"]["prompt"]["template"]
+
+    @staticmethod
+    def _tools(body):
+        return body["config"]["modules"]["prompt_templating"]["prompt"]["tools"]
+
+    def test_cache_control_preserved_on_system_user_and_tool_messages(self, config):
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "large static prompt",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "hello",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "tool output",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+        ]
+
+        template = self._template(
+            config.transform_request("anthropic--claude-4.5-sonnet", messages, {}, {}, {})
+        )
+
+        assert template[0]["content"] == [
+            {
+                "type": "text",
+                "text": "large static prompt",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ]
+        assert template[1]["content"] == [
+            {"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}
+        ]
+        assert template[2]["content"] == [
+            {
+                "type": "text",
+                "text": "tool output",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    def test_message_level_cache_control_moved_onto_content_block(self, config):
+        """`cache_control_injection_points` marks string-content messages at the message level."""
+        messages = [
+            {
+                "role": "system",
+                "content": "large static prompt",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"role": "user", "content": "hello", "cache_control": {"type": "ephemeral"}},
+        ]
+
+        template = self._template(
+            config.transform_request("anthropic--claude-4.5-sonnet", messages, {}, {}, {})
+        )
+
+        assert template[0] == {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "large static prompt",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        assert template[1] == {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}
+            ],
+        }
+
+    def test_message_level_cache_control_applies_to_last_content_block(self, config):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "first"},
+                    {"type": "text", "text": "second"},
+                ],
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+        template = self._template(
+            config.transform_request("anthropic--claude-4.5-sonnet", messages, {}, {}, {})
+        )
+
+        assert template[0]["content"] == [
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second", "cache_control": {"type": "ephemeral"}},
+        ]
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {}},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            },
+        ],
+        ids=["tool_level", "function_level"],
+    )
+    def test_cache_control_preserved_on_tools(self, config, tool):
+        tools = self._tools(
+            config.transform_request(
+                "anthropic--claude-4.5-sonnet",
+                [{"role": "user", "content": "hi"}],
+                {"tools": [tool]},
+                {},
+                {},
+            )
+        )
+
+        assert tools[0]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in tools[0]["function"]
+
+    def test_no_cache_control_key_when_unmarked(self, config):
+        """SAP rejects `"cache_control": null`, so the key must be absent when unused."""
+        body = config.transform_request(
+            "anthropic--claude-4.5-sonnet",
+            [
+                {"role": "system", "content": [{"type": "text", "text": "sys"}]},
+                {"role": "user", "content": "hi"},
+            ],
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+                    }
+                ]
+            },
+            {},
+            {},
+        )
+
+        assert "cache_control" not in json.dumps(body)
+        assert self._template(body)[0]["content"] == "sys"
+        assert self._template(body)[1]["content"] == "hi"
