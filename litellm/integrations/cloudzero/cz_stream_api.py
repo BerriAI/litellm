@@ -20,7 +20,7 @@
 
 import zoneinfo
 from datetime import datetime, timezone
-from typing import Any, Optional, Union
+from typing import Any
 
 import httpx
 import polars as pl
@@ -30,7 +30,7 @@ from rich.console import Console
 class CloudZeroStreamer:
     """Stream CBF data to CloudZero AnyCost API with proper batching and timezone handling."""
 
-    def __init__(self, api_key: str, connection_id: str, user_timezone: Optional[str] = None):
+    def __init__(self, api_key: str, connection_id: str, user_timezone: str | None = None):
         """Initialize CloudZero streamer with credentials."""
         self.api_key = api_key
         self.connection_id = connection_id
@@ -38,7 +38,7 @@ class CloudZeroStreamer:
         self.console = Console()
 
         # Set timezone - default to UTC
-        self.user_timezone: Union[zoneinfo.ZoneInfo, timezone]
+        self.user_timezone: zoneinfo.ZoneInfo | timezone
         if user_timezone:
             try:
                 self.user_timezone = zoneinfo.ZoneInfo(user_timezone)
@@ -75,7 +75,7 @@ class CloudZeroStreamer:
             self.console.print("[red]Error: Missing 'time/usage_start' column for date grouping[/red]")
             return {}
 
-        timestamp_str: Optional[str] = None
+        timestamp_str: str | None = None
         for row in data.iter_rows(named=True):
             try:
                 # Parse the timestamp and convert to UTC
@@ -205,7 +205,7 @@ class CloudZeroStreamer:
 
         return payload
 
-    def _convert_cbf_to_api_format(self, row: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def _convert_cbf_to_api_format(self, row: dict[str, Any]) -> dict[str, Any] | None:
         """Convert CBF row to CloudZero API format - keeping CBF field names as CloudZero expects them."""
         try:
             # CloudZero expects CBF format field names directly, not converted names

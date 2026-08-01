@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
@@ -69,7 +69,7 @@ async def send_llm_exception_alert(
 
 
 async def async_raise_no_deployment_exception(
-    litellm_router_instance: LitellmRouter, model: str, parent_otel_span: Optional[Span]
+    litellm_router_instance: LitellmRouter, model: str, parent_otel_span: Span | None
 ):
     """
     Raises a RouterRateLimitError if no deployment is found for the given model.

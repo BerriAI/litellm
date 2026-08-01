@@ -1,5 +1,5 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, InputNumber, Radio, Space, Tooltip, Typography } from "antd";
+import { Select as AntdSelect, Card, InputNumber, Radio, Space, Switch, Tooltip, Typography } from "antd";
 import React from "react";
 import {
   ClassifierType,
@@ -47,6 +47,8 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         classifierType === "llm"
           ? value.classifier_context_per_turn_chars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS
           : undefined,
+      classifier_context_include_assistant_turns:
+        classifierType === "llm" ? value.classifier_context_include_assistant_turns : undefined,
     };
     onChange(nextValue);
   };
@@ -82,6 +84,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({
       ...value,
       classifier_context_per_turn_chars: perTurnChars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+    });
+  };
+
+  const handleClassifierContextIncludeAssistantTurnsChange = (includeAssistantTurns: boolean) => {
+    onChange({
+      ...value,
+      classifier_context_include_assistant_turns: includeAssistantTurns,
     });
   };
 
@@ -168,6 +177,26 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
               Prior turns longer than this are truncated.
+            </Text>
+          </div>
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <Switch
+                checked={value.classifier_context_include_assistant_turns ?? false}
+                onChange={handleClassifierContextIncludeAssistantTurnsChange}
+                size="small"
+                aria-label="Include Assistant Turns"
+              />
+              <Text strong>Include Assistant Turns</Text>
+              <Tooltip title="Off by default. Enabling it changes tier decisions, and therefore spend, for an existing router, and sends assistant text to the classifier model, which may be a different provider than the routed model.">
+                <InfoCircleOutlined className="text-gray-400" />
+              </Tooltip>
+            </div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Let the classifier read the assistant&apos;s replies, so difficulty the model stated rather than the user
+              stays visible: a plan the assistant calls complex, approved with &quot;yes&quot;, is classified on the
+              work being approved. Context Window Size then counts the last N turns across both roles rather than the
+              last N user turns.
             </Text>
           </div>
         </div>

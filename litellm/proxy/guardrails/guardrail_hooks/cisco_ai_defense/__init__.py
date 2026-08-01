@@ -84,7 +84,7 @@ __all__ = [
     "CiscoAIDefenseGuardrail",
     "CiscoAIDefenseGuardrailAPIError",
     "CiscoAIDefenseGuardrailMissingSecrets",
-    "initialize_guardrail",
-    "guardrail_initializer_registry",
     "guardrail_class_registry",
+    "guardrail_initializer_registry",
+    "initialize_guardrail",
 ]

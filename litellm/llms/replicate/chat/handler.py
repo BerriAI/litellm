@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Callable, List, Union
+from collections.abc import Callable
 
 import litellm
 from litellm.constants import REPLICATE_POLLING_DELAY_SECONDS
@@ -134,7 +134,7 @@ def completion(
     logger_fn=None,
     acompletion=None,
     headers={},
-) -> Union[ModelResponse, CustomStreamWrapper]:
+) -> ModelResponse | CustomStreamWrapper:
     headers = replicate_config.validate_environment(
         api_key=api_key,
         headers=headers,
@@ -237,7 +237,7 @@ def completion(
 async def async_completion(
     model_response: ModelResponse,
     model: str,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     encoding,
     optional_params: dict,
     litellm_params: dict,
@@ -248,7 +248,7 @@ async def async_completion(
     logging_obj,
     print_verbose,
     headers: dict,
-) -> Union[ModelResponse, CustomStreamWrapper]:
+) -> ModelResponse | CustomStreamWrapper:
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,
         api_key=api_key,

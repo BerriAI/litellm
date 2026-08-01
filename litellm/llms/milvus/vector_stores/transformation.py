@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -47,8 +47,8 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
     def __init__(self):
         super().__init__()
 
-    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
-        api_key: Optional[str] = None
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+        api_key: str | None = None
         if litellm_params is not None:
             api_key = litellm_params.api_key or get_secret_str("MILVUS_API_KEY")
 
@@ -94,7 +94,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -117,13 +117,13 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
         """
         Transform search request for Azure AI Search API
 
@@ -158,14 +158,14 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
             )
             query_vector = embedding_response.data[0]["embedding"]
         except Exception as e:
-            raise Exception(f"Failed to generate embedding for query: {str(e)}")
+            raise Exception(f"Failed to generate embedding for query: {e!s}")
 
         # Azure AI Search endpoint for search
         index_name = vector_store_id  # vector_store_id is the index name
         url = f"{api_base}/v2/vectordb/entities/search"
 
         # Build the request body for Azure AI Search with vector search
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "collectionName": index_name,
             "data": [query_vector],
             "annsField": "book_intro_vector",
@@ -223,7 +223,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
                 )
 
             # Transform results to standard format
-            search_results: List[VectorStoreSearchResult] = []
+            search_results: list[VectorStoreSearchResult] = []
             for result in results:
                 # Extract text content
                 text_content = result.get(text_field, "")
@@ -271,7 +271,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         raise NotImplementedError
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:

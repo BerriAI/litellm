@@ -4,7 +4,7 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from litellm._logging import _redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -96,7 +96,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             url = url.copy_with(params=query_params)
         return str(url)
 
-    def _make_event_normalizer(self) -> Optional[RealtimeEventNormalizer]:
+    def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:
         """Return a per-session GA event normalizer, or None for passthrough.
 
         Subclasses (e.g. XAIRealtime) override this to supply a provider-specific
@@ -109,13 +109,13 @@ class OpenAIRealtime(OpenAIChatCompletion):
         model: str,
         websocket: Any,
         logging_obj: LiteLLMLogging,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        client: Optional[Any] = None,
-        timeout: Optional[float] = None,
-        query_params: Optional[RealtimeQueryParams] = None,
-        user_api_key_dict: Optional[Any] = None,
-        litellm_metadata: Optional[dict] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        client: Any | None = None,
+        timeout: float | None = None,
+        query_params: RealtimeQueryParams | None = None,
+        user_api_key_dict: Any | None = None,
+        litellm_metadata: dict | None = None,
         **kwargs: Any,
     ):
         import websockets
@@ -178,7 +178,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {str(e)}"))
+                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e!s}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     # The WebSocket is already closed or the response is completed, so we can ignore this error

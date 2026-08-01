@@ -1,5 +1,3 @@
-from typing import Optional
-
 import litellm
 
 
@@ -40,7 +38,7 @@ class Rules:
                     )  # type: ignore
         return True
 
-    def post_call_rules(self, input: Optional[str], model: str) -> bool:
+    def post_call_rules(self, input: str | None, model: str) -> bool:
         if input is None:
             return True
         for rule in litellm.post_call_rules:

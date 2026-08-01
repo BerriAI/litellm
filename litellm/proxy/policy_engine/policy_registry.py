@@ -187,8 +187,8 @@ class PolicyRegistry:
                 self._policies[policy_name] = policy
                 verbose_proxy_logger.debug(f"Loaded policy: {policy_name}")
             except Exception as e:
-                verbose_proxy_logger.error(f"Error loading policy '{policy_name}': {str(e)}")
-                raise ValueError(f"Invalid policy '{policy_name}': {str(e)}") from e
+                verbose_proxy_logger.error(f"Error loading policy '{policy_name}': {e!s}")
+                raise ValueError(f"Invalid policy '{policy_name}': {e!s}") from e
 
         self._config_policies = dict(self._policies)
         self._sources = {policy_name: "config" for policy_name in self._policies}
@@ -310,7 +310,7 @@ class PolicyRegistry:
         self._sources = {}
         self._initialized = False
 
-    def get_source(self, policy_name: str) -> Optional[Literal["db", "config"]]:
+    def get_source(self, policy_name: str) -> Literal["db", "config"] | None:
         """
         Return the provenance of an in-memory policy, or None if unknown.
         """
@@ -433,7 +433,7 @@ class PolicyRegistry:
             return _row_to_policy_db_response(created_policy)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error adding policy to DB: {e}")
-            raise Exception(f"Error adding policy to DB: {str(e)}")
+            raise Exception(f"Error adding policy to DB: {e!s}")
 
     async def update_policy_in_db(
         self,
@@ -497,7 +497,7 @@ class PolicyRegistry:
             return _row_to_policy_db_response(updated_policy)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error updating policy in DB: {e}")
-            raise Exception(f"Error updating policy in DB: {str(e)}")
+            raise Exception(f"Error updating policy in DB: {e!s}")
 
     async def delete_policy_from_db(
         self,
@@ -547,7 +547,7 @@ class PolicyRegistry:
             return result
         except Exception as e:
             verbose_proxy_logger.exception(f"Error deleting policy from DB: {e}")
-            raise Exception(f"Error deleting policy from DB: {str(e)}")
+            raise Exception(f"Error deleting policy from DB: {e!s}")
 
     async def get_policy_by_id_from_db(
         self,
@@ -573,7 +573,7 @@ class PolicyRegistry:
             return _row_to_policy_db_response(policy)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error getting policy from DB: {e}")
-            raise Exception(f"Error getting policy from DB: {str(e)}")
+            raise Exception(f"Error getting policy from DB: {e!s}")
 
     def get_policy_by_id_for_request(self, policy_id: str) -> tuple[str, Policy] | None:
         """
@@ -620,7 +620,7 @@ class PolicyRegistry:
             return [_row_to_policy_db_response(p) for p in policies]
         except Exception as e:
             verbose_proxy_logger.exception(f"Error getting policies from DB: {e}")
-            raise Exception(f"Error getting policies from DB: {str(e)}")
+            raise Exception(f"Error getting policies from DB: {e!s}")
 
     async def sync_policies_from_db(
         self,
@@ -689,7 +689,7 @@ class PolicyRegistry:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error syncing policies from DB: {e}")
-            raise Exception(f"Error syncing policies from DB: {str(e)}")
+            raise Exception(f"Error syncing policies from DB: {e!s}")
 
     async def resolve_guardrails_from_db(
         self,
@@ -742,7 +742,7 @@ class PolicyRegistry:
             return sorted(resolved_policy.guardrails)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error resolving guardrails from DB: {e}")
-            raise Exception(f"Error resolving guardrails from DB: {str(e)}")
+            raise Exception(f"Error resolving guardrails from DB: {e!s}")
 
     async def get_versions_by_policy_name(
         self,
@@ -772,7 +772,7 @@ class PolicyRegistry:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error getting versions: {e}")
-            raise Exception(f"Error getting versions: {str(e)}")
+            raise Exception(f"Error getting versions: {e!s}")
 
     async def create_new_version(
         self,
@@ -858,7 +858,7 @@ class PolicyRegistry:
             return _row_to_policy_db_response(created)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error creating new version: {e}")
-            raise Exception(f"Error creating new version: {str(e)}")
+            raise Exception(f"Error creating new version: {e!s}")
 
     async def update_version_status(
         self,
@@ -963,7 +963,7 @@ class PolicyRegistry:
             return _row_to_policy_db_response(updated)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error updating version status: {e}")
-            raise Exception(f"Error updating version status: {str(e)}")
+            raise Exception(f"Error updating version status: {e!s}")
 
     async def compare_versions(
         self,
@@ -1016,7 +1016,7 @@ class PolicyRegistry:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error comparing versions: {e}")
-            raise Exception(f"Error comparing versions: {str(e)}")
+            raise Exception(f"Error comparing versions: {e!s}")
 
     async def delete_all_versions(
         self,
@@ -1047,7 +1047,7 @@ class PolicyRegistry:
             return {"message": message}
         except Exception as e:
             verbose_proxy_logger.exception(f"Error deleting all versions: {e}")
-            raise Exception(f"Error deleting all versions: {str(e)}")
+            raise Exception(f"Error deleting all versions: {e!s}")
 
 
 # Global singleton instance
