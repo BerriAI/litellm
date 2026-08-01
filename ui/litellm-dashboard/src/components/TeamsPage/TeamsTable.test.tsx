@@ -196,6 +196,19 @@ describe("server-side filtering maps controls to the right query params", () => 
       expect(mockUseTeamsTable).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: "platform" }));
     });
   });
+
+  it("opts into team id prefix matching so a partial id from a proxy error finds the team", async () => {
+    renderTable();
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "66c432fa" } });
+
+    await waitFor(() => {
+      expect(mockUseTeamsTable).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ search: "66c432fa", searchTeamIdMatch: "prefix" }),
+      );
+    });
+  });
 });
 
 describe("non-admin scoping", () => {
