@@ -249,41 +249,38 @@ describe("UsageTab", () => {
     expect(readSeries(bars)[0]).toMatchObject({ "Auto-router": -0.05 });
   });
 
-  it("keeps the header the same shape on both tabs so the chart cannot shift", async () => {
+  it("lays the savings header out with the card's own slots so nothing shifts between tabs", async () => {
     // The subtitle differs in length between the tabs ("Running total saved" vs "Saved
-    // per day"). Sharing a row with the title and controls made the header grow a line
-    // when it wrapped, moving the legend, the toggle and the chart below it.
+    // per day"). Hand-rolled rows made it compete with the legend and the toggle for
+    // width, so the header grew a line on one tab and the chart moved with it. CardHeader
+    // sizes the action column to its content and gives the rest to the title column.
     const { getByRole, getByTestId, container } = renderWith(twoDays());
 
-    const layout = () => {
+    const header = () => {
       const legend = getByTestId("chart-legend");
-      const controls = legend.parentElement as HTMLElement;
-      // the toggle travels with the legend, so neither can move independently
-      expect(controls.contains(getByRole("tablist"))).toBe(true);
-      const titleRow = controls.parentElement as HTMLElement;
-      // by text, not by class: several cards render a muted <p>, and grabbing the first
-      // one silently asserts against a summary-card hint instead of this subtitle
-      const subtitle = Array.from(container.querySelectorAll("p")).find((el) =>
-        /Running total saved|Saved per day/.test(el.textContent ?? ""),
-      );
-      expect(subtitle, "savings subtitle should be rendered").toBeTruthy();
-      return { controls, titleRow, subtitle: subtitle as HTMLElement };
+      const action = legend.closest('[data-slot="card-action"]') as HTMLElement;
+      const cardHeader = action.parentElement as HTMLElement;
+      const description = cardHeader.querySelector('[data-slot="card-description"]') as HTMLElement;
+      return { action, cardHeader, description };
     };
 
-    const before = layout();
-    // the subtitle is a sibling BELOW the title row, never inside it, so its length
-    // cannot change that row's height
-    expect(before.titleRow.contains(before.subtitle)).toBe(false);
-    expect(before.titleRow.className).not.toContain("flex-wrap");
-    expect(before.controls.className).toContain("shrink-0");
+    const before = header();
+    expect(before.action).toBeTruthy();
+    expect(before.description).toBeTruthy();
+    // the toggle rides in the same action slot as the legend, so neither moves alone
+    expect(before.action.contains(getByRole("tablist"))).toBe(true);
+    // the subtitle lives outside that slot, so its length cannot reposition the controls
+    expect(before.action.contains(before.description)).toBe(false);
+    expect(before.description.textContent).toContain("Running total saved");
 
     await userEvent.click(getByRole("tab", { name: "Per day" }));
 
-    const after = layout();
-    expect(after.controls).toBe(before.controls);
-    expect(after.titleRow).toBe(before.titleRow);
-    expect(after.titleRow.contains(after.subtitle)).toBe(false);
-    expect(container.textContent).toContain("Saved per day");
+    const after = header();
+    expect(after.action).toBe(before.action);
+    expect(after.cardHeader).toBe(before.cardHeader);
+    expect(after.action.contains(after.description)).toBe(false);
+    expect(after.description.textContent).toContain("Saved per day");
+    expect(container.textContent).toContain("Savings");
   });
 
   it("subtracts a losing auto-router route from the total and keeps it out of the donut", () => {
