@@ -123,6 +123,7 @@ LLM_CONFIG_NAMES = (
     "CompactifAIChatConfig",
     "EmpowerChatConfig",
     "MinimaxChatConfig",
+    "ApiTokenChatConfig",
     "AiohttpOpenAIChatConfig",
     "HuggingFaceChatConfig",
     "HuggingFaceEmbeddingConfig",
@@ -602,6 +603,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     ),
     "EmpowerChatConfig": (".llms.empower.chat.transformation", "EmpowerChatConfig"),
     "MinimaxChatConfig": (".llms.minimax.chat.transformation", "MinimaxChatConfig"),
+    "ApiTokenChatConfig": (".llms.apitoken.chat.transformation", "ApiTokenChatConfig"),
     "AiohttpOpenAIChatConfig": (
         ".llms.aiohttp_openai.chat.transformation",
         "AiohttpOpenAIChatConfig",

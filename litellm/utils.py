@@ -7673,6 +7673,7 @@ class ProviderConfigManager:
             LlmProviders.WATSONX_TEXT: (lambda: litellm.IBMWatsonXAIConfig(), False),
             LlmProviders.EMPOWER: (lambda: litellm.EmpowerChatConfig(), False),
             LlmProviders.MINIMAX: (lambda: litellm.MinimaxChatConfig(), False),
+            LlmProviders.APITOKEN: (lambda: litellm.ApiTokenChatConfig(), False),
             LlmProviders.GITHUB: (lambda: litellm.GithubChatConfig(), False),
             LlmProviders.COMPACTIFAI: (lambda: litellm.CompactifAIChatConfig(), False),
             LlmProviders.GITHUB_COPILOT: (lambda: litellm.GithubCopilotConfig(), False),
@@ -8074,6 +8075,12 @@ class ProviderConfigManager:
             )
 
             return MinimaxMessagesConfig()
+        elif litellm.LlmProviders.APITOKEN == provider:
+            from litellm.llms.apitoken.messages.transformation import (
+                ApiTokenMessagesConfig,
+            )
+
+            return ApiTokenMessagesConfig()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             from litellm.llms.deepseek.messages.transformation import (
                 DeepSeekAnthropicMessagesConfig,

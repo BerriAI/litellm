@@ -2795,6 +2795,14 @@
         "responses": true
       }
     },
+    "apitoken": {
+      "display_name": "apiToken.sale (`apitoken`)",
+      "url": "https://docs.litellm.ai/docs/providers/apitoken",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true
+      }
+    },
     "pg_vector": {
       "display_name": "PG Vector (`pg_vector`)",
       "url": "https://docs.litellm.ai/docs/providers/pg_vector",

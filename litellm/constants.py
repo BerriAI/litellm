@@ -521,6 +521,7 @@ LITELLM_CHAT_PROVIDERS = [
     "text-completion-inception",
     "deepseek",
     "tencent",
+    "apitoken",
     "sambanova",
     "maritalk",
     "cloudflare",
@@ -686,6 +687,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
 }
 
 openai_compatible_endpoints: List = [
+    "api.apitoken.sale",
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
