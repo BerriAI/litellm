@@ -5378,10 +5378,15 @@ class Router:
                 request_kwargs=kwargs,
             )
 
-            selected_deployment_id = (deployment.get("model_info") or {}).get("id")
+            selected_model_info = deployment.get("model_info") or {}
+            selected_deployment_id = selected_model_info.get("id")
             data = deployment["litellm_params"].copy()
+            # async_get_available_deployment already team-authorized this
+            # deployment; re-resolve with its owner team so the resolver's
+            # team guard doesn't reject the deployment it was handed.
             resolved_credentials = self.get_deployment_credentials_with_provider(
-                model_id=selected_deployment_id or model
+                model_id=selected_deployment_id or model,
+                team_id=selected_model_info.get("team_id"),
             )
             if resolved_credentials is not None:
                 data.update(resolved_credentials)
@@ -8647,12 +8652,16 @@ class Router:
 
         Both the credential resolver and the alias-to-model resolver delegate
         here so a mixed model group can never hand one caller the credentials
-        of one deployment and the model of another. Name and wildcard lookups
-        skip deployments owned by a team other than ``team_id``; passing
-        ``team_id`` also unlocks that team's own deployments (exact team public
-        model name and team wildcard patterns).
+        of one deployment and the model of another. Every lookup path -
+        exact deployment id, model-group name, and wildcard - skips
+        deployments owned by a team other than ``team_id``, so a caller who
+        knows another team's deployment id cannot resolve its credentials or
+        model; passing ``team_id`` also unlocks that team's own deployments
+        (exact team public model name and team wildcard patterns).
         """
         deployment = self.get_deployment(model_id=model_id)
+        if deployment is not None and not self._deployment_usable_by_team(deployment, team_id):
+            deployment = None
 
         if deployment is None:
             deployment = self._get_model_group_deployment_usable_by_team(model_group_name=model_id, team_id=team_id)
@@ -8775,10 +8784,11 @@ class Router:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
             team_id: Optional team id of the caller. When set, team-scoped
                 deployments (indexed by team public model name, including team
-                wildcard models like "openai/*") are also considered. Name and
-                wildcard lookups never resolve a deployment owned by a
-                different team, so shared model names can't leak another
-                team's credentials.
+                wildcard models like "openai/*") are also considered. No lookup
+                path - exact deployment id, model-group name, or wildcard -
+                ever resolves a deployment owned by a different team, so
+                neither shared model names nor known deployment ids can leak
+                another team's credentials.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.

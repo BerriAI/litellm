@@ -5892,6 +5892,15 @@ def test_get_deployment_model_for_alias_matches_credential_deployment_per_team()
             f"team_id={team_id}: credentials came from a different deployment than the model"
         )
 
+    # A caller who knows another team's exact deployment id must not resolve
+    # its model or credentials through it either.
+    for outsider_team_id in [None, "team-b"]:
+        assert router.get_deployment_model_for_alias(model_id="team-a-dep", team_id=outsider_team_id) is None
+        assert router.get_deployment_credentials_with_provider(model_id="team-a-dep", team_id=outsider_team_id) is None
+    assert router.get_deployment_model_for_alias(model_id="team-a-dep", team_id="team-a") == (
+        "bedrock/team-a-private-model"
+    )
+
 
 def test_resolve_unblocked_deployment_resolves_alias_id_and_wildcard():
     """
