@@ -421,6 +421,9 @@ class TestDurationInSeconds(unittest.TestCase):
             with self.subTest(duration=duration):
                 self.assertEqual(duration_in_seconds(duration), expected)
 
+        self.assertEqual(duration_in_seconds("1mos"), duration_in_seconds("1mo"))
+        self.assertEqual(duration_in_seconds("2mons"), duration_in_seconds("2mo"))
+
     def test_long_unit_spelling_sets_reset_interval(self):
         now = datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc)
         self.assertEqual(

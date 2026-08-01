@@ -46,7 +46,9 @@ _DURATION_UNIT_ALIASES: Final[dict[str, str]] = {  # mutable-ok: constant lookup
     "week": "w",
     "weeks": "w",
     "mo": "mo",
+    "mos": "mo",
     "mon": "mo",
+    "mons": "mo",
     "month": "mo",
     "months": "mo",
 }
