@@ -49,9 +49,7 @@ def _make_router() -> Router:
     )
 
 
-def _make_completed_event(
-    input_tokens: int, output_tokens: int, total_tokens: int
-) -> ResponseCompletedEvent:
+def _make_completed_event(input_tokens: int, output_tokens: int, total_tokens: int) -> ResponseCompletedEvent:
     response = ResponsesAPIResponse.model_construct(
         usage=ResponseAPIUsage(
             input_tokens=input_tokens,
@@ -90,6 +88,36 @@ def test_extract_partial_responses_usage_no_completed_response():
     assert usage is None
 
 
+def test_extract_partial_responses_usage_dict_response():
+    """Regression #34754: some upstream providers return a plain dict
+    instead of a Pydantic ResponsesAPIResponse. The guard should extract
+    usage from the dict via .get() instead of accessing .usage as an
+    attribute."""
+    dict_usage = ResponseAPIUsage(input_tokens=5, output_tokens=3, total_tokens=8)
+    completed = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response={"usage": dict_usage, "status": "completed"},
+    )
+    source = MagicMock()
+    source.completed_response = completed
+
+    usage = Router._extract_partial_responses_usage(source)
+    assert usage is dict_usage
+
+
+def test_extract_partial_responses_usage_dict_response_no_usage_key():
+    """A dict response without a 'usage' key should return None, not raise."""
+    completed = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response={"status": "completed"},
+    )
+    source = MagicMock()
+    source.completed_response = completed
+
+    usage = Router._extract_partial_responses_usage(source)
+    assert usage is None
+
+
 # -------- _combine_responses_fallback_usage --------
 
 
@@ -119,9 +147,7 @@ def test_combine_responses_fallback_usage_passthrough_for_unknown_event():
 
 
 def test_build_responses_continuation_input_from_string():
-    out = Router._build_responses_continuation_input(
-        "Hello world", "partial assistant text"
-    )
+    out = Router._build_responses_continuation_input("Hello world", "partial assistant text")
     assert len(out) == 3
     assert out[0]["role"] == "user"
     assert out[0]["content"][0]["text"] == "Hello world"
@@ -201,9 +227,7 @@ async def test_aresponses_streaming_iterator_passthrough():
     router = _make_router()
     source = _FakeSource()
 
-    wrapper = await router._aresponses_streaming_iterator(
-        source, initial_kwargs={"model": "primary"}
-    )
+    wrapper = await router._aresponses_streaming_iterator(source, initial_kwargs={"model": "primary"})
     assert isinstance(wrapper, BaseResponsesAPIStreamingIterator)
 
     collected = [ev async for ev in wrapper]
@@ -250,15 +274,18 @@ async def test_aresponses_with_streaming_fallbacks_wraps_streaming_iterator():
     async def fake_original(**_kwargs):
         return streaming_iter
 
-    with patch.object(
-        router,
-        "_ageneric_api_call_with_fallbacks",
-        new=AsyncMock(return_value=streaming_iter),
-    ), patch.object(
-        router,
-        "_aresponses_streaming_iterator",
-        new=AsyncMock(return_value=wrapped),
-    ) as mock_wrap:
+    with (
+        patch.object(
+            router,
+            "_ageneric_api_call_with_fallbacks",
+            new=AsyncMock(return_value=streaming_iter),
+        ),
+        patch.object(
+            router,
+            "_aresponses_streaming_iterator",
+            new=AsyncMock(return_value=wrapped),
+        ) as mock_wrap,
+    ):
         out = await router._aresponses_with_streaming_fallbacks(
             original_function=fake_original,
             model="primary",

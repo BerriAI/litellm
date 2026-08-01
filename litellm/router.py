@@ -2286,6 +2286,8 @@ class Router:
             completed,
             (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
         ):
+            if isinstance(completed.response, dict):
+                return completed.response.get("usage", None)
             return completed.response.usage
         return None
 
