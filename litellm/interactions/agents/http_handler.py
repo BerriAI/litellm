@@ -6,7 +6,8 @@ Extends InteractionsHTTPHandler so that the shared HTTP infrastructure
 duplicated. BaseAgentsAPIConfig stays as pure transform code.
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+from collections.abc import Coroutine
+from typing import Any, Dict, Optional, Union
 
 import httpx
 

@@ -4,14 +4,11 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 
 import json
 import os
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Callable,
     Dict,
-    Iterable,
-    Iterator,
     List,
     Literal,
     Optional,

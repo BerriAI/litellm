@@ -4,7 +4,8 @@ Azure Anthropic handler - reuses AnthropicChatCompletion logic with Azure authen
 
 import copy
 import json
-from typing import TYPE_CHECKING, Callable, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Union
 
 import httpx
 

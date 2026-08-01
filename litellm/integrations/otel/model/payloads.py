@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, ClassVar, Mapping, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 from urllib.parse import urlsplit
 
 from litellm.integrations.otel.model.metadata import (

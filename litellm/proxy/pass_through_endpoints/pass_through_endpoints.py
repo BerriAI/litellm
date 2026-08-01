@@ -5,9 +5,10 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
+from collections.abc import AsyncGenerator, Mapping
 from datetime import datetime
 from itertools import groupby
-from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx

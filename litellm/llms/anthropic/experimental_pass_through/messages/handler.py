@@ -7,13 +7,11 @@
 
 import asyncio
 import contextvars
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from functools import partial
 from typing import (
     Any,
-    AsyncIterator,
-    Coroutine,
     Dict,
-    Iterator,
     List,
     Optional,
     Union,
@@ -39,10 +37,9 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
 
-from ..utils import is_reasoning_auto_summary_enabled
-
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
+from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
 

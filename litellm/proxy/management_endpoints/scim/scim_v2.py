@@ -5,12 +5,11 @@ This is an enterprise feature and requires a premium license.
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import chain
 from typing import (
     TYPE_CHECKING,
     Dict,
-    Iterable,
     List,
     NamedTuple,
     Optional,

@@ -4,8 +4,9 @@ usage/spend data by querying the aggregated daily activity endpoints.
 """
 
 import json
+from collections.abc import AsyncIterator, Callable
 from datetime import date
-from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, cast
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from typing_extensions import TypedDict
 

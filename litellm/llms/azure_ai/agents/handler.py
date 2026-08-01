@@ -22,11 +22,10 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import AsyncIterator, Callable
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Callable,
     Dict,
     List,
     Optional,

@@ -3,16 +3,15 @@
 ## Initial implementation - covers gemini + image gen calls
 import json
 import time
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
     List,
     Literal,
-    Mapping,
     Optional,
     Tuple,
     Type,

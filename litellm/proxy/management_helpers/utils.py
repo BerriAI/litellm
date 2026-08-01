@@ -1,8 +1,9 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
+from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel

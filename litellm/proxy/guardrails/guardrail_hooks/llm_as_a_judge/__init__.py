@@ -2,12 +2,13 @@
 
 import json
 import re
+from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
-import litellm
 from fastapi import HTTPException
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
@@ -15,8 +16,8 @@ from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
     from litellm import Router
-    from litellm.types.guardrails import Guardrail, LitellmParams
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.guardrails import Guardrail, LitellmParams
     from litellm.types.utils import StandardLoggingEvalInformation
 
 JUDGE_SYSTEM_PROMPT = """You are a quality judge. Evaluate the assistant's response against the criteria provided.

@@ -8,7 +8,7 @@ the factory in ``litellm_logging`` can resolve a name and build a single
 ``OpenTelemetryV2`` instance from the result.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from litellm.integrations.otel.presets.agentops import agentops_preset
 from litellm.integrations.otel.presets.arize import arize_dynamic_headers, arize_preset

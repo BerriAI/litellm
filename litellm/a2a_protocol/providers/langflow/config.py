@@ -1,4 +1,5 @@
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any, Dict, Optional
 
 from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     A2A_USER_API_KEY_HASH_PARAM,

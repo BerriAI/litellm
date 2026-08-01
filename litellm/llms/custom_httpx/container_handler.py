@@ -6,8 +6,9 @@ endpoint defined in endpoints.json, eliminating the need for individual handler 
 """
 
 import json
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Type, Union
 
 import httpx
 

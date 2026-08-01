@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import json
 import time
-from typing import Any, AsyncIterator, Dict, NamedTuple, Optional, Tuple, cast
+from collections.abc import AsyncIterator
+from typing import Any, Dict, NamedTuple, Optional, Tuple, cast
 
 import httpx
 

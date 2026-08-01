@@ -2,11 +2,10 @@
 
 from enum import Enum
 from functools import lru_cache
-from typing import Any, List
+from typing import Annotated, Any, List
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
-from typing_extensions import Annotated
 
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,

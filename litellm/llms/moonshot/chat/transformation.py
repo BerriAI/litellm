@@ -2,7 +2,8 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from collections.abc import Coroutine
+from typing import Any, List, Literal, Optional, Tuple, Union, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (

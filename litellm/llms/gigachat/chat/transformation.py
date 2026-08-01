@@ -7,7 +7,8 @@ Transforms OpenAI-format requests to GigaChat format and back.
 import json
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 

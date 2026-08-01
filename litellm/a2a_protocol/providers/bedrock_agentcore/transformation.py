@@ -6,7 +6,8 @@ and signs requests via AmazonAgentCoreConfig (SigV4 or JWT).
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Mapping, Optional, Tuple
+from collections.abc import AsyncIterator, Mapping
+from typing import Any, Dict, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig

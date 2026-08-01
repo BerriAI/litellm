@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Awaitable, Final, Protocol, Union, cast
+from collections.abc import Awaitable
+from typing import TYPE_CHECKING, Any, Final, Protocol, Union, cast
 
 import httpx
 

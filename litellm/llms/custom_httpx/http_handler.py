@@ -6,13 +6,12 @@ import socket
 import ssl
 import sys
 import time
+from collections.abc import Callable, Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
     List,
-    Mapping,
     Optional,
     Tuple,
     Union,

@@ -1,8 +1,9 @@
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, Mapping, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import TypeAdapter

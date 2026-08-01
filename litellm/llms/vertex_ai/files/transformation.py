@@ -5,12 +5,10 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable, Iterable, Iterator
 from typing import (
     Any,
-    Callable,
     Dict,
-    Iterable,
-    Iterator,
     List,
     Optional,
     Tuple,
@@ -40,8 +38,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
-    BaseFileUploadStream,
     BaseFilesConfig,
+    BaseFileUploadStream,
     LiteLLMLoggingObj,
 )
 from litellm.llms.vertex_ai.common_utils import (
@@ -51,6 +49,7 @@ from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
+from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -60,7 +59,6 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
-from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.vertex_ai import GcsBucketResponse
 from litellm.types.utils import LlmProviders, ModelResponse
 

@@ -6,6 +6,7 @@ import io
 import json
 import mimetypes
 import re
+from collections.abc import Mapping
 from os import PathLike
 from pathlib import Path
 from typing import (
@@ -14,7 +15,6 @@ from typing import (
     Dict,
     List,
     Literal,
-    Mapping,
     Optional,
     Tuple,
     Union,

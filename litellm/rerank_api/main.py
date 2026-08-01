@@ -1,7 +1,8 @@
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Union
+from typing import Any, Dict, List, Literal, Union
 
 import litellm
 from litellm._logging import verbose_logger

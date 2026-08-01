@@ -1,6 +1,7 @@
 import json
 import re
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
+from collections.abc import AsyncGenerator
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 

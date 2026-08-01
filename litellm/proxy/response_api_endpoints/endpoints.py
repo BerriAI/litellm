@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from typing import Any, AsyncIterator, Dict, Optional, cast
+from collections.abc import AsyncIterator
+from typing import Any, Dict, Optional, cast
 from uuid import uuid4
 
 import fastapi

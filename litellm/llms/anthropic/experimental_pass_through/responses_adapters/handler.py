@@ -4,7 +4,8 @@ Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 Used when the target model is an OpenAI or Azure model.
 """
 
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union
+from collections.abc import AsyncIterator, Coroutine
+from typing import Any, Dict, List, Optional, Union
 
 import litellm
 from litellm.types.llms.anthropic import AnthropicMessagesRequest

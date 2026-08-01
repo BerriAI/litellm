@@ -2,19 +2,21 @@
 # for the sake of performance and scalability.
 
 import asyncio
+import atexit
 import contextvars
 import logging
-from typing import Coroutine, Optional
-import atexit
+from collections.abc import Coroutine
+from typing import Optional
+
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
+    LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS,
+    LOGGING_WORKER_CLEAR_PERCENTAGE,
     LOGGING_WORKER_CONCURRENCY,
     LOGGING_WORKER_MAX_QUEUE_SIZE,
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
-    LOGGING_WORKER_CLEAR_PERCENTAGE,
-    LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS,
     MAX_ITERATIONS_TO_CLEAR_QUEUE,
     MAX_TIME_TO_CLEAR_QUEUE,
 )

@@ -7,7 +7,8 @@ API requests to database operations via LiteLLMSkillsHandler.
 Pattern follows litellm/llms/litellm_proxy/responses/transformation.py
 """
 
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm.types.llms.anthropic_skills import (
     DeleteSkillResponse,

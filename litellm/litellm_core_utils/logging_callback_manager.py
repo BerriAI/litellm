@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Type, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Type, Union
 
 import litellm
 from litellm._logging import verbose_logger

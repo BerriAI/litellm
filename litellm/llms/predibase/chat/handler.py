@@ -2,8 +2,9 @@
 ## Controller file for Predibase Integration - https://predibase.com/
 
 import json
+from collections.abc import Callable
 from functools import partial
-from typing import Callable, Optional, Union
+from typing import Optional, Union
 
 import httpx  # type: ignore
 

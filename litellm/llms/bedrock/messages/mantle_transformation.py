@@ -6,7 +6,8 @@ AmazonAnthropicClaudeMessagesConfig. Overrides only the URL and model-prefix
 stripping that are specific to the bedrock-mantle endpoint.
 """
 
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import httpx
 

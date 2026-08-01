@@ -1,8 +1,8 @@
+from collections.abc import Awaitable
 from json import JSONDecodeError
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
     Dict,
     List,
     Literal,

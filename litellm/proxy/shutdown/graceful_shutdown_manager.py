@@ -20,7 +20,8 @@ granularity of ``InFlightRequestsMiddleware``.
 import asyncio
 import os
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.in_flight_requests_middleware import (

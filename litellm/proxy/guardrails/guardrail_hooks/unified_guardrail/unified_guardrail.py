@@ -8,7 +8,8 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 
 import copy
 import json
-from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Union
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any, List, Union
 
 from fastapi import HTTPException
 
@@ -210,14 +211,13 @@ class UnifiedLLMGuardrails(CustomLogger):
         Uses Enkrypt AI guardrails to check the response for policy violations, PII, and injection attacks
         """
         global endpoint_guardrail_translation_mappings
+        # Local import avoids a module-level cyclic import with
+        # litellm.integrations.custom_guardrail.
+        from litellm.integrations.custom_guardrail import ModifyResponseException
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
         from litellm.types.guardrails import GuardrailEventHooks
-
-        # Local import avoids a module-level cyclic import with
-        # litellm.integrations.custom_guardrail.
-        from litellm.integrations.custom_guardrail import ModifyResponseException
 
         guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
 

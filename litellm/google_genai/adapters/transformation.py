@@ -1,5 +1,6 @@
 import json
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, cast
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.json_validation_rule import normalize_tool_schema

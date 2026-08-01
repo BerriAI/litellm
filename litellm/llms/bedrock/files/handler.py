@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import Mapping
-from typing import Any, Coroutine, Optional, Tuple, Union
+from collections.abc import Coroutine, Mapping
+from typing import Any, Optional, Tuple, Union
 
 import httpx
 

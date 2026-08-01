@@ -19,6 +19,7 @@ import random
 import sys
 import time
 import traceback
+from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -26,13 +27,9 @@ from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
     Dict,
-    Iterable,
     List,
     Literal,
-    Mapping,
     Optional,
     Tuple,
     Type,

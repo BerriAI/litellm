@@ -5,7 +5,8 @@ otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 """
 
 import os
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper

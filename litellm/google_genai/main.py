@@ -1,7 +1,8 @@
 import asyncio
 import contextvars
+from collections.abc import Iterator
 from functools import partial
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import AsyncGenerator, List, Literal
-
-from pydantic import TypeAdapter, ValidationError
-from pydantic import BaseModel
-from typing_extensions import TypeGuard
+from typing import List, Literal, TypeGuard
 
 from fastapi import HTTPException
-from httpx import HTTPError, Response as HttpxResponse
+from httpx import HTTPError
+from httpx import Response as HttpxResponse
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger

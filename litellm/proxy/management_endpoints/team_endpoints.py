@@ -13,13 +13,12 @@ import asyncio
 import json
 import math
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import (
     Annotated,
     Dict,
     List,
-    Mapping,
     Optional,
     Protocol,
     Tuple,

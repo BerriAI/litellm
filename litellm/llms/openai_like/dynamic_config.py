@@ -2,7 +2,8 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from collections.abc import Coroutine
+from typing import Any, List, Literal, Optional, Tuple, Union, overload
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (

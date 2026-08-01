@@ -2,7 +2,8 @@ import asyncio
 import importlib
 import importlib.util
 import os
-from typing import Any, Callable, Literal, Optional, get_type_hints
+from collections.abc import Callable
+from typing import Any, Literal, Optional, get_type_hints
 
 
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:

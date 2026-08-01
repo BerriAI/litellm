@@ -2,10 +2,10 @@
 #    On success, logs events to Promptlayer
 import re
 import traceback
+from collections.abc import AsyncGenerator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     Dict,
     List,
     Optional,
@@ -18,9 +18,9 @@ from pydantic import BaseModel
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.types.integrations.argilla import ArgillaItem
+from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
     CallTypes,
@@ -850,9 +850,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         This is useful for logging payloads that contain sensitive information.
         """
-        import litellm
         from copy import copy
 
+        import litellm
         from litellm import Choices, Message, ModelResponse
 
         turn_off_message_logging: bool = getattr(self, "turn_off_message_logging", False)

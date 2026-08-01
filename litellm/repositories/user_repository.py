@@ -3,7 +3,8 @@ User repository for database operations on LiteLLM_UserTable.
 """
 
 import json
-from typing import Any, Dict, List, Mapping, Optional, Type
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional, Type
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict

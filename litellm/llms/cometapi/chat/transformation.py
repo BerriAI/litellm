@@ -5,7 +5,8 @@ Based on OpenAI-compatible API interface implementation
 Documentation: [CometAPI Documentation Link]
 """
 
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, List, Optional, Tuple, Union
 
 import httpx
 

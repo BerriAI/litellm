@@ -10,7 +10,8 @@ A2A Streaming Events (in order):
 4. Status update (kind: "status-update") - Final status "completed" with final=true
 """
 
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any, Dict, Optional
 
 import litellm
 from litellm._logging import verbose_logger

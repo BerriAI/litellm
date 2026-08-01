@@ -12,7 +12,8 @@ pattern: global spend, feature flags, config, or other shared read-through data.
 
 import asyncio
 import time
-from typing import Any, Awaitable, Callable, Optional, Protocol, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Any, Optional, Protocol, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 

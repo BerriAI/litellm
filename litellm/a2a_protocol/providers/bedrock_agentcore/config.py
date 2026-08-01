@@ -2,7 +2,8 @@
 Bedrock AgentCore A2A provider configuration.
 """
 
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any, Dict, Optional
 
 from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
 from litellm.a2a_protocol.providers.bedrock_agentcore.handler import (

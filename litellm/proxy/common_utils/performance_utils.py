@@ -13,8 +13,9 @@ import cProfile
 import functools
 import inspect
 import threading
+from collections.abc import Callable
 from pathlib import Path as PathLib
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 

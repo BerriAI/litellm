@@ -5,7 +5,8 @@ import os
 import ssl
 import typing
 import urllib.request
-from typing import Any, Callable, ClassVar, Dict, Optional, Union
+from collections.abc import Callable
+from typing import Any, ClassVar, Dict, Optional, Union
 
 import aiohttp
 import aiohttp.client_exceptions

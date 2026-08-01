@@ -6,7 +6,8 @@ Reference: https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 

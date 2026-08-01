@@ -8,13 +8,10 @@
 - async_streaming
 """
 
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Callable,
-    Coroutine,
-    Iterator,
     Optional,
     Union,
 )

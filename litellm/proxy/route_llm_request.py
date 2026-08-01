@@ -1,5 +1,6 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
 from fastapi import HTTPException, status

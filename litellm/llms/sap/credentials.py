@@ -1,17 +1,20 @@
 from __future__ import annotations
-from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple, Union
-from datetime import datetime, timedelta, timezone
-from threading import Lock
-from pathlib import Path
-from dataclasses import dataclass
+
 import json
 import os
 import tempfile
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from threading import Lock
+from typing import Any, Dict, Final, List, Optional, Tuple, Union
+
 import httpx
 
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client, HTTPHandler
-from litellm._logging import verbose_logger
 import litellm
+from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 

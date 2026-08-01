@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from typing import Any, Coroutine, Optional, Union
+from collections.abc import Coroutine
+from typing import Any, Optional, Union
 
 import httpx
 

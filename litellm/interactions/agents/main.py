@@ -30,8 +30,9 @@ Usage:
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import httpx
 

@@ -1,12 +1,11 @@
 import asyncio
 import contextvars
+from collections.abc import Coroutine, Iterable
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Coroutine,
     Dict,
-    Iterable,
     List,
     Literal,
     Optional,

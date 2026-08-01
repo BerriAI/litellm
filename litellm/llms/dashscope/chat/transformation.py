@@ -2,12 +2,11 @@
 Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
-
-from litellm.types.llms.openai import ChatCompletionToolParam
+from collections.abc import Coroutine
+from typing import Any, List, Literal, Optional, Tuple, Union, overload
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 

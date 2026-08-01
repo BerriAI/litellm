@@ -4,13 +4,11 @@ This module is used to pass through requests to the LLM APIs.
 
 import asyncio
 import contextvars
+from collections.abc import AsyncGenerator, Coroutine, Generator
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Coroutine,
-    Generator,
     List,
     Optional,
     Union,

@@ -18,10 +18,10 @@ handler (analogous to the OpenAI / Azure transcription handlers).
 import asyncio
 import math
 import time
+from collections.abc import Coroutine
 from typing import (
     TYPE_CHECKING,
     Any,
-    Coroutine,
     Dict,
     List,
     Optional,

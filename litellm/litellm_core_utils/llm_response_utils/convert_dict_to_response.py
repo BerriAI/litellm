@@ -3,7 +3,8 @@ import json
 import re
 import time
 import traceback
-from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union, cast
+from collections.abc import Iterable
+from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -28,9 +29,6 @@ from litellm.types.utils import (
     Function,
     HiddenParams,
     ImageResponse,
-)
-from litellm.types.utils import Logprobs as TextCompletionLogprobs
-from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
@@ -44,6 +42,7 @@ from litellm.types.utils import (
     TranscriptionUsageTokensObject,
     Usage,
 )
+from litellm.types.utils import Logprobs as TextCompletionLogprobs
 
 from .get_headers import get_response_headers
 

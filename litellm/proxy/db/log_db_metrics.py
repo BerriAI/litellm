@@ -5,9 +5,10 @@ ServiceLogger() then sends DB logs to Prometheus, OTEL, Datadog etc
 """
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
-from typing import Callable, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from litellm._service_logger import ServiceTypes
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs

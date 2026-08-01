@@ -1,7 +1,8 @@
 import posixpath
 import re
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Mapping, Optional, Sequence, Tuple, cast
+from typing import Any, Optional, Tuple, cast
 from urllib.parse import quote, unquote
 
 from litellm._uuid import uuid

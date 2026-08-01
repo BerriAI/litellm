@@ -8,7 +8,8 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
-from typing import Any, Callable, Dict, FrozenSet, Iterator, List
+from collections.abc import Callable, Iterator
+from typing import Any, Dict, FrozenSet, List
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret

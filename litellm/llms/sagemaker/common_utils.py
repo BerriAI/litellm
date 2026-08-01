@@ -1,6 +1,7 @@
 import functools
 import json
-from typing import AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import List, Optional, Union
 
 import httpx
 

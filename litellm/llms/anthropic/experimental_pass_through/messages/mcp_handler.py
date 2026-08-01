@@ -7,7 +7,8 @@ tool through a ``tool_use`` content block, and results are fed back as
 ``tool_result`` blocks in a user message.
 """
 
-from typing import Any, AsyncIterator, Mapping, Sequence, Union
+from collections.abc import AsyncIterator, Mapping, Sequence
+from typing import Any, Union
 
 from litellm._logging import verbose_logger
 from litellm.responses.mcp.request_context import MCPRequestContext

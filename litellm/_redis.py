@@ -12,7 +12,8 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from typing import Callable, List, Optional, Union
+from collections.abc import Callable
+from typing import List, Optional, Union
 
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore

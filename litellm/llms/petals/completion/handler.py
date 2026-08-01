@@ -1,5 +1,6 @@
 import time
-from typing import Callable, Optional, Union
+from collections.abc import Callable
+from typing import Optional, Union
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (

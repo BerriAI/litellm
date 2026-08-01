@@ -9,7 +9,8 @@ follow-up response is chained as Phase 2 of the same iterator.
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, List, Optional, cast
+from collections.abc import AsyncIterator
+from typing import Any, Dict, List, Optional, cast
 
 from litellm._logging import verbose_logger
 

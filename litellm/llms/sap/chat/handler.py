@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import time
-from typing import AsyncIterator, Iterator, Optional
+from collections.abc import AsyncIterator, Iterator
+from typing import Optional
 
 import httpx
 

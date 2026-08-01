@@ -1,5 +1,6 @@
 import types
-from typing import Any, AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, List, Optional, Union
 
 import httpx
 

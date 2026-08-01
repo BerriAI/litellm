@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 
 import aiohttp
 import httpx  # type: ignore
@@ -12,12 +13,12 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
 )
-from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.types.llms.openai import FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager

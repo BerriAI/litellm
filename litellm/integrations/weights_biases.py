@@ -10,7 +10,9 @@ try:
     if sys.version_info >= (3, 8):
         from typing import Literal, Protocol
     else:
-        from typing_extensions import Literal, Protocol
+        from typing import Literal
+
+        from typing_extensions import Protocol
 
     logger = logging.getLogger(__name__)
 

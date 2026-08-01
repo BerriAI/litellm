@@ -1,9 +1,10 @@
 import os
 import re
 import sys
+from collections.abc import Iterator, Mapping
 from functools import lru_cache
 from logging import Logger
-from typing import Any, Dict, FrozenSet, Iterator, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Union
 
 from fastapi import HTTPException, Request, status
 

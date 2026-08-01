@@ -1,11 +1,10 @@
 import base64
 import re
+from collections.abc import Iterable, Mapping
 from typing import (
     Any,
     Dict,
-    Iterable,
     List,
-    Mapping,
     Optional,
     Type,
     Union,

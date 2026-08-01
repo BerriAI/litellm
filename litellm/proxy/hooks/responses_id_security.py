@@ -5,7 +5,8 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Tuple, Union, cast
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 
 from fastapi import HTTPException
 

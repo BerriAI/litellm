@@ -12,7 +12,8 @@ All /policy management endpoints
 import copy
 import json
 import os
-from typing import TYPE_CHECKING, Any, AsyncIterator, List, Literal, Optional, cast
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse

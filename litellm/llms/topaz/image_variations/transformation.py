@@ -1,7 +1,8 @@
 import base64
 import time
+from collections.abc import Mapping
 from io import BytesIO
-from typing import Any, List, Mapping, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 from aiohttp import ClientResponse
 from httpx import Headers, Response

@@ -1,4 +1,5 @@
-from typing import Dict, List, Mapping, Optional, Union
+from collections.abc import Mapping
+from typing import Dict, List, Optional, Union
 from urllib.parse import parse_qs
 
 import httpx

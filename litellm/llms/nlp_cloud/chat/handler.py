@@ -1,5 +1,6 @@
 import json
-from typing import Callable, Optional, Union
+from collections.abc import Callable
+from typing import Optional, Union
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (

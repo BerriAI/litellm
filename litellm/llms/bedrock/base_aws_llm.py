@@ -4,11 +4,11 @@ import json
 import os
 import re
 import urllib.parse
+from collections.abc import Callable
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     ClassVar,
     Dict,
     Literal,

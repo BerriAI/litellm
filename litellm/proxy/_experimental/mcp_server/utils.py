@@ -7,14 +7,11 @@ import importlib
 import json
 import os
 import re
-from collections.abc import MutableMapping, MutableSequence
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence
 from typing import (
     Any,
     Dict,
-    Iterable,
-    Iterator,
     List,
-    Mapping,
     Optional,
     Set,
     Tuple,

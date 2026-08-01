@@ -1,8 +1,9 @@
 import asyncio
 import contextvars
 import json
+from collections.abc import Coroutine
 from functools import partial
-from typing import Coroutine, Dict, List, Literal, Optional, Union, overload
+from typing import Dict, List, Literal, Optional, Union, overload
 
 import litellm
 from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL

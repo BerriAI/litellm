@@ -3,9 +3,9 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
 import json
+from collections.abc import Coroutine
 from typing import (
     Any,
-    Coroutine,
     Dict,
     List,
     Literal,

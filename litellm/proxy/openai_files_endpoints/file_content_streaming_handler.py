@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional, Tuple, cast
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 
 from fastapi.responses import StreamingResponse
 

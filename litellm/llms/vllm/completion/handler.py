@@ -1,5 +1,5 @@
 import time  # type: ignore
-from typing import Callable
+from collections.abc import Callable
 
 import httpx
 

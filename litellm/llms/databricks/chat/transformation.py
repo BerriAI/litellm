@@ -3,12 +3,10 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 """
 
 import os
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
-    Iterator,
     List,
     Literal,
     Optional,

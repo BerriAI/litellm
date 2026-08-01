@@ -6,7 +6,8 @@ This module provides fake streaming by converting non-streaming responses into s
 """
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, Optional, cast
+from collections.abc import AsyncIterator
+from typing import Any, Dict, Optional, cast
 from uuid import uuid4
 
 from litellm._logging import verbose_logger

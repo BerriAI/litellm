@@ -8,7 +8,8 @@ WXO uses a REST API (not A2A/JSON-RPC) with an async-poll execution model:
 """
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from litellm._logging import verbose_logger

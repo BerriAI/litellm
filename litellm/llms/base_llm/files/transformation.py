@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Union
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 from openai.types.file_deleted import FileDeleted

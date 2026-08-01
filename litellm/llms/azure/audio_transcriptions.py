@@ -1,9 +1,10 @@
-from litellm._uuid import uuid
-from typing import Any, Coroutine, Optional, Union
+from collections.abc import Coroutine
+from typing import Any, Optional, Union
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
 
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.types.utils import FileTypes
 from litellm.utils import (

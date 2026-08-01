@@ -2,7 +2,8 @@
 Utility functions for the Agents API SDK.
 """
 
-from typing import Dict, Mapping, Optional
+from collections.abc import Mapping
+from typing import Dict, Optional
 
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 

@@ -33,8 +33,9 @@ Usage:
 
 import asyncio
 import contextvars
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 

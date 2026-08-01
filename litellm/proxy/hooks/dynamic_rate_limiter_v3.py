@@ -3,8 +3,9 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 """
 
 import os
+from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 

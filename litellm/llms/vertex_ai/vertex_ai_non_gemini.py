@@ -1,7 +1,8 @@
 import json
 import os
 import time
-from typing import Any, Callable, Optional, cast
+from collections.abc import Callable
+from typing import Any, Optional, cast
 
 import httpx
 

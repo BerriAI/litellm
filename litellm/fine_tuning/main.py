@@ -11,8 +11,9 @@ https://platform.openai.com/docs/api-reference/fine-tuning
 import asyncio
 import contextvars
 import os
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 import httpx
 

@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
+from collections.abc import Callable, Coroutine
+from typing import Any, Dict, List, Optional, Union
 
 import httpx  # type: ignore
 from openai import (

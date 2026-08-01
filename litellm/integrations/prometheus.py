@@ -7,18 +7,15 @@ import asyncio
 import math
 import os
 import sys
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
     Dict,
     List,
     Literal,
-    Mapping,
     Optional,
-    Sequence,
     Tuple,
     Union,
     cast,

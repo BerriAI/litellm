@@ -1,4 +1,5 @@
-from typing import Any, Dict, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any, Dict, Optional
 
 from litellm.types.utils import StandardCallbackDynamicParams
 

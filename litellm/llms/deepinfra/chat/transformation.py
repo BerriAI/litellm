@@ -1,5 +1,6 @@
 import json
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from collections.abc import Coroutine
+from typing import Any, List, Literal, Optional, Tuple, Union, cast, overload
 
 import litellm
 from litellm.constants import MIN_NON_ZERO_TEMPERATURE

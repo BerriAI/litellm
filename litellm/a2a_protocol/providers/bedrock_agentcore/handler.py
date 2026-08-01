@@ -6,7 +6,8 @@ completion bridge that would otherwise strip the envelope.
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Optional, cast
+from collections.abc import AsyncIterator
+from typing import Any, Dict, Optional, cast
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (

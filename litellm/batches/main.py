@@ -13,8 +13,9 @@ https://platform.openai.com/docs/api-reference/batch
 import asyncio
 import contextvars
 import os
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts

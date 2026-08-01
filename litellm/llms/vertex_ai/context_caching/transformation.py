@@ -5,7 +5,8 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import re
-from typing import List, Optional, Sequence, Tuple, Literal
+from collections.abc import Sequence
+from typing import List, Literal, Optional, Tuple
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody

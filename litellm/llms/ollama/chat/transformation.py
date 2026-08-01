@@ -1,11 +1,9 @@
 import json
 import time
-from litellm._uuid import uuid
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Iterator,
     List,
     Optional,
     Union,
@@ -16,6 +14,7 @@ from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,

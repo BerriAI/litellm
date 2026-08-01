@@ -4,12 +4,11 @@ import copy
 import json
 import traceback
 from collections import deque
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
     Dict,
-    Iterator,
     List,
     Literal,
     Optional,

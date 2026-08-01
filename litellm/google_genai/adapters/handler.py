@@ -1,4 +1,5 @@
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from collections.abc import AsyncIterator, Coroutine
+from typing import Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm.types.router import GenericLiteLLMParams
