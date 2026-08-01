@@ -84,6 +84,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.router_strategy.tag_limits import TagLimitCheck, has_tag_limits
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -722,6 +723,11 @@ class Router:
                 optional_pre_call_checks.append("router_budget_limiting")
             else:
                 optional_pre_call_checks = ["router_budget_limiting"]
+        if has_tag_limits(model_list):
+            if optional_pre_call_checks is not None:
+                optional_pre_call_checks.append("tag_limits")
+            else:
+                optional_pre_call_checks = ["tag_limits"]
         self.retry_policy: Optional[RetryPolicy] = None
         if retry_policy is not None:
             if isinstance(retry_policy, dict):
@@ -1710,6 +1716,10 @@ class Router:
                 self.router_budget_logger = _callback
             elif pre_call_check == "enforce_model_rate_limits":
                 _callback = ModelRateLimitingCheck(dual_cache=self.cache)
+            elif pre_call_check == "tag_limits":
+                if any(isinstance(_cb, TagLimitCheck) for _cb in (self.optional_callbacks or [])):
+                    continue
+                _callback = TagLimitCheck(dual_cache=self.cache)
 
             if _callback is None:
                 continue
