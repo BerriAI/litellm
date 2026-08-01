@@ -2902,3 +2902,60 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "tokens_saved": 7000,
         "source": "compression_interception",
     }
+
+
+def test_no_routing_decision_key_defaults_to_none_in_spend_log_metadata():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-no-routing-decision", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["routing_decision"] is None
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_internal_call_origin_survives_into_spend_log_metadata(bucket):
+    """The origin is only useful if it reaches the row the Logs UI reads.
+
+    _get_spend_logs_metadata projects onto SpendLogsMetadata.__annotations__, so an
+    undeclared key is dropped silently. Both buckets are covered because the resolver
+    returns litellm_metadata when present and metadata otherwise, and the classifier
+    sub-call populates whichever the parent route used.
+    """
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {
+                bucket: {
+                    "user_api_key": "test-key",
+                    "internal_call_origin": "autorouter_classifier",
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-classifier", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["internal_call_origin"] == "autorouter_classifier"
+
+
+def test_user_traffic_carries_no_internal_call_origin():
+    """The negative class the badge depends on: an ordinary request must be
+    distinguishable from a classifier call, not merely unlabelled by accident."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-user-traffic", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["internal_call_origin"] is None

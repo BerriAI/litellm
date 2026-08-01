@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.95.0"
+version = "1.96.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -23,7 +23,7 @@ dependencies = [
     "tokenizers>=0.21.0,<1.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
-    "aiohttp>=3.10,<4.0",
+    "aiohttp>=3.14.2,<4.0",
     "pydantic>=2.10.0,<3.0.0",
     "jsonschema>=4.0.0,<5.0",
 ]
@@ -62,8 +62,8 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.80",
-    "litellm-enterprise==0.1.51",
+    "litellm-proxy-extras==0.4.81",
+    "litellm-enterprise==0.1.52",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -99,6 +99,10 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
+# SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
+# bundle the native libxmlsec1/libxml2 libraries, so no system packages are
+# required. Kept out of the base `proxy` extra so it stays optional.
+saml = ["python3-saml>=1.16.0,<2.0"]
 semantic-router = [
     "semantic-router>=0.1.15,<1.0; python_version < '3.14'",
     "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
@@ -273,7 +277,7 @@ exclude = [
 [tool.uv]
 constraint-dependencies = [
     "tornado>=6.5.6",
-    "aiohttp>=3.14.1,<4.0",
+    "aiohttp>=3.14.2,<4.0",
     "packaging>=24.0",
     "soupsieve>=2.8.4",
     "httplib2>=0.32.0",
@@ -298,7 +302,7 @@ members = ["enterprise", "litellm-proxy-extras"]
 profile = "black"
 
 [tool.commitizen]
-version = "1.95.0"
+version = "1.96.0"
 version_files = [
     "pyproject.toml:^version",
 ]

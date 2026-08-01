@@ -234,6 +234,12 @@ class ImagesResult(BaseModel):
     data: list[ImageItem] = []
 
 
+class ImageEditForm(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
+
+
 class TranscriptionResult(BaseModel):
     text: str = ""
 

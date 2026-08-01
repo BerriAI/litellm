@@ -11,6 +11,7 @@ from typing import (
     Literal,
     Mapping,
     NamedTuple,
+    Sequence,
     Union,
 )
 
@@ -2025,19 +2026,7 @@ async def ui_view_spend_logs(
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
-        # query_raw returns the JSONB `metadata` column as a string (the Prisma
-        # serialiser bypasses the model-layer JSON hydration we get on the ORM
-        # path). The UI reads `metadata.status` / `metadata.error_information`
-        # as object fields, so failure rows looked like successes (#29674).
-        # Re-hydrate to dict here.
-        for row in data:
-            if isinstance(row, dict):
-                md = row.get("metadata")
-                if isinstance(md, str):
-                    try:
-                        row["metadata"] = json.loads(md)
-                    except (ValueError, TypeError):
-                        row["metadata"] = {}
+        _hydrate_spend_log_metadata(data)
 
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
@@ -2076,6 +2065,27 @@ def _spend_log_field_has_content(value: Union[str, list, dict] | None) -> bool:
     if isinstance(value, (list, dict)):
         return len(value) > 0
     return True
+
+
+def _hydrate_spend_log_metadata(rows: Sequence[Any]) -> None:
+    """Re-hydrate the JSONB ``metadata`` column returned by ``query_raw`` as a string.
+
+    The Prisma serialiser bypasses the model-layer JSON hydration we get on the ORM
+    path, while the UI reads ``metadata.status`` / ``metadata.error_information`` /
+    ``metadata.internal_call_origin`` as object fields. Property access on a string
+    is silently undefined, so failure rows looked like successes (#29674). Every
+    ``query_raw`` reader of this column goes through here so a new one cannot
+    reintroduce that.
+    """
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        md = row.get("metadata")
+        if isinstance(md, str):
+            try:
+                row["metadata"] = json.loads(md)
+            except (ValueError, TypeError):
+                row["metadata"] = {}
 
 
 def _cold_storage_object_key_from_metadata(
@@ -3308,8 +3318,36 @@ async def ui_view_session_spend_logs(
                 detail="Database not connected",
             )
 
-        # Build query conditions
-        where_conditions = {"session_id": session_id}
+        if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+            scope_sql = ""
+            scope_params = ()
+            where_conditions = {"session_id": session_id}
+        else:
+            try:
+                permitted_team_ids = (
+                    await _get_permitted_team_ids_for_spend_logs(
+                        prisma_client=prisma_client,
+                        user_api_key_dict=user_api_key_dict,
+                    )
+                    if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+                    else []
+                )
+            except Exception:  # noqa: BLE001  # mirror /spend/logs/ui: failed team lookup falls back to own-logs-only scope
+                permitted_team_ids = []
+            if permitted_team_ids:
+                scope_sql = ' AND ("user" = $4 OR team_id = ANY($5::text[]))'
+                scope_params = (user_api_key_dict.user_id, permitted_team_ids)
+                where_conditions = {
+                    "session_id": session_id,
+                    "OR": [
+                        {"user": user_api_key_dict.user_id},
+                        {"team_id": {"in": permitted_team_ids}},
+                    ],
+                }
+            else:
+                scope_sql = ' AND "user" = $4'
+                scope_params = (user_api_key_dict.user_id,)
+                where_conditions = {"session_id": session_id, "user": user_api_key_dict.user_id}
 
         # Calculate pagination offsets
         skip = (page - 1) * page_size
@@ -3318,7 +3356,7 @@ async def ui_view_session_spend_logs(
         total_records = await SpendLogsRepository(prisma_client).table.count(where=where_conditions)
 
         # Query with raw SQL to exclude heavy columns (messages, response, proxy_server_request)
-        sql_query = """
+        sql_query = f"""
             SELECT
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
@@ -3328,11 +3366,12 @@ async def ui_view_session_spend_logs(
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id
             FROM "LiteLLM_SpendLogs"
-            WHERE session_id = $1
+            WHERE session_id = $1{scope_sql}
             ORDER BY "startTime" DESC
             LIMIT $2 OFFSET $3
         """
-        result = await prisma_client.db.query_raw(sql_query, session_id, page_size, skip)
+        result = await prisma_client.db.query_raw(sql_query, session_id, page_size, skip, *scope_params)
+        _hydrate_spend_log_metadata(result)
 
         total_pages = (total_records + page_size - 1) // page_size
 
@@ -3548,7 +3587,7 @@ async def _can_team_member_view_log(
     team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
     if team_row is None:
         return False
-    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+    team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
     if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
         return True
     return _team_member_has_permission(
@@ -3640,7 +3679,7 @@ async def _get_permitted_team_ids_for_spend_logs(
 
     permitted: List[str] = []
     for team_row in team_rows:
-        team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+        team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
         if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             permitted.append(team_obj.team_id)
         elif _team_member_has_permission(

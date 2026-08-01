@@ -147,8 +147,10 @@ class UnifiedLLMGuardrails(CustomLogger):
             litellm_logging_obj=data.get("litellm_logging_obj"),
         )
 
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_to_apply.guardrail_name)
+        if not guardrail_to_apply.records_own_guardrail_information:
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
+            )
         return data
 
     async def async_moderation_hook(
@@ -274,8 +276,10 @@ class UnifiedLLMGuardrails(CustomLogger):
             if e.original_response is None:
                 e.original_response = response
             raise
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_to_apply.guardrail_name)
+        if not guardrail_to_apply.records_own_guardrail_information:
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
+            )
 
         return response
 
@@ -800,6 +804,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
+        guardrail_to_apply: Union[CustomGuardrail, None] = None,
+        buffer_until_moderated_default: bool = False,
     ) -> AsyncGenerator[Any, None]:
         """
         Passes the entire stream to the guardrail
@@ -820,7 +826,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         # litellm.integrations.custom_guardrail.
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
-        guardrail_to_apply: CustomGuardrail = request_data.pop("guardrail_to_apply", None)
+        if guardrail_to_apply is None:
+            guardrail_to_apply = request_data.pop("guardrail_to_apply", None)
 
         # Get streaming configuration. Resolution order (later wins): default
         # < guardrail attribute < guardrail_config dict < this callback's
@@ -848,7 +855,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         # release the original chunks are replayed as-is, so a
         # content-rewriting guardrail (e.g. PII masking) would leak
         # unredacted content. Guarded below via mask_response_content.
-        buffer_until_moderated = _streaming_flag("streaming_buffer_until_moderated", False)
+        buffer_until_moderated = _streaming_flag("streaming_buffer_until_moderated", buffer_until_moderated_default)
 
         if (
             buffer_until_moderated

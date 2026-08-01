@@ -141,6 +141,7 @@ class StreamingResponse(BaseModel):
     # quota) arrive as SSE error events inside an otherwise-successful response;
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
+    stream_done: bool = False
 
     @property
     def ok(self) -> bool:

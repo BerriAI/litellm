@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+from collections import Counter
 from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
@@ -25,6 +26,7 @@ from litellm.repositories.table_repositories import (
     SSOConfigRepository,
     UISettingsRepository,
 )
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
@@ -598,6 +600,51 @@ async def get_default_team_settings():
     )
 
 
+def _default_team_ids(teams: list[str] | list[NewUserRequestTeam]) -> tuple[str, ...]:
+    return tuple(team if isinstance(team, str) else team.team_id for team in teams)
+
+
+async def _validate_default_teams_exist(teams: list[str] | list[NewUserRequestTeam]) -> None:
+    """Reject default teams that cannot be assigned.
+
+    New users are added to these teams long after the settings are saved, and that
+    consume path swallows the resulting 404, so an unknown team id would silently
+    drop every future user's team assignment unless it is caught here.
+    """
+    team_ids = _default_team_ids(teams)
+    if not team_ids:
+        return
+
+    duplicate_ids = tuple(team_id for team_id, count in Counter(team_ids).items() if count > 1)
+    if duplicate_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Duplicate default team id(s): {', '.join(duplicate_ids)}. List each default team only once."
+            },
+        )
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    existing_teams = await TeamRepository(prisma_client).find_many(where={"team_id": {"in": list(team_ids)}})
+    existing_team_ids = {team.team_id for team in existing_teams}
+    missing_ids = tuple(team_id for team_id in team_ids if team_id not in existing_team_ids)
+    if missing_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Team(s) not found: {', '.join(missing_ids)}. "
+                "A team must exist before it can be set as a default team for new users."
+            },
+        )
+
+
 async def update_default_team_member_budget(teams: List[NewUserRequestTeam], user_api_key_dict: UserAPIKeyAuth):
     """
     1. Update the max member budget for the team
@@ -706,6 +753,9 @@ async def update_internal_user_settings(
     Update the default internal user parameters for SSO users.
     These settings will be applied to new users who sign in via SSO.
     """
+    if settings.teams is not None:
+        await _validate_default_teams_exist(settings.teams)
+
     if settings.teams is not None and all(isinstance(team, NewUserRequestTeam) for team in settings.teams):
         await update_default_team_member_budget(
             settings.teams,

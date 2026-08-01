@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import type { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
-import { buildDailyToolSeries, computeCacheLeakage, isAnthropicModel, topToolsBySpend } from "./costOptimizationUtils";
+import {
+  buildDailyToolSeries,
+  computeCacheLeakage,
+  formatRangeLabel,
+  isAnthropicModel,
+  localIsoDay,
+  toCumulative,
+  topToolsBySpend,
+  withStartAnchor,
+} from "./costOptimizationUtils";
 
 const metrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
   spend: 0,
@@ -219,5 +228,81 @@ describe("topToolsBySpend", () => {
 
   it("sorts by spend descending and truncates to the limit", () => {
     expect(topToolsBySpend(byTool, 2).map((t) => t.tool_name)).toEqual(["b", "c"]);
+  });
+});
+
+describe("localIsoDay", () => {
+  it("reads the date off the viewer's clock rather than shifting it to UTC", () => {
+    expect(localIsoDay(new Date(2026, 6, 23, 23, 30))).toBe("2026-07-23");
+    expect(localIsoDay(new Date(2026, 0, 5, 0, 30))).toBe("2026-01-05");
+  });
+});
+
+describe("toCumulative", () => {
+  const point = (date: string, compression: number, caching: number) => ({
+    date,
+    Compression: compression,
+    "Prompt caching": caching,
+  });
+
+  it("turns each reading into everything saved up to that point", () => {
+    const running = toCumulative([point("Jul 1", 1, 10), point("Jul 2", 2, 20), point("Jul 3", 3, 30)]);
+    expect(running.map((p) => p.Compression)).toEqual([1, 3, 6]);
+    expect(running.map((p) => p["Prompt caching"])).toEqual([10, 30, 60]);
+  });
+
+  it("accumulates each driver on its own, so one flat series cannot lift the other", () => {
+    const running = toCumulative([point("Jul 1", 0, 5), point("Jul 2", 0, 5)]);
+    expect(running.map((p) => p.Compression)).toEqual([0, 0]);
+    expect(running.map((p) => p["Prompt caching"])).toEqual([5, 10]);
+  });
+
+  it("never falls, even across a quiet interval", () => {
+    const running = toCumulative([point("Jul 1", 4, 0), point("Jul 2", 0, 0), point("Jul 3", 1, 0)]);
+    expect(running.map((p) => p.Compression)).toEqual([4, 4, 5]);
+  });
+
+  it("keeps the labels and length of the readings it was given", () => {
+    const running = toCumulative([point("9am", 1, 1), point("10am", 1, 1)]);
+    expect(running.map((p) => p.date)).toEqual(["9am", "10am"]);
+    expect(toCumulative([])).toEqual([]);
+  });
+});
+
+describe("withStartAnchor", () => {
+  const point = (date: string, compression: number, caching: number) => ({
+    date,
+    Compression: compression,
+    "Prompt caching": caching,
+  });
+
+  it("lifts a single-day cumulative off a floating dot by prepending a $0 origin", () => {
+    const anchored = withStartAnchor([point("Jul 24", 12, 30)], "Jul 24");
+    expect(anchored).toEqual([point("Jul 24", 0, 0), point("Jul 24", 12, 30)]);
+  });
+
+  it("starts the range at zero without disturbing the running totals that follow", () => {
+    const anchored = withStartAnchor([point("Jul 16", 5, 1), point("Jul 17", 9, 4)], "Jul 16");
+    expect(anchored.map((p) => p.Compression)).toEqual([0, 5, 9]);
+    expect(anchored.map((p) => p["Prompt caching"])).toEqual([0, 1, 4]);
+  });
+
+  it("leaves an empty series alone so the chart's own no-data state can show", () => {
+    expect(withStartAnchor([], "Jul 24")).toEqual([]);
+  });
+});
+
+describe("formatRangeLabel", () => {
+  it("reads as a range across days", () => {
+    expect(formatRangeLabel(new Date(2026, 6, 16), new Date(2026, 6, 23))).toBe("Jul 16 \u2013 Jul 23");
+  });
+
+  it("collapses to one date when both ends are the same day", () => {
+    expect(formatRangeLabel(new Date(2026, 6, 23), new Date(2026, 6, 23))).toBe("Jul 23");
+  });
+
+  it("is empty until both ends are picked", () => {
+    expect(formatRangeLabel(undefined, new Date(2026, 6, 23))).toBe("");
+    expect(formatRangeLabel(new Date(2026, 6, 23), undefined)).toBe("");
   });
 });

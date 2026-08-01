@@ -399,6 +399,103 @@ async def test_mantle_anthropic_messages_sends_workspace_header_and_clean_body()
     assert "aws_bedrock_project_id" not in requests[0]["body"]
 
 
+def _usageless_anthropic_response(url: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        json={
+            "id": "msg_classifier",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-4-8",
+            "content": [{"type": "text", "text": "safe"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+        },
+        request=httpx.Request("POST", url),
+    )
+
+
+@pytest.mark.asyncio
+async def test_mantle_anthropic_messages_backfills_missing_usage():
+    """
+    Regression for LIT-4758: a Mantle non-streaming response with no `usage`
+    object must not reach the client usage-less, or Claude Code's auto-mode
+    classifier crashes on `usage.input_tokens`.
+    """
+    import litellm
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        return _usageless_anthropic_response(str(url))
+
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            response = await litellm.anthropic_messages(
+                model="bedrock/mantle/anthropic.claude-opus-4-8",
+                messages=[{"role": "user", "content": "is `Bash(ls)` safe?"}],
+                max_tokens=10,
+                aws_access_key_id="fake-key",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-east-1",
+            )
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert response["usage"]["input_tokens"] == 0
+    assert response["usage"]["output_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_mantle_anthropic_messages_preserves_upstream_usage():
+    """Backfill must not clobber a usage object the upstream did return."""
+    import litellm
+
+    def _response_with_usage(url: str) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "anthropic.claude-opus-4-8",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": 42,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 5,
+                },
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        return _response_with_usage(str(url))
+
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            response = await litellm.anthropic_messages(
+                model="bedrock/mantle/anthropic.claude-opus-4-8",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                aws_access_key_id="fake-key",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-east-1",
+            )
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert response["usage"]["input_tokens"] == 42
+    assert response["usage"]["output_tokens"] == 7
+    assert response["usage"]["cache_read_input_tokens"] == 5
+
+
 @pytest.mark.asyncio
 async def test_mantle_anthropic_messages_routes_to_vpc_api_base():
     import litellm

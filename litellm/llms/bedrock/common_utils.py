@@ -1109,8 +1109,10 @@ def get_bedrock_chat_config(model: str):
     Returns:
         The appropriate Bedrock config class instance
     """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
     bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-    bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(model=model)
+    bedrock_invoke_provider = BaseAWSLLM.get_bedrock_invoke_provider(model=model)
     base_model = BedrockModelInfo.get_base_model(model)
 
     # Handle explicit routes first

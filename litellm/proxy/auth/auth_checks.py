@@ -74,6 +74,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
+    object_permission_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -485,6 +486,14 @@ MODEL_DISCOVERY_ROUTES = frozenset(
     }
 )
 
+BUDGET_ENFORCED_SIDE_EFFECT_ROUTES = frozenset(
+    {
+        "/health",
+        "/health/services",
+        "/health/test_connection",
+    }
+)
+
 
 async def common_checks(
     request_body: dict,
@@ -531,8 +540,10 @@ async def common_checks(
         request=request,
     )
 
-    if route in MODEL_DISCOVERY_ROUTES:
-        skip_budget_checks = True
+    skip_all_budget_checks = skip_budget_checks or (
+        route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
+        and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
+    )
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -606,7 +617,7 @@ async def common_checks(
             project_object=project_object,
             _model=_model,
             llm_router=llm_router,
-            skip_budget_checks=skip_budget_checks,
+            skip_budget_checks=skip_all_budget_checks,
             valid_token=valid_token,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -615,7 +626,7 @@ async def common_checks(
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
 
     # If this is a free model, skip all budget checks
-    if not skip_budget_checks:
+    if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
         if valid_token is not None:
@@ -632,31 +643,28 @@ async def common_checks(
             )
 
         async def _user_max_budget_check() -> None:
-            if user_object is None or user_object.max_budget is None:
-                return
-            skip_for_team = (
-                general_settings.get("skip_user_budget_on_team_key") is True
-                and team_object is not None
-                and team_object.team_id is not None
-            )
-            if skip_for_team:
-                return
-            from litellm.proxy.proxy_server import get_current_spend
+            # 4.1 personal budget, if personal key
+            if (
+                (team_object is None or team_object.team_id is None)
+                and user_object is not None
+                and user_object.max_budget is not None
+            ):
+                from litellm.proxy.proxy_server import get_current_spend
 
-            user_budget = user_object.max_budget
-            user_spend = await get_current_spend(
-                counter_key=f"spend:user:{user_object.user_id}",
-                fallback_spend=user_object.spend or 0.0,
-                max_budget=user_budget,
-            )
-            if math.isfinite(user_budget) and user_spend >= user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=user_spend,
+                user_budget = user_object.max_budget
+                user_spend = await get_current_spend(
+                    counter_key=f"spend:user:{user_object.user_id}",
+                    fallback_spend=user_object.spend or 0.0,
                     max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
-                    entity_type=Litellm_EntityType.USER.value,
-                    entity_id=user_object.user_id,
                 )
+                if math.isfinite(user_budget) and user_spend >= user_budget:
+                    raise litellm.BudgetExceededError(
+                        current_cost=user_spend,
+                        max_budget=user_budget,
+                        message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
+                        entity_type=Litellm_EntityType.USER.value,
+                        entity_id=user_object.user_id,
+                    )
 
         # Each scope reads a distinct counter key with no cross-scope ordering
         # dependency, so the per-scope Redis-first reads run concurrently instead
@@ -715,7 +723,7 @@ async def common_checks(
             raise budget_error
 
     _enforce_user_param_check(general_settings, request, request_body, route)
-    _global_proxy_budget_check(global_proxy_spend, skip_budget_checks, route)
+    _global_proxy_budget_check(global_proxy_spend, skip_all_budget_checks, route)
     _guardrail_modification_check(request_body, team_object)
 
     # 10 [OPTIONAL] Organization RBAC checks
@@ -953,7 +961,7 @@ async def get_default_end_user_budget(
             )
             return None
 
-        _budget_obj = LiteLLM_BudgetTable(**budget_record.dict())
+        _budget_obj = LiteLLM_BudgetTable.model_validate(budget_record.dict())
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
             key=cache_key,
@@ -999,7 +1007,7 @@ async def get_team_member_default_budget(
     if isinstance(cached_budget, LiteLLM_BudgetTable):
         return cached_budget
     if isinstance(cached_budget, dict):
-        return LiteLLM_BudgetTable(**cached_budget)
+        return LiteLLM_BudgetTable.model_validate(cached_budget)
 
     try:
         budget_record = await BudgetRepository(prisma_client).table.find_unique(where={"budget_id": budget_id})
@@ -1014,7 +1022,7 @@ async def get_team_member_default_budget(
             ttl=get_management_object_ttl(user_api_key_cache),
         )
 
-        return LiteLLM_BudgetTable(**budget_record.dict())
+        return LiteLLM_BudgetTable.model_validate(budget_record.dict())
 
     except Exception:
         verbose_proxy_logger.exception(f"Error fetching team-default member budget {budget_id}")
@@ -1168,7 +1176,7 @@ async def get_end_user_object(
             raise Exception
 
         # Convert to LiteLLM_EndUserTable object
-        _response = LiteLLM_EndUserTable(**response.dict())
+        _response = LiteLLM_EndUserTable.model_validate(response.dict())
 
         # Apply default budget if needed
         _response = await _apply_default_budget_to_end_user(
@@ -1360,7 +1368,7 @@ async def get_tag_objects_batch(
             for db_tag in db_tags:
                 tag_name = db_tag.tag_name
                 cache_key = f"tag:{tag_name}"
-                _tag_obj = LiteLLM_TagTable(**db_tag.dict())
+                _tag_obj = LiteLLM_TagTable.model_validate(db_tag.dict())
                 await user_api_key_cache.async_set_cache(
                     key=cache_key,
                     value=_tag_obj,
@@ -1453,7 +1461,7 @@ async def get_team_membership(
         if response is None:
             return None
 
-        _response = LiteLLM_TeamMembership(**response.dict())
+        _response = LiteLLM_TeamMembership.model_validate(response.dict())
         await user_api_key_cache.async_set_cache(
             key=_key,
             value=_response,
@@ -1671,13 +1679,20 @@ async def get_user_object(
 
         if response is None:
             if user_id_upsert:
+                from litellm.proxy.management_endpoints.internal_user_endpoints import (
+                    add_new_user_to_default_team,
+                    check_if_default_team_set,
+                )
+
+                default_params = litellm.default_internal_user_params or {}
+                scalar_default_params = {
+                    key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
+                }
                 new_user_params: Dict[str, Any] = {
                     "user_id": user_id,
+                    **({"user_email": user_email} if user_email is not None else {}),
+                    **scalar_default_params,
                 }
-                if user_email is not None:
-                    new_user_params["user_email"] = user_email
-                if litellm.default_internal_user_params is not None:
-                    new_user_params.update(litellm.default_internal_user_params)
                 if (
                     new_user_params.get("budget_duration") is not None
                     and new_user_params.get("budget_reset_at") is None
@@ -1690,6 +1705,16 @@ async def get_user_object(
                     data=new_user_params,
                     include={"organization_memberships": True},
                 )
+
+                default_teams = check_if_default_team_set()
+                if default_teams:
+                    await add_new_user_to_default_team(
+                        user_id=user_id,
+                        user_email=user_email,
+                        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                        teams=default_teams,
+                        prisma_client=prisma_client,
+                    )
             else:
                 if should_check_db:
                     _update_last_db_access_time(
@@ -1702,13 +1727,13 @@ async def get_user_object(
         if response.organization_memberships is not None and len(response.organization_memberships) > 0:
             # dump each organization membership to type LiteLLM_OrganizationMembershipTable
             _dumped_memberships = [
-                LiteLLM_OrganizationMembershipTable(**membership.model_dump())
+                LiteLLM_OrganizationMembershipTable.model_validate(membership.model_dump())
                 for membership in response.organization_memberships
                 if membership is not None
             ]
             response.organization_memberships = _dumped_memberships
 
-        _response = LiteLLM_UserTable(**dict(response))
+        _response = LiteLLM_UserTable.model_validate(dict(response))
         response_dict = _response.model_dump()
 
         # save the user object to cache
@@ -1764,9 +1789,22 @@ async def _cache_team_object(
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
+    key = "team_id:{}".format(team_id)
+
+    if proxy_logging_obj is not None:
+        try:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the write
+            verbose_proxy_logger.warning(
+                "Failed to invalidate internal usage cache entry %s; "
+                "a stale team object may be served until its TTL expires: %s",
+                key,
+                e,
+            )
+
     # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
-        key="team_id:{}".format(team_id),
+        key=key,
         value=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -1788,9 +1826,17 @@ async def _cache_team_object(
     # the cache from a verified single row.
     if team_table.team_alias:
         alias_key = "team_alias:{}".format(team_table.team_alias)
-        user_api_key_cache.delete_cache(key=alias_key)
-        if proxy_logging_obj is not None:
-            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
+        try:
+            user_api_key_cache.delete_cache(key=alias_key)
+            if proxy_logging_obj is not None:
+                await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
+        except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the mutation
+            verbose_proxy_logger.warning(
+                "Failed to invalidate cached team alias entry %s; "
+                "a stale team object may be served until its TTL expires: %s",
+                alias_key,
+                e,
+            )
 
 
 async def _cache_key_object(
@@ -1845,7 +1891,7 @@ async def _get_team_db_check(team_id: str, prisma_client: PrismaClient, team_id_
             http_request=mock_request,
             user_api_key_dict=system_admin_user,
         )
-        response = LiteLLM_TeamTable(**created_team_dict)
+        response = LiteLLM_TeamTable.model_validate(created_team_dict)
     return response
 
 
@@ -1877,7 +1923,7 @@ async def _get_team_object_from_user_api_key_cache(
     if response is None:
         raise Exception
 
-    _response = LiteLLM_TeamTableCachedObj(**response.dict())
+    _response = LiteLLM_TeamTableCachedObj.model_validate(response.dict())
 
     # Load object_permission if object_permission_id exists but object_permission is not loaded
     if _response.object_permission_id and not _response.object_permission:
@@ -2068,7 +2114,7 @@ async def get_access_object(
                 detail={"error": f"Access group doesn't exist in db. Access group={access_group_id}."},
             )
 
-        _response = LiteLLM_AccessGroupTable(**response.dict())
+        _response = LiteLLM_AccessGroupTable.model_validate(response.dict())
 
         # Save to cache
         await _cache_access_object(
@@ -2153,7 +2199,7 @@ async def get_team_object_by_alias(
             )
 
         team = teams[0]
-        team_obj = LiteLLM_TeamTableCachedObj(**team.model_dump())
+        team_obj = LiteLLM_TeamTableCachedObj.model_validate(team.model_dump())
 
         # Load object_permission if object_permission_id exists but object_permission is not loaded
         if team_obj.object_permission_id and not team_obj.object_permission:
@@ -2255,7 +2301,7 @@ async def get_org_object_by_alias(
             )
 
         org = orgs[0]
-        org_obj = LiteLLM_OrganizationTable(**org.model_dump())
+        org_obj = LiteLLM_OrganizationTable.model_validate(org.model_dump())
 
         # Cache the result
         await user_api_key_cache.async_set_cache(
@@ -2396,7 +2442,7 @@ class ExperimentalUIJWTToken:
         if decrypted_token is None:
             return None
         try:
-            return UserAPIKeyAuth(**json.loads(decrypted_token))
+            return UserAPIKeyAuth.model_validate(json.loads(decrypted_token))
         except Exception as e:
             raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
 
@@ -2515,7 +2561,7 @@ async def get_key_object(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+    _response = UserAPIKeyAuth.model_validate(_valid_token.model_dump(exclude_none=True))
 
     # Load object_permission if object_permission_id exists but object_permission is not loaded
     if _response.object_permission_id and not _response.object_permission:
@@ -2571,7 +2617,7 @@ async def get_object_permission(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # check if in cache
-    key = "object_permission_id:{}".format(object_permission_id)
+    key = object_permission_cache_key(object_permission_id)
     deserialized_perm = await user_api_key_cache.async_get_cache(
         key=key,
         model_type=LiteLLM_ObjectPermissionTable,
@@ -2588,7 +2634,7 @@ async def get_object_permission(
         if response is None:
             return None
 
-        _perm_obj = LiteLLM_ObjectPermissionTable(**response.dict())
+        _perm_obj = LiteLLM_ObjectPermissionTable.model_validate(response.dict())
         await user_api_key_cache.async_set_cache(
             key=key,
             value=_perm_obj,
@@ -2648,7 +2694,7 @@ async def get_managed_vector_store_rows_by_uuids(
             row_dict = dict(row) if hasattr(row, "__dict__") else {}
         if not row_dict:
             continue
-        cached_obj = LiteLLM_ManagedVectorStoresTable(**row_dict)
+        cached_obj = LiteLLM_ManagedVectorStoresTable.model_validate(row_dict)
         key = "managed_vector_store_id:{}".format(cached_obj.vector_store_id)
         await user_api_key_cache.async_set_cache(
             key=key,
@@ -2729,7 +2775,7 @@ async def get_org_object(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
 
-    _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
+    _org_obj = LiteLLM_OrganizationTable.model_validate(response.model_dump())
     # Cache the result
     await user_api_key_cache.async_set_cache(
         key=cache_key,
@@ -4204,7 +4250,7 @@ async def get_project_object(
     if project_row is None:
         return None
 
-    project_obj = LiteLLM_ProjectTableCachedObj(**project_row.model_dump())
+    project_obj = LiteLLM_ProjectTableCachedObj.model_validate(project_row.model_dump())
 
     # Cache with TTL following _cache_management_object pattern
     project_obj.last_refreshed_at = time.time()
