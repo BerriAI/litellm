@@ -18,6 +18,7 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
+    _apply_model_routing_hint,
     _update_request_data_with_litellm_managed_vector_store_registry,
     index_create,
 )
@@ -590,6 +591,116 @@ async def test_update_request_data_passes_through_legacy_embedding_config():
 
     assert result["litellm_embedding_config"] == legacy_config
     resolve_mock.assert_not_awaited()
+
+
+def _model_hint_request(query_params=None, headers=None):
+    request = MagicMock(spec=Request)
+    request.query_params = query_params or {}
+    request.headers = headers or {}
+    return request
+
+
+def test_apply_model_routing_hint_uses_query_param():
+    result = _apply_model_routing_hint(
+        data={"vector_store_id": "vs_123"},
+        request=_model_hint_request(query_params={"model": "azure-vector-store"}),
+    )
+
+    assert result["model"] == "azure-vector-store"
+
+
+def test_apply_model_routing_hint_uses_header():
+    result = _apply_model_routing_hint(
+        data={"vector_store_id": "vs_123"},
+        request=_model_hint_request(headers={"x-litellm-model": "azure-vector-store"}),
+    )
+
+    assert result["model"] == "azure-vector-store"
+
+
+def test_apply_model_routing_hint_prefers_body_model():
+    result = _apply_model_routing_hint(
+        data={"vector_store_id": "vs_123", "model": "body-model"},
+        request=_model_hint_request(query_params={"model": "query-model"}),
+    )
+
+    assert result["model"] == "body-model"
+
+
+def test_apply_model_routing_hint_preserves_registry_routing():
+    """A managed vector store row already selected the provider/credentials, so a
+    caller-supplied hint must not repoint the request at another deployment."""
+    data = {
+        "vector_store_id": "vs_123",
+        "custom_llm_provider": "azure_ai",
+        "api_key": "registry-key",
+    }
+
+    result = _apply_model_routing_hint(
+        data=data,
+        request=_model_hint_request(query_params={"model": "other-deployment"}),
+    )
+
+    assert "model" not in result
+    assert result == data
+
+
+def test_apply_model_routing_hint_without_hint_is_noop():
+    data = {"vector_store_id": "vs_123"}
+
+    assert _apply_model_routing_hint(data=data, request=_model_hint_request()) == data
+
+
+@pytest.mark.asyncio
+async def test_vector_store_retrieve_routes_by_model_query_param():
+    from litellm.proxy.vector_store_endpoints import endpoints as vector_store_endpoints
+
+    processor = MagicMock()
+    processor.base_process_llm_request = AsyncMock(return_value={"id": "vs_123"})
+
+    with (
+        patch.object(
+            vector_store_endpoints,
+            "get_litellm_managed_vector_store",
+            AsyncMock(return_value=None),
+        ),
+        patch.object(
+            vector_store_endpoints,
+            "ProxyBaseLLMRequestProcessing",
+            MagicMock(return_value=processor),
+        ) as mock_processor_cls,
+    ):
+        response = await vector_store_endpoints.vector_store_retrieve(
+            request=_model_hint_request(query_params={"model": "azure-vector-store"}),
+            vector_store_id="vs_123",
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    assert response == {"id": "vs_123"}
+    assert mock_processor_cls.call_args.kwargs["data"]["model"] == "azure-vector-store"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_list_routes_by_model_header():
+    from litellm.proxy.vector_store_endpoints import endpoints as vector_store_endpoints
+
+    processor = MagicMock()
+    processor.base_process_llm_request = AsyncMock(return_value={"data": []})
+
+    with patch.object(
+        vector_store_endpoints,
+        "ProxyBaseLLMRequestProcessing",
+        MagicMock(return_value=processor),
+    ) as mock_processor_cls:
+        response = await vector_store_endpoints.vector_store_list(
+            request=_model_hint_request(headers={"x-litellm-model": "azure-vector-store"}),
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    assert response == {"data": []}
+    assert mock_processor_cls.call_args.kwargs["data"]["model"] == "azure-vector-store"
 
 
 class TestCheckVectorStorePermission:
