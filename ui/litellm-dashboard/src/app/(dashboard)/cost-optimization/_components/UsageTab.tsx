@@ -204,7 +204,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           label="Auto-router savings"
           value={usd(autorouterTotal)}
           hint="vs. the priciest model it could pick"
-          info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost."
+          info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost. Switching leaves the new model with a cold cache, so it pays to write the prompt again while the baseline is priced as already warm; a route that thrashes the cache can total below zero, and a genuine first turn, where neither side had anything cached, is undercounted."
         />
       </div>
 
