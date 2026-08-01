@@ -34,6 +34,10 @@
 # Optional env (parallelism):
 #   COMPAT_XDIST_WORKERS                  passed to `pytest -n` (default: auto)
 #
+# Optional env (scope):
+#   COMPAT_TARGETS                        space-separated pytest targets
+#                                         (default: the whole matrix)
+#
 # Optional env (artifacts):
 #   COMPAT_RESULTS_PATH                   default: compat-results.json
 #   COMPAT_RATE_LIMIT_SUMMARY_PATH        default: compat-rate-limit-summary.json
@@ -58,6 +62,12 @@ fi
 # this is a "go as fast as the limiter allows" knob, not a tuning knob.
 workers="${COMPAT_XDIST_WORKERS:-auto}"
 
+# What to run. The whole suite by default: every feature directory is a
+# column of the published matrix, and running a subset silently leaves
+# those cells "not_tested". Override with COMPAT_TARGETS to iterate on
+# one feature (e.g. COMPAT_TARGETS=tests/e2e/claude_code/thinking).
+read -r -a targets <<< "${COMPAT_TARGETS:-tests/e2e/claude_code}"
+
 # Where the artifacts land. We resolve them now so the summary file is
 # always at a known path the caller can grep, even if they didn't set
 # the env explicitly.
@@ -71,28 +81,22 @@ for provider in ANTHROPIC AZURE VERTEX_AI BEDROCK_CONVERSE BEDROCK_INVOKE OPENAI
 done
 echo "  BURST=${LITELLM_COMPAT_RATE_BURST:-default(=rate)}"
 echo "[run_compat] xdist workers: ${workers}"
+echo "[run_compat] targets:  ${targets[*]}"
 echo "[run_compat] results:  ${results_path}"
 echo "[run_compat] summary:  ${summary_path}"
 
-# Run only the per-feature live tests; skip the unit-test directories
-# (they're under directories starting with `_`). The dist=loadfile
-# scheduler keeps each test file pinned to a single worker, which is
-# what we want — every test in a file shares a single ThreadPoolExecutor
-# fanout, and we don't gain anything by splitting it across workers.
+# Every cell is one test, so `dist=load` hands each one to whichever
+# worker is free next; the rate limiter keeps the aggregate per-provider
+# request rate bounded no matter how many run at once.
 start=$(date +%s)
 set +e
 COMPAT_RESULTS_PATH="${results_path}" \
 COMPAT_RATE_LIMIT_SUMMARY_PATH="${summary_path}" \
 PATH="$HOME/.local/bin:$PATH" \
 uv run pytest \
-    tests/e2e/claude_code/basic_messaging_non_streaming \
-    tests/e2e/claude_code/basic_messaging_streaming \
-    tests/e2e/claude_code/thinking \
-    tests/e2e/claude_code/tool_use \
-    tests/e2e/claude_code/vision \
-    tests/e2e/claude_code/prompt_caching_5m \
+    "${targets[@]}" \
     -n "${workers}" \
-    --dist=loadfile \
+    --dist=load \
     -q \
     "$@"
 

@@ -1,6 +1,6 @@
 """Pytest plumbing for the Claude Code compatibility matrix.
 
-Three responsibilities live here:
+Four responsibilities live here:
 
 1. The `compat_result` fixture — the only API a test author needs to learn.
    Tests call `compat_result.set({"status": "pass"})` (or fail / not_applicable)
@@ -21,6 +21,12 @@ Three responsibilities live here:
    worker finished last. The same merge step also emits a rate-limit
    summary that the binary-search helper consumes to decide whether the
    current X/Y/Z values were too aggressive.
+
+4. Compat model registration — `pytest_configure` POSTs every deployment
+   in `test_config.yaml` to the proxy (in parallel) and
+   `pytest_unconfigure` deletes them again. Doing it on the controller
+   rather than in a session fixture keeps it to one registration pass
+   per run instead of one per xdist worker.
 
 The (feature, provider) inference comes from the test file path: the parent
 directory name is the feature_id (matching `manifest.yaml`), and the file
@@ -298,19 +304,19 @@ def pytest_runtest_makereport(item, call):
         )
 
 
-def _is_xdist_worker(session) -> bool:
-    """Return True iff the current pytest session is an xdist worker.
+def _is_xdist_worker(config) -> bool:
+    """Return True iff this pytest process is an xdist worker.
 
     The standard idiom is to look up `workerinput` on the config; the
     controller process doesn't have it, the workers do. We deliberately
     don't `import xdist` because the suite must keep running when xdist
     isn't installed at all.
     """
-    return hasattr(session.config, "workerinput")
+    return hasattr(config, "workerinput")
 
 
-def _xdist_worker_id(session) -> Optional[str]:
-    info = getattr(session.config, "workerinput", None)
+def _xdist_worker_id(config) -> Optional[str]:
+    info = getattr(config, "workerinput", None)
     if not info:
         return None
     return info.get("workerid")
@@ -452,7 +458,7 @@ def pytest_sessionstart(session):
     _COLLECTOR.items.clear()
     _manifest_feature_ids.cache_clear()
 
-    if _is_xdist_worker(session):
+    if _is_xdist_worker(session.config):
         return
     artifact_path = Path(os.environ.get(RESULTS_ARTIFACT_ENV) or DEFAULT_ARTIFACT_PATH)
     shard_dir = _shard_dir(artifact_path)
@@ -494,11 +500,11 @@ def pytest_sessionfinish(session, exitstatus):
     artifact_path = Path(os.environ.get(RESULTS_ARTIFACT_ENV) or DEFAULT_ARTIFACT_PATH)
     shard_dir = _shard_dir(artifact_path)
     has_worker_shards = shard_dir.is_dir() and any(shard_dir.glob("*.json"))
-    if not _COLLECTOR.items and not _is_xdist_worker(session) and not has_worker_shards:
+    if not _COLLECTOR.items and not _is_xdist_worker(session.config) and not has_worker_shards:
         return
     shard_dir.mkdir(parents=True, exist_ok=True)
 
-    worker_id = _xdist_worker_id(session) or "main"
+    worker_id = _xdist_worker_id(session.config) or "main"
     shard_path = shard_dir / f"{worker_id}.json"
     shard_path.write_text(
         json.dumps(
@@ -514,7 +520,7 @@ def pytest_sessionfinish(session, exitstatus):
 
     # Workers stop here. The controller merges; if we're not running
     # under xdist, we are effectively the controller.
-    if _is_xdist_worker(session):
+    if _is_xdist_worker(session.config):
         return
 
     merged_rows: List[Dict[str, Any]] = []
@@ -551,30 +557,43 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 # ---------------------------------------------------------------------------
-# Session-scoped compat model registration.
+# Run-scoped compat model registration.
 #
 # The compat cells probe hardcoded virtual names like ``claude-sonnet-4-5``
 # and ``claude-sonnet-4-5-bedrock-invoke``. On stage those live in the
 # gateway's model_list at deploy time; locally the docker-config.yaml
 # under tests/e2e/ only declares one of them, so every non-haiku cell
-# 400s with ``Invalid model name``. The fixture here reconciles the two:
-# it reads ``test_config.yaml`` (the ground-truth compat matrix config)
-# and POSTs ``/model/new`` for the subset whose provider credentials are
-# actually set in the current environment, then tears them all down at
-# session end.
+# 400s with ``Invalid model name``. The hooks here reconcile the two:
+# they read ``test_config.yaml`` (the ground-truth compat matrix config),
+# POST ``/model/new`` for every deployment it declares, and delete them
+# again when the run ends.
+#
+# This runs in ``pytest_configure`` rather than a session fixture so it
+# happens once per run instead of once per process: under ``-n``, a
+# session fixture executes in every worker, so a 12-worker matrix run
+# registered (and later deleted) the same 15 deployments 12 times over.
+# The controller configures before it forks any worker, so registering
+# there also means the deployments are already servable by the time the
+# first cell runs. The 15 POSTs go out concurrently, so startup costs
+# roughly one round trip rather than fifteen.
 #
 # Kept below the rest of the conftest so the compat-artifact hooks stay
-# grouped up top. The fixture is opt-in via autouse=True on the session
-# scope, so a cell that hits the proxy sees the deployment ready without
-# any per-cell wiring, and pure unit tests that never reach the proxy
-# pay only one skipped-liveness check.
+# grouped up top.
 # ---------------------------------------------------------------------------
+
+from typing import TYPE_CHECKING  # noqa: E402
 
 from claude_code._env import ProxyConfig, resolve_proxy  # noqa: E402
 from claude_code._compat_models import (  # noqa: E402
     CompatDeployment,
+    RegistrationOutcome,
     load_all_deployments,
+    register_deployments,
+    unregister_deployments,
 )
+
+if TYPE_CHECKING:
+    from proxy_client import ProxyClient
 
 
 def _build_control_plane_client(proxy_config: ProxyConfig):
@@ -606,14 +625,58 @@ def _register_deployment(proxy, deployment: CompatDeployment) -> str:
     )
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _compat_models_registered() -> Any:
-    """Register every compat deployment against the running proxy, then
-    tear them all down on session exit.
+@dataclass(frozen=True, slots=True)
+class _RegisteredCompatModels:
+    proxy: "ProxyClient"
+    model_ids: Tuple[str, ...]
 
-    Skips silently if the proxy env is not configured (no
-    ``LITELLM_PROXY_URL``/``LITELLM_MASTER_KEY``) so unit-test runs
-    stay hermetic.
+
+_REGISTERED_MODELS = pytest.StashKey[_RegisteredCompatModels]()
+_CONTROLLER_REGISTERED = "claude_code_compat_models_registered"
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node) -> None:
+    """Tell each xdist worker the controller owns registration.
+
+    xdist-only hook (`optionalhook` so the suite still loads without
+    xdist installed). The controller only reaches it when this conftest
+    was loaded before the workers forked, which is exactly when its
+    `pytest_configure` registered the deployments - so the flag doubles
+    as the workers' "don't register your own copies" signal. A run whose
+    controller never loaded this conftest (e.g. `pytest tests/e2e -n
+    auto`, where the directory is only reached during each worker's own
+    collection) never sets it, and the workers fall back to registering
+    for themselves."""
+    node.workerinput[_CONTROLLER_REGISTERED] = True
+
+
+def _controller_already_registered(config) -> bool:
+    workerinput = getattr(config, "workerinput", None)
+    return bool(workerinput) and bool(workerinput.get(_CONTROLLER_REGISTERED))
+
+
+def _report_registration_failures(outcome: RegistrationOutcome) -> None:
+    summary = "\n".join(
+        f"  - {failure.model_name}: {failure.reason}" for failure in outcome.failures
+    )
+    total = len(outcome.failures) + len(outcome.model_ids)
+    print(
+        f"[compat] {len(outcome.failures)} of {total} deployments failed to "
+        f"register (proxy likely missing that provider's credentials); cells "
+        f"that target them will fail loudly:\n{summary}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register every compat deployment against the running proxy, once per run.
+
+    Does nothing if the proxy env is not configured (no
+    ``LITELLM_PROXY_URL``/``LITELLM_MASTER_KEY``) so unit-test runs stay
+    hermetic, in a ``--collect-only`` run, which executes no cell, or in
+    an xdist worker whose controller already registered.
 
     Design note: we always attempt to register all 15 deployments,
     regardless of what credentials are exported in the test-runner's
@@ -621,44 +684,51 @@ def _compat_models_registered() -> Any:
     (via docker-compose ``env_file``), not the shell running pytest -
     so gating on shell env would filter out deployments the proxy can
     actually serve. Per-deployment ``/model/new`` failures are printed
-    but do not abort the session: the cells that need that specific
+    but do not abort the run: the cells that need that specific
     deployment will 400 with "Invalid model name" and fail loudly,
     which is the right signal (missing cred on the proxy side)."""
+    if _controller_already_registered(config) or config.getoption(
+        "collectonly", default=False
+    ):
+        return
     proxy_config = resolve_proxy()
     if proxy_config is None:
-        yield
         return
 
-    from requests import RequestException
-
     proxy = _build_control_plane_client(proxy_config)
-    registered_ids: list[str] = []
-    failures: list[tuple[str, str]] = []
-    try:
-        for deployment in load_all_deployments():
-            try:
-                model_id = _register_deployment(proxy, deployment)
-                registered_ids.append(model_id)
-            except (AssertionError, RequestException) as exc:
-                failures.append((deployment.model_name, str(exc)))
-        if failures:
-            summary = "\n".join(
-                f"  - {name}: {reason}" for name, reason in failures
-            )
-            print(
-                f"[compat fixture] {len(failures)} of "
-                f"{len(failures) + len(registered_ids)} deployments "
-                f"failed to register (proxy likely missing that provider's "
-                f"credentials); cells that target them will fail loudly:\n"
-                f"{summary}"
-            )
-        yield
-    finally:
-        for model_id in registered_ids:
-            try:
-                proxy.delete_model(model_id)
-            except (AssertionError, RequestException):
-                # Best-effort — teardown surfaces via warnings inside
-                # ``delete_model`` already; swallowing here so one flaky
-                # delete does not mask real test failures.
-                pass
+    outcome = register_deployments(
+        load_all_deployments(),
+        lambda deployment: _register_deployment(proxy, deployment),
+    )
+    config.stash[_REGISTERED_MODELS] = _RegisteredCompatModels(
+        proxy=proxy,
+        model_ids=outcome.model_ids,
+    )
+    if outcome.failures:
+        _report_registration_failures(outcome)
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Delete the deployments this process registered in `pytest_configure`.
+
+    On the controller that lands after every worker has finished, so no
+    cell can still be routing to a deployment we are tearing down.
+    Delete failures are reported, never raised - a flaky teardown must
+    not mask the results the run just produced."""
+    registered = config.stash.get(_REGISTERED_MODELS, None)
+    if registered is None:
+        return
+    failures = unregister_deployments(
+        registered.model_ids,
+        registered.proxy.delete_model,
+    )
+    if failures:
+        summary = "\n".join(
+            f"  - {failure.model_name}: {failure.reason}" for failure in failures
+        )
+        print(
+            f"[compat] {len(failures)} deployment(s) failed to delete; they "
+            f"will linger on the proxy:\n{summary}",
+            file=sys.stderr,
+            flush=True,
+        )
