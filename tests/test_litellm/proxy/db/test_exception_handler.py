@@ -1,9 +1,11 @@
 import asyncio
+import builtins
 import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException, Request, status
 from prisma import errors as prisma_errors
@@ -27,7 +29,10 @@ sys.path.insert(
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.exception_handler import (
+    PrismaDBExceptionHandler,
+    _prisma_error_types,
+)
 
 
 # Test is_database_connection_error method
@@ -426,3 +431,46 @@ def test_handle_db_exception_with_non_db_error():
     )
     with pytest.raises(litellm.BudgetExceededError):
         PrismaDBExceptionHandler.handle_db_exception(regular_error)
+
+
+@pytest.fixture
+def prisma_not_installed(monkeypatch):
+    """Simulate a master-key-only deployment: `prisma` is an optional extra and
+    is absent when the proxy runs without a DATABASE_URL."""
+    real_import = builtins.__import__
+
+    def _import(name, *args, **kwargs):
+        if name == "prisma" or name.startswith("prisma."):
+            raise ImportError("No module named 'prisma'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _import)
+    _prisma_error_types.cache_clear()
+    yield
+    _prisma_error_types.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "classifier",
+    [
+        PrismaDBExceptionHandler.is_database_connection_error,
+        PrismaDBExceptionHandler.is_prisma_data_error,
+        PrismaDBExceptionHandler.is_database_transport_error,
+        PrismaDBExceptionHandler.is_prisma_engine_internal_error,
+        PrismaDBExceptionHandler.is_database_service_unavailable_error,
+    ],
+)
+def test_classifiers_do_not_require_prisma(prisma_not_installed, classifier):
+    """A plain auth failure on a proxy without prisma installed must classify as
+    "not a DB problem" instead of blowing up with ModuleNotFoundError, which the
+    auth layer surfaced as a 500 instead of a 401.
+    """
+    assert classifier(Exception("No api key passed in.")) is False
+
+
+def test_httpx_connect_error_still_classified_without_prisma(prisma_not_installed):
+    """The non-prisma connectivity signals must keep working when prisma is absent."""
+    error = httpx.ConnectError("[Errno 111] Connection refused")
+    assert PrismaDBExceptionHandler.is_database_connection_error(error) is True
+    assert PrismaDBExceptionHandler.is_database_transport_error(error) is True
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(error) is True
