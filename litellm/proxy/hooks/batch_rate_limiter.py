@@ -209,13 +209,25 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         data: Dict,
     ) -> List["RateLimitDescriptor"]:
-        return self.parallel_request_limiter._create_rate_limit_descriptors(
+        """Batch descriptors, mirroring what ``async_pre_call_hook`` enforces for a chat request.
+
+        Team per-model limits live in their own helper (the same one the chat
+        path calls), so they have to be added explicitly here too.
+        """
+        descriptors = self.parallel_request_limiter._create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
             rpm_limit_type=None,
             tpm_limit_type=None,
             model_has_failures=False,
         )
+        requested_model = data.get("model")
+        self.parallel_request_limiter._add_team_model_rate_limit_descriptor_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model if isinstance(requested_model, str) else None,
+            descriptors=descriptors,
+        )
+        return descriptors
 
     def _should_skip_batch_input_file_processing(
         self,
