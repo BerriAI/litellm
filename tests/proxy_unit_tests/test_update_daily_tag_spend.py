@@ -141,3 +141,104 @@ async def test_daily_tag_spend_retries_then_succeeds():
     assert prisma_client.db.batch_.return_value.__aenter__.await_count == 4
     assert sleep_mock.await_count == 3
     mock_table.upsert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_daily_tag_spend_processes_more_than_one_batch():
+    prisma_client = MagicMock()
+    proxy_logging_obj = MagicMock()
+
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_batcher.litellm_dailytagspend = mock_table
+    prisma_client.db.batch_.return_value.__aenter__ = AsyncMock(
+        return_value=mock_batcher
+    )
+
+    daily_spend_transactions: Dict[str, DailyTagSpendTransaction] = {}
+    for i in range(250):
+        daily_spend_transactions[f"k-{i}"] = {
+            "tag": f"tag-{i:03d}",
+            "date": "2026-05-30",
+            "api_key": f"key-{i:03d}",
+            "model": "gpt-4o",
+            "model_group": None,
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": "",
+            "endpoint": "",
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "spend": 0.01,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+            "request_id": None,
+        }
+
+    await DBSpendUpdateWriter.update_daily_tag_spend(
+        n_retry_times=3,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        daily_spend_transactions=daily_spend_transactions,
+    )
+
+    assert prisma_client.db.batch_.call_count == 3
+    assert mock_table.upsert.call_count == 250
+    assert daily_spend_transactions == {}
+
+
+@pytest.mark.asyncio
+async def test_daily_tag_spend_retries_later_batch_without_dropping_transactions():
+    prisma_client = MagicMock()
+    proxy_logging_obj = MagicMock()
+
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_batcher.litellm_dailytagspend = mock_table
+    prisma_client.db.batch_.return_value.__aenter__ = AsyncMock(
+        side_effect=[
+            mock_batcher,
+            httpx.ConnectError("second batch unavailable"),
+            mock_batcher,
+        ]
+    )
+
+    daily_spend_transactions: Dict[str, DailyTagSpendTransaction] = {}
+    for i in range(150):
+        daily_spend_transactions[f"k-{i}"] = {
+            "tag": f"tag-{i:03d}",
+            "date": "2026-05-30",
+            "api_key": f"key-{i:03d}",
+            "model": "gpt-4o",
+            "model_group": None,
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": "",
+            "endpoint": "",
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "spend": 0.01,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+            "request_id": None,
+        }
+
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        patch("random.uniform", return_value=0),
+    ):
+        await DBSpendUpdateWriter.update_daily_tag_spend(
+            n_retry_times=3,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+        )
+
+    assert prisma_client.db.batch_.return_value.__aenter__.await_count == 3
+    assert sleep_mock.await_count == 1
+    assert mock_table.upsert.call_count == 150
+    assert daily_spend_transactions == {}
