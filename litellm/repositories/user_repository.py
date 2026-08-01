@@ -200,8 +200,8 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         Returns the number of rows updated: 0 means another writer already set an email.
         """
         updated_count: int = await self.table.update_many(
-            where={"user_id": user_id, "user_email": None},
-            data={"user_email": user_email},
+            where={"user_id": user_id, "user_email": None},  # mutable-ok: Prisma query filters are dict-shaped
+            data={"user_email": user_email},  # mutable-ok: Prisma update payloads are dict-shaped
         )
         return updated_count
 

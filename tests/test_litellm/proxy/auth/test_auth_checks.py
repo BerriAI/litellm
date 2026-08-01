@@ -902,6 +902,13 @@ async def test_get_user_object_backfills_null_email_from_cache_hit():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id="jwt-user-1",
+            user_email="jwt-user-1@example.com",
+            user_role="internal_user",
+        )
+    )
 
     result = await get_user_object(
         user_id="jwt-user-1",
@@ -937,9 +944,16 @@ async def test_get_user_object_backfills_null_email_from_db_read():
     db_row = LiteLLM_UserTable(
         user_id="jwt-user-3", user_email=None, user_role="internal_user"
     )
+    backfilled_row = LiteLLM_UserTable(
+        user_id="jwt-user-3",
+        user_email="jwt-user-3@example.com",
+        user_role="internal_user",
+    )
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=[db_row, backfilled_row]
+    )
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
 
@@ -1043,6 +1057,53 @@ async def test_get_user_object_backfill_race_prefers_db_email():
     )
     assert refreshed is not None
     assert refreshed.user_email == "winner@example.com"
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_backfill_caches_persisted_email_not_proposed():
+    """
+    LIT-4710 cache-coherence: even when the null-guarded update succeeds, the
+    cache must be refreshed from the row the DB actually holds, not this
+    request's proposed email. A concurrent ordinary user update (not null
+    guarded) can change the email in the window before the cache write, so
+    optimistically caching the proposed email would serve a stale value.
+    """
+    cache = UserApiKeyCache()
+    existing = LiteLLM_UserTable(
+        user_id="jwt-user-5", user_email=None, user_role="internal_user"
+    )
+    await cache.async_set_cache(
+        key="jwt-user-5", value=existing, model_type=LiteLLM_UserTable
+    )
+
+    persisted_row = LiteLLM_UserTable(
+        user_id="jwt-user-5",
+        user_email="admin-edited@example.com",
+        user_role="internal_user",
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=persisted_row
+    )
+
+    result = await get_user_object(
+        user_id="jwt-user-5",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=False,
+        proxy_logging_obj=None,
+        user_email="jwt-user-5@example.com",
+    )
+
+    assert result is not None
+    assert result.user_email == "admin-edited@example.com"
+
+    refreshed = await cache.async_get_cache(
+        key="jwt-user-5", model_type=LiteLLM_UserTable
+    )
+    assert refreshed is not None
+    assert refreshed.user_email == "admin-edited@example.com"
 
 
 @pytest.mark.asyncio

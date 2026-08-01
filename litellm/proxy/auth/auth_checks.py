@@ -1632,17 +1632,15 @@ async def _backfill_null_user_email(
         return user_row
 
     user_repo = UserRepository(prisma_client)
-    updated_count = await user_repo.backfill_null_user_email(
+    await user_repo.backfill_null_user_email(
         user_id=user_row.user_id,
         user_email=user_email,
     )
-    if updated_count == 0:
-        db_row = await user_repo.find_by_id(user_row.user_id)
-        if db_row is None:
-            return user_row
-        updated_row = user_row.model_copy(update={"user_email": db_row.user_email})
-    else:
-        updated_row = user_row.model_copy(update={"user_email": user_email})
+    db_row = await user_repo.find_by_id(user_row.user_id)
+    if db_row is None:
+        return user_row
+    email_update = {"user_email": db_row.user_email}  # mutable-ok: model_copy update payload is dict-shaped
+    updated_row = user_row.model_copy(update=email_update)
     await user_api_key_cache.async_set_cache(
         key=user_row.user_id,
         value=updated_row,

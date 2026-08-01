@@ -1236,8 +1236,9 @@ async def _user_api_key_auth_builder(
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
                         if valid_token.user_id is not None and valid_token.user_email is None:
-                            mapped_user_email = jwt_handler.get_user_email(token=jwt_claims or {}, default_value=None)
-                            mapped_jwt_user_id = jwt_handler.get_user_id(token=jwt_claims or {}, default_value=None)
+                            mapped_claims = jwt_claims or {}  # mutable-ok: empty-dict fallback for the None-claims case
+                            mapped_user_email = jwt_handler.get_user_email(token=mapped_claims, default_value=None)
+                            mapped_jwt_user_id = jwt_handler.get_user_id(token=mapped_claims, default_value=None)
                             if mapped_user_email is not None and mapped_jwt_user_id == valid_token.user_id:
                                 try:
                                     mapped_user_obj = await get_user_object(
