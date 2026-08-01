@@ -4998,3 +4998,60 @@ async def test_split_usage_still_respects_the_configured_limit_type(monkeypatch)
     token_operations = [op for op in captured_operations if op["key"].endswith(":tokens")]
     assert token_operations
     assert all(op["increment_value"] == 7 for op in token_operations)
+
+
+@pytest.mark.asyncio
+async def test_atomic_check_with_zero_increment_still_enforces_token_limit():
+    """Regression: a zero token increment must still CHECK the token limit.
+
+    The dynamic rate limiter calls atomic_check_and_increment_by_n with
+    {"requests": 1, "tokens": 0} because tokens land on the counter post-call.
+    The payload builder used to skip any counter whose increment was <= 0, so a
+    TPM-only descriptor produced zero counters to evaluate and the call
+    returned OK with empty statuses; TPM limits were never enforced at all.
+    """
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitDescriptor
+
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    descriptor = RateLimitDescriptor(
+        key="model_saturation_check",
+        value="tpm-only-model",
+        rate_limit={"tokens_per_unit": 100, "window_size": 60},
+    )
+    zero_token_increment: Dict[str, int] = {"requests": 1, "tokens": 0}
+
+    under_limit = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[zero_token_increment],
+    )
+    assert under_limit["overall_code"] == "OK"
+    assert [s["rate_limit_type"] for s in under_limit["statuses"]] == ["tokens"]
+
+    counter_key = handler.create_rate_limit_keys(
+        "model_saturation_check", "tpm-only-model", "tokens"
+    )
+    await handler.async_increment_tokens_with_ttl_preservation(
+        pipeline_operations=[
+            RedisPipelineIncrementOperation(
+                key=counter_key, increment_value=150, ttl=60
+            )
+        ],
+    )
+
+    over_limit = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[zero_token_increment],
+    )
+    assert over_limit["overall_code"] == "OVER_LIMIT"
+    blocked = over_limit["statuses"][0]
+    assert blocked["rate_limit_type"] == "tokens"
+    assert blocked["current_limit"] == 100
+
+    assert (
+        await handler.internal_usage_cache.async_get_cache(
+            key=counter_key, litellm_parent_otel_span=None, local_only=True
+        )
+        == 150
+    )
