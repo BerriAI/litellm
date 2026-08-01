@@ -7,6 +7,8 @@ B. Orphaned tool_result without matching tool_use
 C. Empty text content
 """
 
+import copy
+import json
 import pytest
 import sys
 import os
@@ -18,6 +20,8 @@ sys.path.insert(
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    _EMPTY_TEXT_PLACEHOLDER as PLACEHOLDER,
+    _sanitize_empty_text_content,
     sanitize_messages_for_tool_calling,
     anthropic_messages_pt,
 )
@@ -427,6 +431,232 @@ class TestMessageSanitization:
         assert result[0]["content"][0]["text"] == "Hello"
         assert result[1]["content"][0]["text"] == "Hi there"
         assert result[2]["content"][0]["text"] == "How are you?"
+
+    @pytest.mark.parametrize("modify_params", [True, False])
+    @pytest.mark.parametrize(
+        "empty_content",
+        [None, "", "   \n  \t  ", [], [{"type": "text", "text": ""}]],
+        ids=["none", "empty_str", "whitespace_str", "empty_list", "empty_text_block"],
+    )
+    def test_tool_call_only_assistant_turn_never_gets_placeholder(
+        self, modify_params, empty_content
+    ):
+        """
+        Regression for the placeholder leaking into tool-call-only assistant turns.
+
+        An OpenAI-format assistant turn that carries tool_calls but no text is the normal
+        shape emitted by coding agents. Anthropic accepts an assistant turn whose content
+        is just tool_use, so there is nothing to substitute; injecting the placeholder made
+        it look like the assistant had said it, and the model echoed it on later turns.
+        """
+        litellm.modify_params = modify_params
+
+        messages = [
+            {"role": "user", "content": "list the files"},
+            {
+                "role": "assistant",
+                "content": empty_content,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "run_bash", "arguments": '{"cmd": "ls"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "a.txt"},
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+        )
+
+        assistant_turns = [m for m in result if m["role"] == "assistant"]
+        assert len(assistant_turns) == 1
+        blocks = assistant_turns[0]["content"]
+
+        assert [b["type"] for b in blocks] == ["tool_use"]
+        assert blocks[0]["id"] == "call_1"
+        assert blocks[0]["name"] == "run_bash"
+
+        assert PLACEHOLDER not in json.dumps(result)
+
+    def test_empty_text_dropped_alongside_non_text_blocks(self):
+        """
+        An assistant turn already carrying a non-text block has enough content for
+        Anthropic once the empty text block is dropped, so the placeholder must not be
+        substituted in its place.
+        """
+        litellm.modify_params = True
+
+        message = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "  "},
+                {"type": "thinking", "thinking": "weighing options", "signature": "sig"},
+            ],
+        }
+
+        sanitized = _sanitize_empty_text_content(message)
+
+        assert [b["type"] for b in sanitized["content"]] == ["thinking"]
+        assert PLACEHOLDER not in json.dumps(sanitized)
+
+    @pytest.mark.parametrize(
+        "sibling_block",
+        [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}},
+            {"type": "thinking", "thinking": ""},
+            {"type": "unknown_future_block"},
+            {"no_type_key": "malformed"},
+        ],
+        ids=["image_url", "unsignable_thinking", "unknown_type", "missing_type"],
+    )
+    def test_empty_text_kept_when_sibling_block_would_not_survive(self, sibling_block):
+        """
+        Dropping empty text is only safe when something else in the turn actually reaches
+        Anthropic. Blocks the assistant conversion discards (assistant-side images,
+        signature-less thinking, unrecognised types) would leave an empty turn that gets
+        dropped from the request entirely, so the placeholder has to stay.
+        """
+        litellm.modify_params = True
+
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "  "}, sibling_block]},
+            {"role": "user", "content": "and now?"},
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-haiku-4-5", llm_provider="anthropic"
+        )
+
+        assert [m["role"] for m in result] == ["user", "assistant", "user"]
+        assert PLACEHOLDER in json.dumps(result)
+
+    def test_assistant_text_preserved_alongside_tool_calls(self):
+        """
+        Dropping empty text must not drop real text: an assistant turn that says something
+        *and* calls a tool keeps both blocks.
+        """
+        litellm.modify_params = True
+
+        messages = [
+            {"role": "user", "content": "list the files"},
+            {
+                "role": "assistant",
+                "content": "Let me check.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "run_bash", "arguments": '{"cmd": "ls"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "a.txt"},
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+        )
+
+        assistant_turns = [m for m in result if m["role"] == "assistant"]
+        blocks = assistant_turns[0]["content"]
+
+        assert [b["type"] for b in blocks] == ["text", "tool_use"]
+        assert blocks[0]["text"] == "Let me check."
+        assert PLACEHOLDER not in json.dumps(result)
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [{"role": "user", "content": ""}],
+            [{"role": "user", "content": [{"type": "text", "text": "  "}]}],
+            [{"role": "user", "content": "hi"}, {"role": "assistant", "content": ""}],
+        ],
+        ids=["user_str", "user_block", "assistant_without_tool_calls"],
+    )
+    def test_placeholder_still_used_when_turn_would_be_empty(self, messages):
+        """
+        The placeholder is still required where dropping the empty text would leave the
+        turn with no content at all, which Anthropic also rejects.
+        """
+        litellm.modify_params = True
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+        )
+
+        assert PLACEHOLDER in json.dumps(result)
+        for message in result:
+            assert message["content"]
+
+    def test_no_empty_text_block_or_content_reaches_anthropic(self):
+        """
+        The invariant Anthropic actually enforces, over a conversation mixing every shape:
+        no empty content list and no empty text block may survive the conversion.
+        """
+        litellm.modify_params = True
+
+        messages = [
+            {"role": "user", "content": ""},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "run_bash", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "out"},
+            {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+            {"role": "user", "content": [{"type": "text", "text": "thanks"}]},
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+        )
+
+        for message in result:
+            content = message["content"]
+            assert content
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    assert block["text"].strip()
+
+    def test_sanitization_does_not_mutate_caller_messages(self):
+        """
+        Callers reuse their message list across retries and fallbacks, so sanitization has
+        to stay copy-on-write.
+        """
+        litellm.modify_params = True
+
+        messages = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "run_bash", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "out"},
+        ]
+        before = copy.deepcopy(messages)
+
+        anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+        )
+
+        assert messages == before
 
 
 if __name__ == "__main__":
