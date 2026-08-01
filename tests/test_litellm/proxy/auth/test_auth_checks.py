@@ -42,6 +42,7 @@ from litellm.proxy.auth.auth_checks import (
     _log_budget_lookup_failure,
     _tag_max_budget_check,
     _team_max_budget_check,
+    _team_model_max_budget_check,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
@@ -3091,6 +3092,81 @@ async def test_team_budget_check_reads_from_spend_counter():
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.entity_type == "team"
         assert exc_info.value.entity_id == "test-team"
+
+
+@pytest.mark.asyncio
+async def test_team_model_max_budget_check_delegates_to_limiter():
+    """The auth bridge must pass the team's per-model budgets and the key's own
+    model_max_budget (for precedence) through to the limiter, once per request model."""
+    team_object = LiteLLM_TeamTable(
+        team_id="team-mmb",
+        model_max_budget={"gpt-4o": {"budget_limit": 10.0, "time_period": "1d"}},
+    )
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        team_id="team-mmb",
+        model_max_budget={"claude-3": {"budget_limit": 5.0, "time_period": "1d"}},
+    )
+    mock_limiter = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.model_max_budget_limiter", mock_limiter):
+        await _team_model_max_budget_check(
+            team_object=team_object,
+            valid_token=valid_token,
+            model="gpt-4o",
+        )
+
+    mock_limiter.is_team_within_model_budget.assert_awaited_once_with(
+        team_id="team-mmb",
+        team_model_max_budget={"gpt-4o": {"budget_limit": 10.0, "time_period": "1d"}},
+        model="gpt-4o",
+        key_model_max_budget={"claude-3": {"budget_limit": 5.0, "time_period": "1d"}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_model_max_budget_check_noop_without_budgets():
+    """Teams without model_max_budget (the default {}) must not touch the limiter."""
+    team_object = LiteLLM_TeamTable(team_id="team-plain")
+    mock_limiter = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.model_max_budget_limiter", mock_limiter):
+        await _team_model_max_budget_check(
+            team_object=team_object,
+            valid_token=UserAPIKeyAuth(token="t", team_id="team-plain"),
+            model="gpt-4o",
+        )
+        await _team_model_max_budget_check(
+            team_object=None,
+            valid_token=None,
+            model="gpt-4o",
+        )
+
+    mock_limiter.is_team_within_model_budget.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_model_max_budget_check_propagates_budget_error():
+    """BudgetExceededError from the limiter must escape the bridge so common_checks
+    rejects the request."""
+    team_object = LiteLLM_TeamTable(
+        team_id="team-mmb",
+        model_max_budget={"gpt-4o": {"budget_limit": 10.0, "time_period": "1d"}},
+    )
+    mock_limiter = AsyncMock()
+    mock_limiter.is_team_within_model_budget.side_effect = litellm.BudgetExceededError(
+        current_cost=11.0,
+        max_budget=10.0,
+        message="over",
+    )
+
+    with patch("litellm.proxy.proxy_server.model_max_budget_limiter", mock_limiter):
+        with pytest.raises(litellm.BudgetExceededError):
+            await _team_model_max_budget_check(
+                team_object=team_object,
+                valid_token=None,
+                model=["gpt-4o"],
+            )
 
 
 @pytest.mark.asyncio

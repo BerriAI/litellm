@@ -1082,6 +1082,7 @@ async def new_team(
     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
+    - model_max_budget: Optional[dict] - Per-model max budgets shared by every key on the team, e.g. {"gpt-4o": {"budget_limit": 100.0, "time_period": "1d"}}. A key's own model_max_budget entry for a model takes precedence; the team entry is the default cap for keys without one.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
@@ -1187,6 +1188,21 @@ async def new_team(
                             "error": f"soft_budget ({data.soft_budget}) must be strictly lower than max_budget ({data.max_budget})"
                         },
                     )
+
+        if data.model_max_budget is not None:
+            from litellm.proxy.management_endpoints.key_management_endpoints import (
+                validate_model_max_budget,
+            )
+
+            try:
+                validate_model_max_budget(data.model_max_budget)
+            except ValueError as e:
+                raise ProxyException(
+                    message=str(e),
+                    type=ProxyErrorTypes.bad_request_error,
+                    param="model_max_budget",
+                    code="400",
+                )
 
         # Check if license is over limit
         total_teams = await _team_db(prisma_client).count()
@@ -1751,6 +1767,7 @@ async def update_team(
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
+    - model_max_budget: Optional[dict] - Per-model max budgets shared by every key on the team, e.g. {"gpt-4o": {"budget_limit": 100.0, "time_period": "1d"}}. A key's own model_max_budget entry for a model takes precedence; the team entry is the default cap for keys without one.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
@@ -1953,6 +1970,21 @@ async def update_team(
                 user_api_key_dict=user_api_key_dict,
                 existing_team_max_budget=existing_team_row.max_budget,
             )
+
+        if data.model_max_budget is not None:
+            from litellm.proxy.management_endpoints.key_management_endpoints import (
+                validate_model_max_budget,
+            )
+
+            try:
+                validate_model_max_budget(data.model_max_budget)
+            except ValueError as e:
+                raise ProxyException(
+                    message=str(e),
+                    type=ProxyErrorTypes.bad_request_error,
+                    param="model_max_budget",
+                    code="400",
+                )
 
         updated_kv = data.json(exclude_unset=True)
 

@@ -1,6 +1,7 @@
 import enum
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
@@ -1785,6 +1786,7 @@ from litellm.models.team import TeamBase as TeamBase  # noqa: E402
 
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
+    model_max_budget: Mapping[str, Mapping[str, str | float]] | None = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
@@ -1847,6 +1849,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     max_budget: Optional[float] = None
     soft_budget: Optional[float] = None
+    model_max_budget: Mapping[str, Mapping[str, str | float]] | None = None
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
@@ -2542,6 +2545,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
+    team_model_max_budget: Mapping[str, Mapping[str, str | float]] | None = None
     team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
     team_object_permission_id: Optional[str] = None

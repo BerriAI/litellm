@@ -6551,7 +6551,7 @@ async def _enforce_unique_key_alias(
             )
 
 
-def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
+def validate_model_max_budget(model_max_budget: Mapping[str, Mapping[str, str | float]] | None) -> None:
     """
     Validate the model_max_budget is GenericBudgetConfigType + enforce user has an enterprise license
 
