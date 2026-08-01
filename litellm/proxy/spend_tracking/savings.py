@@ -160,7 +160,10 @@ def _usage_from_spend_log(usage_object: dict | None) -> Usage | None:
     try:
         return Usage(**usage_object)
     except Exception as e:  # noqa: BLE001  # a malformed usage_object must not fail the daily spend write
-        verbose_proxy_logger.debug("savings: unusable usage_object (%s)", e)
+        # Warning, not debug: this silently zeroes the auto-router driver for every
+        # affected row, and a shape change in Usage would otherwise show up only as a
+        # dashboard that quietly reads $0.00.
+        verbose_proxy_logger.warning("savings: unusable usage_object, auto-router savings will read zero (%s)", e)
         return None
 
 

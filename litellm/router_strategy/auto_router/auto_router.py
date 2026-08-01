@@ -2,7 +2,6 @@
 Auto-Routing Strategy that works with a Semantic Router Config
 """
 
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_router_logger
@@ -135,14 +134,6 @@ class AutoRouter(CustomLogger):
             return None
         return max(priced)[2]
 
-    @cached_property
-    def _derived_savings_baseline_model(self) -> str | None:
-        """Resolved on first use, not at construction, because the parent router's
-        deployments are still being assembled while this router is built. Caching
-        through `cached_property` keeps "derived to nothing" distinct from "not derived
-        yet" without a second flag to hold them apart."""
-        return self._most_expensive_candidate()
-
     @property
     def savings_baseline_model(self) -> str | None:
         """The model this router's savings are measured against.
@@ -158,13 +149,19 @@ class AutoRouter(CustomLogger):
         writes `deepseek-r1` meaning Azure would otherwise be priced against whoever
         owns that name.
 
+        Derived per call rather than cached: the parent router adds and removes
+        deployments while it runs, so a baseline pinned on first use would keep naming a
+        model the router no longer has, and a pricier one added later could never become
+        the baseline. Resolving costs tens of microseconds against a network call, which
+        is not worth trading correctness for.
+
         ``None`` when nothing can be priced, which zeroes the driver rather than
         inventing a baseline.
         """
         configured = self.configured_savings_baseline_model
         if configured:
             return self._canonical_model(configured, None)
-        return self._derived_savings_baseline_model
+        return self._most_expensive_candidate()
 
     def _load_semantic_routing_routes(self) -> List[Route]:
         from semantic_router.routers import SemanticRouter

@@ -484,19 +484,39 @@ class TestSavingsBaselineModel:
         auto_router = self._auto_router({}, ["not-a-real-model"], "also-not-real")
         assert auto_router.savings_baseline_model is None
 
-    def test_the_derived_baseline_is_resolved_once(self):
-        """The parent router's deployments are still being assembled while this router
-        is constructed, so resolution is lazy; it must not re-derive per request."""
+    def test_the_baseline_follows_deployments_added_after_the_first_read(self):
+        """The parent router adds and removes deployments while it runs. A baseline
+        pinned on first use would keep naming a model the router no longer has, and a
+        pricier one added later could never become the baseline."""
         auto_router = self._auto_router(
-            {"cheap-tier": "anthropic/claude-haiku-4-5", "mid-tier": "anthropic/claude-sonnet-5"},
-            ["cheap-tier", "mid-tier"],
-            "cheap-tier",
+            {"cheap": {"model": "claude-haiku-4-5", "custom_llm_provider": "anthropic"}},
+            ["cheap", "big"],
+            "cheap",
         )
-        assert auto_router.savings_baseline_model == "anthropic/claude-sonnet-5"
+        assert auto_router.savings_baseline_model == "anthropic/claude-haiku-4-5"
 
-        auto_router.litellm_router_instance.model_list = []
-        auto_router.litellm_router_instance.model_name_to_deployment_indices = {}
-        assert auto_router.savings_baseline_model == "anthropic/claude-sonnet-5"
+        parent = auto_router.litellm_router_instance
+        parent.model_list.append({"model_name": "big", "litellm_params": {"model": "anthropic/claude-opus-5"}})
+        parent.model_name_to_deployment_indices["big"] = [len(parent.model_list) - 1]
+
+        assert auto_router.savings_baseline_model == "anthropic/claude-opus-5"
+
+    def test_the_baseline_drops_a_deployment_that_was_removed(self):
+        auto_router = self._auto_router(
+            {
+                "cheap": {"model": "claude-haiku-4-5", "custom_llm_provider": "anthropic"},
+                "big": {"model": "claude-opus-5", "custom_llm_provider": "anthropic"},
+            },
+            ["cheap", "big"],
+            "cheap",
+        )
+        assert auto_router.savings_baseline_model == "anthropic/claude-opus-5"
+
+        parent = auto_router.litellm_router_instance
+        parent.model_name_to_deployment_indices.pop("big")
+        auto_router.loaded_routes = [r for r in auto_router.loaded_routes if r.name != "big"]
+
+        assert auto_router.savings_baseline_model == "anthropic/claude-haiku-4-5"
 
     def test_a_deployment_naming_its_provider_separately_is_still_priced(self):
         """A deployment may name its vendor in `custom_llm_provider` rather than in the
