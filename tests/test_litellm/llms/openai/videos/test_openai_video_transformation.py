@@ -2,10 +2,15 @@ import io
 import os
 
 import httpx
+import pytest
 
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.videos.utils import encode_character_id_with_provider
+from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
+    encode_character_id_with_provider,
+    extract_original_video_id,
+)
 
 
 def test_video_content_request_encodes_video_id_path_segment():
@@ -145,3 +150,114 @@ def test_video_create_response_parses_payload_with_unknown_fields():
     assert video_obj.id == "video_123"
     assert video_obj.seconds == "8"
     assert video_obj.usage == {"duration_seconds": 8.0}
+
+
+def _video_payload(video_id: str = "video_123", **overrides: object) -> dict:
+    payload = {
+        "id": video_id,
+        "object": "video",
+        "status": "completed",
+        "seconds": "8",
+        "size": "1280x720",
+        "unexpected_upstream_field": {"nested": True},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _json_response(payload: dict) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json=payload,
+        request=httpx.Request("POST", "https://api.openai.com/v1/videos"),
+    )
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "transform_video_remix_response",
+        "transform_video_status_retrieve_response",
+        "transform_video_edit_response",
+        "transform_video_extension_response",
+    ],
+)
+def test_video_response_transforms_parse_payload_and_wrap_id(method_name):
+    """Every /videos response transform parses the upstream body into a VideoObject
+    and swaps in a LiteLLM-managed id that decodes back to the provider's id."""
+    config = OpenAIVideoConfig()
+    transform = getattr(config, method_name)
+
+    video_obj = transform(
+        raw_response=_json_response(_video_payload()),
+        logging_obj=None,
+        custom_llm_provider="openai",
+    )
+
+    assert video_obj.status == "completed"
+    assert video_obj.seconds == "8"
+    assert video_obj.size == "1280x720"
+    assert video_obj.id != "video_123"
+    assert extract_original_video_id(video_obj.id) == "video_123"
+    assert decode_video_id_with_provider(video_obj.id)["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "transform_video_remix_response",
+        "transform_video_status_retrieve_response",
+        "transform_video_edit_response",
+        "transform_video_extension_response",
+    ],
+)
+def test_video_response_transforms_leave_id_raw_without_provider(method_name):
+    config = OpenAIVideoConfig()
+    transform = getattr(config, method_name)
+
+    video_obj = transform(
+        raw_response=_json_response(_video_payload()),
+        logging_obj=None,
+    )
+
+    assert video_obj.id == "video_123"
+
+
+def test_video_delete_response_parses_payload_without_wrapping_id():
+    """Delete returns the deleted object as-is; it must still parse, and it must not
+    re-encode the id (the caller already holds the managed one)."""
+    config = OpenAIVideoConfig()
+
+    video_obj = config.transform_video_delete_response(
+        raw_response=_json_response(_video_payload(status="deleted")),
+        logging_obj=None,
+    )
+
+    assert video_obj.id == "video_123"
+    assert video_obj.status == "deleted"
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    ["transform_video_create_character_response", "transform_video_get_character_response"],
+)
+def test_character_response_transforms_parse_payload(method_name):
+    config = OpenAIVideoConfig()
+    transform = getattr(config, method_name)
+
+    character = transform(
+        raw_response=_json_response(
+            {
+                "id": "char_123",
+                "object": "character",
+                "created_at": 1700000000,
+                "name": "hero",
+                "unexpected_upstream_field": "ignored",
+            }
+        ),
+        logging_obj=None,
+    )
+
+    assert character.id == "char_123"
+    assert character.name == "hero"
+    assert character.created_at == 1700000000
