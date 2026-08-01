@@ -78,7 +78,7 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = api_base or get_secret_str("ALIYUN_IQS_API_BASE") or self.ALIYUN_IQS_API_BASE
+        api_base = (api_base or get_secret_str("ALIYUN_IQS_API_BASE") or self.ALIYUN_IQS_API_BASE).rstrip("/")
 
         # Append "/search/unified" to the api base if it's not already there
         if not api_base.endswith("/search/unified"):
@@ -117,7 +117,12 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
 
         # Transform Perplexity unified spec parameters to IQS format
         if "max_results" in optional_params:
+            # merge with caller-supplied advancedParams instead of replacing,
+            # so native filters (date ranges, ...) survive
             request_data["advancedParams"] = {  # mutable-ok: nested payload dict
+                **optional_params.get(
+                    "advancedParams", {}
+                ),  # mutable-ok: empty default, immediately spread into payload
                 "numResults": optional_params["max_results"],
             }
 
@@ -155,6 +160,11 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
             SearchResponse with standardized format
         """
         response_json = raw_response.json()
+
+        # 200-with-error-body guard: IQS business errors (errorCode/errorMessage)
+        # must not masquerade as "zero results" — non-2xx already raises upstream
+        if "pageItems" not in response_json and ("errorCode" in response_json or "errorMessage" in response_json):
+            raise ValueError(f"Aliyun IQS error response: {response_json}")
 
         # Transform pageItems to SearchResult objects
         results = []  # mutable-ok: collected into pydantic SearchResponse(results=...)

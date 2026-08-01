@@ -105,6 +105,7 @@ class TestAliyunIQSSearchTransformations:
 
     def setup_method(self):
         from litellm.llms.aliyun_iqs.search.transformation import AliyunIQSSearchConfig
+
         self.config = AliyunIQSSearchConfig()
 
     def test_transform_search_request_list_query_and_max_results(self):
@@ -129,6 +130,7 @@ class TestAliyunIQSSearchTransformations:
 
     def test_validate_environment_missing_key_raises(self, monkeypatch):
         import pytest as _pytest
+
         monkeypatch.delenv("ALIYUN_IQS_API_KEY", raising=False)
         with _pytest.raises(ValueError, match="ALIYUN_IQS_API_KEY"):
             self.config.validate_environment(headers={})
@@ -139,3 +141,33 @@ class TestAliyunIQSSearchTransformations:
         response = self.config.transform_search_response(raw_response=mock_resp, logging_obj=None)
         assert response.results == []
         assert response.object == "search"
+
+    def test_max_results_merges_native_advanced_params(self):
+        data = self.config.transform_search_request(
+            query="q",
+            optional_params={
+                "max_results": 5,
+                "advancedParams": {"startPublishedDate": "2026-01-01"},
+            },
+        )
+        assert data["advancedParams"] == {
+            "startPublishedDate": "2026-01-01",
+            "numResults": 5,
+        }
+
+    def test_get_complete_url_normalizes_trailing_slash(self):
+        assert (
+            self.config.get_complete_url(api_base="https://cloud-iqs.aliyuncs.com/", optional_params={})
+            == "https://cloud-iqs.aliyuncs.com/search/unified"
+        )
+
+    def test_error_body_raises_instead_of_empty_results(self):
+        import pytest as _pytest
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "errorCode": "Retrieval.TestUserPeriodExpired",
+            "errorMessage": "The test period has expired",
+        }
+        with _pytest.raises(ValueError, match="TestUserPeriodExpired"):
+            self.config.transform_search_response(raw_response=mock_resp, logging_obj=None)
