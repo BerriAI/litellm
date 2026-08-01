@@ -40,17 +40,21 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _oauth_endpoints_unresolved,
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
+    _obo_retry_applies,
     _should_strip_caller_authorization,
     _without_authorization,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
+    LiteLLM_ObjectPermissionTable,
+    LitellmUserRoles,
     MCPApprovalStatus,
     MCPEnvVar,
     MCPEnvVarScope,
     MCPTransport,
+    UserAPIKeyAuth,
 )
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPAuthType
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 
 
@@ -8232,6 +8236,35 @@ def test_should_strip_caller_authorization_for_token_exchange():
     assert _should_strip_caller_authorization(mcp_server=server, raw_headers=None, user_api_key_auth=None) is True
 
 
+def _retry_gate_server(auth_type: MCPAuthType) -> MCPServer:
+    return MCPServer(
+        server_id="retry-gate",
+        name="retry-gate-server",
+        url="https://up.example.com",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+    )
+
+
+def test_obo_retry_applies_to_id_jag_without_an_inbound_subject_token():
+    """ID-JAG can source its subject from the user's stored SSO assertion, so the upstream-401
+    invalidate-and-retry path must engage even when the caller presented no token of its own;
+    otherwise a store-sourced bearer is replayed until its TTL after being rejected."""
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_id_jag), None) is True
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_id_jag), "inbound-id-token") is True
+
+
+def test_obo_retry_still_requires_a_subject_token_for_token_exchange():
+    """token_exchange can only mint from an inbound token, so with none there is nothing to re-mint."""
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_token_exchange), None) is False
+    assert _obo_retry_applies(_retry_gate_server(MCPAuth.oauth2_token_exchange), "inbound-token") is True
+
+
+def test_obo_retry_does_not_apply_to_other_auth_modes():
+    for auth_type in (MCPAuth.none, MCPAuth.api_key, MCPAuth.oauth2, MCPAuth.true_passthrough):
+        assert _obo_retry_applies(_retry_gate_server(auth_type), "some-token") is False
+
+
 class _UpstreamAuthError(Exception):
     """Mimics a wrapped upstream 401 the way _extract_upstream_auth_failure detects it."""
 
@@ -9688,3 +9721,75 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         assert result.isError is True
         assert "not found in registry" in result.content[0].text
+
+
+class TestToolAuthorizationIsNotConditionalOnLogging:
+    """`call_tool` used to run `pre_call_tool_check` — the only place tool-level
+    MCP entitlements are enforced — inside `if proxy_logging_obj:`, so a caller
+    reached with no logging object got no authorization decision at all. Both
+    production call sites pass the module-level `ProxyLogging` singleton, which
+    is never None, so this was not a live hole; the invariant being restored is
+    that an authorization decision cannot be skipped by an absent logger.
+    """
+
+    @staticmethod
+    def _manager_with_scoped_server() -> tuple[MCPServerManager, UserAPIKeyAuth]:
+        manager = MCPServerManager()
+        manager.registry["srv-gated"] = MCPServer(
+            server_id="srv-gated",
+            name="gated_server",
+            server_name="gated_server",
+            alias="gated_server",
+            url="http://127.0.0.1:1/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        for tool_name in ("read_only_tool", "delete_everything"):
+            manager.tool_name_to_mcp_server_name_mapping[tool_name] = "gated_server"
+        user = UserAPIKeyAuth(
+            api_key="sk-caller",
+            user_id="alice",
+            user_role=LitellmUserRoles.INTERNAL_USER.value,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-gated",
+                mcp_servers=["srv-gated"],
+                mcp_tool_permissions={"srv-gated": ["read_only_tool"]},
+            ),
+        )
+        return manager, user
+
+    @pytest.mark.asyncio
+    async def test_unentitled_tool_refused_without_proxy_logging_obj(self):
+        manager, user = self._manager_with_scoped_server()
+        upstream = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+
+        with patch.object(manager, "_call_regular_mcp_tool", new=upstream):
+            with pytest.raises(HTTPException) as exc:
+                await manager.call_tool(
+                    server_name="gated_server",
+                    name="delete_everything",
+                    arguments={},
+                    user_api_key_auth=user,
+                    proxy_logging_obj=None,
+                )
+
+        assert exc.value.status_code == 403
+        upstream.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_entitled_tool_still_dispatches_without_proxy_logging_obj(self):
+        """The gate must refuse only what the entitlement excludes; an allowed
+        tool still reaches the upstream when there is no logging object."""
+        manager, user = self._manager_with_scoped_server()
+        upstream = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+
+        with patch.object(manager, "_call_regular_mcp_tool", new=upstream):
+            await manager.call_tool(
+                server_name="gated_server",
+                name="read_only_tool",
+                arguments={},
+                user_api_key_auth=user,
+                proxy_logging_obj=None,
+            )
+
+        upstream.assert_awaited_once()

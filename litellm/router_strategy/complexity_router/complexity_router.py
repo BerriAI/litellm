@@ -329,7 +329,7 @@ class ComplexityRouter(CustomLogger):
 
         # Parse config - always create a new instance to avoid singleton mutation
         if complexity_router_config:
-            self.config = ComplexityRouterConfig(**complexity_router_config)
+            self.config = ComplexityRouterConfig.model_validate(complexity_router_config)
         else:
             self.config = ComplexityRouterConfig()
 
