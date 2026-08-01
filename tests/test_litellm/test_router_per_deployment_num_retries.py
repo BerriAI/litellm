@@ -575,3 +575,81 @@ class TestRequestNumRetriesBeatsGlobal:
                     model="mock", messages=[{"role": "user", "content": "hi"}]
                 )
         assert counter.attempts == 3
+
+
+class TestGenericApiCallDeploymentNumRetries:
+    """
+    The Responses API and Anthropic Messages routes go through
+    ``_ageneric_api_call_with_fallbacks`` rather than ``_acompletion``, and that path used
+    to swallow the selected deployment's ``litellm_params.num_retries``: the raised
+    exception was never stamped, so ``async_function_with_retries`` always fell back to the
+    router-wide value. Issue #35071.
+    """
+
+    @staticmethod
+    def _router(deployment_params: dict, **router_kwargs) -> Router:
+        params = {"model": "openai/gpt-4o", "api_key": "sk-fake"}
+        params.update(deployment_params)
+        return Router(
+            model_list=[
+                {
+                    "model_name": "mock",
+                    "litellm_params": params,
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+            **router_kwargs,
+        )
+
+    async def _count_attempts(self, router: Router, **call_kwargs) -> int:
+        calls = {"n": 0}
+
+        async def failing_fn(**kwargs):
+            calls["n"] += 1
+            raise litellm.RateLimitError(message="boom", model="mock", llm_provider="openai")
+
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.RateLimitError):
+                await router._ageneric_api_call_with_fallbacks(
+                    model="mock", original_function=failing_fn, **call_kwargs
+                )
+        return calls["n"]
+
+    @pytest.mark.asyncio
+    async def test_deployment_num_retries_overrides_router_default(self):
+        """Router-wide 0 + deployment 1 -> 2 attempts; the unfixed path only made 1."""
+        router = self._router({"num_retries": 1}, num_retries=0)
+        assert await self._count_attempts(router, input="hi") == 2
+
+    @pytest.mark.asyncio
+    async def test_router_num_retries_used_when_deployment_has_none(self):
+        """Without a deployment override the router-wide value still applies: 1 + 2 = 3."""
+        router = self._router({}, num_retries=2)
+        assert await self._count_attempts(router, input="hi") == 3
+
+    @pytest.mark.asyncio
+    async def test_deployment_value_wins_over_request_value_like_chat_completions(self):
+        """
+        Parity with chat/completions: the stamped deployment value is what the retry loop
+        adopts, even when the request carried its own num_retries (deployment 2 -> 3
+        attempts despite num_retries=0 on the request).
+        """
+        router = self._router({"num_retries": 2}, num_retries=5)
+        assert await self._count_attempts(router, input="hi", num_retries=0) == 3
+
+    @pytest.mark.asyncio
+    async def test_failed_deployment_id_stamped_on_exception(self):
+        """
+        The failed deployment id must also be stamped so cooldown/fallback bookkeeping can
+        attribute the failure to the deployment that actually failed.
+        """
+        router = self._router({"num_retries": 0}, num_retries=0)
+
+        async def failing_fn(**kwargs):
+            raise litellm.RateLimitError(message="boom", model="mock", llm_provider="openai")
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await router._ageneric_api_call_with_fallbacks(
+                model="mock", original_function=failing_fn, input="hi"
+            )
+        assert getattr(exc_info.value, "failed_deployment_id", None) == "dep-1"
