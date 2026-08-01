@@ -2481,6 +2481,14 @@ if MCP_AVAILABLE:
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
 
+        # allowed_tools changed: any toolset referencing this server has a cached
+        # resolve_toolset_tool_permissions() result (see mcp_server_manager.py) keyed
+        # only by toolset_id, so it is never invalidated by a server-level edit. Clear
+        # it here so a re-enabled tool is immediately callable through a toolset again,
+        # instead of only after the cache's TTL expires.
+        if "allowed_tools" in payload_fields_set:
+            global_mcp_server_manager.invalidate_toolset_cache()
+
         # If a field that determines which upstream OAuth token gets minted changed (url/audience, OAuth
         # mode/grant, authorization-server endpoints, or the OAuth client + scopes), every stored per-user
         # token was minted for the old configuration and is stale. Purge them (DB + cache) so the next
