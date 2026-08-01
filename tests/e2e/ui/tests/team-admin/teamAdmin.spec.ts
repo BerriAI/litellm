@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   E2E_INTERNAL_USER_KEY_ALIAS,
+  E2E_REMOVABLE_MEMBER_USER_ID,
   E2E_TEAM_CRUD_ALIAS,
   E2E_TEAM_CRUD_ID,
   TEAM_ADMIN_STORAGE_PATH,
@@ -71,7 +72,7 @@ test.describe("Team Admin", () => {
 
     // Seeded members appear in the roster by user_id (members_with_roles has no
     // email), so match the row on the user_id rather than the email.
-    const row = page.locator("tr", { hasText: "e2e-removable-member" }).first();
+    const row = page.locator("tr", { hasText: E2E_REMOVABLE_MEMBER_USER_ID }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.getByTestId("delete-member").click();
 

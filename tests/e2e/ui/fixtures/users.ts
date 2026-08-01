@@ -1,6 +1,11 @@
 import {
   ADMIN_STORAGE_PATH,
   ADMIN_VIEWER_STORAGE_PATH,
+  E2E_ADMIN_VIEWER_EMAIL,
+  E2E_INTERNAL_USER_EMAIL,
+  E2E_INTERNAL_VIEWER_EMAIL,
+  E2E_TEAM_ADMIN_EMAIL,
+  E2E_USER_PASSWORD,
   INTERNAL_USER_STORAGE_PATH,
   INTERNAL_VIEWER_STORAGE_PATH,
   TEAM_ADMIN_STORAGE_PATH,
@@ -20,20 +25,20 @@ export const users: Record<Role, { email: string; password: string }> = {
     password: process.env.LITELLM_MASTER_KEY || "sk-1234",
   },
   [Role.ProxyAdminViewer]: {
-    email: "adminviewer@test.local",
-    password: "test",
+    email: E2E_ADMIN_VIEWER_EMAIL,
+    password: E2E_USER_PASSWORD,
   },
   [Role.InternalUser]: {
-    email: "internal@test.local",
-    password: "test",
+    email: E2E_INTERNAL_USER_EMAIL,
+    password: E2E_USER_PASSWORD,
   },
   [Role.InternalUserViewer]: {
-    email: "viewer@test.local",
-    password: "test",
+    email: E2E_INTERNAL_VIEWER_EMAIL,
+    password: E2E_USER_PASSWORD,
   },
   [Role.TeamAdmin]: {
-    email: "teamadmin@test.local",
-    password: "test",
+    email: E2E_TEAM_ADMIN_EMAIL,
+    password: E2E_USER_PASSWORD,
   },
 };
 
