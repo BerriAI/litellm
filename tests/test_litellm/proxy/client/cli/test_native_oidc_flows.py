@@ -181,20 +181,31 @@ class TestCallbackListener:
     def test_state_mismatch_is_rejected_before_the_code_is_used(self):
         with LoopbackCallbackListener(expected_state="expected") as listener:
             assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=abc&state=wrong") == 400
-            with pytest.raises(NativeOIDCError, match="state was missing or did not match"):
+            # Refused without a terminal result: any local process that guessed the
+            # ephemeral port could otherwise abort a login in progress.
+            assert listener._server.result is None
+            with pytest.raises(NativeOIDCError, match="timed out"):
                 listener.wait_for_code(timeout=0.1)
 
     def test_missing_state_is_rejected(self):
         with LoopbackCallbackListener(expected_state="expected") as listener:
             assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=abc") == 400
-            with pytest.raises(NativeOIDCError, match="state was missing"):
+            assert listener._server.result is None
+            with pytest.raises(NativeOIDCError, match="timed out"):
                 listener.wait_for_code(timeout=0.1)
 
     def test_duplicate_parameters_are_rejected(self):
         with LoopbackCallbackListener(expected_state="s") as listener:
             assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=a&code=b&state=s") == 400
-            with pytest.raises(NativeOIDCError, match="multiple 'code' values"):
+            assert listener._server.result is None
+            with pytest.raises(NativeOIDCError, match="timed out"):
                 listener.wait_for_code(timeout=0.1)
+
+    def test_a_forged_callback_does_not_prevent_the_real_one(self):
+        with LoopbackCallbackListener(expected_state="expected") as listener:
+            assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=forged&state=wrong") == 400
+            assert call_listener(listener, f"{DEFAULT_CALLBACK_PATH}?code=real&state=expected") == 200
+            assert listener.wait_for_code(timeout=0.1) == "real"
 
     def test_provider_error_is_surfaced_after_state_validation(self):
         with LoopbackCallbackListener(expected_state="s") as listener:

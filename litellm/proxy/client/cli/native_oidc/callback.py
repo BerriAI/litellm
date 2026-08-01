@@ -105,20 +105,22 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             self._respond(400, _FAILURE_PAGE)
             return
 
+        # Until the state matches, a request is not evidence of anything: any local
+        # process that guesses the ephemeral port could otherwise end the login by
+        # sending one. Such requests are rejected without recording a terminal
+        # result, so the listener keeps waiting for the real redirect (or times out).
         params = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
         try:
             state = _single_value(params, "state")
             code = _single_value(params, "code")
             error = _single_value(params, "error")
             description = _single_value(params, "error_description")
-        except NativeOIDCError as exc:
-            server.result = _CallbackResult(error=str(exc))
+        except NativeOIDCError:
             self._respond(400, _FAILURE_PAGE)
             return
 
         if state is None or not states_match(server.expected_state, state):
             # Validated before the code is looked at, let alone redeemed.
-            server.result = _CallbackResult(error="authorization response state was missing or did not match")
             self._respond(400, _FAILURE_PAGE)
             return
 
