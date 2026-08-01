@@ -7,7 +7,6 @@ Based on official GigaChat SDK authentication flow.
 
 import time
 import uuid
-from typing import Optional, Tuple
 
 import httpx
 
@@ -41,7 +40,7 @@ class GigaChatAuthError(BaseLLMException):
     pass
 
 
-def _get_credentials() -> Optional[str]:
+def _get_credentials() -> str | None:
     """Get GigaChat credentials from environment."""
     return get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
 
@@ -62,9 +61,10 @@ def _get_http_client() -> HTTPHandler:
 
 
 def get_access_token(
-    credentials: Optional[str] = None,
-    scope: Optional[str] = None,
-    auth_url: Optional[str] = None,
+    credentials: str | None = None,
+    scope: str | None = None,
+    auth_url: str | None = None,
+    litellm_params: dict | None = None,
 ) -> str:
     """
     Get valid access token, using cache if available.
@@ -80,6 +80,13 @@ def get_access_token(
     Raises:
         GigaChatAuthError: If authentication fails
     """
+    if not litellm_params:
+        litellm_params = {}
+
+    access_token = litellm_params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
+    if access_token:
+        return access_token
+
     credentials = credentials or _get_credentials()
     if not credentials:
         raise GigaChatAuthError(
@@ -87,8 +94,8 @@ def get_access_token(
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
 
-    scope = scope or _get_scope()
-    auth_url = auth_url or _get_auth_url()
+    scope = scope or litellm_params.get("gigachat_scope") or _get_scope()
+    auth_url = auth_url or litellm_params.get("gigachat_auth_url") or _get_auth_url()
 
     # Check cache
     cache_key = f"gigachat_token:{credentials[:16]}"
@@ -103,20 +110,29 @@ def get_access_token(
     # Request new token
     token, expires_at = _request_token_sync(credentials, scope, auth_url)
 
-    # Cache token
-    ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
-    if ttl_seconds > 0:
-        _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
+    if expires_at:
+        # Cache token
+        ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+        if ttl_seconds > 0:
+            _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
 
     return token
 
 
 async def get_access_token_async(
-    credentials: Optional[str] = None,
-    scope: Optional[str] = None,
-    auth_url: Optional[str] = None,
+    credentials: str | None = None,
+    scope: str | None = None,
+    auth_url: str | None = None,
+    litellm_params: dict | None = None,
 ) -> str:
     """Async version of get_access_token."""
+    if not litellm_params:
+        litellm_params = {}
+
+    access_token = litellm_params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
+    if access_token:
+        return access_token
+
     credentials = credentials or _get_credentials()
     if not credentials:
         raise GigaChatAuthError(
@@ -124,8 +140,8 @@ async def get_access_token_async(
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
 
-    scope = scope or _get_scope()
-    auth_url = auth_url or _get_auth_url()
+    scope = scope or litellm_params.get("gigachat_scope") or _get_scope()
+    auth_url = auth_url or litellm_params.get("gigachat_auth_url") or _get_auth_url()
 
     # Check cache
     cache_key = f"gigachat_token:{credentials[:16]}"
@@ -139,10 +155,11 @@ async def get_access_token_async(
     # Request new token
     token, expires_at = await _request_token_async(credentials, scope, auth_url)
 
-    # Cache token
-    ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
-    if ttl_seconds > 0:
-        _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
+    if expires_at:
+        # Cache token
+        ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+        if ttl_seconds > 0:
+            _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
 
     return token
 
@@ -151,12 +168,12 @@ def _request_token_sync(
     credentials: str,
     scope: str,
     auth_url: str,
-) -> Tuple[str, int]:
+) -> tuple[str, int]:
     """
     Request new access token from GigaChat OAuth endpoint (sync).
 
     Returns:
-        Tuple of (access_token, expires_at_ms)
+        tuple of (access_token, expires_at_ms)
     """
     headers = {
         "Authorization": f"Basic {credentials}",
@@ -188,7 +205,7 @@ async def _request_token_async(
     credentials: str,
     scope: str,
     auth_url: str,
-) -> Tuple[str, int]:
+) -> tuple[str, int]:
     """Async version of _request_token_sync."""
     headers = {
         "Authorization": f"Basic {credentials}",
@@ -219,7 +236,7 @@ async def _request_token_async(
         )
 
 
-def _parse_token_response(response: httpx.Response) -> Tuple[str, int]:
+def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
     """Parse OAuth token response."""
     data = response.json()
 
