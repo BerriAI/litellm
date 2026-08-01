@@ -2948,20 +2948,14 @@ class Router:
     ) -> None:
         """
         Adds/updates to kwargs:
-        - num_retries
         - litellm_trace_id
         - metadata
+
+        num_retries is deliberately left as the caller passed it, with no default filled in.
+        async_function_with_retries resolves the router/global default itself, and it can only
+        honour the precedence request > deployment litellm_params > litellm_settings while an
+        absent num_retries still means "the caller did not ask for one".
         """
-        # Normalise an explicit num_retries=None to the router default here (dict.get()
-        # only falls back when the key is absent, not when its value is None), then to 0
-        # if the router default is itself None - mirroring the guard in
-        # async_function_with_retries, which remains the safety net for paths that bypass
-        # this setter.
-        _req_num_retries = kwargs.get("num_retries")
-        if _req_num_retries is not None:
-            kwargs["num_retries"] = _req_num_retries
-        else:
-            kwargs["num_retries"] = self.num_retries if self.num_retries is not None else 0
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
         model_group_alias: Optional[str] = None
         if self._get_model_from_alias(model=model):
@@ -3684,7 +3678,6 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._image_generation
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
 
@@ -3739,7 +3732,6 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._aimage_generation
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -4244,7 +4236,6 @@ class Router:
             kwargs["model"] = model
             kwargs["adapter_id"] = adapter_id
             kwargs["original_function"] = self._aadapter_completion
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -4865,7 +4856,6 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_file
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -5126,7 +5116,6 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             metadata_variable_name = _get_router_metadata_variable_name(function_name="_acreate_batch")
             self._update_kwargs_before_fallbacks(
                 model=model,
@@ -5342,7 +5331,6 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acancel_batch
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             metadata_variable_name = _get_router_metadata_variable_name(function_name="_acancel_batch")
             self._update_kwargs_before_fallbacks(
                 model=model,
@@ -6503,7 +6491,8 @@ class Router:
         # Support per-request model_group_retry_policy override (from key/team settings)
         model_group_retry_policy = kwargs.pop("model_group_retry_policy", self.model_group_retry_policy)
         model_group: Optional[str] = kwargs.get("model")
-        num_retries = kwargs.pop("num_retries", None)
+        request_num_retries: Optional[int] = kwargs.pop("num_retries", None)
+        num_retries = request_num_retries
         if num_retries is None:
             # Fall back to the router setting (then 0) so the comparisons below never
             # hit `None > int`, which would mask the real upstream error with a TypeError.
@@ -6533,7 +6522,11 @@ class Router:
             original_exception = e
             deployment_num_retries = getattr(e, "num_retries", None)
 
-            if deployment_num_retries is not None and isinstance(deployment_num_retries, int):
+            if (
+                request_num_retries is None
+                and deployment_num_retries is not None
+                and isinstance(deployment_num_retries, int)
+            ):
                 num_retries = deployment_num_retries
             """
             Retry Logic
@@ -8615,9 +8608,9 @@ class Router:
         deployment = self.get_deployment(model_id=model_id)
         if deployment is None or self._is_deployment_blocked(deployment):
             return None
-        return CredentialLiteLLMParams(**deployment.litellm_params.model_dump(exclude_none=True)).model_dump(
-            exclude_none=True
-        )
+        return CredentialLiteLLMParams.model_validate(
+            deployment.litellm_params.model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
 
     def get_deployment_by_model_group_name(self, model_group_name: str) -> Optional[Deployment]:
         """
@@ -8757,9 +8750,9 @@ class Router:
             return None
 
         # Get basic credentials
-        credentials = CredentialLiteLLMParams(**deployment.litellm_params.model_dump(exclude_none=True)).model_dump(
-            exclude_none=True
-        )
+        credentials = CredentialLiteLLMParams.model_validate(
+            deployment.litellm_params.model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
 
         # Resolve litellm_credential_name to actual credentials
         if deployment.litellm_params.litellm_credential_name is not None:
