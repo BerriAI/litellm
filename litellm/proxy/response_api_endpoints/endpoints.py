@@ -1,6 +1,8 @@
 import asyncio
 import json
 import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, AsyncIterator, Dict, Optional, cast
 from uuid import uuid4
 
@@ -23,19 +25,30 @@ from litellm.types.responses.main import DeleteResponseResult
 router = APIRouter()
 
 _user_api_key_auth_dep = Depends(user_api_key_auth)
+_RESPONSES_TAGS = ["responses"]  # mutable-ok: fastapi's route signature requires List[str] tags
 
-_TOOL_PAYLOAD_KEYS = {
-    "custom": ("name", "description", "format"),
-    "function": ("name", "description", "parameters", "strict"),
-}
+_TOOL_PAYLOAD_KEYS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "custom": ("name", "description", "format"),
+        "function": ("name", "description", "parameters", "strict"),
+    }
+)
+_EMPTY_TOOL_PAYLOAD: Mapping[str, Any] = MappingProxyType({})
 
 
-def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
+def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
+    if key != "format" or not isinstance(value, dict):
+        return value
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         convert_custom_tool_format_to_chat_shape,
         convert_custom_tool_format_to_responses_shape,
     )
 
+    convert = convert_custom_tool_format_to_chat_shape if to_chat else convert_custom_tool_format_to_responses_shape
+    return convert(value)
+
+
+def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
     if not isinstance(obj, dict):
         return obj
     tool_type = obj.get("type")
@@ -43,35 +56,37 @@ def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
     if payload_keys is None:
         return obj
     nested = obj.get(tool_type)
-    nested_source = nested if isinstance(nested, dict) else {}
-    payload = {
-        key: nested_source[key] if key in nested_source else obj[key]
+    nested_source = nested if isinstance(nested, dict) else _EMPTY_TOOL_PAYLOAD
+    payload = {  # mutable-ok: tool entries are embedded verbatim in the JSON request body
+        key: _convert_tool_payload_value(key, nested_source[key] if key in nested_source else obj[key], to_chat=to_chat)
         for key in payload_keys
         if key in nested_source or key in obj
     }
     if "name" not in payload:
         return obj
-    if isinstance(payload.get("format"), dict):
-        convert = convert_custom_tool_format_to_chat_shape if to_chat else convert_custom_tool_format_to_responses_shape
-        payload = {**payload, "format": convert(payload["format"])}
-    return {"type": tool_type, tool_type: payload} if to_chat else {"type": tool_type, **payload}
+    return {"type": tool_type, tool_type: payload} if to_chat else {"type": tool_type, **payload}  # mutable-ok: same
 
 
-def _normalize_tool_dialect(data: dict, *, to_chat: bool) -> dict:
-    converted: dict = {}
+def _normalize_tool_dialect(
+    data: dict, *, to_chat: bool
+) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
     tools = data.get("tools")
-    if isinstance(tools, list):
-        normalized_tools = [_convert_tool_envelope(tool, to_chat=to_chat) for tool in tools]
-        if normalized_tools != tools:
-            converted["tools"] = normalized_tools
     tool_choice = data.get("tool_choice")
+    normalized_tools = (
+        [
+            _convert_tool_envelope(tool, to_chat=to_chat) for tool in tools
+        ]  # mutable-ok: body's tools stays a plain JSON list
+        if isinstance(tools, list)
+        else tools
+    )
     normalized_choice = _convert_tool_envelope(tool_choice, to_chat=to_chat)
-    if normalized_choice != tool_choice:
-        converted["tool_choice"] = normalized_choice
-    return {**data, **converted} if converted else data
+    if normalized_tools == tools and normalized_choice == tool_choice:
+        return data
+    replaceable = (("tools", normalized_tools), ("tool_choice", normalized_choice))
+    return {**data, **{key: value for key, value in replaceable if key in data}}  # mutable-ok: plain body dict
 
 
-def _is_chat_completions_body(data: dict) -> bool:
+def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
     messages = data.get("messages")
     if isinstance(messages, list) and len(messages) > 0:
         return True
@@ -340,13 +355,13 @@ async def responses_api(
 
 @router.get(
     "/cursor/models",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["responses"],
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
 )
 @router.get(
     "/cursor/v1/models",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["responses"],
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
 )
 async def cursor_model_list(
     user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
@@ -447,7 +462,7 @@ async def cursor_chat_completions(
     # Rebuild rather than pop: _read_request_body can return the request-scope
     # cached parsed-body dict itself, and removing keys from it corrupts the
     # cache's key snapshot so later readers get an empty body
-    data = {key: value for key, value in data.items() if key != "stream_options"}
+    data = {key: value for key, value in data.items() if key != "stream_options"}  # mutable-ok: plain body dict
 
     data = _normalize_tool_dialect(data, to_chat=False)
 

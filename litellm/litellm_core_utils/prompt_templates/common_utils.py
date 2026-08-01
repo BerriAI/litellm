@@ -21,6 +21,14 @@ from typing import (
     cast,
 )
 
+from openai.types.chat.chat_completion_custom_tool_param import (
+    CustomFormatGrammar,
+    CustomFormatGrammarGrammar,
+)
+from openai.types.shared_params.custom_tool_input_format import (
+    Grammar as ResponsesGrammarFormat,
+)
+
 import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
@@ -1252,29 +1260,36 @@ def is_function_call(optional_params: dict) -> bool:
     return False
 
 
-def convert_custom_tool_format_to_chat_shape(format_obj: dict) -> dict:
+def convert_custom_tool_format_to_chat_shape(format_obj: Mapping[str, Any]) -> Mapping[str, Any]:
     """
     Responses API grammar formats are flat ({"type": "grammar", "definition", "syntax"});
     Chat Completions wraps the same fields in a "grammar" object. Text formats are
     identical on both surfaces and pass through, as does anything unrecognized.
     """
-    if format_obj.get("type") == "grammar" and "grammar" not in format_obj:
-        return {
-            "type": "grammar",
-            "grammar": {k: format_obj[k] for k in ("definition", "syntax") if k in format_obj},
-        }
-    return format_obj
+    if format_obj.get("type") != "grammar" or "grammar" in format_obj:
+        return format_obj
+    grammar = CustomFormatGrammarGrammar()
+    if "definition" in format_obj:
+        grammar["definition"] = format_obj["definition"]
+    if "syntax" in format_obj:
+        grammar["syntax"] = format_obj["syntax"]
+    return CustomFormatGrammar(type="grammar", grammar=grammar)
 
 
-def convert_custom_tool_format_to_responses_shape(format_obj: dict) -> dict:
+def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, Any]) -> Mapping[str, Any]:
     """
     Inverse of convert_custom_tool_format_to_chat_shape: unwrap the Chat Completions
     "grammar" object into the flat Responses API grammar shape.
     """
     grammar = format_obj.get("grammar")
-    if format_obj.get("type") == "grammar" and isinstance(grammar, dict):
-        return {"type": "grammar", **{k: grammar[k] for k in ("definition", "syntax") if k in grammar}}
-    return format_obj
+    if format_obj.get("type") != "grammar" or not isinstance(grammar, dict):
+        return format_obj
+    flat = ResponsesGrammarFormat(type="grammar")
+    if "definition" in grammar:
+        flat["definition"] = grammar["definition"]
+    if "syntax" in grammar:
+        flat["syntax"] = grammar["syntax"]
+    return flat
 
 
 def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:

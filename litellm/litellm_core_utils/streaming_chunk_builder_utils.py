@@ -1,5 +1,6 @@
 import base64
 import time
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from litellm.types.llms.openai import (
@@ -205,9 +206,13 @@ class ChunkProcessor:
         return response
 
     def get_combined_tool_content(
-        self, tool_call_chunks: List[Dict[str, Any]]
-    ) -> List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]]:
-        tool_calls_list: List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]] = []
+        self, tool_call_chunks: Sequence[Mapping[str, Any]]
+    ) -> List[
+        Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]
+    ]:  # mutable-ok: assigned verbatim to Message.tool_calls, a List field
+        tool_calls_list: List[
+            Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]
+        ] = []  # mutable-ok: see return type
         tool_call_map: Dict[int, Dict[str, Any]] = {}  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
@@ -245,9 +250,9 @@ class ChunkProcessor:
                             "id": None,
                             "name": None,
                             "type": None,
-                            "arguments": [],
+                            "arguments": (),
                             "custom_name": None,
-                            "custom_input": [],
+                            "custom_input": (),
                             "provider_specific_fields": None,
                         }
 
@@ -263,20 +268,20 @@ class ChunkProcessor:
                             if function.get("name"):
                                 tool_call_map[index]["name"] = function["name"]
                             if function.get("arguments"):
-                                tool_call_map[index]["arguments"].append(function["arguments"])
+                                tool_call_map[index]["arguments"] += (function["arguments"],)
                         else:
                             # function is an object
                             if hasattr(function, "name") and function.name:
                                 tool_call_map[index]["name"] = function.name
                             if hasattr(function, "arguments") and function.arguments:
-                                tool_call_map[index]["arguments"].append(function.arguments)
+                                tool_call_map[index]["arguments"] += (function.arguments,)
 
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict):
                             if custom.get("name"):
                                 tool_call_map[index]["custom_name"] = custom["name"]
                             if custom.get("input"):
-                                tool_call_map[index]["custom_input"].append(custom["input"])
+                                tool_call_map[index]["custom_input"] += (custom["input"],)
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
@@ -287,14 +292,14 @@ class ChunkProcessor:
                             if hasattr(tool_call.function, "name") and tool_call.function.name:
                                 tool_call_map[index]["name"] = tool_call.function.name
                             if hasattr(tool_call.function, "arguments") and tool_call.function.arguments:
-                                tool_call_map[index]["arguments"].append(tool_call.function.arguments)
+                                tool_call_map[index]["arguments"] += (tool_call.function.arguments,)
 
                         custom = getattr(tool_call, "custom", None)
                         if custom is not None:
                             if getattr(custom, "name", None):
                                 tool_call_map[index]["custom_name"] = custom.name
                             if getattr(custom, "input", None):
-                                tool_call_map[index]["custom_input"].append(custom.input)
+                                tool_call_map[index]["custom_input"] += (custom.input,)
 
                     # Preserve provider_specific_fields from streaming chunks
                     provider_fields = None

@@ -1058,7 +1058,7 @@ def responses_api_bridge_check(
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
     has_function_tool = any(
         (tool.get("type") == "function" if isinstance(tool, dict) else getattr(tool, "type", None) == "function")
-        for tool in (tools or [])
+        for tool in (tools or ())
     )
     if isinstance(reasoning_effort, dict):
         reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None

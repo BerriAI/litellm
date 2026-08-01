@@ -42,7 +42,7 @@
     "limit": 18
   },
   "reportIndexIssue": {
-    "limit": 37
+    "limit": 36
   },
   "reportInvalidTypeForm": {
     "limit": 35
@@ -114,10 +114,10 @@
     "limit": 31978
   },
   "reportUnnecessaryCast": {
-    "limit": 177
+    "limit": 175
   },
   "reportUnnecessaryComparison": {
-    "limit": 1021
+    "limit": 1019
   },
   "reportUnnecessaryContains": {
     "limit": 7
