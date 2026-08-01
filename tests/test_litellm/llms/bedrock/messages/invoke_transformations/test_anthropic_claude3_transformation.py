@@ -1497,6 +1497,86 @@ def test_bedrock_messages_renames_user_provided_aliased_beta_header():
     )
 
 
+_TOOL_SEARCH_REQUEST_TOOLS = [
+    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+    {
+        "name": "add_numbers",
+        "description": "Add two integers",
+        "input_schema": {
+            "type": "object",
+            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+            "required": ["a", "b"],
+        },
+    },
+]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-sonnet-4-6",
+        "us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_bedrock_messages_auto_injects_tool_search_beta_for_every_claude_model(model):
+    """
+    Regression: the tool-search beta header used to be auto-injected only for a
+    hardcoded list of models (Opus/Sonnet 4.5/4.6). Requests carrying a
+    `tool_search_tool_regex_20251119` tool on any other Claude model (Haiku 4.5,
+    Opus 4.7) were forwarded without the header and Bedrock rejected them with
+    "Input tag 'tool_search_tool_regex_20251119' found using 'type' does not
+    match any of the expected tags". The header must be attached whenever a
+    tool-search tool is present, for every model.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 64,
+            "tools": [dict(t) for t in _TOOL_SEARCH_REQUEST_TOOLS],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    betas = result.get("anthropic_beta") or []
+    assert "tool-search-tool-2025-10-19" in betas, (
+        f"tool-search beta header must be auto-injected for {model}; got {betas}"
+    )
+    tool_types = [t.get("type") for t in result.get("tools") or []]
+    assert "tool_search_tool_regex_20251119" in tool_types, (
+        "the tool_search tool itself must survive the transformation"
+    )
+
+
+def test_bedrock_messages_no_tool_search_beta_without_tool_search_tool():
+    """The tool-search beta header must only appear when a tool-search tool is
+    actually in the request; injecting it unconditionally would advertise a
+    capability the request doesn't use."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 64,
+            "tools": [dict(_TOOL_SEARCH_REQUEST_TOOLS[1])],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    betas = result.get("anthropic_beta") or []
+    assert "tool-search-tool-2025-10-19" not in betas
+
+
 @pytest.mark.asyncio
 async def test_promote_message_stop_usage_preserves_message_delta_output_tokens():
     """

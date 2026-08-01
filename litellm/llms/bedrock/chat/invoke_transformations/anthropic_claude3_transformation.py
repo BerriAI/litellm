@@ -22,8 +22,8 @@ from litellm.llms.bedrock.common_utils import (
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
     remove_custom_field_from_tools,
+    swap_tool_search_beta_header_for_bedrock,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 from litellm.utils import _supports_factory
@@ -273,10 +273,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
         beta_set.update(auto_betas)
 
-        if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
-            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if "opus-4" in model.lower() or "opus_4" in model.lower():
-                beta_set.add("tool-search-tool-2025-10-19")
+        beta_set = swap_tool_search_beta_header_for_bedrock(
+            beta_set=beta_set,
+            tool_search_used=tool_search_used,
+            programmatic_tool_calling_used=programmatic_tool_calling_used,
+            input_examples_used=input_examples_used,
+        )
 
         auto_beta_list = filter_and_transform_beta_headers(
             beta_headers=list(beta_set - user_beta_set),

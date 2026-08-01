@@ -473,3 +473,59 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
 
     assert is_claude_4_5_on_bedrock(regional) is True
     assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
+
+
+class TestSwapToolSearchBetaHeaderForBedrock:
+    def test_swaps_anthropic_header_for_bedrock_header(self):
+        from litellm.llms.bedrock.common_utils import (
+            swap_tool_search_beta_header_for_bedrock,
+        )
+
+        result = swap_tool_search_beta_header_for_bedrock(
+            beta_set={"advanced-tool-use-2025-11-20", "context-1m-2025-08-07"},
+            tool_search_used=True,
+            programmatic_tool_calling_used=False,
+            input_examples_used=False,
+        )
+
+        assert result == {"tool-search-tool-2025-10-19", "context-1m-2025-08-07"}
+
+    def test_adds_bedrock_header_even_without_anthropic_header(self):
+        from litellm.llms.bedrock.common_utils import (
+            swap_tool_search_beta_header_for_bedrock,
+        )
+
+        result = swap_tool_search_beta_header_for_bedrock(
+            beta_set=set(),
+            tool_search_used=True,
+            programmatic_tool_calling_used=False,
+            input_examples_used=False,
+        )
+
+        assert result == {"tool-search-tool-2025-10-19"}
+
+    @pytest.mark.parametrize(
+        "tool_search_used, programmatic_tool_calling_used, input_examples_used",
+        [
+            (False, False, False),
+            (True, True, False),
+            (True, False, True),
+        ],
+    )
+    def test_leaves_beta_set_unchanged_outside_the_plain_tool_search_case(
+        self, tool_search_used, programmatic_tool_calling_used, input_examples_used
+    ):
+        from litellm.llms.bedrock.common_utils import (
+            swap_tool_search_beta_header_for_bedrock,
+        )
+
+        original = {"advanced-tool-use-2025-11-20"}
+        result = swap_tool_search_beta_header_for_bedrock(
+            beta_set=original,
+            tool_search_used=tool_search_used,
+            programmatic_tool_calling_used=programmatic_tool_calling_used,
+            input_examples_used=input_examples_used,
+        )
+
+        assert result == {"advanced-tool-use-2025-11-20"}
+        assert result is not original
