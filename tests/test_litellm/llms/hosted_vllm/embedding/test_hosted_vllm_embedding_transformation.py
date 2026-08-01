@@ -290,5 +290,314 @@ class TestHostedVLLMEmbeddingTransformation:
             assert sent_data["input"] == ["Hello world"]
 
 
+class TestHostedVLLMMultimodalEmbedding:
+    """Regression tests for issue #31178 - multimodal embedding (image inputs) via hosted_vllm proxy."""
+
+    def setup_method(self):
+        self.config = HostedVLLMEmbeddingConfig()
+        self.model = "hosted_vllm/Qwen3-VL-Embedding-8B-MLX-4bit"
+
+    def test_messages_in_optional_params_forwarded_as_messages(self):
+        """A messages-shaped request must be forwarded as `messages`, not `input`.
+
+        vLLM's embeddings endpoint expects chat-style `messages` for image embeddings.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc="},
+                    }
+                ],
+            }
+        ]
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=[],
+            optional_params={"messages": messages},
+            headers={},
+        )
+
+        assert "input" not in result
+        assert result["messages"] == messages
+        assert result["model"] == "Qwen3-VL-Embedding-8B-MLX-4bit"
+
+    def test_remote_http_image_url_in_messages_rejected(self):
+        """A remote http image_url must be rejected; vLLM would fetch it (SSRF)."""
+        from litellm.exceptions import BadRequestError
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "http://169.254.169.254/latest/meta-data/"
+                        },
+                    }
+                ],
+            }
+        ]
+        with pytest.raises(BadRequestError):
+            self.config.transform_embedding_request(
+                model=self.model,
+                input=[],
+                optional_params={"messages": messages},
+                headers={},
+            )
+
+    def test_public_https_image_url_in_messages_rejected(self):
+        """Even a public https image_url is rejected; only data: URLs are allowed."""
+        from litellm.exceptions import BadRequestError
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/cat.png"},
+                    }
+                ],
+            }
+        ]
+        with pytest.raises(BadRequestError):
+            self.config.transform_embedding_request(
+                model=self.model,
+                input=[],
+                optional_params={"messages": messages},
+                headers={},
+            )
+
+    def test_non_data_scheme_image_url_in_messages_rejected(self):
+        """A non-data scheme (e.g. file://) must be rejected."""
+        from litellm.exceptions import BadRequestError
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "file:///etc/passwd"}}
+                ],
+            }
+        ]
+        with pytest.raises(BadRequestError):
+            self.config.transform_embedding_request(
+                model=self.model,
+                input=[],
+                optional_params={"messages": messages},
+                headers={},
+            )
+
+    def test_string_form_remote_image_url_rejected(self):
+        """A remote URL given as the image_url string (not a dict) is also rejected."""
+        from litellm.exceptions import BadRequestError
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": "http://169.254.169.254/"}
+                ],
+            }
+        ]
+        with pytest.raises(BadRequestError):
+            self.config.transform_embedding_request(
+                model=self.model,
+                input=[],
+                optional_params={"messages": messages},
+                headers={},
+            )
+
+    def test_data_url_image_in_messages_allowed(self):
+        """data: URLs are never fetched server-side, so they are allowed and forwarded."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                    }
+                ],
+            }
+        ]
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=[],
+            optional_params={"messages": messages},
+            headers={},
+        )
+        assert result["messages"] == messages
+
+    def test_messages_forwarded_alongside_other_optional_params(self):
+        """messages must not collide with or duplicate other optional params."""
+        messages = [{"role": "user", "content": "hi"}]
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=[],
+            optional_params={"messages": messages, "dimensions": 256},
+            headers={},
+        )
+
+        assert result["messages"] == messages
+        assert result["dimensions"] == 256
+        assert "input" not in result
+
+    def test_data_url_input_passed_through_unchanged(self):
+        """A data: URL in `input` must be forwarded as-is, not rewritten.
+
+        Backends differ: some (e.g. MLX-served Qwen3-VL) accept image data URLs directly
+        in `input`. The transform must not hijack the `input` field.
+        """
+        data_url = "data:image/png;base64,iVBORw0KGgo="
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=data_url,
+            optional_params={},
+            headers={},
+        )
+
+        assert "messages" not in result
+        assert result["input"] == [data_url]
+
+    def test_plain_text_input_unaffected(self):
+        """Plain text input is wrapped in a list and forwarded as `input`."""
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=["hello world"],
+            optional_params={},
+            headers={},
+        )
+
+        assert "messages" not in result
+        assert result["input"] == ["hello world"]
+
+    def test_messages_supported_param(self):
+        """messages must be in get_supported_openai_params so it survives optional-param filtering."""
+        assert "messages" in self.config.get_supported_openai_params(self.model)
+
+    def test_messages_mapped_through_map_openai_params(self):
+        """map_openai_params must pass messages into optional_params."""
+        messages = [{"role": "user", "content": "hi"}]
+        result = self.config.map_openai_params(
+            non_default_params={"messages": messages},
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+        assert result["messages"] == messages
+
+    def test_messages_takes_precedence_when_both_input_and_messages_provided(self):
+        """When both are supplied, messages wins and input is dropped (no raw input forwarded)."""
+        messages = [{"role": "user", "content": "hi"}]
+        result = self.config.transform_embedding_request(
+            model=self.model,
+            input=["should be ignored"],
+            optional_params={"messages": messages},
+            headers={},
+        )
+
+        assert result["messages"] == messages
+        assert "input" not in result
+
+    def _router(self):
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": "qwen3-vl-embedding",
+                    "litellm_params": {
+                        "model": "hosted_vllm/Qwen3-VL-Embedding-8B-MLX-4bit",
+                        "api_base": "http://localhost:8001/v1",
+                    },
+                }
+            ]
+        )
+
+    @property
+    def _image_messages(self):
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc="},
+                    }
+                ],
+            }
+        ]
+
+    def test_router_aembedding_accepts_messages_without_input(self):
+        """Router.aembedding must not raise when called with messages and no input (failure mode 2)."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        fake_response = MagicMock()
+
+        with patch("litellm.aembedding", new=AsyncMock(return_value=fake_response)):
+            result = asyncio.run(
+                self._router().aembedding(
+                    model="qwen3-vl-embedding", messages=self._image_messages
+                )
+            )
+
+        assert result is fake_response
+
+    def test_router_aembedding_forwards_input_when_present(self):
+        """Router.aembedding must still forward `input` downstream when it is provided."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        fake_response = MagicMock()
+
+        with patch(
+            "litellm.aembedding", new=AsyncMock(return_value=fake_response)
+        ) as mock_aembedding:
+            result = asyncio.run(
+                self._router().aembedding(
+                    model="qwen3-vl-embedding", input=["hello world"]
+                )
+            )
+
+        assert result is fake_response
+        assert mock_aembedding.call_args.kwargs["input"] == ["hello world"]
+
+    def test_router_embedding_sync_accepts_messages_without_input(self):
+        """Router.embedding (sync) must not raise when called with messages and no input."""
+        from unittest.mock import patch
+
+        fake_response = MagicMock()
+
+        with patch("litellm.embedding", return_value=fake_response) as mock_embedding:
+            result = self._router().embedding(
+                model="qwen3-vl-embedding", messages=self._image_messages
+            )
+
+        assert result is fake_response
+        forwarded = mock_embedding.call_args.kwargs
+        assert "input" not in forwarded
+        assert forwarded["messages"] == self._image_messages
+
+    def test_router_embedding_sync_forwards_input_when_present(self):
+        """Router.embedding (sync) must still forward `input` downstream when it is provided."""
+        from unittest.mock import patch
+
+        fake_response = MagicMock()
+
+        with patch("litellm.embedding", return_value=fake_response) as mock_embedding:
+            result = self._router().embedding(
+                model="qwen3-vl-embedding", input=["hello world"]
+            )
+
+        assert result is fake_response
+        assert mock_embedding.call_args.kwargs["input"] == ["hello world"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
