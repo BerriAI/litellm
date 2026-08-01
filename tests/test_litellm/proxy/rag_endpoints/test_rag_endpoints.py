@@ -327,3 +327,82 @@ def test_rag_query_stream_returns_event_stream(client_internal_user):
     assert response.headers.get("content-type", "").startswith("text/event-stream")
     assert '"object":"chat.completion.chunk"' in response.text
     assert "data: [DONE]" in response.text
+
+
+@pytest.mark.asyncio
+async def test_rag_ingest_persists_embedding_model_on_registry_entry():
+    """
+    /rag/ingest must record the embedding model it used on the new registry entry, otherwise
+    search-time query embedding falls back to text-embedding-3-small
+    (https://github.com/BerriAI/litellm/issues/34768).
+    """
+    from litellm.proxy.rag_endpoints.endpoints import (
+        _save_vector_store_to_db_from_rag_ingest,
+    )
+
+    repo = MagicMock()
+    repo.return_value.table.find_unique = AsyncMock(return_value=None)
+    create_in_db = AsyncMock()
+
+    with (
+        patch("litellm.proxy.rag_endpoints.endpoints.ManagedVectorStoresRepository", repo),
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints.create_vector_store_in_db",
+            new=create_in_db,
+        ),
+    ):
+        await _save_vector_store_to_db_from_rag_ingest(
+            response={"status": "completed", "vector_store_id": "my-bucket:my-index", "file_id": "file-1"},
+            ingest_options={
+                "embedding": {"model": "bedrock/amazon.titan-embed-text-v2:0"},
+                "vector_store": {
+                    "custom_llm_provider": "s3_vectors",
+                    "vector_bucket_name": "my-bucket",
+                    "index_name": "my-index",
+                },
+            },
+            prisma_client=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="u1"),
+            file_data=("probe.txt", b"hello", "text/plain"),
+        )
+
+    litellm_params = create_in_db.call_args.kwargs["litellm_params"]
+    assert litellm_params["embedding_model"] == "bedrock/amazon.titan-embed-text-v2:0"
+    assert litellm_params["vector_bucket_name"] == "my-bucket"
+    assert litellm_params["index_name"] == "my-index"
+
+
+@pytest.mark.asyncio
+async def test_rag_ingest_keeps_explicit_vector_store_embedding_model():
+    """An embedding model set on the vector store config wins over ingest_options.embedding."""
+    from litellm.proxy.rag_endpoints.endpoints import (
+        _save_vector_store_to_db_from_rag_ingest,
+    )
+
+    repo = MagicMock()
+    repo.return_value.table.find_unique = AsyncMock(return_value=None)
+    create_in_db = AsyncMock()
+
+    with (
+        patch("litellm.proxy.rag_endpoints.endpoints.ManagedVectorStoresRepository", repo),
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints.create_vector_store_in_db",
+            new=create_in_db,
+        ),
+    ):
+        await _save_vector_store_to_db_from_rag_ingest(
+            response={"status": "completed", "vector_store_id": "my-bucket:my-index"},
+            ingest_options={
+                "embedding": {"model": "text-embedding-3-small"},
+                "vector_store": {
+                    "custom_llm_provider": "s3_vectors",
+                    "vector_bucket_name": "my-bucket",
+                    "embedding_model": "bedrock/amazon.titan-embed-text-v2:0",
+                },
+            },
+            prisma_client=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="u1"),
+        )
+
+    litellm_params = create_in_db.call_args.kwargs["litellm_params"]
+    assert litellm_params["embedding_model"] == "bedrock/amazon.titan-embed-text-v2:0"
