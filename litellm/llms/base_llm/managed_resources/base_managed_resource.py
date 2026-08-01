@@ -542,35 +542,39 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         Returns:
             Dictionary with list of resources and pagination info
         """
+        from fastapi import HTTPException
+
         owner_filter = build_owner_filter(user_api_key_dict)
         if owner_filter is None:
             return build_list_page([])
 
-        where_clause: Dict[str, Any] = {**owner_filter}
+        where_clause: Dict[str, Any] = {**owner_filter, **(additional_filters or {})}
+
+        table = getattr(self.prisma_client.db, self.table_name)
 
         if after:
-            where_clause["id"] = {"gt": after}
+            cursor_row = await table.find_first(where={**where_clause, "unified_resource_id": after})
+            if cursor_row is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid 'after' cursor: no {self.resource_type} found with id '{after}'.",
+                )
 
-        # Add additional filters
-        if additional_filters:
-            where_clause.update(additional_filters)
+        page_size = limit or 20
+        cursor_args: Dict[str, Any] = {"cursor": {"unified_resource_id": after}, "skip": 1} if after else {}
 
-        # Fetch resources
-        fetch_limit = limit or 20
-        table = getattr(self.prisma_client.db, self.table_name)
         resources = await table.find_many(
             where=where_clause,
-            take=fetch_limit,
-            order={"created_at": "desc"},
+            take=page_size + 1,
+            order=[{"created_at": "desc"}, {"unified_resource_id": "desc"}],
+            **cursor_args,
         )
 
-        resource_objects: List[Any] = []
-        for resource in resources:
-            try:
-                # Stop once we have enough
-                if len(resource_objects) >= (limit or 20):
-                    break
+        has_more = len(resources) > page_size
 
+        resource_objects: List[Any] = []
+        for resource in resources[:page_size]:
+            try:
                 # Parse resource object
                 resource_data = resource.resource_object
                 if isinstance(resource_data, str):
@@ -590,4 +594,4 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
                 )
                 continue
 
-        return build_list_page(resource_objects, has_more=len(resource_objects) == (limit or 20))
+        return build_list_page(resource_objects, has_more=has_more)

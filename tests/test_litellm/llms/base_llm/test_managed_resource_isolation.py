@@ -5,10 +5,51 @@ Tests for managed-resource tenant isolation helpers.
 import pytest
 
 from litellm.llms.base_llm.managed_resources.isolation import (
+    build_list_page,
     build_owner_filter,
     can_access_resource,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+
+# ---------------------------------------------------------------------------
+# build_list_page
+# ---------------------------------------------------------------------------
+
+
+def test_list_page_reads_ids_from_dict_items():
+    """The vector-store listing builds plain dicts, so sourcing the cursor ids
+    through attribute access alone raised AttributeError on every non-empty
+    page."""
+    page = build_list_page(
+        [{"id": "resource-a"}, {"id": "resource-b"}], has_more=True
+    )
+
+    assert page["first_id"] == "resource-a"
+    assert page["last_id"] == "resource-b"
+    assert page["has_more"] is True
+
+
+def test_list_page_reads_ids_from_object_items():
+    class _Item:
+        def __init__(self, id: str):
+            self.id = id
+
+    page = build_list_page([_Item("batch-a"), _Item("batch-b")])
+
+    assert page["first_id"] == "batch-a"
+    assert page["last_id"] == "batch-b"
+    assert page["has_more"] is False
+
+
+def test_list_page_empty():
+    assert build_list_page([]) == {
+        "object": "list",
+        "data": [],
+        "first_id": None,
+        "last_id": None,
+        "has_more": False,
+    }
 
 
 # ---------------------------------------------------------------------------
