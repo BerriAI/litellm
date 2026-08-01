@@ -1623,11 +1623,18 @@ async def _backfill_null_user_email(
     if user_email is None or user_row.user_email is not None or prisma_client is None:
         return user_row
 
-    await UserRepository(prisma_client).backfill_null_user_email(
+    user_repo = UserRepository(prisma_client)
+    updated_count = await user_repo.backfill_null_user_email(
         user_id=user_row.user_id,
         user_email=user_email,
     )
-    updated_row = user_row.model_copy(update={"user_email": user_email})
+    if updated_count == 0:
+        db_row = await user_repo.find_by_id(user_row.user_id)
+        if db_row is None:
+            return user_row
+        updated_row = user_row.model_copy(update={"user_email": db_row.user_email})
+    else:
+        updated_row = user_row.model_copy(update={"user_email": user_email})
     await user_api_key_cache.async_set_cache(
         key=user_row.user_id,
         value=updated_row,

@@ -999,6 +999,51 @@ async def test_get_user_object_does_not_overwrite_existing_email():
     mock_prisma_client.db.litellm_usertable.update_many.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_get_user_object_backfill_race_prefers_db_email():
+    """
+    LIT-4710 race guard: when the null-guarded update matches 0 rows because a
+    concurrent writer already backfilled an email, the cache must be refreshed
+    with the value the DB accepted, not this request's proposed email.
+    """
+    cache = UserApiKeyCache()
+    existing = LiteLLM_UserTable(
+        user_id="jwt-user-4", user_email=None, user_role="internal_user"
+    )
+    await cache.async_set_cache(
+        key="jwt-user-4", value=existing, model_type=LiteLLM_UserTable
+    )
+
+    winner_row = LiteLLM_UserTable(
+        user_id="jwt-user-4",
+        user_email="winner@example.com",
+        user_role="internal_user",
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=winner_row
+    )
+
+    result = await get_user_object(
+        user_id="jwt-user-4",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=False,
+        proxy_logging_obj=None,
+        user_email="loser@example.com",
+    )
+
+    assert result is not None
+    assert result.user_email == "winner@example.com"
+
+    refreshed = await cache.async_get_cache(
+        key="jwt-user-4", model_type=LiteLLM_UserTable
+    )
+    assert refreshed is not None
+    assert refreshed.user_email == "winner@example.com"
+
+
 def test_log_budget_lookup_failure_dry_run():
     """Dry run: verify _log_budget_lookup_failure logs for schema/DB errors."""
     with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
