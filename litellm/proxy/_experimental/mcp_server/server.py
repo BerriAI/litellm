@@ -557,7 +557,9 @@ if MCP_AVAILABLE:
     # Maps session_id -> authenticated-identity fingerprint (API key / user /
     # OAuth bearer only). Used for the hard ceiling that stops header/IP
     # rotation from creating unbounded sessions under one credential.
-    _stateful_session_auth_identities: dict[str, str] = {}
+    _stateful_session_auth_identities: dict[
+        str, str
+    ] = {}  # mutable-ok: session registry mutated on initialize/terminate
     # Per-session lock that serializes ``handle_request`` for the same
     # mcp-session-id. The stored ``MCPAuthenticatedUser`` is mutated in place
     # by ``_update_auth_context`` each request; without this lock, two
@@ -681,14 +683,16 @@ if MCP_AVAILABLE:
             # owner fingerprint (header/IP/anonymous).
             return True
 
-        server_instances = getattr(session_manager_stateful, "_server_instances", {})
+        server_instances = getattr(session_manager_stateful, "_server_instances", None)
+        if server_instances is None:
+            server_instances = types.MappingProxyType({})
 
-        def _identity_live_session_ids() -> list[str]:
-            return [
+        def _identity_live_session_ids() -> tuple[str, ...]:
+            return tuple(
                 session_id
                 for session_id, identity in _stateful_session_auth_identities.items()
                 if identity == auth_identity and session_id in server_instances
-            ]
+            )
 
         owned = _identity_live_session_ids()
         if len(owned) < _MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY:
@@ -3497,7 +3501,7 @@ if MCP_AVAILABLE:
 
     def _auth_identity_material(
         user_api_key_auth: UserAPIKeyAuth | None,
-        oauth2_headers: dict[str, str] | None = None,
+        oauth2_headers: Mapping[str, str] | None = None,
     ) -> tuple[str, bytes] | None:
         """
         Return ``(kind, material)`` for the authenticated caller, or ``None``
@@ -3522,7 +3526,7 @@ if MCP_AVAILABLE:
 
     def _auth_identity_fingerprint_for(
         user_api_key_auth: UserAPIKeyAuth | None,
-        oauth2_headers: dict[str, str] | None = None,
+        oauth2_headers: Mapping[str, str] | None = None,
     ) -> str:
         """
         Authenticated-identity fingerprint used for the hard session ceiling.
@@ -3538,9 +3542,9 @@ if MCP_AVAILABLE:
 
     def _owner_fingerprint_for(
         user_api_key_auth: UserAPIKeyAuth | None,
-        oauth2_headers: dict[str, str] | None = None,
+        oauth2_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
-        request_headers: dict[str, str] | None = None,
+        request_headers: Mapping[str, str] | None = None,
     ) -> str:
         """
         Stable, non-reversible identifier for the caller used to bind an
@@ -3584,8 +3588,13 @@ if MCP_AVAILABLE:
 
         owner_hdr_bytes: bytes | None = None
         if MCP_SESSION_OWNER_HEADER and request_headers:
-            normalized = {str(k).lower(): v for k, v in request_headers.items() if isinstance(k, str)}
-            owner_hdr_bytes = _bytes_for_owner_hash(normalized.get(MCP_SESSION_OWNER_HEADER.lower()))
+            target = MCP_SESSION_OWNER_HEADER.lower()
+            owner_hdr_value: str | None = None
+            for key, value in request_headers.items():
+                if isinstance(key, str) and key.lower() == target and isinstance(value, str):
+                    owner_hdr_value = value
+                    break
+            owner_hdr_bytes = _bytes_for_owner_hash(owner_hdr_value)
 
         # Bind optional sub-identity to authenticated material so shared-key
         # users get independent buckets without enabling cross-key hijacking.
@@ -4372,31 +4381,23 @@ if MCP_AVAILABLE:
             if is_initialize and not session_id:
                 request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip, raw_headers)
                 auth_identity = _auth_identity_fingerprint_for(user_api_key_auth, oauth2_headers)
-                if not await _enforce_stateful_session_cap_for_owner(request_owner):
-                    verbose_logger.warning(
-                        "Rejecting MCP initialize: caller already holds the maximum number of active stateful sessions."
-                    )
+
+                async def _reject_too_many_sessions(details: str) -> None:
+                    verbose_logger.warning("Rejecting MCP initialize: %s", details)
                     too_many_response = JSONResponse(
                         status_code=429,
-                        content={
+                        content={  # mutable-ok: JSONResponse requires a JSON object payload
                             "error": "Too Many Requests",
-                            "details": "Too many active MCP sessions for this caller.",
+                            "details": details,
                         },
                     )
                     await too_many_response(scope, receive, send)
+
+                if not await _enforce_stateful_session_cap_for_owner(request_owner):
+                    await _reject_too_many_sessions("Too many active MCP sessions for this caller.")
                     return
                 if not await _enforce_stateful_session_cap_for_auth_identity(auth_identity):
-                    verbose_logger.warning(
-                        "Rejecting MCP initialize: authenticated identity already holds the maximum number of active stateful sessions."
-                    )
-                    too_many_response = JSONResponse(
-                        status_code=429,
-                        content={
-                            "error": "Too Many Requests",
-                            "details": "Too many active MCP sessions for this authenticated identity.",
-                        },
-                    )
-                    await too_many_response(scope, receive, send)
+                    await _reject_too_many_sessions("Too many active MCP sessions for this authenticated identity.")
                     return
 
             # Replay body messages if we consumed them for peeking

@@ -134,6 +134,22 @@ def _positive_int_env(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _env_str(name: str, default: str) -> str:
+    """Read a string env var; missing values use ``default``."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Parse a boolean env var (1/true/yes/on); missing values use ``default``."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).lower() in ("1", "true", "yes", "on")
+
+
 # Cap concurrent stateful MCP sessions per caller fingerprint. Shared API keys
 # collapse many users into one bucket unless session ownership is customized
 # via MCP_SESSION_OWNER_HEADER / MCP_SESSION_OWNER_PREFER_IP (see #35383).
@@ -155,16 +171,11 @@ MCP_MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY = max(
 # identity (not a replacement) so IDE / plugin users behind a shared
 # service-account key get independent session caps without enabling
 # cross-key session hijacking. Empty string disables.
-MCP_SESSION_OWNER_HEADER = os.getenv("LITELLM_MCP_SESSION_OWNER_HEADER", "x-litellm-mcp-session-owner")
+MCP_SESSION_OWNER_HEADER = _env_str("LITELLM_MCP_SESSION_OWNER_HEADER", "x-litellm-mcp-session-owner")
 # When true, combine client IP with the authenticated identity (not a
 # replacement) so callers that share a key but arrive from distinct IPs
 # get separate per-owner caps.
-MCP_SESSION_OWNER_PREFER_IP = os.getenv("LITELLM_MCP_SESSION_OWNER_PREFER_IP", "false").lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
+MCP_SESSION_OWNER_PREFER_IP = _env_bool("LITELLM_MCP_SESSION_OWNER_PREFER_IP", False)
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
