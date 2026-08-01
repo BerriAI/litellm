@@ -1090,8 +1090,8 @@ def create_anthropic_model_list_response(model_ids: list[str]) -> dict:
     created_at = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    data = [
-        {
+    data = [  # mutable-ok: JSON response body, serialized by the route and never mutated
+        {  # mutable-ok: JSON response body, serialized by the route and never mutated
             "type": "model",
             "id": model_id,
             "display_name": model_id,
@@ -1099,7 +1099,7 @@ def create_anthropic_model_list_response(model_ids: list[str]) -> dict:
         }
         for model_id in model_ids
     ]
-    return {
+    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "data": data,
         "has_more": False,
         "first_id": model_ids[0] if model_ids else None,
