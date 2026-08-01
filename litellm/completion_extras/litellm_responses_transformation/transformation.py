@@ -565,6 +565,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # If we accumulated tool calls, create a single choice with all of them
         if accumulated_tool_calls:
+            if len(choices) == 1 and choices[0].message.tool_calls is None:
+                text_choice = choices[0]
+                text_choice.message = Message(
+                    **text_choice.message.model_dump(exclude_none=True),
+                    tool_calls=accumulated_tool_calls,
+                )
+                text_choice.finish_reason = "tool_calls"
+                return choices
             msg = Message(
                 content=None,
                 tool_calls=accumulated_tool_calls,
