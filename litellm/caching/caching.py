@@ -348,6 +348,16 @@ class Cache:
         litellm_param_kwargs = all_litellm_params
         is_semantic_cache = self._is_semantic_cache()
         scope_excluded_params = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        # Search requests (litellm.search / litellm.asearch) forward arbitrary
+        # provider-specific optional params (search_provider, max_results,
+        # safesearch, search_depth, exclude_domains, topic, ...) that change the
+        # results but aren't in the fixed LLM-param set. Key every non-litellm
+        # search kwarg regardless of the global
+        # enable_caching_on_provider_specific_optional_params flag; otherwise two
+        # different searches in the same scope would collide on one cached result.
+        # (Transient params like litellm_call_id are in all_litellm_params, so the
+        # `not in litellm_param_kwargs` guard still excludes them.)
+        is_search_request = "search_provider" in kwargs
         for param in kwargs:
             if param in scope_excluded_params:
                 continue
@@ -356,7 +366,7 @@ class Cache:
                 if param_value is not None:
                     cache_key += f"{str(param)}: {str(param_value)}"
             elif param not in litellm_param_kwargs:  # check if user passed in optional param - e.g. top_k
-                if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
+                if litellm.enable_caching_on_provider_specific_optional_params is True or is_search_request:
                     if kwargs[param] is None:
                         continue  # ignore None params
                     param_value = kwargs[param]
