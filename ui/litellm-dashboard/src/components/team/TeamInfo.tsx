@@ -144,6 +144,25 @@ export interface TeamInfoProps {
   premiumUser?: boolean;
 }
 
+/**
+ * Mirrors the /team/update budget-authority gate so a team admin sees why the
+ * save is refused before the round-trip: they may keep or lower the team's
+ * ceiling, never raise or remove it.
+ */
+export const validateTeamMaxBudget =
+  (canWidenTeamGrants: boolean, currentMaxBudget: number | null | undefined) =>
+  async (_rule: unknown, value: unknown): Promise<void> => {
+    if (canWidenTeamGrants || currentMaxBudget == null) return;
+    if (value === null || value === undefined || value === "") {
+      throw new Error(`Only a proxy admin can remove this team's budget (currently $${currentMaxBudget})`);
+    }
+    const requested = Number(value);
+    if (Number.isNaN(requested)) return;
+    if (requested > currentMaxBudget) {
+      throw new Error(`Only a proxy admin can raise this team's budget above $${currentMaxBudget}`);
+    }
+  };
+
 const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
   let tempModelsToPick = [];
 
@@ -234,6 +253,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   );
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
+  const isTeamAdminForThisTeam = is_team_admin || isTeamAdminFromTeamData;
+  const holdsAuthorityOverTeam = isProxyAdminRole(userRole) || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
+  const canWidenTeamGrants = holdsAuthorityOverTeam || !isTeamAdminForThisTeam;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
 
@@ -1042,6 +1064,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           includeUserModels: !teamData?.team_info?.organization_id,
                           showAllProxyModelsOverride:
                             isProxyAdminRole(userRole) && !teamData?.team_info?.organization_id,
+                          restrictToModels: canWidenTeamGrants ? undefined : info.models ?? [],
                         }}
                         context="team"
                         dataTestId="models-select"
@@ -1066,7 +1089,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item label="Max Budget (USD)" name="max_budget">
+                    <Form.Item
+                      label="Max Budget (USD)"
+                      name="max_budget"
+                      tooltip={
+                        canWidenTeamGrants || info.max_budget == null
+                          ? undefined
+                          : `Only a proxy admin can raise this team's budget above $${info.max_budget} or remove it`
+                      }
+                      rules={[{ validator: validateTeamMaxBudget(canWidenTeamGrants, info.max_budget) }]}
+                    >
                       <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                     </Form.Item>
 

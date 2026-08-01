@@ -1,4 +1,5 @@
 import math
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from fastapi import HTTPException, status
@@ -76,27 +77,62 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
+def _passthrough_routes_differ(requested: object, existing: Sequence[str] | None) -> bool:
+    """True when `requested` asks for a different route set than what is stored.
+
+    Anything that isn't a list/tuple of route strings counts as a change, so
+    malformed payloads fall through to the 403 instead of silently passing the
+    gate (or blowing up on an unhashable element).
+    """
+    if requested is None:
+        return False
+    if not _is_route_list(requested):
+        return True
+    stored = existing if _is_route_list(existing) else ()
+    return frozenset(requested) != frozenset(stored)
+
+
+def _is_route_list(value: object) -> bool:
+    return isinstance(value, (list, tuple)) and all(isinstance(route, str) for route in value)
+
+
 def _check_passthrough_routes_caller_permission(
     data: BaseModel,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     entity: str = "key",
+    existing_routes: Sequence[str] | None = None,
 ) -> None:
     """
-    Only proxy admins may set `allowed_passthrough_routes` (top-level or under
-    `metadata`) — it short-circuits the role-based route gate, so keys and teams
-    must be gated identically.
+    Only proxy admins may CHANGE `allowed_passthrough_routes` (top-level or
+    under `metadata`) — it short-circuits the role-based route gate, so keys and
+    teams must be gated identically.
+
+    Re-sending the stored routes unchanged is a no-op rather than a 403: an
+    update writes `metadata` wholesale, so clients have to echo the stored value
+    back or an unrelated edit would wipe it. Without `existing_routes` the gate
+    stays strict (any non-empty value is a change), which is what create paths
+    want.
     """
     # view-only admins excluded by design; blocked upstream from writes anyway
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    if getattr(data, "allowed_passthrough_routes", None):
+    if _passthrough_routes_differ(getattr(data, "allowed_passthrough_routes", None), existing_routes):
         raise HTTPException(
             status_code=403,
             detail={"error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."},
         )
     metadata = getattr(data, "metadata", None)
-    if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
+    if not isinstance(metadata, dict) or "allowed_passthrough_routes" not in metadata:
+        return
+    requested_in_metadata = metadata["allowed_passthrough_routes"]
+    # an explicit null wipes the stored routes, so it is a change like any other
+    metadata_differs = (
+        bool(existing_routes)
+        if requested_in_metadata is None
+        else _passthrough_routes_differ(requested_in_metadata, existing_routes)
+    )
+    if metadata_differs:
         raise HTTPException(
             status_code=403,
             detail={"error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."},

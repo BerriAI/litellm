@@ -5410,6 +5410,10 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
@@ -5450,13 +5454,13 @@ async def test_update_team_standalone_models_not_gated_by_user_limit():
     Test that /team/update for a standalone team does NOT gate the team's models
     by the caller's personal allowed models.
 
-    A team admin authorized via _verify_team_access() may set the team's models
-    independently of their own personal model list on update.
+    A team admin authorized via _verify_team_access() may narrow the team's
+    models independently of their own personal model list on update.
 
     Scenario:
     - Team admin has personal models=['gpt-3.5-turbo']
-    - Standalone team exists (no organization_id)
-    - Admin updates team models to ['gpt-4'] (not in their personal list)
+    - Standalone team exists (no organization_id) holding both models
+    - Admin narrows the team to ['gpt-4'] (not in their personal list)
     - Expected: Should succeed (personal models are irrelevant on /team/update)
     """
     from fastapi import Request
@@ -5489,12 +5493,12 @@ async def test_update_team_standalone_models_not_gated_by_user_limit():
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "standalone-team-models-123"
         mock_existing_team.organization_id = None  # Standalone team
-        mock_existing_team.models = ["gpt-3.5-turbo"]
+        mock_existing_team.models = ["gpt-3.5-turbo", "gpt-4"]
         mock_existing_team.model_id = None
         mock_existing_team.model_dump.return_value = {
             "team_id": "standalone-team-models-123",
             "organization_id": None,
-            "models": ["gpt-3.5-turbo"],
+            "models": ["gpt-3.5-turbo", "gpt-4"],
             "members_with_roles": [
                 {"user_id": "non-admin-update-models-test", "role": "admin"}
             ],
@@ -5586,6 +5590,10 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
@@ -5696,6 +5704,10 @@ async def test_update_team_org_scoped_models_bypasses_user_limit():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
@@ -5799,6 +5811,10 @@ async def test_update_team_org_scoped_models_not_in_org_models():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
@@ -5887,6 +5903,10 @@ async def test_update_team_org_scoped_models_with_all_proxy_models():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
@@ -10617,3 +10637,465 @@ def test_validate_member_user_id_provisioning_caps_the_ids_it_echoes_back():
     assert f"u{_MAX_REPORTED_UNKNOWN_USER_IDS}" not in detail
     assert f"and {500 - _MAX_REPORTED_UNKNOWN_USER_IDS} more" in detail
     assert len(detail) < 1000
+
+
+async def _run_update_team(
+    *,
+    update_request,
+    caller,
+    existing_team,
+    org=None,
+    caller_is_org_admin=False,
+):
+    """Drive /team/update against a mocked team row and return the handler result.
+
+    `existing_team` is the stored row as a dict; every field the handler reads
+    off the row has to be present, since a MagicMock attribute would otherwise
+    stand in as a truthy sentinel.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    mock_existing_team = MagicMock()
+    for field, value in existing_team.items():
+        setattr(mock_existing_team, field, value)
+    mock_existing_team.model_dump.return_value = dict(existing_team)
+
+    mock_updated_team = MagicMock()
+    mock_updated_team.team_id = existing_team["team_id"]
+    mock_updated_team.litellm_model_table = None
+    mock_updated_team.model_dump.return_value = dict(existing_team)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+            new=AsyncMock(return_value=org),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new=AsyncMock(return_value=caller_is_org_admin),
+        ),
+    ):
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
+
+        return await update_team(
+            data=update_request,
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=caller,
+        )
+
+
+def _team_admin_caller(user_id="team-admin-doc-alignment"):
+    return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id=user_id, models=[])
+
+
+def _stored_team(**overrides):
+    stored = {
+        "team_id": "doc-alignment-team",
+        "organization_id": None,
+        "max_budget": 30.0,
+        "models": ["gpt-4"],
+        "model_id": None,
+        "metadata": {},
+        "object_permission_id": None,
+        "members_with_roles": [{"user_id": "team-admin-doc-alignment", "role": "admin"}],
+    }
+    stored.update(overrides)
+    return stored
+
+
+@pytest.mark.asyncio
+async def test_update_team_model_add_blocked_for_team_admin():
+    """The docs say a team admin cannot add global proxy models to their team;
+    /team/update has to say the same."""
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_update_team(
+            update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["gpt-4", "claude-opus-4-5"]),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(),
+        )
+
+    assert exc_info.value.code == "403"
+    assert "claude-opus-4-5" in str(exc_info.value.message)
+    assert "proxy admin" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_model_add_allowed_for_org_admin():
+    """An org admin holds the grant, so widening their own team's models stays
+    allowed (the org's model list is the ceiling, checked separately)."""
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        UpdateTeamRequest,
+    )
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-doc-alignment"
+    mock_org.models = ["gpt-4", "claude-opus-4-5"]
+    mock_org.litellm_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_org.litellm_budget_table.max_budget = None
+    mock_org.litellm_budget_table.tpm_limit = None
+    mock_org.litellm_budget_table.rpm_limit = None
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["gpt-4", "claude-opus-4-5"]),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(organization_id="org-doc-alignment"),
+        org=mock_org,
+        caller_is_org_admin=True,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_model_add_allowed_when_team_already_holds_every_model():
+    """A team holding the all-proxy-models sentinel already reaches everything,
+    so naming a specific model narrows rather than widens."""
+    from litellm.proxy._types import UpdateTeamRequest
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["claude-opus-4-5"]),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(models=["all-proxy-models"]),
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_budget_raise_blocked_for_team_admin():
+    """Keep-or-lower applies to a team admin whether or not the team sits in an
+    org; staying under the org ceiling is a separate question."""
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+    )
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-doc-alignment"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_org.litellm_budget_table.max_budget = 1000.0
+    mock_org.litellm_budget_table.tpm_limit = None
+    mock_org.litellm_budget_table.rpm_limit = None
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_update_team(
+            update_request=UpdateTeamRequest(team_id="doc-alignment-team", max_budget=900.0),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(organization_id="org-doc-alignment"),
+            org=mock_org,
+        )
+
+    assert exc_info.value.code == "403"
+    assert "raise" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_budget_removal_blocked_for_team_admin():
+    """Dropping the cap is the strongest raise there is."""
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+    )
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-doc-alignment"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_org.litellm_budget_table.max_budget = 1000.0
+    mock_org.litellm_budget_table.tpm_limit = None
+    mock_org.litellm_budget_table.rpm_limit = None
+
+    request = UpdateTeamRequest(team_id="doc-alignment-team", max_budget=None)
+    assert "max_budget" in request.model_fields_set
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_update_team(
+            update_request=request,
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(organization_id="org-doc-alignment"),
+            org=mock_org,
+        )
+
+    assert exc_info.value.code == "403"
+    assert "remove" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_budget_lower_allowed_for_team_admin():
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        UpdateTeamRequest,
+    )
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-doc-alignment"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_org.litellm_budget_table.max_budget = 1000.0
+    mock_org.litellm_budget_table.tpm_limit = None
+    mock_org.litellm_budget_table.rpm_limit = None
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(team_id="doc-alignment-team", max_budget=10.0),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(organization_id="org-doc-alignment"),
+        org=mock_org,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_unchanged_passthrough_routes_do_not_block_a_team_admin_edit():
+    """The dashboard echoes the stored routes back so an unrelated edit doesn't
+    wipe them; that echo must not read as an attempt to set them."""
+    from litellm.proxy._types import UpdateTeamRequest
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(
+            team_id="doc-alignment-team",
+            team_alias="renamed-by-team-admin",
+            metadata={"allowed_passthrough_routes": ["/v1/foo"]},
+        ),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(metadata={"allowed_passthrough_routes": ["/v1/foo"]}),
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_changed_passthrough_routes_still_blocked_for_team_admin():
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_update_team(
+            update_request=UpdateTeamRequest(
+                team_id="doc-alignment-team",
+                metadata={"allowed_passthrough_routes": ["/v1/foo", "/v1/escalate"]},
+            ),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(metadata={"allowed_passthrough_routes": ["/v1/foo"]}),
+        )
+
+    assert exc_info.value.code == "403"
+    assert "allowed_passthrough_routes" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_model_clear_blocked_for_team_admin():
+    """An empty models list is the unrestricted sentinel at auth time, so
+    clearing the list is the widest possible grant, not a narrowing."""
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_update_team(
+            update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=[]),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(),
+        )
+
+    assert exc_info.value.code == "403"
+    assert "every proxy model" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_model_wildcard_grant_blocked_for_team_admin():
+    """"*" reaches everything the same way the empty list does."""
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_update_team(
+            update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["*"]),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(),
+        )
+
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_update_team_narrowing_a_wildcard_allowed_for_team_admin():
+    """A team holding openai/* already reaches openai/gpt-4o, so pinning the
+    list to that model narrows the team's access."""
+    from litellm.proxy._types import UpdateTeamRequest
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["openai/gpt-4o"]),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(models=["openai/*"]),
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_model_outside_a_wildcard_blocked_for_team_admin():
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_update_team(
+            update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["anthropic/claude-opus-4-5"]),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(models=["openai/*"]),
+        )
+
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_update_team_budget_raise_allowed_for_team_admin_who_is_also_org_admin():
+    """The org admin who created the team is a team admin too; the stronger
+    grant has to win or they lose authority over their own org's team."""
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        UpdateTeamRequest,
+    )
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-doc-alignment"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_org.litellm_budget_table.max_budget = 1000.0
+    mock_org.litellm_budget_table.tpm_limit = None
+    mock_org.litellm_budget_table.rpm_limit = None
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(team_id="doc-alignment-team", max_budget=900.0),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(organization_id="org-doc-alignment"),
+        org=mock_org,
+        caller_is_org_admin=True,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_narrowing_a_bare_star_grant_allowed_for_team_admin():
+    """A team stored with "*" already reaches everything, so naming models narrows it."""
+    from litellm.proxy._types import UpdateTeamRequest
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["gpt-4"]),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(models=["*"]),
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_no_default_models_allowed_for_team_admin():
+    """Handing the team the no-default-models sentinel is the strictest narrowing there is."""
+    from litellm.proxy._types import UpdateTeamRequest
+
+    result = await _run_update_team(
+        update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["no-default-models"]),
+        caller=_team_admin_caller(),
+        existing_team=_stored_team(),
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_non_string_model_entry_is_refused_not_crashed():
+    """A junk element must land on the 403, not blow up inside the wildcard matcher."""
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_update_team(
+            update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=[123]),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(models=["openai/*"]),
+        )
+
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_update_team_access_group_member_is_reachable_for_team_admin():
+    """team.models may name a router access group; narrowing to one of its members is not a new grant."""
+    from litellm.proxy._types import UpdateTeamRequest
+
+    mock_router = MagicMock()
+    mock_router.get_model_access_groups.return_value = {"beta-models": ["gpt-4o", "o4-mini"]}
+
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+        result = await _run_update_team(
+            update_request=UpdateTeamRequest(team_id="doc-alignment-team", models=["gpt-4o"]),
+            caller=_team_admin_caller(),
+            existing_team=_stored_team(models=["beta-models"]),
+        )
+
+    assert result is not None
+
+
+def test_team_grant_gates_are_fail_closed_on_an_unknown_grant():
+    """A grant value that isn't a known enum member must not disable the gates."""
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _check_team_budget_update_authority,
+        _check_team_models_update_authority,
+    )
+
+    request = UpdateTeamRequest(team_id="doc-alignment-team", models=["claude-opus-4-5"], max_budget=999.0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_team_models_update_authority(
+            data=request,
+            team_access="team_admin",  # a plain string stands in for a stale or serialized grant
+            existing_team_models=["gpt-4"],
+        )
+    assert exc_info.value.status_code == 403
+
+    with pytest.raises(HTTPException) as budget_exc_info:
+        _check_team_budget_update_authority(
+            data=request,
+            team_access="team_admin",
+            existing_team_max_budget=30.0,
+        )
+    assert budget_exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_is_org_admin_for_team_or_false_degrades_instead_of_raising():
+    """A failed org lookup must withhold authority, never 500 the request."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.team_endpoints import _is_org_admin_for_team_or_false
+
+    caller = _team_admin_caller()
+    standalone_team = LiteLLM_TeamTable(team_id="t", organization_id=None)
+    org_team = LiteLLM_TeamTable(team_id="t", organization_id="org-1")
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+        new=AsyncMock(side_effect=ValueError("User doesn't exist in db")),
+    ) as mock_lookup:
+        assert await _is_org_admin_for_team_or_false(team_obj=standalone_team, user_api_key_dict=caller) is False
+        mock_lookup.assert_not_called()
+
+        assert await _is_org_admin_for_team_or_false(team_obj=org_team, user_api_key_dict=caller) is False
+        mock_lookup.assert_awaited_once()

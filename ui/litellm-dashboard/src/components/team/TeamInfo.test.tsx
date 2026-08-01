@@ -3,7 +3,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
-import TeamInfoView from "./TeamInfo";
+import TeamInfoView, { validateTeamMaxBudget } from "./TeamInfo";
 
 vi.mock("@/components/networking", () => ({
   teamInfoCall: vi.fn(),
@@ -41,6 +41,21 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
   useCurrentUser: vi.fn(),
+}));
+
+let mockUserRole = "Admin";
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({
+    token: "123",
+    accessToken: "test-token",
+    userId: "user-1",
+    userEmail: "user@example.com",
+    userRole: mockUserRole,
+    premiumUser: false,
+    disabledPersonalKeyCreation: null,
+    showSSOBanner: false,
+  }),
 }));
 
 vi.mock("@/components/team/TeamMemberTab", () => ({
@@ -1191,6 +1206,179 @@ describe("TeamInfoView", () => {
           }),
         );
       });
+    });
+  });
+  describe("team-admin budget authority", () => {
+    const teamAdminProps = { ...defaultProps, is_proxy_admin: false, is_team_admin: true };
+
+    const openSettingsForm = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      await screen.findByLabelText("Team Name");
+    };
+
+    beforeEach(() => {
+      testQueryClient.clear();
+      mockUserRole = "Internal User";
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"], max_budget: 30 }));
+    });
+
+    afterEach(() => {
+      mockUserRole = "Admin";
+    });
+
+    it("blocks a raise before the request leaves the browser", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+      await openSettingsForm(user);
+
+      const budgetInput = screen.getByLabelText("Max Budget (USD)");
+      await user.clear(budgetInput);
+      await user.type(budgetInput, "100");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await screen.findByText(/Only a proxy admin can raise this team's budget above \$30/)).toBeInTheDocument();
+      expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+    }, 60000);
+
+    it("blocks clearing the cap", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+      await openSettingsForm(user);
+
+      await user.clear(screen.getByLabelText("Max Budget (USD)"));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await screen.findByText(/Only a proxy admin can remove this team's budget/)).toBeInTheDocument();
+      expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+    }, 60000);
+
+    it("lets a team admin lower the cap", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+      await openSettingsForm(user);
+
+      const budgetInput = screen.getByLabelText("Max Budget (USD)");
+      await user.clear(budgetInput);
+      await user.type(budgetInput, "10");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+      const [accessToken, payload] = vi.mocked(networking.teamUpdateCall).mock.calls[0];
+      expect(accessToken).toBe("test-token");
+      expect(payload.team_id).toBe("123");
+      expect(Number(payload.max_budget)).toBe(10);
+    }, 60000);
+
+    it("leaves a proxy admin free to raise the cap", async () => {
+      const user = userEvent.setup({ delay: null });
+      mockUserRole = "Admin";
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+      await openSettingsForm(user);
+
+      const budgetInput = screen.getByLabelText("Max Budget (USD)");
+      await user.clear(budgetInput);
+      await user.type(budgetInput, "100");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+      const [accessToken, payload] = vi.mocked(networking.teamUpdateCall).mock.calls[0];
+      expect(accessToken).toBe("test-token");
+      expect(payload.team_id).toBe("123");
+      expect(Number(payload.max_budget)).toBe(100);
+    }, 60000);
+  });
+
+  describe("team-admin model grants", () => {
+    const teamAdminProps = { ...defaultProps, is_proxy_admin: false, is_team_admin: true };
+
+    beforeEach(() => {
+      testQueryClient.clear();
+      mockUserRole = "Internal User";
+      mockUseAllProxyModels.mockReturnValue({
+        data: {
+          data: [
+            { id: "gpt-4", object: "model", created: 1, owned_by: "openai" },
+            { id: "claude-opus-4-5", object: "model", created: 1, owned_by: "anthropic" },
+          ],
+        },
+        isLoading: false,
+      } as any);
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+    });
+
+    afterEach(() => {
+      mockUserRole = "Admin";
+    });
+
+    it("offers a team admin only the models the team already holds", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const modelsSelect = await screen.findByTestId("models-select");
+      await user.click(within(modelsSelect).getByRole("combobox"));
+
+      await waitFor(() => {
+        expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      });
+      expect(screen.queryByText("claude-opus-4-5")).not.toBeInTheDocument();
+      expect(screen.queryByText("All Proxy Models")).not.toBeInTheDocument();
+    }, 60000);
+
+    it("leaves a proxy admin the full proxy model list", async () => {
+      const user = userEvent.setup({ delay: null });
+      mockUserRole = "Admin";
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const modelsSelect = await screen.findByTestId("models-select");
+      await user.click(within(modelsSelect).getByRole("combobox"));
+
+      expect(await screen.findByText("claude-opus-4-5")).toBeInTheDocument();
+    }, 60000);
+  });
+
+  describe("validateTeamMaxBudget", () => {
+    it("is inert for callers who hold the grant, or when the team has no cap", async () => {
+      await expect(validateTeamMaxBudget(true, 30)(null, 1000)).resolves.toBeUndefined();
+      await expect(validateTeamMaxBudget(false, null)(null, 1000)).resolves.toBeUndefined();
+      await expect(validateTeamMaxBudget(false, undefined)(null, "")).resolves.toBeUndefined();
+    });
+
+    it("allows keeping or lowering, rejects raising or clearing", async () => {
+      const validate = validateTeamMaxBudget(false, 30);
+
+      await expect(validate(null, 30)).resolves.toBeUndefined();
+      await expect(validate(null, 29.99)).resolves.toBeUndefined();
+      await expect(validate(null, 30.01)).rejects.toThrow(/raise/);
+      await expect(validate(null, "")).rejects.toThrow(/remove/);
+      await expect(validate(null, null)).rejects.toThrow(/remove/);
+    });
+
+    it("treats a zero cap as a real ceiling", async () => {
+      const validate = validateTeamMaxBudget(false, 0);
+
+      await expect(validate(null, 0)).resolves.toBeUndefined();
+      await expect(validate(null, 5)).rejects.toThrow(/raise/);
     });
   });
 });

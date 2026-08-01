@@ -715,6 +715,127 @@ class TestCheckPassthroughRoutesCallerPermission:
             is None
         )
 
+    def _route_data_model(self):
+        from pydantic import BaseModel
+
+        class _RouteData(BaseModel):
+            allowed_passthrough_routes: list | None = None
+            metadata: dict | None = None
+
+        return _RouteData
+
+    def test_unchanged_echo_of_stored_routes_is_allowed(self):
+        """An update rewrites metadata wholesale, so a non-admin has to echo the
+        stored routes back or the save would wipe them. Echoing changes nothing
+        and must not 403."""
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        data = self._route_data_model()(
+            metadata={"allowed_passthrough_routes": ["/v1/bar", "/v1/foo"]}
+        )
+
+        assert (
+            _check_passthrough_routes_caller_permission(
+                data,
+                self._non_admin(),
+                entity="team",
+                existing_routes=["/v1/foo", "/v1/bar"],
+            )
+            is None
+        )
+
+    def test_adding_a_route_to_the_stored_set_is_rejected(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        data = self._route_data_model()(
+            metadata={"allowed_passthrough_routes": ["/v1/foo", "/v1/baz"]}
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_passthrough_routes_caller_permission(
+                data,
+                self._non_admin(),
+                entity="team",
+                existing_routes=["/v1/foo"],
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {
+            "error": "Only proxy admins can set `metadata.allowed_passthrough_routes` on a team."
+        }
+
+    def test_clearing_stored_routes_is_rejected(self):
+        """Wiping an admin-only field is still changing it."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        data = self._route_data_model()(metadata={"allowed_passthrough_routes": []})
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_passthrough_routes_caller_permission(
+                data,
+                self._non_admin(),
+                entity="team",
+                existing_routes=["/v1/foo"],
+            )
+
+        assert exc_info.value.status_code == 403
+
+    def test_non_list_payload_is_rejected(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        data = self._route_data_model()(
+            metadata={"allowed_passthrough_routes": "/v1/foo"}
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_passthrough_routes_caller_permission(
+                data,
+                self._non_admin(),
+                entity="team",
+                existing_routes=["/v1/foo"],
+            )
+
+        assert exc_info.value.status_code == 403
+
+    def test_top_level_echo_is_allowed_while_a_change_is_rejected(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        model = self._route_data_model()
+        assert (
+            _check_passthrough_routes_caller_permission(
+                model(allowed_passthrough_routes=["/v1/foo"]),
+                self._non_admin(),
+                existing_routes=["/v1/foo"],
+            )
+            is None
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_passthrough_routes_caller_permission(
+                model(allowed_passthrough_routes=["/v1/foo", "/v1/qux"]),
+                self._non_admin(),
+                existing_routes=["/v1/foo"],
+            )
+        assert exc_info.value.status_code == 403
+
 
 class TestIsUserOrgAdminForTeam:
     """The caller must be looked up with its exact identity; a nulled or omitted
@@ -925,3 +1046,68 @@ class TestUpdateMetadataFieldMove:
             _update_metadata_fields(updated_kv)
         assert "guardrails" not in updated_kv
         assert updated_kv["metadata"]["guardrails"] == ["g1"]
+
+
+class TestPassthroughRoutesStoredValueEdgeCases:
+    """The stored side of the comparison is caller data too, and an explicit null
+    is a wipe, not an omission."""
+
+    def _non_admin(self):
+        return UserAPIKeyAuth(user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    def _data(self, metadata):
+        from pydantic import BaseModel
+
+        class _RouteData(BaseModel):
+            allowed_passthrough_routes: list | None = None
+            metadata: dict | None = None
+
+        return _RouteData(metadata=metadata)
+
+    def test_unhashable_stored_routes_do_not_crash(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_passthrough_routes_caller_permission(
+                self._data({"allowed_passthrough_routes": ["/v1/foo"]}),
+                self._non_admin(),
+                entity="team",
+                existing_routes=[{"route": "/v1/foo"}],
+            )
+
+        assert exc_info.value.status_code == 403
+
+    def test_explicit_null_that_would_wipe_stored_routes_is_rejected(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_passthrough_routes_caller_permission(
+                self._data({"allowed_passthrough_routes": None}),
+                self._non_admin(),
+                entity="team",
+                existing_routes=["/v1/foo"],
+            )
+
+        assert exc_info.value.status_code == 403
+
+    def test_explicit_null_with_nothing_stored_is_allowed(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        assert (
+            _check_passthrough_routes_caller_permission(
+                self._data({"allowed_passthrough_routes": None}),
+                self._non_admin(),
+                entity="team",
+            )
+            is None
+        )

@@ -578,4 +578,90 @@ describe("ModelSelect", () => {
       expect(screen.getByText(/\+5 more/)).toBeInTheDocument();
     });
   });
+  describe("restrictToModels", () => {
+    const renderRestricted = (grantedModels: string[], organizationModels?: string[]) => {
+      if (organizationModels) {
+        mockUseOrganization.mockReturnValue({
+          data: createMockOrganization(organizationModels),
+          isLoading: false,
+        } as any);
+      }
+
+      renderWithProviders(
+        <ModelSelect
+          onChange={mockOnChange}
+          context="team"
+          teamID="team-1"
+          organizationID={organizationModels ? "org-1" : undefined}
+          options={{ includeSpecialOptions: true, restrictToModels: grantedModels }}
+        />,
+      );
+    };
+
+    it("offers only the models the grant already covers", async () => {
+      renderRestricted(["gpt-4"]);
+
+      await waitFor(() => {
+        expect(screen.getByRole("option", { name: "gpt-4" })).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("option", { name: "claude-3" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "All Proxy Models" })).not.toBeInTheDocument();
+    });
+
+    it("hides All Proxy Models even when the org grants everything", async () => {
+      renderRestricted(["gpt-4"], ["all-proxy-models"]);
+
+      await waitFor(() => {
+        expect(screen.getByRole("option", { name: "gpt-4" })).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("option", { name: "All Proxy Models" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "claude-3" })).not.toBeInTheDocument();
+    });
+
+    it("keeps every model a wildcard grant already reaches selectable", async () => {
+      mockUseAllProxyModels.mockReturnValue({
+        data: {
+          data: [
+            { id: "openai/gpt-4o", object: "model", created: 1, owned_by: "openai" },
+            { id: "openai/*", object: "model", created: 1, owned_by: "openai" },
+            { id: "anthropic/claude-opus-4-5", object: "model", created: 1, owned_by: "anthropic" },
+          ],
+        },
+        isLoading: false,
+      } as any);
+      renderRestricted(["openai/*"]);
+
+      await waitFor(() => {
+        expect(screen.getByRole("option", { name: "openai/gpt-4o" })).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("option", { name: "anthropic/claude-opus-4-5" })).not.toBeInTheDocument();
+    });
+
+    it("does not restrict a grant that already reaches every model", async () => {
+      renderRestricted(["all-proxy-models"]);
+
+      await waitFor(() => {
+        expect(screen.getByRole("option", { name: "gpt-4" })).toBeInTheDocument();
+      });
+      expect(screen.getByRole("option", { name: "claude-3" })).toBeInTheDocument();
+    });
+
+    it("does not restrict a bare * grant", async () => {
+      renderRestricted(["*"]);
+
+      await waitFor(() => {
+        expect(screen.getByRole("option", { name: "gpt-4" })).toBeInTheDocument();
+      });
+      expect(screen.getByRole("option", { name: "claude-3" })).toBeInTheDocument();
+    });
+
+    it("does not restrict when no grant list is given", async () => {
+      renderRestricted([]);
+
+      await waitFor(() => {
+        expect(screen.getByRole("option", { name: "gpt-4" })).toBeInTheDocument();
+      });
+      expect(screen.getByRole("option", { name: "claude-3" })).toBeInTheDocument();
+    });
+  });
 });

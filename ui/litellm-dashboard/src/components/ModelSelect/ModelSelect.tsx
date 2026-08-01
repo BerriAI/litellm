@@ -3,6 +3,7 @@ import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrgani
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { Select, Skeleton, Tooltip, type SelectProps } from "antd";
+import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import { Organization, Team } from "../networking";
 import { splitWildcardModels } from "./modelUtils";
 
@@ -29,6 +30,7 @@ export interface ModelSelectProps {
     showAllTeamModelsOption?: boolean;
     showAllProxyModelsOverride?: boolean;
     includeSpecialOptions?: boolean;
+    restrictToModels?: string[];
   };
   context: "team" | "organization" | "user" | "global";
   dataTestId?: string;
@@ -45,6 +47,22 @@ type FilterContextArgs = {
   options?: ModelSelectProps["options"];
 };
 
+/**
+ * The models the caller may pick from when they can only narrow an existing
+ * grant (a team admin can drop a model but not add one — /team/update rejects
+ * it). Returns null when the restriction doesn't apply, including when the
+ * grant already reaches every model, since nothing can widen it further.
+ */
+const restrictedModelOptions = (options: ModelSelectProps["options"], allProxyModels: string[]): string[] | null => {
+  const grantedModels = options?.restrictToModels;
+  if (!grantedModels || grantedModels.length === 0) return null;
+  if (grantedModels.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) || grantedModels.includes("*")) {
+    return null;
+  }
+  const reachable = unfurlWildcardModelsInList(grantedModels, allProxyModels);
+  return Array.from(new Set([...grantedModels, ...reachable]));
+};
+
 const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextArgs) => string[]> = {
   user: ({ allProxyModels, userModels, options }) => {
     if (!userModels) return [];
@@ -52,7 +70,10 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
     return [];
   },
 
-  team: ({ allProxyModels, selectedOrganization, userModels }) => {
+  team: ({ allProxyModels, selectedTeam, selectedOrganization, userModels, options }) => {
+    const restrictedModels = restrictedModelOptions(options, allProxyModels);
+    if (restrictedModels) return restrictedModels;
+
     if (selectedOrganization) {
       if (
         selectedOrganization.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
@@ -107,7 +128,8 @@ export const ModelSelect = (props: ModelSelectProps) => {
     organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
     organization?.models.length === 0;
   const shouldShowAllProxyModels =
-    showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
+    restrictedModelOptions(options, []) === null &&
+    (showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global");
 
   if (isLoading) {
     return <Skeleton.Input active block />;
