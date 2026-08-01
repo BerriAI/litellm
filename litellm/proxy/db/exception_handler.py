@@ -8,6 +8,16 @@ from litellm.proxy._types import (
 )
 from litellm.secret_managers.main import str_to_bool
 
+try:
+    import prisma  # optional dependency, only installed when the proxy is generated against a DATABASE_URL
+
+    PRISMA_AVAILABLE = True
+except ImportError:
+    # Master-key-only deployments run without a DATABASE_URL and never install
+    # prisma. The classifiers below must not crash the auth-failure path in that
+    # mode, so they short-circuit to False when prisma is unavailable.
+    PRISMA_AVAILABLE = False
+
 # Bounds the __cause__/__context__ walk in is_database_service_unavailable_error_in_chain.
 # Real exception chains are a few links deep; the cap also makes the walk cycle-safe.
 _MAX_EXCEPTION_CHAIN_DEPTH = 20
@@ -47,7 +57,10 @@ class PrismaDBExceptionHandler:
         to True so genuine outages that don't match a specific subclass
         still trigger the fallback.
         """
-        import prisma
+        if not PRISMA_AVAILABLE:
+            # No DATABASE_URL / prisma not installed: there is no DB layer to
+            # be unavailable, so this cannot be a DB-connectivity failure.
+            return False
 
         # Explicit data-layer exclusion: DB IS reachable, fallback must
         # NOT fire.
@@ -89,7 +102,8 @@ class PrismaDBExceptionHandler:
         per-row data rejection has to additionally consult
         ``is_database_service_unavailable_error`` before acting on a True here.
         """
-        import prisma
+        if not PRISMA_AVAILABLE:
+            return False
 
         return type(e) is prisma.errors.DataError
 
@@ -102,7 +116,8 @@ class PrismaDBExceptionHandler:
         Use this for reconnect logic — data-layer errors like UniqueViolationError
         mean the DB IS reachable, so reconnecting would be pointless.
         """
-        import prisma
+        if not PRISMA_AVAILABLE:
+            return False
 
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
@@ -154,7 +169,10 @@ class PrismaDBExceptionHandler:
         are already classified by type/keyword above, and data-layer ones
         (the DB IS reachable) must stay 401.
         """
-        import prisma
+        if not PRISMA_AVAILABLE:
+            # No prisma engine in play, so no prisma-engine-internal error is
+            # possible.
+            return False
 
         if isinstance(e, prisma.errors.PrismaError):
             return False
