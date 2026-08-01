@@ -5,7 +5,7 @@ Aliyun IQS (Information Query Service) UnifiedSearch API Reference:
 https://help.aliyun.com/zh/document_detail/2883041.html
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import Optional, TypedDict, Union
 
 import httpx
 
@@ -45,11 +45,11 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
@@ -70,7 +70,7 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
         self,
         api_base: Optional[str],
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: Optional[Union[dict, list[dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -86,10 +86,10 @@ class AliyunIQSSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: Union[str, list[str]],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Aliyun IQS UnifiedSearch API format.
 
