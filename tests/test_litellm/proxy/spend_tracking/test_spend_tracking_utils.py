@@ -544,21 +544,78 @@ def test_get_messages_for_spend_logs_realtime_empty_when_disabled(mock_should_st
 @patch(
     "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
 )
-def test_get_messages_for_spend_logs_non_realtime_returns_empty(mock_should_store):
+@pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+def test_get_messages_for_spend_logs_stores_prompts_for_all_call_types(
+    mock_should_store, call_type
+):
     """
-    Test that _get_messages_for_spend_logs_payload returns '{}' for non-realtime
-    calls even when store_prompts_in_spend_logs is True.
+    Regression for #34747: prompts were only persisted for realtime calls, so
+    LiteLLM_SpendLogs.messages stayed '{}' for /chat/completions and /responses.
     """
     mock_should_store.return_value = True
     payload = cast(
         StandardLoggingPayload,
         {
-            "call_type": "acompletion",
+            "call_type": call_type,
             "messages": [{"role": "user", "content": "Hello"}],
         },
     )
     result = _get_messages_for_spend_logs_payload(payload)
-    assert result == "{}"
+    assert json.loads(result) == [{"role": "user", "content": "Hello"}]
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_truncates_large_strings(mock_should_store):
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    mock_should_store.return_value = True
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "acompletion",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "A" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500),
+                }
+            ],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in result
+    assert (
+        len(json.loads(result)[0]["content"]) < MAX_STRING_LENGTH_PROMPT_IN_DB + 500
+    )
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_redacts_when_message_logging_off(
+    mock_should_store,
+):
+    """turn_off_message_logging must win over store_prompts_in_spend_logs."""
+    mock_should_store.return_value = True
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "acompletion",
+            "messages": [{"role": "user", "content": "my secret prompt"}],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(
+        payload,
+        kwargs={
+            "litellm_params": {"metadata": {}},
+            "standard_callback_dynamic_params": {"turn_off_message_logging": True},
+        },
+    )
+    assert "my secret prompt" not in result
+    assert json.loads(result) == [
+        {"role": "user", "content": REDACTED_BY_LITELM_STRING}
+    ]
 
 
 @patch(
