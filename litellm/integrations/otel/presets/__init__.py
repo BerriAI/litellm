@@ -57,6 +57,25 @@ def dynamic_otlp_headers(
     return headers or None
 
 
+def dynamic_otlp_endpoint(
+    callback_name: str | None,
+    dynamic_params: "StandardCallbackDynamicParams | None",
+) -> str | None:
+    """The endpoint a request's own team/key credentials export to, or ``None``.
+
+    Resolved through the admin-destination builders so a team's ``callback_vars`` reach
+    exactly the account an equivalent destination would, honouring per-tenant overrides
+    such as ``langfuse_host``.
+    """
+    from litellm.integrations.otel.presets.destinations import build_destination
+
+    if callback_name not in DYNAMIC_HEADERS_BY_CALLBACK or not dynamic_params:
+        return None
+    values = {str(key): str(value) for key, value in dynamic_params.items() if isinstance(value, str)}
+    destination = build_destination(callback_name or "", values)
+    return destination.endpoint if destination is not None else None
+
+
 #: Callback name → preset. The ``Preset`` annotation makes mypy verify every
 #: registered value matches the preset interface.
 PRESET_BY_CALLBACK: dict[str, Preset] = {
@@ -77,6 +96,7 @@ __all__ = [
     "Preset",
     "agentops_preset",
     "arize_preset",
+    "dynamic_otlp_endpoint",
     "dynamic_otlp_headers",
     "generic_preset",
     "langfuse_preset",

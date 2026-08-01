@@ -451,9 +451,18 @@ class OpenTelemetryV2(CustomLogger):
 
         A missing carrier means either ``pre_call`` never ran (rejected at the gate or by a
         pre-call guardrail, no payload, so dropping is correct) or this v2 instance was lazily
-        activated after ``pre_call`` (the destination-resolver path), where the payload IS set and
-        names this backend, so a deferred span is emitted with the success event's start time.
+        activated after ``pre_call``, where the payload IS set and names this backend, so a
+        deferred span is emitted with the success event's start time.
+
+        Lazy activation has two causes, and both must emit. A resolved destination is one.
+        The other is a team carrying its own ``callback_vars`` credentials for this backend:
+        once v2 owns the backend the legacy logger is no longer built, so this instance is
+        the only thing left that can reach that team's account. Gating the deferred span on
+        destinations alone dropped those spans whenever the destination that made v2 take
+        the backend over belonged to a different team.
         """
+        from litellm.integrations.otel.presets import dynamic_otlp_headers
+
         call = LLMCallEvent.from_dict(kwargs)
         call_id = call.call_id
 
@@ -465,7 +474,8 @@ class OpenTelemetryV2(CustomLogger):
 
         if carrier is None:
             destinations = self._destinations_for_backend(call)
-            if call.is_no_upstream_call or payload is None or not destinations:
+            own_credentials = bool(dynamic_otlp_headers(self.callback_name, call.dynamic_params))
+            if call.is_no_upstream_call or payload is None or not (destinations or own_credentials):
                 return None
             self._mark_closed(call_id)
             return self._emit_deferred_llm_call(

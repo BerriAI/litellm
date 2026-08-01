@@ -2586,3 +2586,64 @@ def test_generic_destination_emits_error_span_on_failure(monkeypatch):
     assert "chat gpt-4o" in spans
     assert spans["chat gpt-4o"].status.status_code is StatusCode.ERROR
     assert spans["chat gpt-4o"].attributes["error.type"] == "AuthenticationError"
+
+
+def test_lazy_activation_emits_llm_span_for_a_team_carrying_its_own_credentials(monkeypatch):
+    """Regression: a team's own ``callback_vars`` export must survive another team's grant.
+
+    Once an admin registers a destination for a backend, v2 owns it and the legacy logger
+    is no longer built, so this instance is the only thing that can reach a team's own
+    account. That team has no destination of its own, so it is lazily activated at the
+    success event with no carrier. Gating the deferred span on destinations alone dropped
+    it: the team silently stopped exporting the moment a *different* team was granted a
+    destination for the same backend.
+    """
+    logger, exporter = _logger()
+    monkeypatch.setattr(logger, "callback_name", "langfuse_otel")
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+
+    genai_calls: list[tuple] = []
+
+    def _fake_genai_tracers_for(default, destinations, dynamic_params):
+        genai_calls.append((destinations, dynamic_params))
+        return (default,)
+
+    monkeypatch.setattr(logger._tenant_tracers, "genai_tracers_for", _fake_genai_tracers_for)
+
+    kwargs = _kwargs()
+    kwargs["standard_callback_dynamic_params"] = {
+        "langfuse_public_key": "pk-team",
+        "langfuse_secret_key": "sk-team",
+        "langfuse_host": "https://team.langfuse.example",
+    }
+    _anchor([])  # no destination grants this identity
+
+    assert "call_1" not in logger._open_llm_calls
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+
+    assert "chat gpt-4o" in [s.name for s in exporter.get_finished_spans()]
+    # routed by the request's own credentials, with no destinations in play
+    assert len(genai_calls) == 1
+    destinations, dynamic_params = genai_calls[0]
+    assert destinations == ()
+    assert dynamic_params["langfuse_public_key"] == "pk-team"
+
+
+def test_lazy_activation_stays_silent_without_destination_or_credentials(monkeypatch):
+    """The counterpart: no destination and no per-request credentials for this backend
+    means nothing activated it, so the deferred path must emit nothing. Default-deny is
+    what keeps an ungranted identity off every destination."""
+    logger, exporter = _logger()
+    monkeypatch.setattr(logger, "callback_name", "langfuse_otel")
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+
+    kwargs = _kwargs()
+    _anchor([])
+
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+
+    assert "chat gpt-4o" not in [s.name for s in exporter.get_finished_spans()]

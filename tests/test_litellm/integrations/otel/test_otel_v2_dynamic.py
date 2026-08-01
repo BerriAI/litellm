@@ -602,3 +602,41 @@ def test_otel_destination_is_frozen_and_renders_header_string():
     with pytest.raises(ValidationError):
         dest.endpoint = "https://evil/v1"
     assert dest.header_string() == "Authorization=Bearer x,x-k=y"
+
+
+@pytest.mark.parametrize(
+    "backend, params, expected_endpoint",
+    [
+        (
+            "langfuse_otel",
+            {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": "https://lf.internal"},
+            "https://lf.internal/api/public/otel",
+        ),
+        ("arize", {"arize_space_key": "S", "arize_api_key": "K"}, "https://otlp.arize.com/v1"),
+        ("weave_otel", {"wandb_api_key": "wk"}, "https://trace.wandb.ai/otel/v1/traces"),
+    ],
+)
+def test_team_credentials_still_export_when_the_preset_degraded(backend, params, expected_endpoint):
+    """Regression: a preset built with ``allow_missing_credentials`` contributes no owned
+    exporter, so a team's own ``callback_vars`` had nothing to be stamped onto and its
+    spans were dropped. The exporter is synthesized from the request's own credentials
+    instead, resolved through the same builder an equivalent admin destination uses.
+    """
+    from litellm.integrations.otel.presets import dynamic_otlp_headers
+
+    degraded = TenantTracerCache(OpenTelemetryV2Config(exporters=[]), backend, "litellm")
+    headers = dynamic_otlp_headers(backend, params)
+    assert headers, "the backend must recognise these per-team credentials"
+
+    owned = [spec for spec in degraded._config_with_headers(headers, params).exporters if spec.owner == backend]
+
+    assert len(owned) == 1, "a degraded preset must still export the team's own traces"
+    assert owned[0].endpoint == expected_endpoint
+    assert owned[0].headers == ",".join(f"{k}={v}" for k, v in headers.items())
+
+
+def test_degraded_preset_synthesizes_nothing_without_team_credentials():
+    """No per-request credentials means no synthesized exporter, so a degraded backend
+    stays silent rather than inventing an uncredentialled vendor export."""
+    degraded = TenantTracerCache(OpenTelemetryV2Config(exporters=[]), "arize", "litellm")
+    assert degraded._config_with_headers({}, None).exporters == []
