@@ -4834,10 +4834,52 @@ class TestTierFallbackLadder:
         assert response.routing_decision["tier_fallback_from"] == "SIMPLE"
 
     @pytest.mark.asyncio
-    async def test_default_model_serves_when_the_ladder_is_exhausted(self):
+    async def test_default_model_serves_when_the_ladder_is_exhausted_and_says_so(self):
+        """The routed model alone cannot be told apart from an ordinary pick out of the
+        classified tier, so the record has to name default_model as what answered."""
         router = _ladder_router(live=set(), default_model="fallback-model")
         response = await _route(router, "What is 2+2?")
         assert response.model == "fallback-model"
+        decision = response.routing_decision
+        assert decision["resolved_by"] == "default_model"
+        assert decision["tier"] == "SIMPLE"
+        assert "tier_fallback_from" not in decision
+
+    @pytest.mark.asyncio
+    async def test_serving_an_unconfirmed_tier_is_recorded_as_best_effort(self):
+        """Nothing reported a live deployment and there is no default_model, so the tier is
+        served anyway rather than failing a request a stale cooldown may not block. That is
+        a different fact from an ordinary pick and the record keeps them apart."""
+        router = _ladder_router(live=set())
+        response = await _route(router, "What is 2+2?")
+        assert response.model in {"simple-a", "simple-b"}
+        decision = response.routing_decision
+        assert decision["resolved_by"] == "best_effort"
+        assert decision["tier"] == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_pick_records_no_resolution_fact(self):
+        router = _ladder_router(live={"simple-a", "simple-b"})
+        decision = (await _route(router, "What is 2+2?")).routing_decision
+        assert "resolved_by" not in decision
+        assert "tier_fallback_from" not in decision
+
+    @pytest.mark.asyncio
+    async def test_a_best_effort_climb_records_both_facts(self):
+        """The two facts are independent: an exhausted ladder can both climb to a
+        configured tier and be serving something nothing confirmed was up."""
+        router = ComplexityRouter(
+            model_name="test-ladder-router",
+            litellm_router_instance=StubRouter(live=set()),
+            complexity_router_config={
+                "tiers": {"MEDIUM": "medium-model", "COMPLEX": "complex-model"},
+                "session_affinity": False,
+            },
+        )
+        decision = (await _route(router, "What is 2+2?")).routing_decision
+        assert decision["tier"] == "MEDIUM"
+        assert decision["tier_fallback_from"] == "SIMPLE"
+        assert decision["resolved_by"] == "best_effort"
 
     @pytest.mark.asyncio
     async def test_a_healthy_tier_is_probed_and_no_higher_tier_is(self):

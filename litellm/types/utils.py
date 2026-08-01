@@ -2718,6 +2718,17 @@ records that it is not traffic the caller sent."""
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: InternalCallOrigin = "autorouter_classifier"
 
 
+RoutingDecisionTierResolution = Literal[
+    "tier_pool",
+    "default_model",
+    "best_effort",
+]
+"""How a classified tier became a model. `tier_pool` is the ordinary path and is omitted
+from the record; `default_model` means no tier on the ladder could serve, so the declared
+fallback did; `best_effort` means nothing reported a live deployment and the tier was
+served anyway rather than failing a request that may still succeed."""
+
+
 class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
@@ -2734,6 +2745,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     escalated: bool
     tier_fallback_from: str
+    resolved_by: RoutingDecisionTierResolution
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
 
 
@@ -2754,6 +2766,7 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "classifier_model",
         "escalated",
         "tier_fallback_from",
+        "resolved_by",
         "tier_boundaries",
     }
 )
