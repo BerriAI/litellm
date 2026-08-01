@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast
 
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
+from litellm.responses.streaming_iterator import SyntheticResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
 
@@ -381,20 +382,41 @@ async def _call_aresponses(input, model, tools, **kwargs):  # pragma: no cover â
 
 
 def _prepare_emulated_file_search_call(
-    kwargs: Dict[str, Any],
-) -> Tuple[bool, Dict[str, Any]]:
+    kwargs: dict[str, Any],
+) -> tuple[bool, bool, dict[str, Any]]:
     include_items: List[str] = list(kwargs.get("include") or [])
     include_search_results = "file_search_call.results" in include_items
 
-    original_stream = kwargs.get("stream")
+    stream_requested = bool(kwargs.get("stream"))
     updated_kwargs = kwargs
-    if original_stream:
+    if stream_requested:
         verbose_logger.debug(
-            "Streaming is not yet supported for emulated file_search. Disabling stream for this request."
+            "Emulated file_search runs the provider calls non-streaming; "
+            "the synthesized response is replayed as Responses API stream events."
         )
         updated_kwargs = {**kwargs, "stream": False}
 
-    return include_search_results, updated_kwargs
+    return include_search_results, stream_requested, updated_kwargs
+
+
+def _as_stream_if_requested(
+    response: ResponsesAPIResponse,
+    stream_requested: bool,
+    kwargs: dict[str, Any],
+) -> Union[ResponsesAPIResponse, "SyntheticResponsesAPIStreamingIterator"]:
+    if not stream_requested:
+        return response
+
+    logging_obj = kwargs.get("litellm_logging_obj")
+    if logging_obj is None:
+        verbose_logger.warning("Emulated file_search: no logging object available, returning a non-streaming response.")
+        return response
+
+    return SyntheticResponsesAPIStreamingIterator(
+        response=response,
+        logging_obj=logging_obj,
+        custom_llm_provider=kwargs.get("custom_llm_provider"),
+    )
 
 
 def _extract_tool_call_fields(tool_call: Any, fallback_call_id: str) -> Tuple[str, str]:
@@ -495,15 +517,16 @@ async def aresponses_with_emulated_file_search(
     tools: Optional[Iterable[ToolParam]] = None,
     # Pass-through params â€” forwarded as-is to the underlying aresponses call
     **kwargs: Any,
-) -> ResponsesAPIResponse:
+) -> Union[ResponsesAPIResponse, SyntheticResponsesAPIStreamingIterator]:
     """
     Emulated file_search for providers that don't support it natively.
 
     Replaces file_search tools with a function tool, intercepts the tool call,
-    runs vector search, and synthesizes an OpenAI-format response.
+    runs vector search, and synthesizes an OpenAI-format response. When the caller asked
+    for stream=true, that response is replayed as Responses API stream events.
     """
     # Determine whether caller wants search_results populated in the output.
-    _include_search_results, kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
+    _include_search_results, _stream_requested, kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
 
     # 1. Replace file_search tools with function tool
     transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
@@ -547,15 +570,19 @@ async def aresponses_with_emulated_file_search(
         # Return as-is wrapped in OpenAI format.
         call_id = f"fs_{uuid.uuid4().hex[:24]}"
         response_text = _extract_text_from_responses_output(first_response)
-        return _synthesize_responses_api_response(
-            original_response=first_response,
-            file_search_call_output=_build_file_search_call_output(
-                call_id=call_id,
-                queries=[str(input)],
-                results=None,
-                include_search_results=False,
+        return _as_stream_if_requested(
+            _synthesize_responses_api_response(
+                original_response=first_response,
+                file_search_call_output=_build_file_search_call_output(
+                    call_id=call_id,
+                    queries=[str(input)],
+                    results=None,
+                    include_search_results=False,
+                ),
+                message_output=_build_message_output(response_text, []),
             ),
-            message_output=_build_message_output(response_text, []),
+            stream_requested=_stream_requested,
+            kwargs=kwargs,
         )
 
     # 4. Execute each file_search tool call
@@ -593,14 +620,18 @@ async def aresponses_with_emulated_file_search(
     # 7. Synthesize OpenAI-format output
     response_text = _extract_text_from_responses_output(final_response)
 
-    return _synthesize_responses_api_response(
-        original_response=final_response,
-        file_search_call_output=_build_file_search_call_output(
-            call_id=file_search_call_id,
-            queries=all_queries or [str(input)],
-            results=all_results,
-            include_search_results=_include_search_results,
+    return _as_stream_if_requested(
+        _synthesize_responses_api_response(
+            original_response=final_response,
+            file_search_call_output=_build_file_search_call_output(
+                call_id=file_search_call_id,
+                queries=all_queries or [str(input)],
+                results=all_results,
+                include_search_results=_include_search_results,
+            ),
+            message_output=_build_message_output(response_text, all_results),
+            first_response=first_response,
         ),
-        message_output=_build_message_output(response_text, all_results),
-        first_response=first_response,
+        stream_requested=_stream_requested,
+        kwargs=kwargs,
     )
