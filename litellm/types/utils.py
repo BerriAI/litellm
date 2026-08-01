@@ -196,6 +196,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[Optional[float]]
+    cost_discount: Optional[float]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
     input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
@@ -3158,6 +3159,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
 
 class CustomPricingLiteLLMParams(BaseModel):
     ## CUSTOM PRICING ##
+    cost_discount: Optional[float] = None
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
     input_cost_per_second: Optional[float] = None
@@ -3240,6 +3242,13 @@ class CustomPricingLiteLLMParams(BaseModel):
     annotation_cost_per_page: Optional[float] = None
     regional_processing_uplift_multiplier_eu: Optional[float] = None
     regional_processing_uplift_multiplier_us: Optional[float] = None
+
+    @field_validator("cost_discount")
+    @classmethod
+    def validate_cost_discount(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and not 0 <= value <= 1:
+            raise ValueError("cost_discount must be between 0 and 1")
+        return value
 
     @classmethod
     def strip_custom_pricing_fields(cls, model_info: Dict[str, Any]) -> Dict[str, Any]:
