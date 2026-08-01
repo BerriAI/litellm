@@ -5,8 +5,9 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
+from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Literal, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -253,6 +254,43 @@ class ClassifierLLMConfig(BaseModel):
     )
 
 
+@dataclass(frozen=True, slots=True)
+class TierModels:
+    """The models that may serve a tier."""
+
+    models: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TierUnservable:
+    """Why no configured model may serve a tier."""
+
+    tier: str
+    configured_tiers: tuple[str, ...]
+    reason: Literal["nothing_configured", "plugins_require_own_pool"]
+
+    def describe(self) -> str:
+        match self.reason:
+            case "plugins_require_own_pool":
+                why = (
+                    "routing plugins are configured, so only this tier's own models may serve it: "
+                    "a model the plugins never vetted must not serve"
+                )
+                remedy = "give it models in tiers, or name a tier that has them"
+            case "nothing_configured":
+                why = "it has no models, and neither default_model nor the MEDIUM tier supplies one"
+                remedy = "give it models in tiers, or set default_model"
+            case _:
+                assert_never(self.reason)
+        return (
+            f"No model can serve tier {self.tier}: {why}. "
+            f"Configured tiers: {', '.join(self.configured_tiers) or 'none'}. To fix, {remedy}"
+        )
+
+
+TierResolution = TierModels | TierUnservable
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -276,8 +314,8 @@ class ComplexityRouterConfig(BaseModel):
         description=(
             "Tier used when no scoring dimension fires, i.e. the prompt matched no keyword, "
             "pattern or token-count threshold and the scorer has no evidence either way. "
-            "When set explicitly it must have a model behind it: a non-empty entry in `tiers`, "
-            "or `default_model`. "
+            "It resolves to a model the same way a classified tier does, and when set explicitly "
+            "it is rejected at load unless that resolution finds one. "
             "Set to SIMPLE to restore the previous behavior of treating unmatched traffic as simple"
         ),
     )
@@ -472,33 +510,48 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError("classifier_llm_config is required when classifier_type is 'llm'")
         return self
 
+    def models_for(self, tier: ComplexityTier | str) -> tuple[str, ...]:
+        """The models this tier itself names; absent, an empty pool and an empty pin all mean none."""
+        configured = self.tiers.get(tier.value if isinstance(tier, ComplexityTier) else tier)
+        if isinstance(configured, str):
+            return (configured,) if configured else ()
+        return tuple(configured or ())
+
+    def resolve_tier(self, tier: ComplexityTier | str) -> TierResolution:
+        """Which models may serve this tier, or why none may.
+
+        Config validation and request-time selection both ask here, so a config that loads
+        is a config that routes. A second hand-kept copy of this precedence drifts from it
+        one case at a time, until an accepted config raises on its first request.
+        """
+        tier_key = tier.value if isinstance(tier, ComplexityTier) else tier
+        configured = tuple(sorted(self.tiers))
+        own = self.models_for(tier_key)
+        if own:
+            return TierModels(own)
+        if self.plugins:
+            return TierUnservable(tier_key, configured, "plugins_require_own_pool")
+        if self.default_model:
+            return TierModels((self.default_model,))
+        medium = self.models_for(ComplexityTier.MEDIUM)
+        if medium:
+            return TierModels(medium)
+        return TierUnservable(tier_key, configured, "nothing_configured")
+
     @model_validator(mode="after")
     def _validate_default_tier_is_servable(self) -> "ComplexityRouterConfig":
+        """Reject an explicit `default_tier` that nothing can serve.
+
+        Left implicit it is not checked, so a partial `tiers` map keeps loading and MEDIUM
+        resolves through the same chain every other tier does.
+        """
         if "default_tier" not in self.model_fields_set:
             return self
-        if self.tiers.get(self.default_tier.value):
-            return self
-        # default_model rescues this only without plugins. The plugin path never falls back
-        # to it, since a model the plugins did not vet must not serve, so accepting it here
-        # would validate a config whose every no-signal request fails at routing time.
-        if self.default_model and not self.plugins:
-            return self
-        remedy = (
-            "Add it to tiers, or name a tier that is configured"
-            if self.plugins
-            else "Add it to tiers, name a tier that is configured, or set default_model in complexity_router_config"
-        )
-        because = (
-            "routing plugins are configured, so default_model is not consulted: a model the plugins "
-            "never vetted must not serve"
-            if self.plugins
-            else "the deployment-level complexity_router_default_model does not count here, because "
-            "falling through to it would serve every no-signal request from a model this tier never names"
-        )
-        raise ValueError(
-            f"default_tier {self.default_tier.value} is not a non-empty entry in tiers "
-            f"({sorted(self.tiers)}). {remedy}; {because}"
-        )
+        match self.resolve_tier(self.default_tier):
+            case TierModels():
+                return self
+            case TierUnservable() as unservable:
+                raise ValueError(f"default_tier {self.default_tier.value} is unservable. {unservable.describe()}")
 
     @model_validator(mode="after")
     def _validate_adaptive_pools(self) -> "ComplexityRouterConfig":

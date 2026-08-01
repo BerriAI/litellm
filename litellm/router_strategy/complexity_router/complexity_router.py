@@ -46,6 +46,8 @@ from .config import (
     TIER_SEVERITY_ORDER,
     ComplexityRouterConfig,
     ComplexityTier,
+    TierModels,
+    TierUnservable,
 )
 
 if TYPE_CHECKING:
@@ -85,6 +87,24 @@ def _append_custom_keywords(base_keywords: list[str], custom_keywords: list[str]
     base_lowered = frozenset(keyword.lower() for keyword in base_keywords)
     deduped_custom = {keyword.lower(): keyword for keyword in custom_keywords if keyword.lower() not in base_lowered}
     return [*base_keywords, *deduped_custom.values()]
+
+
+def _servable_models(config: ComplexityRouterConfig, tier: ComplexityTier) -> tuple[str, ...]:
+    """The models that may serve this tier, raising the resolver's own reason when none may.
+
+    The one place a `TierUnservable` becomes an exception, so every caller reports the same
+    gap the same way and none of them re-derives when a tier is servable.
+    """
+    match config.resolve_tier(tier):
+        case TierModels(models=models):
+            return models
+        case TierUnservable() as unservable:
+            raise ValueError(unservable.describe())
+
+
+def _pick_model(models: tuple[str, ...]) -> str:
+    """One model out of a resolved, non-empty pool; a single pin never consults the RNG."""
+    return models[0] if len(models) == 1 else random.choice(models)
 
 
 # Metadata keys that carry only the parent request's budget reservation state. These
@@ -328,15 +348,15 @@ class ComplexityRouter(CustomLogger):
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
 
-        # Parse config - always create a new instance to avoid singleton mutation
-        if complexity_router_config:
-            self.config = ComplexityRouterConfig(**complexity_router_config)
-        else:
-            self.config = ComplexityRouterConfig()
-
-        # Override default_model if provided
+        # Parse config - always create a new instance to avoid singleton mutation.
+        # The deployment-level default_model goes in before validation, not onto the
+        # validated model afterwards, so the config that gets checked is the config that
+        # routes; assigning it later left validation judging a default_model that requests
+        # would never see.
+        config_fields: dict[str, Any] = dict(complexity_router_config or {})
         if default_model:
-            self.config.default_model = default_model
+            config_fields["default_model"] = default_model
+        self.config = ComplexityRouterConfig(**config_fields)
 
         # Build effective keyword lists (use config overrides or defaults)
         self.code_keywords = self.config.code_keywords or DEFAULT_CODE_KEYWORDS
@@ -833,30 +853,10 @@ class ComplexityRouter(CustomLogger):
         Returns:
             The model name configured for that tier.
         """
-        tier_key = tier.value if isinstance(tier, ComplexityTier) else tier
+        return _pick_model(_servable_models(self.config, tier))
 
-        if tier_key in self.config.tiers:
-            return self._pick_from_tier_value(self.config.tiers[tier_key], tier_key)
-
-        if self.config.default_model:
-            return self.config.default_model
-
-        medium_key = ComplexityTier.MEDIUM.value
-        if medium_key in self.config.tiers:
-            return self._pick_from_tier_value(self.config.tiers[medium_key], medium_key)
-
-        raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
-
-    @staticmethod
-    def _pick_from_tier_value(model: str | list[str], tier_key: str) -> str:
-        if isinstance(model, str):
-            return model
-        if not model:
-            raise ValueError(f"Empty model pool for tier {tier_key}")
-        return random.choice(model)
-
-    def _tier_pools(self) -> dict[str, list[str]]:
-        return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
+    def _tier_pools(self) -> dict[str, tuple[str, ...]]:
+        return {tier: self.config.models_for(tier) for tier in self.config.tiers}
 
     async def _pick_model_for_tier(
         self,
@@ -871,20 +871,11 @@ class ComplexityRouter(CustomLogger):
         from litellm.types.router import RoutingContext
 
         tier_key = tier.value
-        candidates = list(self._tier_pools().get(tier_key, []))
-        if not candidates:
-            # Distinct from the plugin denial below: nothing was filtered out, the tier was
-            # never given models. Saying "after routing-plugin filtering" would send an
-            # operator to read plugin code for what is a gap in `tiers`.
-            raise ValueError(
-                f"Tier {tier_key} has no models configured. Routing plugins are configured, so "
-                f"default_model is not consulted: a model the plugins never vetted must not serve"
-            )
         metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
         context = RoutingContext(
             raw_messages=raw_messages or [],
             structured_messages=resolved_messages or [],
-            candidate_models=candidates,
+            candidate_models=list(_servable_models(self.config, tier)),
             metadata=request_kwargs.get(metadata_key) or {},
         )
         for plugin in self.config.plugins:
@@ -897,7 +888,7 @@ class ComplexityRouter(CustomLogger):
             # silently bypassed. Raise instead, matching the Router-level plugin
             # pipeline's own fail-closed behavior for the same situation.
             raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
-        return self._pick_from_tier_value(context.candidate_models, tier_key)
+        return _pick_model(tuple(context.candidate_models))
 
     def _ensure_adaptive_router(self) -> Any | None:
         if not self.config.adaptive:

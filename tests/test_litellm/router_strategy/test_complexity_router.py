@@ -347,7 +347,7 @@ class TestModelSelection:
                 "default_model": "mid",
             },
         )
-        pool = ["cheap", "premium"]
+        pool = ("cheap", "premium")
         with patch(
             "litellm.router_strategy.complexity_router.complexity_router.random.choice",
             return_value="premium",
@@ -356,16 +356,30 @@ class TestModelSelection:
             choice.assert_called_once_with(pool)
         assert router.get_model_for_tier(ComplexityTier.MEDIUM) == "mid"
 
-    def test_get_model_for_tier_empty_pool_raises(self, mock_router_instance):
+    @pytest.mark.parametrize("no_models", [[], ""], ids=["empty_pool", "empty_pin"])
+    def test_a_tier_with_no_models_falls_through_like_an_absent_one(self, mock_router_instance, no_models):
+        """`{"SIMPLE": []}` and a `tiers` map with no SIMPLE key say the same thing, so they
+        have to resolve the same way. Selecting on the key being present sent the empty one
+        into a pool it then refused to pick from, raising where the absent one served
+        default_model."""
+        absent, empty = (
+            ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={"tiers": tiers, "default_model": "mid"},
+            )
+            for tiers in ({}, {"SIMPLE": no_models})
+        )
+        assert empty.get_model_for_tier(ComplexityTier.SIMPLE) == absent.get_model_for_tier(ComplexityTier.SIMPLE)
+        assert empty.get_model_for_tier(ComplexityTier.SIMPLE) == "mid"
+
+    def test_a_tier_with_no_models_and_nothing_to_fall_through_to_raises(self, mock_router_instance):
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                "tiers": {"SIMPLE": []},
-                "default_model": "mid",
-            },
+            complexity_router_config={"tiers": {"SIMPLE": []}},
         )
-        with pytest.raises(ValueError, match="Empty model pool for tier SIMPLE"):
+        with pytest.raises(ValueError, match="No model can serve tier SIMPLE"):
             router.get_model_for_tier(ComplexityTier.SIMPLE)
 
 
@@ -1911,7 +1925,7 @@ class TestAdaptiveSoftFloors:
                 "default_model": "mid",
             },
         )
-        pool = ["cheap", "premium"]
+        pool = ("cheap", "premium")
         with patch(
             "litellm.router_strategy.complexity_router.complexity_router.random.choice",
             return_value="premium",
@@ -4869,29 +4883,57 @@ class TestNoSignalDefaultTier:
         with pytest.raises(ValidationError):
             _router_with_default_tier(mock_router_instance, "CHEAPEST")
 
-    def test_default_tier_without_a_model_is_rejected_at_config_time(self, mock_router_instance):
-        """An explicit default_tier naming a tier with no model would only surface as a routing
+    def test_default_tier_with_no_model_anywhere_is_rejected_at_config_time(self, mock_router_instance):
+        """An explicit default_tier that nothing can serve would only surface as a routing
         failure on the first no-signal request, so reject the config instead."""
-        with pytest.raises(ValidationError, match="default_tier COMPLEX is not a non-empty entry in tiers"):
+        with pytest.raises(ValidationError, match="default_tier COMPLEX is unservable"):
             ComplexityRouter(
                 model_name="test-router",
                 litellm_router_instance=mock_router_instance,
-                complexity_router_config={
-                    "tiers": {"SIMPLE": "simple-model", "MEDIUM": "medium-model"},
-                    "default_tier": "COMPLEX",
-                },
+                complexity_router_config={"tiers": {"COMPLEX": []}, "default_tier": "COMPLEX"},
             )
 
-    def test_default_tier_with_an_empty_pool_is_rejected(self, mock_router_instance):
-        with pytest.raises(ValidationError, match="default_tier MEDIUM is not a non-empty entry in tiers"):
-            ComplexityRouter(
-                model_name="test-router",
-                litellm_router_instance=mock_router_instance,
-                complexity_router_config={
-                    "tiers": {"SIMPLE": "simple-model", "MEDIUM": []},
-                    "default_tier": "MEDIUM",
-                },
-            )
+    @pytest.mark.parametrize(
+        "config_overrides, deployment_default_model, expected",
+        [
+            ({"tiers": {"SIMPLE": "s", "MEDIUM": "m"}}, None, "m"),
+            ({"tiers": {"SIMPLE": "s", "MEDIUM": "m"}, "default_model": "f"}, None, "f"),
+            ({"tiers": {"SIMPLE": "s", "MEDIUM": "m"}}, "d", "d"),
+            ({"tiers": {"SIMPLE": "s", "COMPLEX": []}, "default_model": "f"}, None, "f"),
+        ],
+        ids=["medium_tier", "config_default_model", "deployment_default_model", "empty_pool_falls_through"],
+    )
+    def test_a_default_tier_the_config_accepts_is_one_a_request_can_land_on(
+        self, mock_router_instance, config_overrides, deployment_default_model, expected
+    ):
+        """The invariant the validator exists to hold: loading and routing agree.
+
+        default_tier is not a special tier; it names which tier no-signal traffic is
+        classified as, and that tier resolves through the same chain as any classified
+        one. Every accepted config here therefore has to serve, and a validator that
+        re-derives that chain by hand instead of asking `resolve_tier` drifts from it
+        one case at a time, accepting configs whose first no-signal request raises."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"default_tier": "COMPLEX", **config_overrides},
+            default_model=deployment_default_model,
+        )
+        assert router.get_model_for_tier(ComplexityTier.COMPLEX) == expected
+
+    def test_the_deployment_level_default_model_is_visible_to_validation(self, mock_router_instance):
+        """router.py always hands ComplexityRouter a derived complexity_router_default_model,
+        so a default_tier outside `tiers` is servable on every proxy deployment. Validating
+        before that value was applied failed those configs at startup for a gap that routing
+        did not have."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {"SIMPLE": "s"}, "default_tier": "COMPLEX"},
+            default_model="derived-from-tiers",
+        )
+        assert router.config.default_model == "derived-from-tiers"
+        assert router.get_model_for_tier(ComplexityTier.COMPLEX) == "derived-from-tiers"
 
     def test_default_model_does_not_rescue_the_default_tier_when_plugins_are_configured(self, mock_router_instance):
         """The plugin path builds candidates from the tier pool alone and never consults
@@ -4934,7 +4976,7 @@ class TestNoSignalDefaultTier:
                 "session_affinity": False,
             },
         )
-        with pytest.raises(ValueError, match="Tier MEDIUM has no models configured"):
+        with pytest.raises(ValueError, match="No model can serve tier MEDIUM: routing plugins are configured"):
             await router.async_pre_routing_hook(
                 model="test-model",
                 request_kwargs={},
