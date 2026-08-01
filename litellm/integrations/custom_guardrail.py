@@ -1182,6 +1182,7 @@ class CustomGuardrail(CustomLogger):
             call_type == CallTypes.completion.value
             or call_type == CallTypes.acompletion.value
             or call_type == CallTypes.anthropic_messages.value
+            or call_type == CallTypes.call_mcp_tool.value
         ):
             return data.get("messages")
 
