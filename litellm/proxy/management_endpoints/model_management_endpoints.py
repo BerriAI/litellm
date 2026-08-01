@@ -134,9 +134,10 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     # clear propagates to both blobs.
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
+            if getattr(updated_patch.litellm_params, field) is None:
                 merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
-                merged_deployment_dict.get("model_info", {}).pop(field, None)
+                if field in SPECIAL_MODEL_INFO_PARAMS:
+                    merged_deployment_dict.get("model_info", {}).pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
