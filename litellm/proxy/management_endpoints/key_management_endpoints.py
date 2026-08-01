@@ -60,6 +60,10 @@ from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
 )
+from litellm.proxy.common_utils.config_sync_pubsub import (
+    coordination_redis_cache,
+    publish_config_change,
+)
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -4240,6 +4244,7 @@ async def _rotate_master_key(
             await tx.litellm_proxymodeltable.create_many(
                 data=new_models,
             )
+        await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
     # 3. process config table
     try:
         config = await ConfigRepository(prisma_client).table.find_many()
