@@ -101,13 +101,16 @@ def _cache_token_split(usage: Usage) -> tuple[int, int]:
 def _baseline_usage(usage: Usage) -> Usage:
     """The same request as a single-model baseline would have met it.
 
-    Staying on one model, the cache is written once and read from thereafter, so the
-    tokens the router forced a cold model to re-write would already have been cached.
-    A request that read nothing from cache is a genuine cold start that the baseline
-    would have paid to write too, so it is left alone.
+    Staying on one model, the prompt is written to cache once and read from thereafter,
+    so whatever this request paid to write would already have been cached on the
+    baseline. That holds whether or not this request also read anything: a switch to a
+    cold model reads nothing precisely because its cache is empty, which is the case the
+    penalty exists for. Gating on a read instead would charge the baseline a write it
+    would never repeat, and a cold switch would then report a larger saving than the
+    same traffic with caching turned off.
     """
     cache_read, cache_creation = _cache_token_split(usage)
-    if cache_read <= 0 or cache_creation <= 0:
+    if cache_creation <= 0:
         return usage
     return Usage(
         prompt_tokens=usage.prompt_tokens,

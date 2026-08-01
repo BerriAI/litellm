@@ -168,20 +168,38 @@ def test_switching_models_mid_conversation_charges_the_cold_cache_write():
     assert result != pytest.approx(warm_baseline + phantom - actually_paid)
 
 
-def test_cold_start_prices_a_cache_write_on_both_models():
-    """With nothing read from cache the request is a first turn: the baseline would
-    have paid to write too, so charging only the selected model would invent a loss."""
-    usage = _usage(fresh=3, cached=0, written=12304, out=500)
-    result = _savings("claude-sonnet-5", "claude-haiku-4-5", usage)
+def test_a_cold_switch_never_beats_turning_caching_off():
+    """Switching to a cold model makes it write the whole prompt again. That write is a
+    real cost of switching, so the same traffic must look worse than if caching were off
+    entirely.
 
-    sonnet = litellm.get_model_info("claude-sonnet-5", "anthropic")
+    The baseline is priced as a warm cache even though this request read nothing: a
+    switch reads nothing precisely because the new model's cache is empty, and staying
+    on one model would have had the prompt cached already. Gating the warm baseline on
+    a read charged the baseline a write it would never repeat, which made a cold switch
+    report a larger saving than no caching at all.
+    """
+    cold_switch = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(0, 0, 20_000, 1_000))
+    caching_off = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(20_000, 0, 0, 1_000))
+
+    assert cold_switch < caching_off
+
+    opus = litellm.get_model_info("claude-opus-5", "anthropic")
     haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    assert result == pytest.approx(
-        (3 * sonnet["input_cost_per_token"] + 12304 * sonnet["cache_creation_input_token_cost"])
-        - (3 * haiku["input_cost_per_token"] + 12304 * haiku["cache_creation_input_token_cost"])
-        + 500 * (sonnet["output_cost_per_token"] - haiku["output_cost_per_token"])
-    )
-    assert result > 0
+    warm_baseline = 20_000 * opus["cache_read_input_token_cost"] + 1_000 * opus["output_cost_per_token"]
+    actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    assert cold_switch == pytest.approx(warm_baseline - actually_paid)
+
+
+def test_moving_one_token_between_cache_buckets_does_not_move_the_answer():
+    """A continuing conversation writes a few new tokens and reads the rest. Treating the
+    presence of a write as the signal for a switch made that ordinary increment flip the
+    result, so a request reading 19,999 and writing 1 landed somewhere entirely different
+    from one reading 20,000 and writing none.
+    """
+    reads_nothing = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(0, 0, 20_000, 1_000))
+    reads_one = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(0, 1, 19_999, 1_000))
+    assert reads_one == pytest.approx(reads_nothing, abs=1e-4)
 
 
 def test_uncached_request_is_the_plain_rate_difference():
