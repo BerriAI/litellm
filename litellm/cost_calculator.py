@@ -2280,13 +2280,10 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
             List[OpenAIRealtimeStreamResponseBaseObject],
             [result for result in results if result["type"] == "response.done"],
         )
-        usage_objects: List[Usage] = []
-        for result in response_done_events:
-            usage_object = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                result["response"].get("usage", {})
-            )
-            usage_objects.append(usage_object)
-        return usage_objects
+        return [
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(result["response"].get("usage", {}))
+            for result in response_done_events
+        ]
 
     @staticmethod
     def collect_and_combine_usage_from_realtime_stream_results(

@@ -637,9 +637,9 @@ def _is_gemini_model(model: Optional[str], custom_llm_provider: Optional[str]) -
     """
     Check if the target model is a Gemini or Vertex AI Gemini model.
     """
-    if custom_llm_provider in ["gemini", "vertex_ai", "vertex_ai_beta"]:
+    if custom_llm_provider in ("gemini", "vertex_ai", "vertex_ai_beta"):
         # For vertex_ai, check if it's actually a Gemini model
-        if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
+        if custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
             return model is not None and "gemini" in model.lower()
         return True
 
@@ -4717,17 +4717,12 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
     # Handle standard ModelResponse and ModelResponseStream
     _choices: Union[List[Choices], List[StreamingChoices]] = response_obj.choices
 
-    # Use list accumulation to avoid O(n^2) string concatenation across choices
-    response_parts: List[str] = []
-    for choice in _choices:
-        if isinstance(choice, Choices):
-            if choice.message.content is not None:
-                response_parts.append(str(choice.message.content))
-        elif isinstance(choice, StreamingChoices):
-            if choice.delta.content is not None:
-                response_parts.append(str(choice.delta.content))
-
-    return "".join(response_parts)
+    return "".join(
+        str(content)
+        for choice in _choices
+        if isinstance(choice, (Choices, StreamingChoices))
+        and (content := choice.message.content if isinstance(choice, Choices) else choice.delta.content) is not None
+    )
 
 
 def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
@@ -4878,7 +4873,7 @@ def _strip_openai_finetune_model_name(model_name: str) -> str:
 
 
 def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
-    if custom_llm_provider and custom_llm_provider in ["bedrock", "bedrock_converse"]:
+    if custom_llm_provider and custom_llm_provider in ("bedrock", "bedrock_converse"):
         stripped_bedrock_model = _get_base_bedrock_model(model_name=model)
         return stripped_bedrock_model
     elif custom_llm_provider and (custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini"):
@@ -6957,26 +6952,20 @@ _model_cache = AvailableModelsCache()
 
 def _infer_valid_provider_from_env_vars(
     custom_llm_provider: Optional[str] = None,
-) -> List[str]:
-    valid_providers: List[str] = []
+) -> tuple[str, ...]:
     environ_keys = os.environ.keys()
-    for provider in litellm.provider_list:
-        if custom_llm_provider and provider != custom_llm_provider:
-            continue
-
-        # edge case litellm has together_ai as a provider, it should be togetherai
-        env_provider_1 = provider.replace("_", "")
-        env_provider_2 = provider
-
-        # litellm standardizes expected provider keys to
-        # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
-        expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
-        expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
-        if expected_provider_key_1 in environ_keys or expected_provider_key_2 in environ_keys:
-            # key is set
-            valid_providers.append(provider)
-
-    return valid_providers
+    # litellm standardizes expected provider keys to
+    # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
+    # edge case litellm has together_ai as a provider, it should be togetherai
+    return tuple(
+        provider
+        for provider in litellm.provider_list
+        if (not custom_llm_provider or provider == custom_llm_provider)
+        and (
+            f"{provider.replace('_', '').upper()}_API_KEY" in environ_keys
+            or f"{provider.upper()}_API_KEY" in environ_keys
+        )
+    )
 
 
 def _get_valid_models_from_provider_api(
@@ -7037,14 +7026,12 @@ def get_valid_models(
         check_provider_endpoint = check_provider_endpoint or litellm.check_provider_endpoint
         # get keys set in .env
 
-        valid_providers: List[str] = []
         valid_models: List[str] = []
         # for all valid providers, make a list of supported llms
 
-        if custom_llm_provider:
-            valid_providers = [custom_llm_provider]
-        else:
-            valid_providers = _infer_valid_provider_from_env_vars(custom_llm_provider)
+        valid_providers = (
+            (custom_llm_provider,) if custom_llm_provider else _infer_valid_provider_from_env_vars(custom_llm_provider)
+        )
 
         for provider in valid_providers:
             provider_config = ProviderConfigManager.get_provider_model_info(
@@ -9363,15 +9350,11 @@ def jsonify_tools(tools: List[Any]) -> List[Dict]:
 
     Where user passes in a pydantic base model
     """
-    new_tools: List[Dict] = []
-    for tool in tools:
-        if isinstance(tool, BaseModel):
-            tool = tool.model_dump(exclude_none=True)
-        elif isinstance(tool, dict):
-            tool = tool.copy()
-        if isinstance(tool, dict):
-            new_tools.append(tool)
-    return new_tools
+    return [
+        tool.model_dump(exclude_none=True) if isinstance(tool, BaseModel) else tool.copy()
+        for tool in tools
+        if isinstance(tool, (BaseModel, dict))
+    ]
 
 
 def get_empty_usage() -> Usage:

@@ -152,13 +152,13 @@ def create_config_class(provider: SimpleProviderConfig):
             _supports_fc = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 
             if not _supports_fc:
-                tool_params = [
+                tool_params = (
                     "tools",
                     "tool_choice",
                     "function_call",
                     "functions",
                     "parallel_tool_calls",
-                ]
+                )
                 for param in tool_params:
                     if param in supported_params:
                         supported_params.remove(param)
