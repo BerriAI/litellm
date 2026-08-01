@@ -654,8 +654,6 @@ from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
-from litellm.types.agents import AgentConfig
-
 # import enterprise folder
 enterprise_router = APIRouter()
 try:
@@ -1040,6 +1038,8 @@ async def proxy_startup_event(app: FastAPI):
         general_settings=general_settings,
         redis_usage_cache=transaction_buffer_redis_cache,
     )
+
+    ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings=general_settings)
 
     ## SEMANTIC TOOL FILTER ##
     # Read litellm_settings from config for semantic filter initialization
@@ -2000,7 +2000,6 @@ config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
-config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
 shared_aiohttp_session: Optional["ClientSession"] = None  # Global shared session for connection reuse
@@ -5093,8 +5092,8 @@ class ProxyConfig:
             global_mcp_tool_registry.load_tools_from_config(mcp_tools_config, config_file_path=config_file_path)
 
         ## AGENTS
-        agent_config = config.get("agent_list", None)
-        if agent_config:
+        agent_config = config.get("agents", config.get("agent_list", None))
+        if agent_config is not None:
             from litellm.proxy.agent_endpoints.agent_registry import (
                 global_agent_registry,
             )
@@ -5300,7 +5299,7 @@ class ProxyConfig:
             _model_info = RouterModelInfo(id=model.model_id, db_model=db_model)
         return _model_info
 
-    async def _delete_deployment(self, db_models: list) -> int:
+    async def _delete_deployment(self, db_models: list) -> frozenset[str] | None:
         """
         (Helper function of add deployment) -> combined to reduce prisma db calls
 
@@ -5309,14 +5308,16 @@ class ProxyConfig:
         - Remove any that are missing
 
         Return:
-        - int - returns number of deleted deployments
+        - frozenset[str] - the ids the db + config say should be served after this
+          reconcile, so a caller can tell an id this evicted on purpose from one that
+          went missing. None when no reconcile ran and that set is therefore unknown.
         """
         global user_config_file_path, llm_router
         combined_id_list = []
 
         ## BASE CASES ##
         if llm_router is None:
-            return 0
+            return None
         # NOTE: db_models may be legitimately empty when all DB models have been deleted.
         # Do NOT short-circuit on len(db_models) == 0 — we must still evict any
         # DB-sourced deployments that are no longer in the DB. The caller
@@ -5337,7 +5338,7 @@ class ProxyConfig:
                 "Skipping deployment cleanup to avoid removing valid models.",
                 str(e),
             )
-            return 0
+            return None
         model_list = config.get("model_list", None)
         if model_list:
             for model in model_list:
@@ -5361,13 +5362,10 @@ class ProxyConfig:
         router_model_ids = llm_router.get_model_ids()
         # Check for model IDs in llm_router not present in combined_id_list and delete them
 
-        deleted_deployments = 0
         for model_id in router_model_ids:
             if model_id not in combined_id_list:
-                is_deleted = llm_router.delete_deployment(id=model_id)
-                if is_deleted is not None:
-                    deleted_deployments += 1
-        return deleted_deployments
+                llm_router.delete_deployment(id=model_id)
+        return frozenset(combined_id_list)
 
     def _resolve_db_litellm_param(self, key: str, value: object) -> object:
         if not isinstance(value, str):
@@ -5452,8 +5450,10 @@ class ProxyConfig:
         self,
         new_models: Optional[Json],
         proxy_logging_obj: ProxyLogging,
-    ):
+    ) -> frozenset[str] | None:
         global llm_router, llm_model_list, master_key, general_settings
+
+        still_desired_ids: frozenset[str] | None = None
 
         # Load config separately so a timeout here doesn't block model loading
         config_data: dict = {}
@@ -5501,7 +5501,7 @@ class ProxyConfig:
                 if search_tools is not None and llm_router is not None:
                     llm_router.search_tools = search_tools
                 ## DELETE MODEL LOGIC
-                await self._delete_deployment(db_models=models_list)
+                still_desired_ids = await self._delete_deployment(db_models=models_list)
 
                 ## ADD MODEL LOGIC
                 self._add_deployment(db_models=models_list)
@@ -5526,6 +5526,8 @@ class ProxyConfig:
             general_settings=general_settings,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+        return still_desired_ids
 
     def _add_callback_from_db_to_in_memory_litellm_callbacks(
         self,
@@ -6159,13 +6161,19 @@ class ProxyConfig:
         self,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
-    ):
+    ) -> frozenset[str] | None:
         """
         - Check db for new models
         - Check if model id's in router already
         - If not, add to router
+
+        Returns the ids the db + config say should be served after the reconcile, or
+        None when no reconcile ran. Callers that judge their own reload need it to tell
+        a deliberate eviction from a deployment that went missing.
         """
         global llm_router, llm_model_list, master_key, general_settings
+
+        still_desired_ids: frozenset[str] | None = None
 
         try:
             # warm the config cache so the per-param reads below all hit
@@ -6186,7 +6194,9 @@ class ProxyConfig:
                 new_models = await self._get_models_from_db(prisma_client=prisma_client)
 
                 # update llm router
-                await self._update_llm_router(new_models=new_models, proxy_logging_obj=proxy_logging_obj)
+                still_desired_ids = await self._update_llm_router(
+                    new_models=new_models, proxy_logging_obj=proxy_logging_obj
+                )
 
             db_general_settings = await get_config_param(prisma_client, "general_settings")
 
@@ -6203,6 +6213,8 @@ class ProxyConfig:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - {}".format(str(e))
             )
+
+        return still_desired_ids
 
     async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
         """
@@ -6824,7 +6836,7 @@ class ProxyConfig:
 
         try:
             db_agents = await AGENT_REGISTRY.get_all_agents_from_db(prisma_client=prisma_client)
-            AGENT_REGISTRY.load_agents_from_db_and_config(db_agents=db_agents, agent_config=config_agents)
+            AGENT_REGISTRY.load_agents_from_db_and_config(db_agents=db_agents)
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_agents_in_db - {}".format(str(e))
@@ -7711,6 +7723,37 @@ class ProxyStartupEvent:
         cost_tracking()
 
         proxy_logging_obj.startup_event(llm_router=llm_router, redis_usage_cache=redis_usage_cache)
+
+    @staticmethod
+    def _warn_if_mock_testing_params_enabled(general_settings: dict) -> None:
+        """Announce, loudly, that any caller may inject synthetic failures."""
+        from litellm.proxy.route_llm_request import (
+            GATED_MOCK_PARAM_NAMES,
+            MOCK_TESTING_CONFIG_KEY,
+        )
+
+        if general_settings.get(MOCK_TESTING_CONFIG_KEY, False) is not True:
+            return
+
+        verbose_proxy_logger.warning(
+            "\n%s\n"
+            " DANGEROUS SETTING ENABLED\n"
+            " general_settings.%s = true\n"
+            "\n"
+            " Any caller with a valid key on this proxy can now inject synthetic\n"
+            " failures and latency into their own requests using these body params:\n"
+            "%s\n"
+            "\n"
+            " A request using them consumes a connection and a concurrency slot\n"
+            " without reaching a provider, and returns an error the caller chose.\n"
+            "\n"
+            " Intended for testing fallback chains. Do not leave enabled.\n"
+            "%s",
+            "=" * 72,
+            MOCK_TESTING_CONFIG_KEY,
+            "\n".join(f"   {name}" for name in GATED_MOCK_PARAM_NAMES),
+            "=" * 72,
+        )
 
     @staticmethod
     def _validate_redis_transaction_buffer_config(

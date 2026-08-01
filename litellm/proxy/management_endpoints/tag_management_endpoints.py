@@ -96,7 +96,6 @@ class _VerificationTokenTableClient(Protocol):
     async def find_many(
         self,
         where: Mapping[str, object] | None = None,
-        select: Mapping[str, object] | None = None,
     ) -> "Sequence[PrismaVerificationToken]": ...
 
 
@@ -157,7 +156,6 @@ async def _get_internal_user_api_keys(
 
     key_records = await _table(VerificationTokenRepository(prisma_client)).find_many(
         where={"user_id": user_id},
-        select={"token": True},
     )
     user_api_keys.update(key_record.token for key_record in key_records if getattr(key_record, "token", None))
 
