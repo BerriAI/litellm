@@ -72,6 +72,26 @@ class TestVoyageAI(BaseLLMEmbeddingTest):
                 assert response.usage.total_tokens > 0
 
 
+@pytest.mark.parametrize(
+    "model, expected_input_cost",
+    [
+        ("voyage/voyage-4", 6e-08),
+        ("voyage/voyage-4-large", 1.2e-07),
+        ("voyage/voyage-4-lite", 2e-08),
+        ("voyage/voyage-4-nano", 0.0),
+        ("voyage/voyage-context-4", 1.2e-07),
+    ],
+)
+def test_voyage_4_family_pricing_registered(model, expected_input_cost):
+    """The voyage-4 family and voyage-context-4 must be in the cost map."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    info = litellm.get_model_info(model=model)
+    assert info["litellm_provider"] == "voyage"
+    assert info["mode"] == "embedding"
+    assert info["input_cost_per_token"] == expected_input_cost
+
+
 def test_voyage_ai_embedding_extra_params():
     """Test Voyage AI embedding with extra parameters"""
     try:
@@ -143,6 +163,7 @@ class TestVoyageContextualEmbeddings:
 
         # Test contextual model detection
         assert config.is_contextualized_embeddings("voyage-context-3") is True
+        assert config.is_contextualized_embeddings("voyage-context-4") is True
         assert config.is_contextualized_embeddings("voyage-context-2") is True
         assert config.is_contextualized_embeddings("context-model") is True
 
@@ -198,6 +219,117 @@ class TestVoyageContextualEmbeddings:
         assert transformed["inputs"] == input_data
         assert transformed["model"] == "voyage-context-3"
         assert transformed["encoding_format"] == "float"
+
+    def test_contextual_flat_list_str_is_auto_chunked(self):
+        """Flat list[str] without input_type stays flat and is auto-chunked.
+
+        The API accepts a flat list[str] only with input_type="query" or with
+        enable_auto_chunking=True (which requires input_type="document"), so we
+        keep the list flat and let the API auto-chunk it.
+        """
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", ["Hello", "world"], {}, {}
+        )
+
+        assert transformed["inputs"] == ["Hello", "world"]
+        assert transformed["model"] == "voyage-context-4"
+        assert transformed["enable_auto_chunking"] is True
+        assert transformed["chunk_size"] == 32000
+        assert transformed["input_type"] == "document"
+
+    def test_contextual_flat_list_str_query_stays_flat(self):
+        """Flat list[str] with input_type='query' is sent as-is (list[str])."""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4",
+            ["Hello", "world"],
+            {"input_type": "query"},
+            {},
+        )
+
+        assert transformed["inputs"] == ["Hello", "world"]
+        assert transformed["input_type"] == "query"
+        # A query list is accepted as-is, no auto-chunking needed.
+        assert "enable_auto_chunking" not in transformed
+
+    def test_contextual_flat_list_str_document_input_type_preserved(self):
+        """Explicit input_type='document' is preserved while auto-chunking."""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4",
+            ["Hello", "world"],
+            {"input_type": "document"},
+            {},
+        )
+
+        assert transformed["inputs"] == ["Hello", "world"]
+        assert transformed["input_type"] == "document"
+        assert transformed["enable_auto_chunking"] is True
+        assert transformed["chunk_size"] == 32000
+
+    def test_contextual_single_string_is_auto_chunked(self):
+        """A single string becomes a one-element flat list and is auto-chunked."""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "Hello", {}, {}
+        )
+
+        assert transformed["inputs"] == ["Hello"]
+        assert transformed["enable_auto_chunking"] is True
+        assert transformed["chunk_size"] == 32000
+        assert transformed["input_type"] == "document"
+
+    def test_contextual_single_string_query_no_auto_chunk(self):
+        """A single string with input_type='query' is not auto-chunked."""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "Hello", {"input_type": "query"}, {}
+        )
+
+        assert transformed["inputs"] == ["Hello"]
+        assert transformed["input_type"] == "query"
+        assert "enable_auto_chunking" not in transformed
+
+    def test_contextual_nested_input_passthrough(self):
+        """Already-nested list[list[str]] input is passed through unchanged."""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        nested = [["Hello", "world"], ["Test"]]
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", nested, {}, {}
+        )
+
+        assert transformed["inputs"] == nested
 
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""

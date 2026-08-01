@@ -3,7 +3,9 @@ This module is used to transform the request and response for the Voyage context
 This would be used for all the contextualized embeddings models in Voyage.
 """
 
-from typing import List, Optional, Union
+from __future__ import annotations
+
+from typing import Any
 
 import httpx
 
@@ -20,11 +22,14 @@ class VoyageError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Union[dict, httpx.Headers] = {},
+        headers: dict | httpx.Headers = {},  # mutable-ok: base class signature
     ):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(method="POST", url="https://api.voyageai.com/v1/contextualizedembeddings")
+        self.request = httpx.Request(
+            method="POST",
+            url="https://api.voyageai.com/v1/contextualizedembeddings",
+        )
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             status_code=status_code,
@@ -43,12 +48,12 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
-        stream: Optional[bool] = None,
+        optional_params: dict,  # mutable-ok: base class signature
+        litellm_params: dict,  # mutable-ok: base class signature
+        stream: bool | None = None,
     ) -> str:
         if api_base:
             if not api_base.endswith("/contextualizedembeddings"):
@@ -56,16 +61,16 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             return api_base
         return "https://api.voyageai.com/v1/contextualizedembeddings"
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class signature
         return ["encoding_format", "dimensions"]
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: base class signature
+        optional_params: dict,  # mutable-ok: base class signature
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: base class signature
         """
         Map OpenAI params to Voyage params
 
@@ -79,14 +84,14 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: base class signature
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> dict:
+        messages: list[AllMessageValues],  # mutable-ok: base class signature
+        optional_params: dict,  # mutable-ok: base class signature
+        litellm_params: dict,  # mutable-ok: base class signature
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:  # mutable-ok: base class signature
         if api_key is None:
             api_key = (
                 get_secret_str("VOYAGE_API_KEY")
@@ -97,18 +102,80 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             "Authorization": f"Bearer {api_key}",
         }
 
+    AUTO_CHUNK_SIZE = 32000
+
     def transform_embedding_request(
         self,
         model: str,
-        input: Union[AllEmbeddingInputValues, List[List[str]]],
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        input: AllEmbeddingInputValues | list[list[str]],  # mutable-ok: base class signature
+        optional_params: dict,  # mutable-ok: base class signature
+        headers: dict,  # mutable-ok: base class signature
+    ) -> dict:  # mutable-ok: base class signature
+        inputs, extra_params = self._transform_contextual_inputs(input, optional_params)
         return {
-            "inputs": input,
+            "inputs": inputs,
             "model": model,
             **optional_params,
+            **extra_params,
         }
+
+    @classmethod
+    def _transform_contextual_inputs(
+        cls,
+        input: AllEmbeddingInputValues | list[list[str]],  # mutable-ok: union with AllEmbeddingInputValues
+        optional_params: dict,  # mutable-ok: matches public API
+    ) -> tuple[list[str] | list[list[str]], dict]:  # mutable-ok: returned to caller who owns it
+        """
+        Normalize ``input`` for Voyage's contextualized embeddings API and
+        return ``(inputs, extra_params)`` where ``extra_params`` carries any
+        request fields (e.g. auto-chunking) needed for the chosen shape.
+
+        The API contract (verified against the live endpoint) is:
+
+        - A flat ``list[str]`` is only accepted with ``input_type="query"`` or
+          with ``enable_auto_chunking=True`` (which itself requires
+          ``input_type="document"``).
+        - A ``list[list[str]]`` (each inner list = one document's chunks) is
+          always accepted.
+
+        So we prefer to send a flat ``list[str]`` and let the API auto-chunk,
+        instead of pre-wrapping into ``list[list[str]]``:
+
+        - ``str`` -> ``[str]`` + ``enable_auto_chunking`` (input_type=document)
+        - flat ``list[str]`` + ``input_type="query"`` -> kept flat, as-is
+        - flat ``list[str]`` otherwise -> kept flat + ``enable_auto_chunking``
+          (input_type=document)
+        - ``list[list[str]]`` -> passed through unchanged
+
+        Reference: https://docs.voyageai.com/reference/contextualized-embeddings-api
+        """
+        if isinstance(input, str):
+            if optional_params.get("input_type") == "query":
+                return [input], {}  # mutable-ok: fresh list returned to caller
+            return [input], cls._auto_chunk_params(optional_params)  # mutable-ok: fresh list returned to caller
+
+        if isinstance(input, list) and all(isinstance(i, str) for i in input):
+            if optional_params.get("input_type") == "query":
+                return input, {}  # pyright: ignore[reportReturnType]  # narrowed to list[str] by isinstance+all check
+            return input, cls._auto_chunk_params(optional_params)  # pyright: ignore[reportReturnType]  # narrowed to list[str]
+
+        return input, {}  # pyright: ignore[reportReturnType]  # list[list[str]] branch
+
+    @classmethod
+    def _auto_chunk_params(cls, optional_params: dict) -> dict:  # mutable-ok: matches public API
+        """
+        Params required to send a flat ``list[str]`` to the contextualized API.
+
+        ``enable_auto_chunking=True`` requires ``input_type="document"``, so set
+        it unless the caller already provided an ``input_type``.
+        """
+        params: dict[str, Any] = {  # mutable-ok: building return value
+            "enable_auto_chunking": True,
+            "chunk_size": cls.AUTO_CHUNK_SIZE,
+        }
+        if not optional_params.get("input_type"):
+            params["input_type"] = "document"
+        return params
 
     def transform_embedding_response(
         self,
@@ -116,17 +183,19 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        api_key: str | None = None,
+        request_data: dict = {},  # mutable-ok: base class signature
+        optional_params: dict = {},  # mutable-ok: base class signature
+        litellm_params: dict = {},  # mutable-ok: base class signature
     ) -> EmbeddingResponse:
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
+            raise VoyageError(
+                message=raw_response.text,
+                status_code=raw_response.status_code,
+            )
 
-        # model_response.usage
         model_response.model = raw_response_json.get("model")
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
@@ -139,7 +208,10 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         return model_response
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: base class signature
     ) -> BaseLLMException:
         return VoyageError(message=error_message, status_code=status_code, headers=headers)
 
