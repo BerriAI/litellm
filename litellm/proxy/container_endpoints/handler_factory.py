@@ -5,12 +5,12 @@ This module reads the endpoints.json config and dynamically creates
 FastAPI route handlers for ALL container file endpoints.
 """
 
-import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
+from pydantic import BaseModel
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -23,19 +23,37 @@ from litellm.proxy.container_endpoints.ownership import (
     assert_user_can_access_container,
     get_container_forwarding_params,
 )
+from litellm.proxy.container_endpoints.pagination import (
+    parse_container_list_query_params,
+)
 
 
-def _load_endpoints_config() -> Dict:
+class ContainerEndpointConfig(BaseModel):
+    name: str
+    async_name: str
+    path: str
+    method: str
+    response_type: str
+    path_params: Tuple[str, ...] = ()
+    query_params: Tuple[str, ...] = ()
+    returns_binary: bool = False
+    is_multipart: bool = False
+
+
+class ContainerEndpointsConfig(BaseModel):
+    endpoints: Tuple[ContainerEndpointConfig, ...] = ()
+
+
+def _load_endpoint_configs() -> Tuple[ContainerEndpointConfig, ...]:
     """Load the endpoints configuration from JSON file."""
     config_path = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
     with open(config_path) as f:
-        return json.load(f)
+        return ContainerEndpointsConfig.model_validate_json(f.read()).endpoints
 
 
 def get_all_route_types() -> List[str]:
     """Get all async route types for registration in route_llm_request.py"""
-    config = _load_endpoints_config()
-    return [endpoint["async_name"] for endpoint in config["endpoints"]]
+    return [endpoint.async_name for endpoint in _load_endpoint_configs()]
 
 
 def _get_container_provider_config(custom_llm_provider: str):
@@ -52,16 +70,17 @@ def _get_container_provider_config(custom_llm_provider: str):
 
 
 def _create_handler_for_path_params(
-    path_params: List[str],
+    path_params: Tuple[str, ...],
     route_type: str,
     returns_binary: bool = False,
     is_multipart: bool = False,
+    query_params: Tuple[str, ...] = (),
 ):
     """
     Dynamically create a handler with the correct path parameter signature.
     """
     # For binary content endpoints, use a different handler
-    if returns_binary and path_params == ["container_id", "file_id"]:
+    if returns_binary and path_params == ("container_id", "file_id"):
 
         async def handler_binary_content(
             request: Request,
@@ -100,7 +119,7 @@ def _create_handler_for_path_params(
         return handler_multipart_upload
 
     # Create handlers for different path parameter combinations
-    if path_params == ["container_id"]:
+    if path_params == ("container_id",):
 
         async def handler_container_id(
             request: Request,
@@ -114,11 +133,12 @@ def _create_handler_for_path_params(
                 user_api_key_dict=user_api_key_dict,
                 route_type=route_type,
                 path_params={"container_id": container_id},
+                query_param_names=query_params,
             )
 
         return handler_container_id
 
-    elif path_params == ["container_id", "file_id"]:
+    elif path_params == ("container_id", "file_id"):
 
         async def handler_container_file(
             request: Request,
@@ -133,6 +153,7 @@ def _create_handler_for_path_params(
                 user_api_key_dict=user_api_key_dict,
                 route_type=route_type,
                 path_params={"container_id": container_id, "file_id": file_id},
+                query_param_names=query_params,
             )
 
         return handler_container_file
@@ -150,6 +171,7 @@ def _create_handler_for_path_params(
                 user_api_key_dict=user_api_key_dict,
                 route_type=route_type,
                 path_params={},
+                query_param_names=query_params,
             )
 
         return handler_no_params
@@ -357,6 +379,7 @@ async def _process_request(
     user_api_key_dict: UserAPIKeyAuth,
     route_type: str,
     path_params: Dict[str, str],
+    query_param_names: Tuple[str, ...] = (),
 ):
     """Common request processing logic."""
     from litellm.proxy.proxy_server import (
@@ -373,9 +396,8 @@ async def _process_request(
         version,
     )
 
-    query_params = dict(request.query_params)
     data: Dict[str, Any] = {
-        "query_params": query_params,
+        **parse_container_list_query_params(request.query_params, supported_params=query_param_names),
         **path_params,
     }
 
@@ -441,21 +463,21 @@ def register_container_file_endpoints(router: APIRouter) -> None:
     This single function registers all endpoints defined in endpoints.json,
     eliminating the need for manual endpoint definitions.
     """
-    config = _load_endpoints_config()
-
-    for endpoint_config in config["endpoints"]:
-        path = endpoint_config["path"]
-        method = endpoint_config["method"].lower()
-        path_params = endpoint_config.get("path_params", [])
-        route_type = endpoint_config["async_name"]
-        returns_binary = endpoint_config.get("returns_binary", False)
-        is_multipart = endpoint_config.get("is_multipart", False)
+    for endpoint_config in _load_endpoint_configs():
+        path = endpoint_config.path
+        returns_binary = endpoint_config.returns_binary
 
         # Create handler with correct signature for path params
-        handler = _create_handler_for_path_params(path_params, route_type, returns_binary, is_multipart)
+        handler = _create_handler_for_path_params(
+            endpoint_config.path_params,
+            endpoint_config.async_name,
+            returns_binary,
+            endpoint_config.is_multipart,
+            query_params=endpoint_config.query_params,
+        )
 
         # Register routes
-        route_method = getattr(router, method)
+        route_method = getattr(router, endpoint_config.method.lower())
 
         # For binary endpoints, don't use ORJSONResponse
         if returns_binary:
