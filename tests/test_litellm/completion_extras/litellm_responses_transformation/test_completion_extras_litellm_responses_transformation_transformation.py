@@ -1553,6 +1553,53 @@ def test_message_content_and_tool_call_are_merged_into_single_choice():
     assert choice.message.tool_calls[0].function.name == "get_weather"
 
 
+def test_raw_dict_message_and_tool_call_are_merged_into_single_choice():
+    handler = LiteLLMResponsesTransformationHandler()
+    output_items = [
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Let me check that. ",
+                    "annotations": [],
+                },
+                {
+                    "type": "output_text",
+                    "text": "I am still checking.",
+                    "annotations": [],
+                },
+            ],
+        },
+        {
+            "id": "fc_1",
+            "type": "function_call",
+            "status": "completed",
+            "arguments": '{"location": "Paris"}',
+            "call_id": "call_paris",
+            "name": "get_weather",
+        },
+    ]
+
+    choices = handler._convert_response_output_to_choices(
+        output_items=output_items,
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
+
+    assert len(choices) == 1
+    choice = choices[0]
+    assert choice.index == 0
+    assert choice.finish_reason == "tool_calls"
+    assert choice.message.content == "Let me check that. I am still checking."
+    assert choice.message.tool_calls is not None
+    assert len(choice.message.tool_calls) == 1
+    assert choice.message.tool_calls[0].id == "call_paris"
+    assert choice.message.tool_calls[0].function.name == "get_weather"
+
+
 def test_map_reasoning_effort_adds_summary_detailed():
     """
     Test that _map_reasoning_effort behavior with reasoning_auto_summary flag.

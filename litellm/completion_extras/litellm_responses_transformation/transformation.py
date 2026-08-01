@@ -4,7 +4,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 
 import json
 import os
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -130,6 +130,37 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 return {"type": "function", "name": fn_name}
         return tool_choice
 
+    @staticmethod
+    def _handle_raw_dict_message_item(item: Mapping[str, Any], index: int) -> tuple[Any | None, int]:
+        """Convert a raw Responses message item into one chat choice."""
+        from litellm.types.utils import Choices, Message
+
+        response_text = ""
+        annotations: tuple[ChatCompletionAnnotation, ...] = ()
+        has_output_text = False
+        for content_item in item.get("content", []):
+            if not isinstance(content_item, dict) or content_item.get("type") != "output_text":
+                continue
+
+            has_output_text = True
+            response_text += content_item.get("text", "")
+            content_annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                content_item.get("annotations", None)
+            )
+            if content_annotations:
+                annotations += tuple(content_annotations)
+
+        if not has_output_text:
+            return None, index
+
+        msg = Message(
+            role=item.get("role", "assistant"),
+            content=response_text,
+            annotations=annotations or None,
+        )
+        choice = Choices(message=msg, finish_reason="stop", index=index)
+        return choice, index + 1
+
     def _handle_raw_dict_response_item(self, item: dict[str, Any], index: int) -> tuple[Any | None, int]:
         """
         Handle raw dict response items from Responses API (e.g., GPT-5 Codex format).
@@ -151,23 +182,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Handle message items with output_text content
         if item_type == "message":
-            content_list = item.get("content", [])
-            for content_item in content_list:
-                if isinstance(content_item, dict):
-                    content_type = content_item.get("type")
-                    if content_type == "output_text":
-                        response_text = content_item.get("text", "")
-                        # Extract annotations from content if present
-                        annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
-                            content_item.get("annotations", None)
-                        )
-                        msg = Message(
-                            role=item.get("role", "assistant"),
-                            content=response_text if response_text else "",
-                            annotations=annotations,
-                        )
-                        choice = Choices(message=msg, finish_reason="stop", index=index)
-                        return choice, index + 1
+            return self._handle_raw_dict_message_item(item=item, index=index)
 
         # Handle function_call items (e.g., from GPT-5 Codex format)
         if item_type == "function_call":
@@ -202,6 +217,30 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Unknown or unsupported type
         return None, index
+
+    @staticmethod
+    def _collect_raw_dict_choice(
+        choice: Any,
+        choices: list[Any],  # mutable-ok: shared output-choice accumulator
+        accumulated_tool_calls: list[dict[str, Any]],  # mutable-ok: shared tool-call accumulator
+        index: int,
+        next_index: int,
+    ) -> tuple[int, int]:
+        """Collect a raw tool choice, or retain a raw message choice."""
+        if choice is None:
+            return index, 0
+
+        raw_tool_calls = choice.message.tool_calls
+        if not raw_tool_calls:
+            choices.append(choice)
+            return next_index, 0
+
+        for tool_call in raw_tool_calls:
+            if isinstance(tool_call, dict):
+                accumulated_tool_calls.append(tool_call)
+            else:
+                accumulated_tool_calls.append(tool_call.model_dump(exclude_none=True))
+        return index, len(raw_tool_calls)
 
     def convert_chat_completion_messages_to_responses_api(
         self, messages: list["AllMessageValues"]
@@ -498,7 +537,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
             elif isinstance(item, ResponseOutputMessage):
                 response_text = ""
-                annotations: list[ChatCompletionAnnotation] | None = None
+                annotations: tuple[ChatCompletionAnnotation, ...] = ()
                 for content in item.content:
                     response_text += getattr(content, "text", "")
                     raw_annotations = getattr(content, "annotations", None)
@@ -506,16 +545,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         raw_annotations
                     )
                     if content_annotations:
-                        if annotations is None:
-                            annotations = content_annotations
-                        else:
-                            annotations.extend(content_annotations)
+                        annotations += tuple(content_annotations)
 
                 msg = Message(
                     role=item.role,
                     content=response_text,
                     reasoning_content=reasoning_content,
-                    annotations=annotations,
+                    annotations=annotations or None,
                     reasoning_items=cast(
                         list[ChatCompletionReasoningItem] | None,
                         ([pending_reasoning_item] if pending_reasoning_item is not None else None),
@@ -564,9 +600,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
             elif isinstance(item, dict) and handle_raw_dict_callback is not None:
                 # Handle raw dict responses (e.g., from GPT-5 Codex)
-                choice, index = handle_raw_dict_callback(item=item, index=index)
-                if choice is not None:
-                    choices.append(choice)
+                choice, next_index = handle_raw_dict_callback(item=item, index=index)
+                index, raw_tool_call_count = LiteLLMResponsesTransformationHandler._collect_raw_dict_choice(
+                    choice=choice,
+                    choices=choices,
+                    accumulated_tool_calls=accumulated_tool_calls,
+                    index=index,
+                    next_index=next_index,
+                )
+                tool_call_index += raw_tool_call_count
             else:
                 pass  # don't fail request if item in list is not supported
 
