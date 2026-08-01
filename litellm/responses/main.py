@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )
+from litellm.litellm_core_utils.skill_id_utils import rewrite_skill_references
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
@@ -1111,6 +1112,8 @@ def responses(
 
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(input)
+        input = rewrite_skill_references(input)
+        response_api_request_params = rewrite_skill_references(response_api_request_params)
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         if custom_llm_provider is None:
@@ -1937,6 +1940,8 @@ def compact_responses(
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         # before forwarding to the upstream provider.
         input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(input)
+        input = rewrite_skill_references(input)
+        responses_api_request_params = rewrite_skill_references(responses_api_request_params)
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         response = base_llm_http_handler.compact_response_api_handler(
