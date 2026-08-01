@@ -98,3 +98,44 @@ class TestAliyunIQSSearch:
             # Verify second result falls back to summary when snippet is empty
             second_result = response.results[1]
             assert second_result.snippet == "Summary fallback for result 2"
+
+
+class TestAliyunIQSSearchTransformations:
+    """Unit tests for AliyunIQSSearchConfig transformations (no network)."""
+
+    def setup_method(self):
+        from litellm.llms.aliyun_iqs.search.transformation import AliyunIQSSearchConfig
+        self.config = AliyunIQSSearchConfig()
+
+    def test_transform_search_request_list_query_and_max_results(self):
+        data = self.config.transform_search_request(
+            query=["latest", "AI", "news"],
+            optional_params={"max_results": 10, "engineType": "GenericAdvanced", "timeRange": "OneWeek"},
+        )
+        assert data["query"] == "latest AI news"
+        assert data["engineType"] == "GenericAdvanced"
+        assert data["advancedParams"] == {"numResults": 10}
+        assert data["timeRange"] == "OneWeek"
+
+    def test_get_complete_url_appends_path(self):
+        assert (
+            self.config.get_complete_url(api_base=None, optional_params={})
+            == "https://cloud-iqs.aliyuncs.com/search/unified"
+        )
+        assert (
+            self.config.get_complete_url(api_base="https://cloud-iqs.aliyuncs.com/search/unified", optional_params={})
+            == "https://cloud-iqs.aliyuncs.com/search/unified"
+        )
+
+    def test_validate_environment_missing_key_raises(self, monkeypatch):
+        import pytest as _pytest
+        monkeypatch.delenv("ALIYUN_IQS_API_KEY", raising=False)
+        with _pytest.raises(ValueError, match="ALIYUN_IQS_API_KEY"):
+            self.config.validate_environment(headers={})
+
+    def test_transform_search_response_empty(self):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"requestId": "r1"}
+        response = self.config.transform_search_response(raw_response=mock_resp, logging_obj=None)
+        assert response.results == []
+        assert response.object == "search"
