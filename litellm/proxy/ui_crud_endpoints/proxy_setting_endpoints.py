@@ -22,6 +22,7 @@ from litellm.proxy.config_resolvers.sso import (
     resolve_sso_config,
 )
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
     SSOConfigRepository,
     UISettingsRepository,
@@ -645,6 +646,36 @@ async def _validate_default_teams_exist(teams: list[str] | list[NewUserRequestTe
         )
 
 
+async def _validate_default_organization_exists(organization_id: str) -> None:
+    """Reject a default organization that cannot be assigned.
+
+    Teams are created from these settings long after they are saved, and an unknown
+    organization id would fail every future team creation instead of here, where the
+    admin who typed it can still fix it.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": "Database not connected. Please connect a database."
+            },
+        )
+
+    organization_exists = await OrganizationRepository(prisma_client).exists(
+        organization_id, id_field="organization_id"
+    )
+    if not organization_exists:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": f"Organization not found: {organization_id}. "
+                "An organization must exist before it can be set as the default organization for new teams."
+            },
+        )
+
+
 async def update_default_team_member_budget(teams: List[NewUserRequestTeam], user_api_key_dict: UserAPIKeyAuth):
     """
     1. Update the max member budget for the team
@@ -783,6 +814,9 @@ async def update_default_team_settings(
     Update the default team parameters for SSO users.
     These settings will be applied to new teams created from SSO.
     """
+    if settings.organization_id is not None:
+        await _validate_default_organization_exists(settings.organization_id)
+
     return await _update_litellm_setting(
         settings=settings,
         settings_key="default_team_params",

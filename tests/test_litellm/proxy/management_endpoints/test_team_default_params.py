@@ -16,7 +16,9 @@ sys.path.insert(
 
 import litellm
 from litellm.proxy._types import (
+    LiteLLM_OrganizationTable,
     NewTeamRequest,
+    ProxyException,
     UserAPIKeyAuth,
     LitellmUserRoles,
 )
@@ -172,6 +174,21 @@ class TestNewTeamDefaultParamsApplied:
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
+    def _make_org(self, organization_id: str) -> LiteLLM_OrganizationTable:
+        return LiteLLM_OrganizationTable(
+            organization_id=organization_id,
+            budget_id="budget-id",
+            created_by="admin-user",
+            updated_by="admin-user",
+        )
+
+    def _patch_org_lookup(self, monkeypatch, **mock_kwargs) -> AsyncMock:
+        from litellm.proxy.management_endpoints import team_endpoints
+
+        lookup = AsyncMock(**mock_kwargs)
+        monkeypatch.setattr(team_endpoints, "get_org_object", lookup)
+        return lookup
+
     @pytest.mark.asyncio
     async def test_all_defaults_applied_when_not_provided(self, monkeypatch):
         """When no budget/rate/permission fields are in the request, all defaults apply."""
@@ -312,6 +329,7 @@ class TestNewTeamDefaultParamsApplied:
         assert data.tpm_limit is None
         assert data.rpm_limit is None
         assert data.team_member_permissions is None
+        assert data.organization_id is None
 
     @pytest.mark.asyncio
     async def test_legacy_default_team_settings_fallback(self, monkeypatch):
@@ -369,6 +387,75 @@ class TestNewTeamDefaultParamsApplied:
 
         # default_team_params wins (100.0), legacy fallback (999.0) not used
         assert data.max_budget == 100.0
+
+    @pytest.mark.asyncio
+    async def test_default_organization_applied_and_validated(self, monkeypatch):
+        """The default org must land before the org-validation block, so a defaulted
+        org goes through the same existence + org-limit checks as an explicit one."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(litellm, "default_team_params", {"organization_id": "default-org"})
+        org_lookup = self._patch_org_lookup(monkeypatch, return_value=self._make_org("default-org"))
+
+        data = NewTeamRequest(team_alias="my-team")
+
+        try:
+            await new_team(
+                data=data,
+                user_api_key_dict=self._make_admin_auth(),
+                http_request=MagicMock(),
+            )
+        except Exception:
+            pass
+
+        assert data.organization_id == "default-org"
+        org_lookup.assert_awaited_once()
+        assert org_lookup.await_args.kwargs["org_id"] == "default-org"
+
+    @pytest.mark.asyncio
+    async def test_explicit_organization_wins_over_default(self, monkeypatch):
+        """An organization_id in the request must not be replaced by the default."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(litellm, "default_team_params", {"organization_id": "default-org"})
+        org_lookup = self._patch_org_lookup(monkeypatch, return_value=self._make_org("explicit-org"))
+
+        data = NewTeamRequest(team_alias="my-team", organization_id="explicit-org")
+
+        try:
+            await new_team(
+                data=data,
+                user_api_key_dict=self._make_admin_auth(),
+                http_request=MagicMock(),
+            )
+        except Exception:
+            pass
+
+        assert data.organization_id == "explicit-org"
+        assert org_lookup.await_args.kwargs["org_id"] == "explicit-org"
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_default_organization_returns_400(self, monkeypatch):
+        """get_org_object raises instead of returning None, so an org that no longer
+        exists surfaced as a 500; team creation must report a 400 instead."""
+        from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(litellm, "default_team_params", {"organization_id": "deleted-org"})
+        self._patch_org_lookup(
+            monkeypatch,
+            side_effect=OrganizationNotFoundError("Organization doesn't exist in db. Organization=deleted-org"),
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=NewTeamRequest(team_alias="my-team"),
+                user_api_key_dict=self._make_admin_auth(),
+                http_request=MagicMock(),
+            )
+
+        assert exc_info.value.code == "400"
+        assert "deleted-org" in exc_info.value.message
 
 
 # ---------------------------------------------------------------------------
