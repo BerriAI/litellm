@@ -11191,7 +11191,7 @@ class Router:
     @staticmethod
     def _record_routing_decision(
         request_kwargs: dict,
-        pre_routing_hook_response: Optional[PreRoutingHookResponse],
+        pre_routing_hook_response: PreRoutingHookResponse | None,
     ) -> None:
         """Make the request's metadata describe THIS routing attempt, and only this one.
 
@@ -11210,15 +11210,23 @@ class Router:
         routing_decision = pre_routing_hook_response.routing_decision if pre_routing_hook_response else None
         baseline_model = pre_routing_hook_response.savings_baseline_model if pre_routing_hook_response else None
 
-        recorded: dict[str, Any] = {}
-        if routing_decision is not None:
-            recorded["routing_decision"] = Router._redact_prompt_text_if_needed(
-                request_kwargs=request_kwargs, routing_decision=routing_decision
+        recorded = {
+            key: value
+            for key, value in (
+                (
+                    "routing_decision",
+                    Router._redact_prompt_text_if_needed(
+                        request_kwargs=request_kwargs, routing_decision=routing_decision
+                    )
+                    if routing_decision is not None
+                    else None,
+                ),
+                ("auto_router_savings_baseline_model", baseline_model),
             )
-        if baseline_model is not None:
-            recorded["auto_router_savings_baseline_model"] = baseline_model
+            if value is not None
+        }
 
-        cleared = {"routing_decision", "auto_router_savings_baseline_model"} - recorded.keys()
+        cleared = frozenset({"routing_decision", "auto_router_savings_baseline_model"}) - recorded.keys()
         for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
             if isinstance(bucket, dict):
                 for key in cleared:
