@@ -5,10 +5,14 @@ Tests for MCPDebug — MCP OAuth2 debug response headers.
 import asyncio
 from unittest.mock import MagicMock
 
+import pytest
+
 from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCP_DEBUG_REQUEST_HEADER,
     MCPDebug,
 )
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 class TestIsDebugEnabled:
@@ -235,6 +239,154 @@ class TestResolveAuthResolution:
             oauth2_headers=None,
         )
         assert result == "no-auth"
+
+    def test_server_specific_header_matches_lowercased_alias(self):
+        """Header names arrive lowercased, so an alias with uppercase letters must
+        still match; egress resolves it, so debug must report it the same way."""
+        server = self._make_server(alias="MyServer", server_name="MyServer")
+        result = MCPDebug.resolve_auth_resolution(
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"myserver": {"Authorization": "Bearer xxx"}},
+            oauth2_headers=None,
+        )
+        assert result == "per-request-header"
+
+    def test_server_specific_header_matches_sanitized_alias(self):
+        """Aliases are sanitized to [a-z0-9_] for the x-mcp-{alias}-* header form."""
+        server = self._make_server(alias="My Server", server_name="My Server")
+        result = MCPDebug.resolve_auth_resolution(
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"my_server": {"Authorization": "Bearer xxx"}},
+            oauth2_headers=None,
+        )
+        assert result == "per-request-header"
+
+    def test_server_specific_header_for_a_different_server_is_not_claimed(self):
+        server = self._make_server(alias="alpha", server_name="alpha")
+        result = MCPDebug.resolve_auth_resolution(
+            server,
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"beta": {"Authorization": "Bearer xxx"}},
+            oauth2_headers=None,
+        )
+        assert result == "no-auth"
+
+
+@pytest.fixture
+def registry():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    saved = dict(global_mcp_server_manager.registry)
+    global_mcp_server_manager.registry.clear()
+    yield global_mcp_server_manager.registry
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update(saved)
+
+
+def _server(server_id, name, url):
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        server_name=name,
+        alias=name,
+        url=url,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+    )
+
+
+_DEBUG_SCOPE = {"type": "http", "headers": [(b"x-litellm-mcp-debug", b"true")]}
+_DEBUG_RAW_HEADERS = {MCP_DEBUG_REQUEST_HEADER: "true"}
+
+
+class TestMaybeBuildDebugHeaders:
+    """The aggregate /mcp endpoint carries no server name in the path or the
+    x-mcp-servers header, so debug reporting must fall back to the servers the
+    caller addressed with x-mcp-{alias}-* headers."""
+
+    def test_aggregate_endpoint_reports_per_request_header(self, registry):
+        registry["s1"] = _server("s1", "myserver", "https://upstream.example.com/mcp")
+
+        headers = MCPDebug.maybe_build_debug_headers(
+            raw_headers=_DEBUG_RAW_HEADERS,
+            scope=_DEBUG_SCOPE,
+            mcp_servers=None,
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"myserver": {"Authorization": "Bearer upstream-tok"}},
+            oauth2_headers=None,
+            client_ip=None,
+        )
+
+        assert headers["x-mcp-debug-auth-resolution"] == "per-request-header"
+        assert headers["x-mcp-debug-outbound-url"] == "https://upstream.example.com/mcp"
+
+    def test_aggregate_endpoint_without_per_server_headers_reports_no_auth(self, registry):
+        registry["s1"] = _server("s1", "myserver", "https://upstream.example.com/mcp")
+
+        headers = MCPDebug.maybe_build_debug_headers(
+            raw_headers=_DEBUG_RAW_HEADERS,
+            scope=_DEBUG_SCOPE,
+            mcp_servers=None,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            client_ip=None,
+        )
+
+        assert headers["x-mcp-debug-auth-resolution"] == "no-auth"
+        assert headers["x-mcp-debug-outbound-url"] == "(unknown)"
+
+    def test_aggregate_endpoint_reports_the_server_the_header_addresses(self, registry):
+        registry["s1"] = _server("s1", "alpha", "https://alpha.example.com/mcp")
+        registry["s2"] = _server("s2", "beta", "https://beta.example.com/mcp")
+
+        headers = MCPDebug.maybe_build_debug_headers(
+            raw_headers=_DEBUG_RAW_HEADERS,
+            scope=_DEBUG_SCOPE,
+            mcp_servers=None,
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"beta": {"Authorization": "Bearer beta-tok"}},
+            oauth2_headers=None,
+            client_ip=None,
+        )
+
+        assert headers["x-mcp-debug-auth-resolution"] == "per-request-header"
+        assert headers["x-mcp-debug-outbound-url"] == "https://beta.example.com/mcp"
+
+    def test_named_server_still_reported(self, registry):
+        registry["s1"] = _server("s1", "myserver", "https://upstream.example.com/mcp")
+
+        headers = MCPDebug.maybe_build_debug_headers(
+            raw_headers=_DEBUG_RAW_HEADERS,
+            scope=_DEBUG_SCOPE,
+            mcp_servers=["myserver"],
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"myserver": {"Authorization": "Bearer upstream-tok"}},
+            oauth2_headers=None,
+            client_ip=None,
+        )
+
+        assert headers["x-mcp-debug-auth-resolution"] == "per-request-header"
+        assert headers["x-mcp-debug-outbound-url"] == "https://upstream.example.com/mcp"
+
+    def test_debug_disabled_returns_nothing(self, registry):
+        registry["s1"] = _server("s1", "myserver", "https://upstream.example.com/mcp")
+
+        headers = MCPDebug.maybe_build_debug_headers(
+            raw_headers={"host": "localhost"},
+            scope=_DEBUG_SCOPE,
+            mcp_servers=None,
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"myserver": {"Authorization": "Bearer upstream-tok"}},
+            oauth2_headers=None,
+            client_ip=None,
+        )
+
+        assert headers == {}
 
 
 class TestWrapSendWithDebugHeaders:

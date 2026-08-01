@@ -156,13 +156,22 @@ class MCPDebug:
 
         Returns one of: ``per-request-header``, ``m2m-client-credentials``,
         ``static-token``, ``oauth2-passthrough``, or ``no-auth``.
+
+        Per-server header matching goes through ``lookup_mcp_server_auth_in_headers``
+        so this reports what egress actually resolves; a raw dict lookup would miss
+        the case-insensitive and header-sanitized alias forms that egress matches.
         """
+        from litellm.proxy._experimental.mcp_server.utils import (
+            lookup_mcp_server_auth_in_headers,
+        )
         from litellm.types.mcp import MCPAuth
 
         has_server_specific = bool(
             mcp_server_auth_headers
-            and (
-                mcp_server_auth_headers.get(server.alias or "") or mcp_server_auth_headers.get(server.server_name or "")
+            and lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers,
+                alias=server.alias,
+                server_name=server.server_name,
             )
         )
         if has_server_specific or mcp_auth_header:
@@ -285,20 +294,49 @@ class MCPDebug:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            lookup_mcp_server_auth_in_headers,
+        )
 
-        server_url: Optional[str] = None
-        server_auth_type: Optional[str] = None
-        auth_resolution = "no-auth"
-
-        for server_name in mcp_servers or []:
-            server = global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
-            if server:
-                server_url = server.url
-                server_auth_type = server.auth_type
-                auth_resolution = MCPDebug.resolve_auth_resolution(
-                    server, mcp_auth_header, mcp_server_auth_headers, oauth2_headers
+        named_servers = (
+            tuple(
+                server
+                for server in (
+                    global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip) for name in mcp_servers
                 )
-                break
+                if server is not None
+            )
+            if mcp_servers
+            else ()
+        )
+        candidate_servers = named_servers or (
+            tuple(
+                server
+                for server in global_mcp_server_manager.get_filtered_registry(client_ip=client_ip).values()
+                if lookup_mcp_server_auth_in_headers(
+                    mcp_server_auth_headers,
+                    alias=server.alias,
+                    server_name=server.server_name,
+                )
+            )
+            if mcp_server_auth_headers
+            else ()
+        )
+        resolutions = tuple(
+            (
+                server,
+                MCPDebug.resolve_auth_resolution(server, mcp_auth_header, mcp_server_auth_headers, oauth2_headers),
+            )
+            for server in candidate_servers
+        )
+        reported = next(
+            ((server, resolution) for server, resolution in resolutions if resolution != "no-auth"),
+            resolutions[0] if resolutions else None,
+        )
+
+        server_url = reported[0].url if reported else None
+        server_auth_type = reported[0].auth_type if reported else None
+        auth_resolution = reported[1] if reported else "no-auth"
 
         scope_headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
         litellm_key = MCPRequestHandler.get_litellm_api_key_from_headers(scope_headers)
