@@ -31,6 +31,10 @@ _EXTRA_SENSITIVE_CALLBACK_KEYS = {"gcs_path_service_account"}
 # already-encrypted input cheaply (no decrypt-attempt round trip) and
 # avoid double-encrypting if `LITELLM_SALT_KEY` is rotated between writes.
 _CALLBACK_VAR_ENCRYPTED_PREFIX = "litellm_enc::"
+# Metadata slots that hold operator-configured callback setup (and therefore
+# integration credentials). Resolved from UserAPIKeyAuth during pre-call setup,
+# never read back off the copies stamped into request metadata.
+_CALLBACK_CONFIG_SLOTS = frozenset({"logging", "callback_settings"})
 
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
@@ -545,6 +549,13 @@ def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
+
+
+def strip_callback_config(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return key/team metadata without the slots that carry callback credentials."""
+    if not isinstance(metadata, dict):
+        return metadata
+    return {k: v for k, v in metadata.items() if k not in _CALLBACK_CONFIG_SLOTS}
 
 
 def encrypt_callback_vars(metadata: Any) -> Any:

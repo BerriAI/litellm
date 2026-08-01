@@ -223,6 +223,12 @@ class ImagesResult(BaseModel):
     data: list[ImageItem] = []
 
 
+class ImageEditForm(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
+
+
 class TranscriptionResult(BaseModel):
     text: str = ""
 
@@ -378,6 +384,20 @@ class EndpointsClient:
     def images(self, key: str, model: str, prompt: str) -> StreamingResponse:
         return self._send(
             "/v1/images/generations", key, ImageRequest(model=model, prompt=prompt)
+        )
+
+    def image_edit(
+        self, key: str, model: str, prompt: str, image: bytes, *, filename: str = "image.png"
+    ) -> Result[ImagesResult]:
+        return self.proxy.transport.upload(
+            "/v1/images/edits",
+            headers=self.proxy.transport.bearer(key),
+            form=ImageEditForm(model=model, prompt=prompt),
+            filename=filename,
+            content=image,
+            file_content_type="image/png",
+            file_field="image",
+            response_type=ImagesResult,
         )
 
 

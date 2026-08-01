@@ -150,6 +150,28 @@ class UserApiKeyCache(DualCache):
         return await super().async_set_cache_pipeline(cache_list=normalized, local_only=local_only, **kwargs)
 
 
+#: Value cached under ``user_object_permission_id_cache_key`` when the user links no permission row,
+#: so a human without an entitlement costs no DB read per request. Lives beside the key builder
+#: because it is part of the same cache protocol: a reader that knows the key must know this value.
+USER_NO_MCP_PERMISSION_SENTINEL = "__user_no_mcp_permission__"
+
+
+def user_object_permission_id_cache_key(user_id: str) -> str:
+    """Cache key for the ``user_id -> object_permission_id`` link.
+
+    Lives here rather than next to either user because two modules own the two halves: the MCP auth
+    resolver writes it on read, and ``/user/update`` deletes it after changing the link. A key format
+    duplicated across those two drifts silently, and the failure is an entitlement change that never
+    takes effect.
+    """
+    return f"user_object_permission_id:{user_id}"
+
+
+def object_permission_cache_key(object_permission_id: str) -> str:
+    """Cache key ``get_object_permission`` stores a permission row under."""
+    return f"object_permission_id:{object_permission_id}"
+
+
 def get_management_object_ttl(cache: DualCache) -> float:
     """
     In-memory TTL for management-object cache writes (keys, teams, users, budgets, ...).

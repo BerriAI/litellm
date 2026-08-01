@@ -1,7 +1,8 @@
 import hashlib
 import json
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Protocol, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -13,9 +14,82 @@ from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
 
+class AgentObjectPermissionRecord(Protocol):
+    def model_dump(self) -> dict[str, object]: ...
+
+    def dict(self) -> dict[str, object]: ...
+
+
+class AgentRecordDump(TypedDict):
+    agent_id: str
+    agent_name: str
+    litellm_params: dict[str, object] | None
+    agent_card_params: dict[str, object]
+    static_headers: dict[str, str] | None
+    extra_headers: list[str] | None
+    object_permission: dict[str, object] | None
+    spend: float
+    tpm_limit: int | None
+    rpm_limit: int | None
+    session_tpm_limit: int | None
+    session_rpm_limit: int | None
+    created_at: datetime
+    updated_at: datetime
+    created_by: str | None
+    updated_by: str | None
+
+
+class AgentRecord(Protocol):
+    agent_id: str
+    agent_name: str
+    object_permission_id: str | None
+    object_permission: AgentObjectPermissionRecord | None
+    spend: float
+
+    def model_dump(self) -> AgentRecordDump: ...
+
+    def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+
+class AgentTableClient(Protocol):
+    async def create(
+        self,
+        data: Mapping[str, object],
+        include: Mapping[str, bool] | None = None,
+    ) -> AgentRecord: ...
+
+    async def find_unique(
+        self,
+        where: Mapping[str, object],
+        include: Mapping[str, bool] | None = None,
+    ) -> AgentRecord | None: ...
+
+    async def find_many(
+        self,
+        where: Mapping[str, object] | None = None,
+        order: Mapping[str, str] | None = None,
+        include: Mapping[str, bool] | None = None,
+    ) -> Sequence[AgentRecord]: ...
+
+    async def update(
+        self,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+        include: Mapping[str, bool] | None = None,
+    ) -> AgentRecord: ...
+
+    async def delete(self, where: Mapping[str, object]) -> AgentRecord: ...
+
+
+def agents_table(prisma_client: PrismaClient) -> AgentTableClient:
+    table: AgentTableClient = AgentsRepository(prisma_client).table
+    return table
+
+
 class AgentRegistry:
     def __init__(self):
-        self.agent_list: List[AgentResponse] = []
+        self.agent_list: list[AgentResponse] = []
+        self.config_agents: tuple[AgentConfig, ...] = ()
 
     def reset_agent_list(self):
         self.agent_list = []
@@ -26,13 +100,13 @@ class AgentRegistry:
     def deregister_agent(self, agent_name: str):
         self.agent_list = [agent for agent in self.agent_list if agent.agent_name != agent_name]
 
-    def get_agent_list(self, agent_names: Optional[List[str]] = None):
+    def get_agent_list(self, agent_names: Sequence[str] | None = None):
         if agent_names is not None:
             return [agent for agent in self.agent_list if agent.agent_name in agent_names]
         return self.agent_list
 
-    def get_public_agent_list(self) -> List[AgentResponse]:
-        public_agent_list: List[AgentResponse] = []
+    def get_public_agent_list(self) -> list[AgentResponse]:
+        public_agent_list: list[AgentResponse] = []
         if litellm.public_agent_groups is None:
             return public_agent_list
         for agent in self.agent_list:
@@ -43,9 +117,21 @@ class AgentRegistry:
     def _create_agent_id(self, agent_config: AgentConfig) -> str:
         return hashlib.sha256(json.dumps(agent_config, sort_keys=True).encode()).hexdigest()
 
-    def load_agents_from_config(self, agent_config: Optional[List[AgentConfig]] = None):
+    def load_agents_from_config(self, agent_config: Sequence[AgentConfig] | None = None):
+        """
+        Register the agents declared in config.yaml and remember them for later rebuilds.
+
+        A config entry is skipped when its ``agent_name`` is already registered, so a
+        database record always wins over a config entry that reuses its name and the
+        registry never holds two agents under one name. Enforcing that here rather than
+        in the caller keeps the guarantee independent of the order the two sources load
+        in. Passing ``None`` leaves the remembered agents untouched; passing an empty
+        sequence clears them.
+        """
         if agent_config is None:
             return None
+
+        self.config_agents = tuple(agent_config)
 
         for agent_config_item in agent_config:
             if not isinstance(agent_config_item, dict):
@@ -56,6 +142,9 @@ class AgentRegistry:
             if not all([agent_name, agent_card_params]):
                 continue
 
+            if any(agent.agent_name == agent_name for agent in self.agent_list):
+                continue
+
             # create a stable hash id for config item
             config_hash = self._create_agent_id(agent_config_item)
 
@@ -63,22 +152,23 @@ class AgentRegistry:
 
     def load_agents_from_db_and_config(
         self,
-        agent_config: Optional[List[AgentConfig]] = None,
-        db_agents: Optional[List[Dict[str, Any]]] = None,
+        agent_config: Sequence[AgentConfig] | None = None,
+        db_agents: list[dict[str, Any]] | None = None,
     ):
+        """
+        Rebuild the registry from the DB rows plus the agents declared in config.yaml.
+
+        ``agent_config`` defaults to the agents remembered by the last
+        ``load_agents_from_config`` call, so a periodic DB reload does not drop
+        config-defined agents.
+
+        The DB rows are registered first so that a config entry reusing one of their
+        names is dropped by ``load_agents_from_config``, mirroring how config-declared
+        MCP servers are unioned under the database registry. Name lookups and
+        deregistration both address a single agent, so the registry must never hold two
+        under one name.
+        """
         self.reset_agent_list()
-
-        if agent_config:
-            for agent_config_item in agent_config:
-                if not isinstance(agent_config_item, dict):
-                    raise ValueError("agent_config must be a list of dictionaries")
-
-                self.register_agent(
-                    agent_config=AgentResponse(
-                        agent_id=self._create_agent_id(agent_config_item),
-                        **agent_config_item,
-                    )
-                )  # type: ignore
 
         if db_agents:
             for db_agent in db_agents:
@@ -86,6 +176,8 @@ class AgentRegistry:
                     raise ValueError("db_agents must be a list of dictionaries")
 
                 self.register_agent(agent_config=AgentResponse(**db_agent))  # type: ignore
+
+        self.load_agents_from_config(agent_config if agent_config is not None else self.config_agents)
         return self.agent_list
 
     ###########################################################
@@ -96,7 +188,7 @@ class AgentRegistry:
         agent: AgentConfig,
         prisma_client: PrismaClient,
         created_by: str,
-        agent_id: Optional[str] = None,
+        agent_id: str | None = None,
     ) -> AgentResponse:
         """
         Add an agent to the database.
@@ -126,18 +218,18 @@ class AgentRegistry:
             agent_card_params: str = safe_dumps(agent_card_params_dict)
 
             # Handle object_permission (MCP tool access for agent)
-            object_permission_id: Optional[str] = None
+            object_permission_id: str | None = None
             if agent.get("object_permission") is not None:
                 agent_copy = dict(agent)
                 object_permission_id = await handle_update_object_permission_common(agent_copy, None, prisma_client)
 
             # Serialize static_headers
             static_headers_obj = agent.get("static_headers")
-            static_headers_val: Optional[str] = safe_dumps(dict(static_headers_obj)) if static_headers_obj else None
+            static_headers_val: str | None = safe_dumps(dict(static_headers_obj)) if static_headers_obj else None
 
-            extra_headers_val: Optional[List[str]] = agent.get("extra_headers")
+            extra_headers_val = agent.get("extra_headers")
 
-            create_data: Dict[str, Any] = {
+            create_data: dict[str, object] = {
                 "agent_name": agent_name,
                 "litellm_params": litellm_params,
                 "agent_card_params": agent_card_params,
@@ -166,7 +258,7 @@ class AgentRegistry:
                     create_data[rate_field] = _val
 
             # Create agent in DB
-            created_agent = await AgentsRepository(prisma_client).table.create(
+            created_agent = await agents_table(prisma_client).create(
                 data=create_data,
                 include={"object_permission": True},
             )
@@ -181,12 +273,12 @@ class AgentRegistry:
         except Exception as e:
             raise Exception(f"Error adding agent to DB: {str(e)}")
 
-    async def delete_agent_from_db(self, agent_id: str, prisma_client: PrismaClient) -> Dict[str, Any]:
+    async def delete_agent_from_db(self, agent_id: str, prisma_client: PrismaClient) -> Mapping[str, object]:
         """
         Delete an agent from the database
         """
         try:
-            deleted_agent = await AgentsRepository(prisma_client).table.delete(where={"agent_id": agent_id})
+            deleted_agent = await agents_table(prisma_client).delete(where={"agent_id": agent_id})
             return dict(deleted_agent)
         except Exception as e:
             raise Exception(f"Error deleting agent from DB: {str(e)}")
@@ -221,7 +313,7 @@ class AgentRegistry:
                 raise Exception(f"Agent with ID {agent_id} not found")
 
             augment_agent = {**existing_agent, **agent}
-            update_data: Dict[str, Any] = {}
+            update_data: dict[str, Any] = {}
             if augment_agent.get("agent_name"):
                 update_data["agent_name"] = augment_agent.get("agent_name")
             if augment_agent.get("litellm_params"):
@@ -254,7 +346,7 @@ class AgentRegistry:
                 if object_permission_id is not None:
                     update_data["object_permission_id"] = object_permission_id
             # Patch agent in DB
-            patched_agent = await AgentsRepository(prisma_client).table.update(
+            patched_agent = await agents_table(prisma_client).update(
                 where={"agent_id": agent_id},
                 data={
                     **update_data,
@@ -307,9 +399,9 @@ class AgentRegistry:
             static_headers_val_u: str = (
                 safe_dumps(dict(static_headers_obj_u)) if static_headers_obj_u is not None else safe_dumps({})
             )
-            extra_headers_val_u: List[str] = agent.get("extra_headers") or []
+            extra_headers_val_u = agent.get("extra_headers") or []
 
-            update_data: Dict[str, Any] = {
+            update_data: dict[str, object] = {
                 "agent_name": agent_name,
                 "litellm_params": litellm_params,
                 "agent_card_params": agent_card_params,
@@ -330,7 +422,7 @@ class AgentRegistry:
                     update_data[rate_field] = _val
 
             if agent.get("object_permission") is not None:
-                existing_agent = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
+                existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
                 existing_object_permission_id = (
                     existing_agent.object_permission_id if existing_agent is not None else None
                 )
@@ -344,7 +436,7 @@ class AgentRegistry:
                     update_data["object_permission_id"] = object_permission_id
 
             # Update agent in DB
-            updated_agent = await AgentsRepository(prisma_client).table.update(
+            updated_agent = await agents_table(prisma_client).update(
                 where={"agent_id": agent_id},
                 data=update_data,
                 include={"object_permission": True},
@@ -363,17 +455,17 @@ class AgentRegistry:
     @staticmethod
     async def get_all_agents_from_db(
         prisma_client: PrismaClient,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """
         Get all agents from the database
         """
         try:
-            agents_from_db = await AgentsRepository(prisma_client).table.find_many(
+            agents_from_db = await agents_table(prisma_client).find_many(
                 order={"created_at": "desc"},
                 include={"object_permission": True},
             )
 
-            agents: List[Dict[str, Any]] = []
+            agents: list[dict[str, object]] = []
             for agent in agents_from_db:
                 agent_dict = dict(agent)
                 # object_permission is eagerly loaded via include above
@@ -391,7 +483,7 @@ class AgentRegistry:
     def get_agent_by_id(
         self,
         agent_id: str,
-    ) -> Optional[AgentResponse]:
+    ) -> AgentResponse | None:
         """
         Get an agent by its ID from the database
         """
@@ -404,7 +496,7 @@ class AgentRegistry:
         except Exception as e:
             raise Exception(f"Error getting agent from DB: {str(e)}")
 
-    def get_agent_by_name(self, agent_name: str) -> Optional[AgentResponse]:
+    def get_agent_by_name(self, agent_name: str) -> AgentResponse | None:
         """
         Get an agent by its name from the database
         """

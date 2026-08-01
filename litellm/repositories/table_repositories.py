@@ -181,6 +181,10 @@ class SpendLogToolIndexRepository(PrismaTableRepository):
     table_name = "litellm_spendlogtoolindex"
 
 
+class DailyToolSpendRepository(PrismaTableRepository):
+    table_name = "litellm_dailytoolspend"
+
+
 class SpendLogGuardrailIndexRepository(PrismaTableRepository):
     table_name = "litellm_spendlogguardrailindex"
 

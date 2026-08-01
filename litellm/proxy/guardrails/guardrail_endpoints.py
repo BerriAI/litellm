@@ -6,8 +6,20 @@ import concurrent.futures
 import inspect
 import json
 import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -49,10 +61,42 @@ from litellm.types.guardrails import (
     ToolPermissionGuardrailConfigModel,
 )
 
+if TYPE_CHECKING:
+    from types import CodeType
+
+    from prisma.actions import LiteLLM_GuardrailsTableActions
+    from prisma.models import LiteLLM_GuardrailsTable
+
+    from litellm.proxy.utils import PrismaClient
+
 #### GUARDRAILS ENDPOINTS ####
 
 router = APIRouter()
 GUARDRAIL_REGISTRY = GuardrailRegistry()
+
+
+def _guardrails_table(prisma_client: "PrismaClient") -> "LiteLLM_GuardrailsTableActions[LiteLLM_GuardrailsTable]":
+    table: LiteLLM_GuardrailsTableActions[LiteLLM_GuardrailsTable] = GuardrailsRepository(prisma_client).table
+    return table
+
+
+async def _create_guardrail_row(prisma_client: "PrismaClient", data: Mapping[str, object]) -> "LiteLLM_GuardrailsTable":
+    row: LiteLLM_GuardrailsTable = await GuardrailsRepository(prisma_client).table.create(data=data)
+    return row
+
+
+async def _delete_guardrail_row(prisma_client: "PrismaClient", where: Mapping[str, object]) -> None:
+    await GuardrailsRepository(prisma_client).table.delete(where=where)
+
+
+async def _find_team_guardrail_rows(
+    prisma_client: "PrismaClient", where: Mapping[str, object]
+) -> "Sequence[LiteLLM_GuardrailsTable]":
+    rows: Sequence[LiteLLM_GuardrailsTable] = await GuardrailsRepository(prisma_client).table.find_many(
+        where=where,
+        order={"created_at": "desc"},
+    )
+    return rows
 
 
 def _get_guardrails_list_response(
@@ -73,6 +117,7 @@ def _get_guardrails_list_response(
         )
         guardrail_configs.append(
             GuardrailInfoResponse(
+                guardrail_id=guardrail.get("guardrail_id"),
                 guardrail_name=guardrail.get("guardrail_name"),
                 litellm_params=masked_params,
                 guardrail_info=guardrail.get("guardrail_info"),
@@ -178,13 +223,14 @@ async def list_guardrails_v2(
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Prisma client not initialized")
-
     is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     try:
-        guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(prisma_client=prisma_client)
+        guardrails = (
+            await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(prisma_client=prisma_client)
+            if prisma_client is not None
+            else []
+        )
 
         excluded_guardrail_ids: set = set()
         if not is_admin:
@@ -361,7 +407,7 @@ async def create_guardrail(
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
-                    await GuardrailsRepository(prisma_client).table.delete(where={"guardrail_id": guardrail_id})
+                    await _delete_guardrail_row(prisma_client, where={"guardrail_id": guardrail_id})
                 except Exception as rollback_err:
                     verbose_proxy_logger.warning(f"Rollback failed for guardrail '{guardrail_id}': {rollback_err}")
             raise HTTPException(
@@ -569,7 +615,7 @@ class RegisterGuardrailRequest(BaseModel):
 
     guardrail_name: str
     litellm_params: Dict[str, Any]  # guardrail, mode, api_base required; api_key, headers, etc. optional
-    guardrail_info: Optional[Dict[str, Any]] = None
+    guardrail_info: Optional[Dict[str, object]] = None
     team_id: Optional[str] = None
 
     def get_litellm_params_dict(self) -> Dict[str, Any]:
@@ -598,8 +644,8 @@ class GuardrailSubmissionItem(BaseModel):
     team_guardrail: bool = (
         False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
     )
-    litellm_params: Optional[Dict[str, Any]] = None
-    guardrail_info: Optional[Dict[str, Any]] = None
+    litellm_params: Optional[Dict[str, object]] = None
+    guardrail_info: Optional[Dict[str, object]] = None
     submitted_by_user_id: Optional[str] = None
     submitted_by_email: Optional[str] = None
     submitted_at: Optional[datetime] = None
@@ -683,9 +729,7 @@ async def register_guardrail(
         )
 
     try:
-        existing = await GuardrailsRepository(prisma_client).table.find_unique(
-            where={"guardrail_name": request.guardrail_name}
-        )
+        existing = await _guardrails_table(prisma_client).find_unique(where={"guardrail_name": request.guardrail_name})
         if existing is not None:
             raise HTTPException(
                 status_code=400,
@@ -706,7 +750,8 @@ async def register_guardrail(
     guardrail_info_str = safe_dumps(guardrail_info)
 
     try:
-        created = await GuardrailsRepository(prisma_client).table.create(
+        created = await _create_guardrail_row(
+            prisma_client,
             data={
                 "guardrail_name": request.guardrail_name,
                 "litellm_params": litellm_params_str,
@@ -716,7 +761,7 @@ async def register_guardrail(
                 "submitted_at": now,
                 "created_at": now,
                 "updated_at": now,
-            }
+            },
         )
         return RegisterGuardrailResponse(
             guardrail_id=created.guardrail_id,
@@ -729,7 +774,7 @@ async def register_guardrail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _parse_json_field(value: Any) -> Optional[Dict[str, Any]]:
+def _parse_json_field(value: object) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
     if isinstance(value, dict):
@@ -766,7 +811,7 @@ async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> List[str]:
     return [t for t in user_obj.teams if t]
 
 
-def _row_to_submission_item(row: Any) -> GuardrailSubmissionItem:
+def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissionItem:
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 
     guardrail_info = _parse_json_field(row.guardrail_info) or {}
@@ -833,7 +878,7 @@ async def list_guardrail_submissions(
             )
 
     try:
-        where_clause: Dict[str, Any] = {"team_id": {"not": None}}
+        where_clause: Dict[str, object] = {"team_id": {"not": None}}
         if visible_team_ids is not None:
             if not visible_team_ids:
                 # Non-admin with no team memberships: nothing visible.
@@ -844,10 +889,7 @@ async def list_guardrail_submissions(
             where_clause["team_id"] = {"in": visible_team_ids}
 
         # Single query: fetch team guardrails visible to the caller
-        all_team_rows = await GuardrailsRepository(prisma_client).table.find_many(
-            where=where_clause,
-            order={"created_at": "desc"},
-        )
+        all_team_rows = await _find_team_guardrail_rows(prisma_client, where_clause)
 
         # Derive summary counts from the full result set
         total = len(all_team_rows)
@@ -907,7 +949,7 @@ async def get_guardrail_submission(
     is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     try:
-        row = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+        row = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
         if row is None:
             raise HTTPException(status_code=404, detail="Guardrail submission not found")
         if not is_admin:
@@ -944,7 +986,7 @@ async def approve_guardrail_submission(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        row = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+        row = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
         if row is None:
             raise HTTPException(status_code=404, detail="Guardrail submission not found")
         if row.status != "pending_review":
@@ -954,7 +996,7 @@ async def approve_guardrail_submission(
             )
 
         now = datetime.now(timezone.utc)
-        await GuardrailsRepository(prisma_client).table.update(
+        await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "active", "reviewed_at": now, "updated_at": now},
         )
@@ -1024,7 +1066,7 @@ async def reject_guardrail_submission(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        row = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+        row = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
         if row is None:
             raise HTTPException(status_code=404, detail="Guardrail submission not found")
         if row.status != "pending_review":
@@ -1034,7 +1076,7 @@ async def reject_guardrail_submission(
             )
 
         now = datetime.now(timezone.utc)
-        await GuardrailsRepository(prisma_client).table.update(
+        await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "rejected", "reviewed_at": now, "updated_at": now},
         )
@@ -1228,13 +1270,12 @@ async def get_guardrail_info(guardrail_id: str):
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Prisma client not initialized")
-
     try:
         guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
-        result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
-            guardrail_id=guardrail_id, prisma_client=prisma_client
+        result = (
+            await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(guardrail_id=guardrail_id, prisma_client=prisma_client)
+            if prisma_client is not None
+            else None
         )
         if result is None:
             in_memory = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(guardrail_id=guardrail_id)
@@ -1885,13 +1926,13 @@ class TestCustomCodeGuardrailRequest(BaseModel):
     custom_code: str
     """The Python-like code containing the apply_guardrail function."""
 
-    test_input: Dict[str, Any]
+    test_input: Dict[str, object]
     """The test input to pass to the guardrail. Should contain 'texts', optionally 'images', 'tools', etc."""
 
     input_type: str = "request"
     """Whether this is a 'request' or 'response' input type."""
 
-    request_data: Optional[Dict[str, Any]] = None
+    request_data: Optional[Dict[str, object]] = None
     """Optional mock request_data (model, user_id, team_id, metadata, etc.)."""
 
 
@@ -1901,7 +1942,7 @@ class TestCustomCodeGuardrailResponse(BaseModel):
     success: bool
     """Whether the test executed successfully (no errors)."""
 
-    result: Optional[Dict[str, Any]] = None
+    result: Optional[Dict[str, object]] = None
     """The guardrail result: action (allow/block/modify), reason, modified_texts, etc."""
 
     error: Optional[str] = None
@@ -2005,7 +2046,7 @@ async def test_custom_code_guardrail(
         exec_globals = build_sandbox_globals()
 
         try:
-            compiled = compile_sandboxed(request.custom_code)
+            compiled: CodeType = compile_sandboxed(request.custom_code)
             exec(compiled, exec_globals)  # noqa: S102
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
@@ -2029,7 +2070,7 @@ async def test_custom_code_guardrail(
                 error_type="compilation",
             )
 
-        apply_fn = exec_globals["apply_guardrail"]
+        apply_fn: object = exec_globals["apply_guardrail"]
         if not callable(apply_fn):
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2054,7 +2095,7 @@ async def test_custom_code_guardrail(
 
         # Step 4: Execute the function with timeout protection
 
-        def execute_guardrail():
+        def execute_guardrail() -> object:
             return apply_fn(test_inputs, safe_request_data, request.input_type)
 
         try:

@@ -23,6 +23,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    apply_team_provider_credentials,
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
@@ -49,12 +50,11 @@ async def _resolve_managed_input_file_storage_url(input_file_id: str) -> "str | 
 
     Provider batch handlers (e.g. Vertex AI, which parses a `publishers/`
     segment out of the file URI) need a real storage location; the opaque
-    unified token crashes them. Returns None only when there is no database or
-    the row has no storage_url yet, so callers fall back to the original id
-    (which the managed-files deployment hook can still map). Fails closed
-    rather than dispatch a token that cannot be resolved: 404 when no
-    managed-file row exists, 503 when the lookup itself errors so the caller
-    can retry.
+    unified token crashes them. Returns None whenever a storage_url cannot be
+    produced (no database, lookup error, no managed-file row, or a row without
+    a storage_url yet) so callers fall back to dispatching the original id,
+    which the managed-files deployment hook still maps. This adds resolution
+    without changing behavior on any path that did not resolve before.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -64,15 +64,9 @@ async def _resolve_managed_input_file_storage_url(input_file_id: str) -> "str | 
         db_file = await ManagedFileRepository(prisma_client).table.find_first(where={"unified_file_id": input_file_id})
     except Exception as e:
         verbose_proxy_logger.warning("create_batch: managed file lookup failed for %s: %s", input_file_id, e)
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "Could not resolve managed file; please retry"},
-        )
+        return None
     if db_file is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Managed file not found: {input_file_id}"},
-        )
+        return None
     return db_file.storage_url or None
 
 
@@ -302,6 +296,12 @@ async def create_batch(
                 verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
+                apply_team_provider_credentials(
+                    data=cast(dict, _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                    custom_llm_provider=custom_llm_provider,
+                )
                 response = await litellm.acreate_batch(
                     custom_llm_provider=custom_llm_provider,
                     **_create_batch_data,  # type: ignore
@@ -532,6 +532,12 @@ async def retrieve_batch(
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
+            apply_team_provider_credentials(
+                data=data,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
             response = await litellm.aretrieve_batch(
                 custom_llm_provider=custom_llm_provider,
                 **data,  # type: ignore
@@ -725,6 +731,12 @@ async def list_batches(
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
+            apply_team_provider_credentials(
+                data=data,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
             response = await litellm.alist_batches(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
                 after=after,
@@ -915,6 +927,12 @@ async def cancel_batch(
             # Extract batch_id from data to avoid "multiple values for keyword argument" error
             # data was cast from CancelBatchRequest which already contains batch_id
             data.pop("batch_id", None)
+            apply_team_provider_credentials(
+                data=data,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
             _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
             response = await litellm.acancel_batch(
                 custom_llm_provider=custom_llm_provider,  # type: ignore

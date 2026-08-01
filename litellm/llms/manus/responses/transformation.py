@@ -217,7 +217,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             raw_response_json["id"] = f"unknown-{uuid.uuid4().hex[:8]}"
 
         try:
-            response = ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
             verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
@@ -305,7 +305,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             raw_response_json["id"] = f"unknown-{uuid.uuid4().hex[:8]}"
 
         try:
-            response = ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
             verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
             response = ResponsesAPIResponse.model_construct(**raw_response_json)

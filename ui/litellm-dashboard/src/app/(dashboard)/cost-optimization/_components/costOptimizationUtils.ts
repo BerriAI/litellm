@@ -149,3 +149,63 @@ const seedPoint = (date: string, toolNames: readonly string[]): DailyToolSpendPo
 
 export const topToolsBySpend = (byTool: readonly ToolSpendEntry[], limit = 8): ToolSpendEntry[] =>
   [...byTool].sort((a, b) => b.spend - a.spend).slice(0, limit);
+
+export const localIsoDay = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+export type SavingsAccumulation = "cumulative" | "per-interval";
+
+// A type alias, not an interface: only aliases get the implicit index signature
+// that the chart wrappers' `Record<string, unknown>` datum bound requires.
+export type SavingsPoint = {
+  date: string;
+  Compression: number;
+  "Prompt caching": number;
+};
+
+export const SAVINGS_SERIES = ["Compression", "Prompt caching"] as const;
+
+/**
+ * Running total of each series across the selected window. The total restarts
+ * at the beginning of the range rather than carrying in earlier spend, which is
+ * what "running total saved, <range>" claims on the card.
+ */
+export const toCumulative = (points: readonly SavingsPoint[]): SavingsPoint[] =>
+  points.reduce<SavingsPoint[]>((acc, point) => {
+    const previous = acc[acc.length - 1];
+    return [
+      ...acc,
+      {
+        date: point.date,
+        Compression: (previous?.Compression ?? 0) + point.Compression,
+        "Prompt caching": (previous?.["Prompt caching"] ?? 0) + point["Prompt caching"],
+      },
+    ];
+  }, []);
+
+/**
+ * Prepend a synthetic $0 point at the start of the range so the cumulative line
+ * rises from zero instead of floating as a single dot. The daily rollup only
+ * resolves whole days, so a one-day range would otherwise be one point; with the
+ * anchor it reads as "start of range $0 climbing to the range's running total".
+ * An empty series is left untouched so the chart's own "No data" state shows.
+ */
+export const withStartAnchor = (cumulative: readonly SavingsPoint[], startLabel: string): SavingsPoint[] =>
+  cumulative.length === 0
+    ? [...cumulative]
+    : [{ date: startLabel, Compression: 0, "Prompt caching": 0 }, ...cumulative];
+
+/** "Jul 16 – Jul 23", collapsing to a single date when the range is one day. */
+export const formatRangeLabel = (from: Date | undefined, to: Date | undefined): string => {
+  if (!from || !to) return "";
+  const short = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const start = short(from);
+  const end = short(to);
+  return start === end ? start : `${start} – ${end}`;
+};
+
+/**
+ * Dots mark each reading, as in the design. Past this many readings they crowd
+ * into a solid band and stop being readable, so the line carries it alone.
+ */
+export const MAX_POINTS_WITH_DOTS = 31;

@@ -6,6 +6,7 @@ import { LogEntry } from "../columns";
 import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
+import { ClassifyTag } from "./ClassifyTag";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
@@ -78,6 +79,7 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
         <span className="text-xs font-medium text-slate-900 truncate">
           {getEventDisplayName(row.call_type, row.model)}
         </span>
+        <ClassifyTag origin={row.metadata?.internal_call_origin} className="ml-auto" />
       </div>
       <div className="text-[10px] text-slate-500 mt-0 flex items-center gap-1.5 font-mono">
         <span>{durationValue}s</span>

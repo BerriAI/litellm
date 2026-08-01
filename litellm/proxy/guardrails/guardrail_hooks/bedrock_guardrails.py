@@ -1634,6 +1634,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.during_mcp_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
@@ -1666,7 +1668,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             source="INPUT",
             messages=filtered_messages,
             request_data=data,
-            logging_event_type=GuardrailEventHooks.during_call,
+            logging_event_type=event_type,
         )
         #########################################################
 

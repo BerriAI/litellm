@@ -16,6 +16,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -63,10 +64,56 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from prometheus_client.metrics import MetricWrapperBase
 else:
     AsyncIOScheduler = Any
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
+
+_NON_ENUM_METRIC_LABELS: frozenset[str] = frozenset(
+    (
+        "guardrail_name",
+        "status",
+        "error_type",
+        "hook_type",
+        "purpose",
+        "file_type",
+        "result",
+    )
+)
+
+
+class _ExcludedLabelMetric:
+    """Proxies a prometheus metric whose declared ``labelnames`` had globally
+    excluded labels removed, dropping those labels from every ``labels(...)``
+    call so the emitted arguments always match the metric's real label set."""
+
+    def __init__(
+        self,
+        metric: MetricWrapperBase,
+        original_labelnames: tuple[str, ...],
+        excluded_labels: frozenset[str],
+    ) -> None:
+        self._metric = metric
+        self._original_labelnames = original_labelnames
+        self._excluded_labels = excluded_labels
+
+    def labels(self, *labelvalues: str, **labelkwargs: str) -> MetricWrapperBase:
+        values = labelvalues or tuple(labelkwargs[name] for name in self._original_labelnames)
+        kept_values = tuple(
+            value for name, value in zip(self._original_labelnames, values) if name not in self._excluded_labels
+        )
+        return self._metric.labels(*kept_values) if kept_values else self._metric
+
+
+# Tiers a caller may name in a request, across the providers that accept the
+# parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock and
+# Groq (subsets of those), Anthropic ("auto", "standard_only") and Vertex, which
+# maps "default" to "standard". Used to bound the caller-controlled fallback in
+# ``get_service_tier_from_standard_logging_payload``.
+KNOWN_REQUEST_SERVICE_TIERS = frozenset(
+    {"auto", "batch", "default", "flex", "priority", "scale", "standard", "standard_only"}
+)
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -111,6 +158,8 @@ class PrometheusLogger(CustomLogger):
 
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
+
+            self.exclude_metrics, self.exclude_labels = self._parse_exclude_config()
 
             # Cache resolved label sets per metric. Several entries in
             # ``PrometheusMetricLabels.get_labels`` read module-level toggles
@@ -686,6 +735,44 @@ class PrometheusLogger(CustomLogger):
         self._pretty_print_prometheus_config(label_filters)
         return label_filters
 
+    def _parse_exclude_config(self) -> tuple[frozenset[str], frozenset[str]]:
+        """Parse and validate the global ``exclude_metrics`` / ``exclude_labels`` settings."""
+        from typing import get_args
+
+        import litellm
+
+        exclude_metrics = frozenset(litellm.prometheus_exclude_metrics or ())
+        exclude_labels = frozenset(litellm.prometheus_exclude_labels or ())
+
+        valid_metrics = frozenset(get_args(DEFINED_PROMETHEUS_METRICS))
+        invalid_metrics = sorted(exclude_metrics - valid_metrics)
+
+        valid_labels = self._all_defined_labels()
+        invalid_labels = sorted(exclude_labels - valid_labels)
+
+        errors = (
+            *(f"Invalid metric name in prometheus_exclude_metrics: {metric}" for metric in invalid_metrics),
+            *(f"Invalid label name in prometheus_exclude_labels: {label}" for label in invalid_labels),
+        )
+        if errors:
+            raise ValueError("Prometheus exclude configuration validation failed:\n" + "\n".join(errors))
+
+        return exclude_metrics, exclude_labels
+
+    @staticmethod
+    def _all_defined_labels() -> frozenset[str]:
+        """Every label a metric can emit: enum labels, hard-coded labels, and configured custom labels / tags."""
+        import litellm
+
+        builtin_labels = frozenset(label.value for label in UserAPIKeyLabelNames)
+        custom_metadata_labels = frozenset(
+            _sanitize_prometheus_label_name(label) for label in litellm.custom_prometheus_metadata_labels
+        )
+        custom_tag_labels = frozenset(
+            _sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags
+        )
+        return builtin_labels | _NON_ENUM_METRIC_LABELS | custom_metadata_labels | custom_tag_labels
+
     def _validate_all_configurations(self, parsed_configs: List) -> ValidationResults:
         """Validate all metric configurations and return collected errors"""
         metric_errors = []
@@ -1005,6 +1092,9 @@ class PrometheusLogger(CustomLogger):
 
     def _is_metric_enabled(self, metric_name: str) -> bool:
         """Check if a metric is enabled based on configuration"""
+        if metric_name in self.exclude_metrics:
+            return False
+
         # If no specific configuration is provided, enable all metrics (default behavior)
         if not hasattr(self, "enabled_metrics"):
             return True
@@ -1022,10 +1112,17 @@ class PrometheusLogger(CustomLogger):
             # Extract metric name from the first argument or 'name' keyword argument
             metric_name = args[0] if args else kwargs.get("name", "")
 
-            if self._is_metric_enabled(metric_name):
-                return metric_class(*args, **kwargs)
-            else:
+            if not self._is_metric_enabled(metric_name):
                 return NoOpMetric()
+
+            original_labelnames = tuple(kwargs.get("labelnames") or ())
+            if not (frozenset(original_labelnames) & self.exclude_labels):
+                return metric_class(*args, **kwargs)
+
+            kept = tuple(name for name in original_labelnames if name not in self.exclude_labels)
+            kept_kwargs = {**kwargs, "labelnames": kept}  # mutable-ok: ** needs a mapping to override labelnames
+            real_metric = metric_class(*args, **kept_kwargs)
+            return _ExcludedLabelMetric(real_metric, original_labelnames, self.exclude_labels)
 
         return factory
 
@@ -1049,19 +1146,15 @@ class PrometheusLogger(CustomLogger):
         # Get default labels for this metric from PrometheusMetricLabels
         default_labels = PrometheusMetricLabels.get_labels(metric_name)
 
-        # If no label filtering is configured for this metric, use default labels
-        if metric_name not in self.label_filters:
-            self._cached_metric_labels[metric_name] = default_labels
-            return default_labels
+        resolved_labels = [
+            label
+            for label in default_labels
+            if label not in self.exclude_labels
+            and (metric_name not in self.label_filters or label in self.label_filters[metric_name])
+        ]
 
-        # Get configured labels for this metric
-        configured_labels = self.label_filters[metric_name]
-
-        # Return intersection of configured and default labels to ensure we only use valid labels
-        filtered_labels = [label for label in default_labels if label in configured_labels]
-
-        self._cached_metric_labels[metric_name] = filtered_labels
-        return filtered_labels
+        self._cached_metric_labels[metric_name] = resolved_labels
+        return resolved_labels
 
     @staticmethod
     def _guardrail_is_additive(info: StandardLoggingGuardrailInformation) -> bool:
@@ -1244,6 +1337,7 @@ class PrometheusLogger(CustomLogger):
             client_ip=standard_logging_payload["metadata"].get("requester_ip_address"),
             user_agent=standard_logging_payload["metadata"].get("user_agent"),
             stream=(str(standard_logging_payload.get("stream")) if litellm.prometheus_emit_stream_label else None),
+            service_tier=get_service_tier_from_standard_logging_payload(standard_logging_payload),
         )
 
         if user_api_key is not None and isinstance(user_api_key, str) and user_api_key.startswith("sk-"):
@@ -1449,6 +1543,8 @@ class PrometheusLogger(CustomLogger):
         prompt_details = usage_object.get("prompt_tokens_details") or {}
         completion_details = usage_object.get("completion_tokens_details") or {}
 
+        cache_creation_detail_tokens = PrometheusLogger._resolve_cache_write_tokens(prompt_details)
+
         detail_metrics: List[Tuple[Any, DEFINED_PROMETHEUS_METRICS, Any]] = [
             (
                 self.litellm_input_cached_tokens_metric,
@@ -1458,7 +1554,7 @@ class PrometheusLogger(CustomLogger):
             (
                 self.litellm_input_cache_creation_tokens_metric,
                 "litellm_input_cache_creation_tokens_metric",
-                (prompt_details.get("cache_creation_tokens") if isinstance(prompt_details, dict) else None),
+                cache_creation_detail_tokens,
             ),
             (
                 self.litellm_input_audio_tokens_metric,
@@ -1597,27 +1693,12 @@ class PrometheusLogger(CustomLogger):
             )
 
         # Provider prompt caching metrics are independent of LiteLLM cache_hit.
-        provider_cache_read_tokens = 0
-        provider_cache_creation_tokens = 0
         usage_obj = (standard_logging_payload.get("metadata", {}) or {}).get("usage_object")
         if isinstance(usage_obj, dict):
-            # Prefer explicit provider cache fields when available.
-            _read = usage_obj.get("cache_read_input_tokens")
-            _write = usage_obj.get("cache_creation_input_tokens")
-
-            if isinstance(_read, int):
-                provider_cache_read_tokens = _read
-            if isinstance(_write, int):
-                provider_cache_creation_tokens = _write
-
-            # Fallback to prompt_tokens_details.cached_tokens (common normalization point).
-            # Only fallback when the explicit field is genuinely absent (None).
-            if _read is None:
-                prompt_details = usage_obj.get("prompt_tokens_details")
-                if isinstance(prompt_details, dict):
-                    cached_tokens = prompt_details.get("cached_tokens")
-                    if isinstance(cached_tokens, int):
-                        provider_cache_read_tokens = cached_tokens
+            (
+                provider_cache_read_tokens,
+                provider_cache_creation_tokens,
+            ) = PrometheusLogger._resolve_provider_cache_tokens(usage_obj)
 
             if provider_cache_read_tokens > 0:
                 PrometheusLogger._inc_labeled_counter(
@@ -1638,6 +1719,40 @@ class PrometheusLogger(CustomLogger):
                     label_context=label_context,
                     amount=float(provider_cache_creation_tokens),
                 )
+
+    @staticmethod
+    def _resolve_provider_cache_tokens(usage_obj: Mapping[str, object]) -> tuple[int, int]:
+        # Prefer explicit provider cache fields when available.
+        _read = usage_obj.get("cache_read_input_tokens")
+        _write = usage_obj.get("cache_creation_input_tokens")
+
+        provider_cache_read_tokens = _read if isinstance(_read, int) else 0
+        provider_cache_creation_tokens = _write if isinstance(_write, int) else 0
+
+        # Fallback to prompt_tokens_details (common normalization point).
+        # Only fallback when the explicit field is genuinely absent (None).
+        prompt_details = usage_obj.get("prompt_tokens_details")
+        if _read is None and isinstance(prompt_details, dict):
+            cached_tokens = prompt_details.get("cached_tokens")
+            if isinstance(cached_tokens, int):
+                provider_cache_read_tokens = cached_tokens
+
+        if _write is None:
+            write_tokens = PrometheusLogger._resolve_cache_write_tokens(prompt_details)
+            if write_tokens is not None:
+                provider_cache_creation_tokens = write_tokens
+
+        return provider_cache_read_tokens, provider_cache_creation_tokens
+
+    @staticmethod
+    def _resolve_cache_write_tokens(prompt_details: object) -> int | None:
+        if not isinstance(prompt_details, dict):
+            return None
+        for key in ("cache_write_tokens", "cache_creation_tokens"):
+            value = prompt_details.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        return None
 
     def _increment_mcp_tool_call_metrics(
         self,
@@ -4074,6 +4189,44 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
             result[original_key.replace(".", "_")] = value
 
     return result
+
+
+def get_service_tier_from_standard_logging_payload(
+    standard_logging_payload: StandardLoggingPayload,
+) -> str | None:
+    """
+    Resolve the service tier a request ran on, for the ``service_tier`` label.
+
+    The tier the provider actually served wins over the tier the caller asked for,
+    so latency and spend stay segmentable when the request said ``auto`` and the
+    provider picked the concrete tier. Providers report the served tier either at
+    the top level of the response (OpenAI, Bedrock, Groq) or on the usage object
+    (Anthropic).
+
+    Streaming responses carry no served tier, so the requested tier is the
+    fallback. That value is caller-controlled and survives param mapping even
+    where the provider then ignores it (Bedrock and Groq accept the request and
+    drop an unrecognized tier), so it is only labelled when it names a known
+    tier; otherwise one caller could mint a Prometheus series per string. Values
+    the provider itself reports are not caller-controlled and stay unrestricted,
+    so a tier a provider adds later is still labelled correctly.
+    """
+    response = standard_logging_payload.get("response")
+    usage_object = standard_logging_payload.get("metadata", {}).get("usage_object")
+
+    served_candidates: tuple[object, ...] = (
+        response.get("service_tier") if isinstance(response, dict) else None,
+        usage_object.get("service_tier") if isinstance(usage_object, dict) else None,
+    )
+    served_tier = next((tier for tier in served_candidates if isinstance(tier, str) and tier), None)
+    if served_tier is not None:
+        return served_tier
+
+    model_parameters = standard_logging_payload.get("model_parameters")
+    requested_tier = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
+    if isinstance(requested_tier, str) and requested_tier in KNOWN_REQUEST_SERVICE_TIERS:
+        return requested_tier
+    return None
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(

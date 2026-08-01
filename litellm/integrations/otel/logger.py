@@ -17,6 +17,7 @@ from litellm.integrations.otel.model.baggage import promoted_baggage
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
+    mcp_message_transport_span,
     request_root_span,
     resolve_mcp_span_context,
     resolve_parent_context,
@@ -280,13 +281,29 @@ class OpenTelemetryV2(CustomLogger):
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time) -> None:
-        """Record the GenAI metrics for a successful LLM call. Best-effort: a
-        recording failure (e.g. a malformed payload) must never break the span
-        close or the request itself."""
+        """Record the GenAI metrics for a successful LLM call."""
+        self._guarded_record(lambda recorder: recorder.record(kwargs, response_obj, start_time, end_time))
+
+    def _record_failure_metrics(self, kwargs, start_time, end_time) -> None:
+        """Record the GenAI metrics for a failed LLM call, so the duration
+        histogram covers the whole traffic rather than only what survived.
+
+        A synthetic proxy-gate log (auth / rate-limit rejection) is skipped for the
+        same reason it gets no span: no upstream call happened, so its duration is
+        not a GenAI operation's duration and would pull the histogram down."""
+        if LLMCallEvent.from_dict(kwargs).is_no_upstream_call:
+            return
+        self._guarded_record(lambda recorder: recorder.record_failure(kwargs, start_time, end_time))
+
+    def _guarded_record(self, record: "Callable[[GenAIMetricRecorder], None]") -> None:
+        """Run one metric recording. Best-effort: a recording failure (e.g. a
+        malformed payload) must never break the span close or the request itself. A
+        misconfigured attribute filter is operator-fixable, so it is surfaced once
+        at ERROR instead of being swallowed."""
         if self._metrics_recorder is None:
             return
         try:
-            self._metrics_recorder.record(kwargs, response_obj, start_time, end_time)
+            record(self._metrics_recorder)
         except ValueError as exc:
             if not self._metric_filter_error_logged:
                 verbose_logger.error(
@@ -303,6 +320,7 @@ class OpenTelemetryV2(CustomLogger):
         if self._emit_mcp_list_tools(kwargs, start_time, end_time):
             return
         self._close_llm_call(kwargs, start_time, end_time)
+        self._record_failure_metrics(kwargs, start_time, end_time)
 
     def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
         """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
@@ -641,8 +659,14 @@ class OpenTelemetryV2(CustomLogger):
         endpoint, auth failure), so the failed request carries the same error keys
         a failed LLM call does. v1's ``OpenTelemetry`` implemented this same hook;
         v2 lost it when it stopped subclassing ``OpenTelemetry``, which is the
-        LIT-4179 regression for pre-call failures."""
-        span = request_root_span() or user_api_key_dict.parent_otel_span
+        LIT-4179 regression for pre-call failures.
+
+        An MCP message is handled on the session's task, where the request-root
+        anchor is whatever request opened the session, so prefer the transport the
+        gateway published for this specific message. Without that, a failed tool
+        call aimed its error at the ``initialize`` request's finished span and the
+        SDK dropped it, leaving the POST that actually failed unmarked."""
+        span = mcp_message_transport_span() or request_root_span() or user_api_key_dict.parent_otel_span
         if span is None or not is_recordable_span(span):
             return None
         stamp_error(span, _span_error_from_exception(original_exception, traceback_str=traceback_str))
