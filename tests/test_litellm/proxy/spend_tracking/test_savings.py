@@ -423,3 +423,47 @@ def test_an_undetermined_conversation_shape_stays_conservative():
     )
     assert defaulted == pytest.approx(_savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage))
     assert defaulted < _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, continuing=False)
+
+
+def test_a_continuing_turn_on_the_same_model_writes_its_growth_on_both_arms():
+    """A conversation that grew by a few tokens writes those on whatever model serves
+    it, and they are new to every model, so the baseline would have written them too.
+    Moving them into the baseline's read bucket forgives it a write it really owes and
+    shrinks the reported saving on ordinary steady-state traffic.
+    """
+    usage = _usage(fresh=0, cached=19_900, written=100, out=1_000)
+    opus = litellm.get_model_info("claude-opus-5", "anthropic")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+
+    def cost(info: dict) -> float:
+        return (
+            19_900 * info["cache_read_input_token_cost"]
+            + 100 * info["cache_creation_input_token_cost"]
+            + 1_000 * info["output_cost_per_token"]
+        )
+
+    both_write_the_growth = cost(opus) - cost(haiku)
+    assert _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage) == pytest.approx(both_write_the_growth)
+
+
+def test_a_switch_onto_a_partly_cached_model_still_pays_for_the_write():
+    """A model holding a small prefix of this prompt still has to write the rest, and
+    that write is the switch's cost. Keying the same-model case off reading *anything*
+    rather than reading *most of it* would hand this request the full rate gap and
+    inflate the saving by an order of magnitude.
+    """
+    mostly_written = _usage(fresh=0, cached=500, written=19_500, out=1_000)
+    reported = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", mostly_written)
+
+    opus = litellm.get_model_info("claude-opus-5", "anthropic")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    if_treated_as_same_model = (
+        500 * opus["cache_read_input_token_cost"]
+        + 19_500 * opus["cache_creation_input_token_cost"]
+        + 1_000 * opus["output_cost_per_token"]
+    ) - (
+        500 * haiku["cache_read_input_token_cost"]
+        + 19_500 * haiku["cache_creation_input_token_cost"]
+        + 1_000 * haiku["output_cost_per_token"]
+    )
+    assert reported < if_treated_as_same_model / 10, "a mostly-cold switch must not be priced as a continuation"

@@ -119,6 +119,15 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool) -> Usage:
     too, which is all a single rollup row can support, understates a first turn to a
     few percent of its value and can render a profitable route as a loss.
 
+    A continuing turn that mostly read from cache is the third case: the selected model
+    was already warm, so it is the one that has been serving this conversation and the
+    baseline's cache holds exactly what its does. The tokens written are the turn's own
+    growth, new to every model, and the baseline would have paid to write them too.
+    Moving them would forgive the baseline a write it really owes and shrink the
+    reported saving. "Mostly read" rather than "read anything" on purpose: a switch onto
+    a model holding a small prefix of this prompt still writes most of it, and must keep
+    counting that write against the saving.
+
     Only the cache buckets move. Every other field the request was priced on travels
     through untouched, audio and image and video counts among them, because the baseline
     is this same request served by a model that happened to be warm; naming the fields to
@@ -128,6 +137,8 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool) -> Usage:
     cache_read, cache_creation = _cache_token_split(usage)
     details = usage.prompt_tokens_details
     if details is None or cache_creation <= 0 or not conversation_continuing:
+        return usage
+    if cache_read > cache_creation:
         return usage
     return Usage(
         prompt_tokens=usage.prompt_tokens,
