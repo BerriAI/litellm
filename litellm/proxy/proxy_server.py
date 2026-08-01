@@ -9362,10 +9362,20 @@ async def completion(
             _response.choices[0].text = e.message
             return _response
     except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
+        transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
+        # Use transformed exception if callback returned one, otherwise use original
+        if transformed_exception is not None:
+            e = transformed_exception
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.completion(): Exception occured - {}".format(str(e)))
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "message", str(e.detail)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
         error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
@@ -9601,15 +9611,18 @@ async def moderations(
 
         return response
     except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
+        transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
+        # Use transformed exception if callback returned one, otherwise use original
+        if transformed_exception is not None:
+            e = transformed_exception
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.moderations(): Exception occured - {}".format(str(e))
         )
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "message", str(e)),
+                message=getattr(e, "message", str(e.detail)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -9747,11 +9760,14 @@ async def audio_speech(
         )
 
     except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
+        transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=data,
         )
+        # Use transformed exception if callback returned one, otherwise use original
+        if transformed_exception is not None:
+            e = transformed_exception
         verbose_proxy_logger.error("litellm.proxy.proxy_server.audio_speech(): Exception occured - {}".format(str(e)))
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
@@ -9891,9 +9907,12 @@ async def audio_transcriptions(
 
         return response
     except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
+        transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
+        # Use transformed exception if callback returned one, otherwise use original
+        if transformed_exception is not None:
+            e = transformed_exception
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.audio_transcription(): Exception occured - {}".format(str(e))
         )
