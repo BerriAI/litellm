@@ -120,6 +120,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
     create_missing_views,
@@ -2973,9 +2974,14 @@ async def get_config_param(prisma_client: Any, param_name: str) -> Optional[Any]
     return row
 
 
+async def evict_config_param(param_name: str) -> None:
+    await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
+
+
 async def invalidate_config_param(param_name: str) -> None:
     """Evict from both cache layers; call after every LiteLLM_Config write."""
-    await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
+    await evict_config_param(param_name)
+    await publish_config_param_change(param_name)
 
 
 async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> None:
