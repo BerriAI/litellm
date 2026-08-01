@@ -34,8 +34,6 @@ const getRouterFields = async (accessToken: string): Promise<RouterFieldsRespons
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/router/fields` : `/router/fields`;
 
-    console.log("Fetching router fields from:", url);
-
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -51,7 +49,6 @@ const getRouterFields = async (accessToken: string): Promise<RouterFieldsRespons
     }
 
     const data: RouterFieldsResponse = await response.json();
-    console.log("Fetched router fields:", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch router fields:", error);

@@ -66,7 +66,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     )
 
                 # Create ResponseReasoningItem object from the item data
-                reasoning_item = ResponseReasoningItem(**item_data)
+                reasoning_item = ResponseReasoningItem.model_validate(item_data)
 
                 # Convert back to dict with exclude_none=True to exclude None fields
                 dict_reasoning_item = reasoning_item.model_dump(exclude_none=True)
@@ -205,7 +205,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
     #########################################################
-    def _construct_url_for_response_id_in_path(self, api_base: str, response_id: str) -> str:
+    def _construct_url_for_response_id_in_path(self, api_base: str, response_id: str, path_suffix: str = "") -> str:
         """
         Constructs a URL for the API request with the response_id in the path.
         """
@@ -218,14 +218,14 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Remove trailing slash if present to avoid double slashes
         path = parsed_url.path.rstrip("/")
         encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
-        new_path = f"{path}/{encoded_response_id}"
+        new_path = f"{path}/{encoded_response_id}{path_suffix}"
 
         # Reconstruct the URL with all original components but with the modified path
         constructed_url = urlunparse(
             (
                 parsed_url.scheme,  # http, https
                 parsed_url.netloc,  # domain name, port
-                new_path,  # path with response_id added
+                new_path,
                 parsed_url.params,  # parameters
                 parsed_url.query,  # query string
                 parsed_url.fragment,  # fragment
@@ -288,7 +288,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
     ) -> Tuple[str, Dict]:
-        url = self._construct_url_for_response_id_in_path(api_base=api_base, response_id=response_id) + "/input_items"
+        url = self._construct_url_for_response_id_in_path(
+            api_base=api_base, response_id=response_id, path_suffix="/input_items"
+        )
         params: Dict[str, Any] = {}
         if after is not None:
             params["after"] = after
@@ -322,27 +324,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         This function handles URLs with query parameters by inserting the response_id
         at the correct location (before any query parameters).
         """
-        from urllib.parse import urlparse, urlunparse
-
-        # Parse the URL to separate its components
-        parsed_url = urlparse(api_base)
-
-        # Insert the response_id and /cancel at the end of the path component
-        # Remove trailing slash if present to avoid double slashes
-        path = parsed_url.path.rstrip("/")
-        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
-        new_path = f"{path}/{encoded_response_id}/cancel"
-
-        # Reconstruct the URL with all original components but with the modified path
-        cancel_url = urlunparse(
-            (
-                parsed_url.scheme,  # http, https
-                parsed_url.netloc,  # domain name, port
-                new_path,  # path with response_id and /cancel added
-                parsed_url.params,  # parameters
-                parsed_url.query,  # query string
-                parsed_url.fragment,  # fragment
-            )
+        cancel_url = self._construct_url_for_response_id_in_path(
+            api_base=api_base, response_id=response_id, path_suffix="/cancel"
         )
 
         data: Dict = {}
@@ -363,4 +346,4 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIError
 
             raise AzureOpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        return ResponsesAPIResponse(**raw_response_json)
+        return ResponsesAPIResponse.model_validate(raw_response_json)

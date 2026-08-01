@@ -89,6 +89,60 @@ async def test_dual_cache_async_set_cache_injects_default_in_memory_ttl():
 
 
 @pytest.mark.asyncio
+async def test_dual_cache_redis_backfill_injects_default_in_memory_ttl():
+    """
+    A Redis-hit backfill into the in-memory tier must honor
+    default_in_memory_ttl the same way the write paths do. Without it, the
+    backfilled entry falls to InMemoryCache's own default_ttl (600s), so a
+    replica that primed a management object (e.g. a virtual key's auth blob)
+    from Redis keeps serving it for 10 minutes after the object was updated
+    and invalidated, instead of re-reading within the configured TTL.
+    """
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value="redis_value")
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=redis_cache,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = await dual_cache.async_get_cache(key="backfill_key")
+    after = time.time()
+
+    assert result == "redis_value"
+    expiry = in_memory_cache.ttl_dict["backfill_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_batch_redis_backfill_injects_default_in_memory_ttl():
+    """async_batch_get_cache's Redis-to-memory backfill must honor
+    default_in_memory_ttl, same as the single-key path."""
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.async_batch_get_cache = AsyncMock(
+        return_value={"batch_backfill_key": "redis_value"}
+    )
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=mock_redis,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = await dual_cache.async_batch_get_cache(keys=["batch_backfill_key"])
+    after = time.time()
+
+    assert result == ["redis_value"]
+    expiry = in_memory_cache.ttl_dict["batch_backfill_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+@pytest.mark.asyncio
 async def test_dual_cache_async_set_cache_respects_explicit_ttl():
     """
     Test that async_set_cache does NOT override an explicitly provided ttl.

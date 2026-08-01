@@ -6,7 +6,7 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { exchangeLoginCode, getProxyBaseUrl, switchToWorkerUrl } from "@/components/networking";
 import { clearTokenCookies, getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
-import { consumeReturnUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
+import { consumeReturnUrl, getLoginUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
 import { InfoCircleOutlined, CloudServerOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Form, Input, Popover, Select, Space, Typography } from "antd";
 import { useRouter } from "next/navigation";
@@ -295,7 +295,7 @@ function LoginPageContent() {
                     // SSO on the worker (or this instance if no worker), always
                     // include return_to so the callback redirects back here
                     const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
-                    const returnTo = encodeURIComponent(window.location.origin + "/ui/login");
+                    const returnTo = encodeURIComponent(getLoginUrl(window.location.origin));
                     router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
                   }}
                   block

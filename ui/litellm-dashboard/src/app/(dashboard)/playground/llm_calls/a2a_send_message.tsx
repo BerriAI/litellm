@@ -226,7 +226,6 @@ export const makeA2ASendMessageRequest = async (
     }
   } catch (error) {
     if (signal?.aborted) {
-      console.log("A2A request was cancelled");
       return;
     }
     console.error("A2A send message error:", error);
@@ -407,7 +406,6 @@ export const makeA2AStreamMessageRequest = async (
     }
   } catch (error) {
     if (signal?.aborted) {
-      console.log("A2A streaming request was cancelled");
       return;
     }
     console.error("A2A stream message error:", error);

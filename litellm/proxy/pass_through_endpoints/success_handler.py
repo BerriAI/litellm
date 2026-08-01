@@ -30,24 +30,37 @@ from .llm_provider_handlers.gemini_passthrough_logging_handler import (
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
+from .upstream_usage_headers import has_upstream_reported_usage
 
 cohere_passthrough_logging_handler = CoherePassthroughLoggingHandler()
 
 
+def _safe_response_text(httpx_response: httpx.Response) -> str:
+    """
+    Streamed passthrough responses are relayed to the client without being read
+    into memory, so accessing .text on them raises ResponseNotRead. Their body is
+    intentionally uninspected; log an empty string instead of failing the row.
+    """
+    try:
+        return httpx_response.text
+    except httpx.ResponseNotRead:
+        return ""
+
+
 class PassThroughEndpointLogging:
     def __init__(self):
-        self.TRACKED_VERTEX_ROUTES = [
+        self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
             "predict",
             "rawPredict",
             "streamRawPredict",
             "search",
-            "batchPredictionJobs",
             "predictLongRunning",
             "embedContent",
             "batchEmbedContents",
-        ]
+        )
+        self.TRACKED_VERTEX_RESOURCE_ROUTES = ("batchPredictionJobs",)
 
         # Anthropic
         self.TRACKED_ANTHROPIC_ROUTES = ["/messages", "/v1/messages/batches"]
@@ -306,7 +319,9 @@ class PassThroughEndpointLogging:
             ]
             kwargs = normalized_llm_passthrough_logging_payload["kwargs"]
         if standard_logging_response_object is None:
-            standard_logging_response_object = StandardPassThroughResponseObject(response=httpx_response.text)
+            standard_logging_response_object = StandardPassThroughResponseObject(
+                response=_safe_response_text(httpx_response)
+            )
 
         kwargs = self._set_cost_per_request(
             logging_obj=logging_obj,
@@ -325,11 +340,10 @@ class PassThroughEndpointLogging:
             **kwargs,
         )
 
-    def is_vertex_route(self, url_route: str):
-        for route in self.TRACKED_VERTEX_ROUTES:
-            if route in url_route:
-                return True
-        return False
+    def is_vertex_route(self, url_route: str) -> bool:
+        if any(f":{method}" in url_route for method in self.TRACKED_VERTEX_METHOD_ROUTES):
+            return True
+        return any(resource in url_route for resource in self.TRACKED_VERTEX_RESOURCE_ROUTES)
 
     def is_anthropic_route(self, url_route: str):
         for route in self.TRACKED_ANTHROPIC_ROUTES:
@@ -435,10 +449,20 @@ class PassThroughEndpointLogging:
 
         Only set the cost per request if it's set in the passthrough logging payload.
         If it's not set, don't set it in the logging object.
+
+        An upstream that prices its own requests always wins: ``cost_per_request``
+        is a flat per-request estimate for targets LiteLLM cannot price, and it
+        defaults to 0.0 on every config-defined endpoint, so honoring it here
+        would zero out the real cost the upstream reported. That holds even when
+        the reported value was unusable, where the contract records 0 rather
+        than billing an estimate the upstream just contradicted.
         """
         #########################################################
         # Check if cost per request is set
         #########################################################
+        if has_upstream_reported_usage(logging_obj):
+            return kwargs
+
         if passthrough_logging_payload.get("cost_per_request") is not None:
             kwargs["response_cost"] = passthrough_logging_payload.get("cost_per_request")
             logging_obj.model_call_details["response_cost"] = passthrough_logging_payload.get("cost_per_request")

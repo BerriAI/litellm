@@ -90,6 +90,7 @@ from typing_extensions import (
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.responses.main import (
+    CustomToolCallOutputItem,
     GenericResponseOutputItem,
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
@@ -528,6 +529,7 @@ class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
 
 class ChatCompletionCachedContent(TypedDict):
     type: Literal["ephemeral"]
+    ttl: NotRequired[Literal["5m", "1h"]]
 
 
 class ChatCompletionThinkingBlock(TypedDict, total=False):
@@ -914,6 +916,7 @@ class OpenAIChatCompletionToolParam(TypedDict):
 
 class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
     cache_control: ChatCompletionCachedContent
+    allowed_callers: List[str]
 
 
 class Function(TypedDict, total=False):
@@ -1142,6 +1145,10 @@ class ContextManagementEntry(TypedDict, total=False):
     """Token threshold at which compaction is triggered for this entry. Minimum 1000."""
 
 
+class ResponsesAPIStreamOptions(TypedDict, total=False):
+    include_obfuscation: bool
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -1168,7 +1175,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     max_tool_calls: Optional[int]
     prompt_cache_key: Optional[str]
     prompt_cache_retention: Optional[str]
-    stream_options: Optional[dict]
+    stream_options: Optional[ResponsesAPIStreamOptions]
     top_logprobs: Optional[int]
     partial_images: Optional[int]  # Number of partial images to generate (1-3) for streaming image generation
     context_management: Optional[List[ContextManagementEntry]]
@@ -1183,7 +1190,7 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: int = 0
+    reasoning_tokens: Optional[int] = None
 
     text_tokens: Optional[int] = None
 
@@ -1253,6 +1260,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
                 OutputFunctionToolCall,
                 OutputImageGenerationCall,
                 ResponseFunctionToolCall,
+                CustomToolCallOutputItem,
             ]
         ],
     ]
@@ -1717,7 +1725,7 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
     type: str  # e.g., 'invalid_request_error'
     code: str  # e.g., 'context_length_exceeded'
     message: str
-    param: Optional[str] = None
+    param: Optional[Union[str, Dict[str, Any]]] = None
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):

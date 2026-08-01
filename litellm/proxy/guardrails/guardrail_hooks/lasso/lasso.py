@@ -93,6 +93,14 @@ class LassoGuardrail(CustomGuardrail):
     through the Lasso Security API.
     """
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         lasso_api_key: Optional[str] = None,
@@ -103,6 +111,7 @@ class LassoGuardrail(CustomGuardrail):
         mask: Optional[bool] = False,
         **kwargs,
     ):
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.lasso_api_key = lasso_api_key or api_key or os.environ.get("LASSO_API_KEY")
         self.user_id = user_id or os.environ.get("LASSO_USER_ID")
@@ -763,7 +772,13 @@ class LassoGuardrail(CustomGuardrail):
             data: Request data (used for conversation_id generation and tools extraction)
             cache: Cache instance for storing conversation_id (optional for post-call)
         """
-        payload: Dict[str, Any] = {"messages": messages, "messageType": message_type}
+        payload: Dict[str, Any] = {
+            "messages": messages,
+            "messageType": message_type,
+            # Drives the "Used By" badge on Lasso Application API Keys: every call from this
+            # integration is attributed as "litellm" on the keys list.
+            "source": {"type": "litellm"},
+        }
 
         # Add optional parameters if available
         if self.user_id:

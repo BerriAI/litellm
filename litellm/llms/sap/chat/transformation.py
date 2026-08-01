@@ -155,7 +155,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def headers(self) -> Dict[str, str]:
         if self.token_creator is None:
             self.run_env_setup()
-        access_token = self.token_creator()  # type: ignore
+        access_token = self.token_creator()  # pyright: ignore[reportOptionalCall]  # run_env_setup set it or raised
         return {
             "Authorization": access_token,
             "AI-Resource-Group": self.resource_group,

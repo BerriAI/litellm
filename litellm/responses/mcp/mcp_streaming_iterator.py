@@ -5,6 +5,8 @@ from litellm._uuid import uuid
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
+    ErrorEvent,
+    ErrorEventError,
     MCPCallArgumentsDeltaEvent,
     MCPCallArgumentsDoneEvent,
     MCPCallCompletedEvent,
@@ -23,6 +25,8 @@ if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 else:
     MCPTool = Any
+
+MAX_MCP_TOOL_CALL_ROUNDS = 5
 
 
 async def create_mcp_list_tools_events(
@@ -265,9 +269,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.should_auto_execute = self._should_auto_execute_tools()
 
         # Streaming state management
-        self.phase = (
-            "initial_response"  # initial_response -> mcp_discovery -> tool_execution -> follow_up_response -> finished
-        )
+        self.phase = "initial_response"  # initial_response -> mcp_discovery -> (continue_initial_response <-> tool_execution) -> finished
         self.finished = False
 
         # Event queues and generation flags
@@ -281,10 +283,22 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Iterator references
         self.base_iterator: Optional[Union[Any, ResponsesAPIResponse]] = base_iterator  # Will be created when needed
-        self.follow_up_iterator: Optional[Any] = None
 
         # Response collection for tool execution
         self.collected_response: Optional[ResponsesAPIResponse] = None
+
+        # Counts completed rounds of tool execution, so a model that keeps
+        # calling tools (e.g. retrying after an error) can't loop forever.
+        # Capped in _create_follow_up_iterator, which drops "tools" from the
+        # request once the cap is hit so the model must answer in text.
+        self.tool_call_round = 0
+        # The collected_response that self.tool_results was computed from.
+        # _create_follow_up_iterator only builds a follow-up when this is
+        # still the current collected_response — otherwise a round whose
+        # response had no tool calls (e.g. the model finally answered in
+        # text) would incorrectly reuse tool_results left over from an
+        # earlier round and keep looping instead of finishing.
+        self._tool_results_for_response: Optional[ResponsesAPIResponse] = None
 
         # Set up model metadata (will be updated when we get the real iterator)
         self.model = self.original_request_params.get("model", "unknown")
@@ -303,6 +317,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Cache the response ID to ensure consistency across all events
         self._cached_response_id: Optional[str] = None
+
+        self._initial_creation_error: Exception | None = None
+        self._stream_error: Exception | None = None
+        self._error_event_emitted = False
+        self._last_sequence_number = 0
 
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
@@ -368,18 +387,40 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
 
+    def _make_stream_error_event(self) -> ResponsesAPIStreamingResponse:
+        err = self._stream_error
+        status_code = getattr(err, "status_code", None)
+        return ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=self._last_sequence_number + 1,
+            error=ErrorEventError(
+                type="mcp_gateway_error",
+                code=str(status_code) if status_code is not None else "internal_error",
+                message=str(err) if err is not None else "MCP gateway stream failed",
+                param=None,
+            ),
+        )
+
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
+        chunk = await self._anext_impl()
+        sequence_number = getattr(chunk, "sequence_number", None)
+        if isinstance(sequence_number, int) and sequence_number > self._last_sequence_number:
+            self._last_sequence_number = sequence_number
+        return chunk
+
+    async def _anext_impl(self) -> ResponsesAPIStreamingResponse:
         """
         Phase-based streaming:
         1. initial_response - Stream the first LLM response (includes response.created, response.in_progress, response.output_item.added)
         2. mcp_discovery - Emit MCP discovery events (after response.output_item.added)
-        3. continue_initial_response - Continue streaming the initial response content
+        3. continue_initial_response - Stream the current round's response (initial or follow-up).
+           On completion, if auto-execute is on and the response contains tool calls, loops back
+           through tool_execution/follow-up instead of ending, up to MAX_MCP_TOOL_CALL_ROUNDS.
         4. tool_execution - Emit tool execution events
-        5. follow_up_response - Stream the follow-up response
-        6. finished - End iteration
+        5. finished - End iteration
         """
 
         # Phase 1: Initial Response Stream (emit standard OpenAI events first)
@@ -415,24 +456,26 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             if self.tool_execution_events:
                 return self.tool_execution_events.pop(0)
 
-            # Move to follow-up response phase
-            self.phase = "follow_up_response"
+            # Route the follow-up call back through continue_initial_response so
+            # its completion is checked for further tool calls the same way the
+            # initial response is — otherwise a model that needs a second round
+            # of tool calls (e.g. retrying after an error) would have that round
+            # silently dropped and the stream would end with no final text.
             await self._create_follow_up_iterator()
-
-        # Phase 5: Follow-up Response Stream
-        if self.phase == "follow_up_response":
-            if self.follow_up_iterator:
-                try:
-                    return await cast(Any, self.follow_up_iterator).__anext__()  # type: ignore[attr-defined]
-                except StopAsyncIteration:
-                    self.phase = "finished"
-                    raise
-            else:
-                self.phase = "finished"
-                raise StopAsyncIteration
+            if self.base_iterator is not None:
+                self.phase = "continue_initial_response"
+                return await self.__anext__()
+            self.phase = "finished"
+            if self._stream_error is not None and not self._error_event_emitted:
+                self._error_event_emitted = True
+                return self._make_stream_error_event()
+            raise StopAsyncIteration
 
         # Phase 6: Finished
         if self.phase == "finished":
+            if self._stream_error is not None and not self._error_event_emitted:
+                self._error_event_emitted = True
+                return self._make_stream_error_event()
             raise StopAsyncIteration
 
         # Should not reach here
@@ -521,6 +564,12 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         chunk = await cast(Any, self.base_iterator).__anext__()  # type: ignore[attr-defined]
 
+        if self._cached_response_id is None and hasattr(chunk, "response"):
+            new_response = getattr(chunk, "response", None)
+            new_response_id = getattr(new_response, "id", None) if new_response is not None else None
+            if new_response_id:
+                self._cached_response_id = new_response_id
+
         # Ensure response ID consistency - update chunk if needed
         if self._cached_response_id and hasattr(chunk, "response"):
             response_obj = getattr(chunk, "response", None)
@@ -580,6 +629,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.base_iterator = None
+            self._initial_creation_error = e
+            self._stream_error = e
             # Don't set phase to "finished" here — let __anext__ emit any
             # pre-generated MCP discovery events before ending the iteration.
 
@@ -599,6 +650,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 tool_calls = []
             if not tool_calls:
                 return
+            self.tool_call_round += 1
 
             for tool_call in tool_calls:
                 (
@@ -686,6 +738,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             # Store tool results for follow-up call
             self.tool_results = tool_results
+            self._tool_results_for_response = self.collected_response
 
         except Exception as e:
             verbose_logger.error(f"Error in tool execution: {e}")
@@ -693,10 +746,16 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.tool_results = []
+            self._tool_results_for_response = self.collected_response
 
     async def _create_follow_up_iterator(self) -> None:
         """Create the follow-up response iterator with tool results"""
-        if not self.collected_response or not hasattr(self, "tool_results"):
+        if self.collected_response is None or self.collected_response is not self._tool_results_for_response:
+            # Either no response to follow up on, or the current round's
+            # response had no tool calls (self.tool_results is stale from an
+            # earlier round) — there is nothing to follow up with, so end
+            # the stream instead of reusing stale tool results.
+            self.base_iterator = None
             return
 
         from litellm.responses.main import aresponses
@@ -726,18 +785,33 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Remove tool_choice to avoid forcing more tool calls
             follow_up_params.pop("tool_choice", None)
 
+            if self.tool_call_round >= MAX_MCP_TOOL_CALL_ROUNDS:
+                # Hit the round cap: drop tools entirely so the model must
+                # answer in text instead of emitting another (unexecuted)
+                # tool call that would otherwise end the stream in silence.
+                follow_up_params.pop("tools", None)
+                verbose_logger.warning(
+                    "MCP auto-execute hit MAX_MCP_TOOL_CALL_ROUNDS=%s; forcing a text-only follow-up.",
+                    MAX_MCP_TOOL_CALL_ROUNDS,
+                )
+
             follow_up_response = await aresponses(**follow_up_params)
 
-            # Set up the follow-up iterator
+            # Route the follow-up through the same base_iterator machinery as
+            # the initial call so its completion is checked for further tool
+            # calls (see phase 4 in __anext__).
             if hasattr(follow_up_response, "__aiter__"):
-                self.follow_up_iterator = follow_up_response
+                self.base_iterator = follow_up_response
+                self.collected_response = None
+                self._cached_response_id = None
 
         except Exception as e:
             verbose_logger.error(f"Error creating follow-up iterator: {e}")
             import traceback
 
             traceback.print_exc()
-            self.follow_up_iterator = None
+            self.base_iterator = None
+            self._stream_error = e
 
     def __iter__(self):
         return self

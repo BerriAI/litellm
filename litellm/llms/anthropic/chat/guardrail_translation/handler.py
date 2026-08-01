@@ -361,14 +361,34 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _write_back_structured_messages(data: dict, structured_messages: list) -> None:
-        """Convert compressed structured_messages back to Anthropic format and write to data."""
+        """Convert compressed structured_messages back to Anthropic format and write to data.
+
+        ``anthropic_messages_pt`` merges every run of consecutive user/tool rows
+        into a single message, so a turn carrying only tool results and the user
+        turn that follows it come back fused, and the request the model sees no
+        longer has the boundaries the client sent. Converting a row at a time
+        would keep them apart but breaks tool pairing: an assistant row whose
+        tool results sit outside its own call reads as an orphaned tool call,
+        and under ``modify_params`` the sanitizer answers it with a synthetic
+        "tool execution skipped" result and drops the real one. Converting each
+        assistant row together with the tool rows that answer it, and every
+        other row on its own, satisfies both.
+        """
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
+            group_tool_exchanges,
         )
 
         model = str(data.get("model") or "")
         non_system = [m for m in structured_messages if m.get("role") != "system"]
-        converted = anthropic_messages_pt(messages=non_system, model=model, llm_provider="anthropic")
+        groups = tuple([non_system[index] for index in group] for group in group_tool_exchanges(non_system)) or (
+            non_system,
+        )
+        converted = [
+            message
+            for group in groups
+            for message in anthropic_messages_pt(messages=group, model=model, llm_provider="anthropic")
+        ]
         for msg in converted:
             content = msg.get("content")
             if isinstance(content, list):
@@ -600,9 +620,15 @@ class AnthropicMessagesHandler(BaseTranslation):
                     guardrail_inputs["tool_calls"] = tool_calls_list
 
                 try:
+                    prepared_request_data = self._prepare_request_data(
+                        request_data,
+                        model_response,
+                        user_api_key_dict,
+                        key="response",
+                    )
                     _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                         inputs=guardrail_inputs,
-                        request_data=request_data if request_data is not None else {},
+                        request_data=prepared_request_data,
                         input_type="response",
                         logging_obj=litellm_logging_obj,
                     )
@@ -618,9 +644,15 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
         try:
+            prepared_request_data = self._prepare_request_data(
+                request_data,
+                responses_so_far,
+                user_api_key_dict,
+                key="responses",
+            )
             _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs={"texts": [string_so_far]},
-                request_data=request_data if request_data is not None else {},
+                request_data=prepared_request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )

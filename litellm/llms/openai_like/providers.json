@@ -168,6 +168,13 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
+  "meta": {
+    "base_url": "https://api.meta.ai/v1",
+    "api_key_env": "META_API_KEY",
+    "api_base_env": "META_API_BASE",
+    "base_class": "openai_gpt",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
   "pinstripes": {
     "base_url": "https://pinstripes.io/v1",
     "api_key_env": "PINSTRIPES_API_KEY",

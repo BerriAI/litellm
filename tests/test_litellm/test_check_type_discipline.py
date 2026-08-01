@@ -62,12 +62,38 @@ def test_noqa_with_codes_and_reason_is_clean(tmp_path):
     assert "LIT003" not in _codes(tmp_path, "x = 1  # noqa: TID251  # legacy import, removed in #123\n")
 
 
-def test_ignore_without_reason_is_flagged(tmp_path):
-    assert "LIT004" in _codes(tmp_path, "x = 1  # type: ignore[arg-type]\n")
+def test_pyright_ignore_without_codes_is_flagged(tmp_path):
+    assert "LIT004" in _codes(tmp_path, "x = 1  # pyright: ignore\n")
+
+
+def test_pyright_ignore_without_reason_is_flagged(tmp_path):
+    assert "LIT004" in _codes(tmp_path, "x = 1  # pyright: ignore[reportArgumentType]\n")
 
 
 def test_ignore_with_codes_and_reason_is_clean(tmp_path):
-    assert "LIT004" not in _codes(tmp_path, "x = 1  # pyright: ignore[reportArgumentType]  # upstream stub is wrong\n")
+    codes = _codes(tmp_path, "x = 1  # pyright: ignore[reportArgumentType]  # upstream stub is wrong\n")
+    assert "LIT004" not in codes
+    assert "LIT009" not in codes
+
+
+def test_bare_type_ignore_is_flagged(tmp_path):
+    assert "LIT009" in _codes(tmp_path, "x = 1  # type: ignore\n")
+
+
+def test_type_ignore_with_codes_and_reason_is_still_flagged(tmp_path):
+    codes = _codes(tmp_path, "x = 1  # type: ignore[arg-type]  # inertness is the point\n")
+    assert "LIT009" in codes
+    assert "LIT004" not in codes
+
+
+def test_prose_mentioning_type_ignored_is_not_flagged(tmp_path):
+    assert "LIT009" not in _codes(tmp_path, "x = 1  # type: ignored by the stub refresh, revisit\n")
+
+
+def test_mypy_ignore_shape_is_lit004_not_lit009(tmp_path):
+    codes = _codes(tmp_path, "x = 1  # mypy: ignore[assignment]\n")
+    assert "LIT004" in codes
+    assert "LIT009" not in codes
 
 
 def test_ok_suppression_without_reason_is_flagged(tmp_path):
@@ -124,6 +150,28 @@ def test_qualified_collections_constructors_still_count(tmp_path):
     # collections concretes are rarely method names, so a qualified call still flags.
     assert "LIT002" in _codes(tmp_path, "import collections\nq = collections.deque()\n")
     assert "LIT002" in _codes(tmp_path, "import collections\nm = collections.defaultdict(list)\n")
+
+
+def test_value_frozen_by_wrapper_is_exempt(tmp_path):
+    assert "LIT002" not in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType({'a': 1})\n")
+    assert "LIT002" not in _codes(tmp_path, "import types\nm = types.MappingProxyType({'a': 1})\n")
+    assert "LIT002" not in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType(dict(a=1))\n")
+    assert "LIT002" not in _codes(tmp_path, "f = frozenset({1, 2})\n")
+    assert "LIT002" not in _codes(tmp_path, "t = tuple([1, 2])\n")
+
+
+def test_same_named_method_does_not_exempt_its_argument(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "t = obj.tuple([1, 2])\n")
+    assert "LIT002" in _codes(tmp_path, "f = obj.frozenset({1, 2})\n")
+    assert "LIT002" in _codes(tmp_path, "m = obj.MappingProxyType({'a': 1})\n")
+
+
+def test_mutable_nested_inside_frozen_wrapper_still_counts(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType({'a': []})\n")
+
+
+def test_unfrozen_literal_still_counts(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nd = {'a': 1}\nm = MappingProxyType(d)\n")
 
 
 def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
@@ -196,4 +244,4 @@ def test_typed_args_is_clean_but_kwargs_ok_suppresses(tmp_path):
 
 def test_budget_covers_exactly_the_checker_rules():
     budget = json.loads((_REPO_ROOT / "type-discipline-budget.json").read_text())
-    assert set(budget) == {f"LIT00{n}" for n in range(1, 9)}
+    assert set(budget) == {f"LIT00{n}" for n in range(1, 10)}

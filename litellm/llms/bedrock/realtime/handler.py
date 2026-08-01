@@ -9,11 +9,16 @@ import contextlib
 import json
 from typing import Any, Optional
 
+from pydantic import TypeAdapter
+
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 from ..base_aws_llm import BaseAWSLLM
+from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
+
+_CLIENT_MODALITIES_ADAPTER: TypeAdapter["list[str] | None"] = TypeAdapter(list[str] | None)
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -59,9 +64,7 @@ class BedrockRealtime(BaseAWSLLM):
                 InvokeModelWithBidirectionalStreamOperationInput,
             )
             from aws_sdk_bedrock_runtime.config import Config
-            from smithy_aws_core.identity.environment import (
-                EnvironmentCredentialsResolver,
-            )
+            from smithy_aws_core.identity import StaticCredentialsResolver
         except ImportError:
             raise ImportError("Missing aws_sdk_bedrock_runtime. Install with: pip install aws-sdk-bedrock-runtime")
 
@@ -82,11 +85,36 @@ class BedrockRealtime(BaseAWSLLM):
 
         verbose_proxy_logger.debug(f"Bedrock Realtime: Connecting to {endpoint_uri} with model {model}")
 
+        credentials = self.get_credentials(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
+        )
+        if credentials is None:
+            raise BedrockError(
+                status_code=401,
+                message=(
+                    "No AWS credentials found for Bedrock realtime. Set aws_* params in litellm_params "
+                    "or configure credentials in the environment"
+                ),
+            )
+        frozen_credentials = credentials.get_frozen_credentials()
+
         # Initialize Bedrock client with aws_sdk_bedrock_runtime
         config = Config(
             endpoint_uri=endpoint_uri,
             region=aws_region_name,
-            aws_credentials_identity_resolver=EnvironmentCredentialsResolver(),
+            aws_access_key_id=frozen_credentials.access_key,
+            aws_secret_access_key=frozen_credentials.secret_key,
+            aws_session_token=frozen_credentials.token,
+            aws_credentials_identity_resolver=StaticCredentialsResolver(),
         )
         bedrock_client = BedrockRuntimeClient(config=config)
 
@@ -99,6 +127,9 @@ class BedrockRealtime(BaseAWSLLM):
             )
 
             verbose_proxy_logger.debug("Bedrock Realtime: Bidirectional stream established")
+
+            await websocket.send_text(json.dumps(transformation_config.session_created_event(model, logging_obj)))
+            verbose_proxy_logger.debug("Bedrock Realtime: sent session.created to client on connect")
 
             # Track state for transformation
             session_state = {
@@ -119,6 +150,7 @@ class BedrockRealtime(BaseAWSLLM):
                     transformation_config,
                     model,
                     session_state,
+                    logging_obj,
                 )
             )
 
@@ -155,6 +187,7 @@ class BedrockRealtime(BaseAWSLLM):
         transformation_config: BedrockRealtimeConfig,
         model: str,
         session_state: dict,
+        logging_obj: LiteLLMLogging | None = None,
     ):
         """Forward messages from client WebSocket to Bedrock stream."""
         from aws_sdk_bedrock_runtime.models import (
@@ -185,6 +218,23 @@ class BedrockRealtime(BaseAWSLLM):
                 # Send transformed messages to Bedrock
                 for bedrock_message in transformed_messages:
                     await send_to_bedrock(bedrock_message)
+
+                if logging_obj is not None:
+                    client_message_type: str | None = None
+                    requested_modalities: list[str] | None = None
+                    with contextlib.suppress(Exception):
+                        parsed_client_message = json.loads(message)
+                        client_message_type = parsed_client_message.get("type")
+                        if client_message_type == "session.update":
+                            requested_modalities = _CLIENT_MODALITIES_ADAPTER.validate_python(
+                                parsed_client_message.get("session", {}).get("modalities")
+                            )
+                    if client_message_type == "session.update":
+                        await client_ws.send_text(
+                            json.dumps(
+                                transformation_config.session_updated_event(model, logging_obj, requested_modalities)
+                            )
+                        )
 
         except Exception as e:
             verbose_proxy_logger.debug(f"Client to Bedrock forwarding ended: {e}", exc_info=True)

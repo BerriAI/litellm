@@ -4,14 +4,15 @@ organizations, teams, and keys.
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Set, Union
 
 from fastapi import HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerNames
+from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
@@ -64,6 +65,57 @@ async def attach_object_permission_to_dict(
     return data_dict
 
 
+@dataclass(frozen=True, slots=True)
+class ObjectPermissionUpsert:
+    object_permission_id: str
+    record: dict[str, object]
+
+
+async def prepare_object_permission_upsert(
+    new_object_permission: Mapping[str, object],
+    existing_object_permission_id: str | None,
+    prisma_client: PrismaClient,
+) -> ObjectPermissionUpsert:
+    """
+    Read-and-merge half of an object permission upsert; performs no writes.
+
+    Merges the sent grants over the existing row (looked up by
+    ``existing_object_permission_id``, or a fresh uuid when the entity has none) and
+    returns the id plus the full record to upsert. The id is pinned inside the record
+    because the column has ``@default(uuid())``, so a create without it would mint a
+    different id than the one the caller links. ``mcp_tool_permissions`` is serialized
+    to a JSON string to avoid GraphQL parsing issues (e.g. server IDs starting with
+    "3e64" being interpreted as floats).
+
+    Keeping this separate from the write lets callers run the upsert inside the same
+    transaction as the row that links ``object_permission_id``, so a rolled-back
+    update cannot leave permission changes live.
+    """
+    object_permission_id = existing_object_permission_id or str(uuid.uuid4())
+    existing_object_permission = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        where={"object_permission_id": object_permission_id},
+    )
+    existing_fields: dict[str, object] = (
+        existing_object_permission.model_dump(exclude_unset=True, exclude_none=True)
+        if existing_object_permission is not None
+        else {}
+    )
+    merged: dict[str, object] = {
+        **existing_fields,
+        **new_object_permission,
+        "object_permission_id": object_permission_id,
+    }
+    record: dict[str, object] = {
+        **merged,
+        **(
+            {"mcp_tool_permissions": safe_dumps(merged["mcp_tool_permissions"])}
+            if "mcp_tool_permissions" in merged
+            else {}
+        ),
+    }
+    return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
+
+
 async def handle_update_object_permission_common(
     data_json: Dict,
     existing_object_permission_id: Optional[str],
@@ -93,50 +145,23 @@ async def handle_update_object_permission_common(
     if prisma_client is None:
         raise ValueError("Prisma client not found")
 
-    #########################################################
-    # Ensure `object_permission` is not added to the data_json
-    # We need to update the entity at the object_permission_id level in the LiteLLM_ObjectPermissionTable
-    #########################################################
-    new_object_permission: Union[dict, str] = data_json.pop("object_permission", None)
+    new_object_permission: Union[dict, str, None] = data_json.pop("object_permission", None)
     if new_object_permission is None:
         return None
 
-    # Lookup existing object permission ID and update that entry
-    object_permission_id_to_use: str = existing_object_permission_id or str(uuid.uuid4())
-    existing_object_permissions_dict: Dict = {}
-
-    existing_object_permission = await ObjectPermissionRepository(prisma_client).table.find_unique(
-        where={"object_permission_id": object_permission_id_to_use},
-    )
-
-    # Update the object permission
-    if existing_object_permission is not None:
-        existing_object_permissions_dict = existing_object_permission.model_dump(exclude_unset=True, exclude_none=True)
-
-    # Handle string JSON object permission
     if isinstance(new_object_permission, str):
         new_object_permission = json.loads(new_object_permission)
 
-    if isinstance(new_object_permission, dict):
-        existing_object_permissions_dict.update(new_object_permission)
-
-    #########################################################
-    # Serialize mcp_tool_permissions JSON field to avoid GraphQL parsing issues
-    # (e.g., server IDs starting with "3e64" being interpreted as floats)
-    #########################################################
-    if "mcp_tool_permissions" in existing_object_permissions_dict:
-        existing_object_permissions_dict["mcp_tool_permissions"] = safe_dumps(
-            existing_object_permissions_dict["mcp_tool_permissions"]
-        )
-
-    #########################################################
-    # Commit the update to the LiteLLM_ObjectPermissionTable
-    #########################################################
+    upsert = await prepare_object_permission_upsert(
+        new_object_permission=new_object_permission if isinstance(new_object_permission, dict) else {},
+        existing_object_permission_id=existing_object_permission_id,
+        prisma_client=prisma_client,
+    )
     created_object_permission_row = await ObjectPermissionRepository(prisma_client).table.upsert(
-        where={"object_permission_id": object_permission_id_to_use},
+        where={"object_permission_id": upsert.object_permission_id},
         data={
-            "create": existing_object_permissions_dict,
-            "update": existing_object_permissions_dict,
+            "create": upsert.record,
+            "update": upsert.record,
         },
     )
 
@@ -334,6 +359,8 @@ async def _resolve_team_allowed_mcp_servers(
     )
 
     direct_servers: List[str] = team_object_permission.mcp_servers or []
+    if SpecialMCPServerName.all_proxy_servers.value in direct_servers:
+        return _get_all_mcp_server_ids()
     access_group_servers: List[str] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
         team_object_permission.mcp_access_groups or []
     )
@@ -357,6 +384,62 @@ def _get_allow_all_keys_server_ids() -> Set[str]:
     )
 
     return set(global_mcp_server_manager.get_allow_all_keys_server_ids())
+
+
+def _get_all_mcp_server_ids() -> set[str]:
+    """Return every MCP server id registered on the proxy (config + DB union)."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    return set(global_mcp_server_manager.get_registry().keys())
+
+
+async def _existing_object_permission_mcp_servers(
+    object_permission_id: Optional[str],
+    prisma_client: Optional[PrismaClient],
+) -> list[str]:
+    if not object_permission_id or prisma_client is None:
+        return []
+    existing = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        where={"object_permission_id": object_permission_id},
+    )
+    if existing is None:
+        return []
+    return existing.mcp_servers or []
+
+
+async def enforce_all_proxy_mcp_servers_grant_is_admin_only(
+    requested_mcp_servers: Optional[list[str]],
+    existing_object_permission_id: Optional[str],
+    is_proxy_admin: bool,
+    prisma_client: Optional[PrismaClient],
+) -> None:
+    """
+    Only a proxy admin may newly grant the all-proxy MCP sentinel.
+
+    Scoping a team to every MCP server on the proxy is a proxy-wide authorization
+    decision, so a caller who is not a proxy admin (e.g. a team admin managing their
+    own team) cannot add ``all-proxy-mcpservers``. A sentinel a proxy admin already
+    granted is left untouched, so unrelated edits to such a team still succeed.
+
+    Raises HTTPException(403) when a non-admin tries to add the sentinel.
+    """
+    sentinel = SpecialMCPServerName.all_proxy_servers.value
+    if is_proxy_admin or sentinel not in (requested_mcp_servers or []):
+        return
+    existing_mcp_servers = await _existing_object_permission_mcp_servers(
+        object_permission_id=existing_object_permission_id,
+        prisma_client=prisma_client,
+    )
+    if sentinel in existing_mcp_servers:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": "Only a proxy admin can grant a team access to all proxy MCP servers ('all-proxy-mcpservers')."
+        },
+    )
 
 
 async def _get_team_allowed_mcp_servers(
