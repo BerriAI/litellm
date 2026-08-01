@@ -1,6 +1,7 @@
 import ast
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from logging import Formatter
@@ -410,10 +411,27 @@ def _enable_debugging():
     verbose_proxy_logger.disabled = False
 
 
+def _sanitize_log_message(message: str) -> str:
+    line_breaks = {
+        "\r": "\\r",
+        "\n": "\\n",
+        "\x85": "\\x85",
+        "\u2028": "\\u2028",
+        "\u2029": "\\u2029",
+    }
+    for char, escaped in line_breaks.items():
+        message = message.replace(char, escaped)
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "?", message)
+
+
+def _redact_and_sanitize(value) -> str:
+    return _sanitize_log_message(redact_secrets(str(value)))
+
+
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa: T201
+            print(_redact_and_sanitize(print_statement))  # noqa: T201
     except Exception:
         pass
 

@@ -89,7 +89,11 @@ from litellm import (
     ModelResponseStream,
     Router,
 )
-from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm._logging import (
+    _redact_and_sanitize,
+    _redact_string,
+    verbose_proxy_logger,
+)
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
@@ -202,7 +206,9 @@ def print_verbose(print_statement):
 
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa: T201
+        print(  # noqa: T201
+            f"LiteLLM Proxy: {_redact_and_sanitize(print_statement)}"
+        )
 
 
 def _get_email_logger_class():
