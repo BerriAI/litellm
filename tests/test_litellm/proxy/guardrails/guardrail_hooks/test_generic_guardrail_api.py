@@ -6,6 +6,7 @@ specifically focusing on metadata extraction and passing.
 """
 
 import os
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -22,7 +23,14 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
-from litellm.types.utils import Choices, Message
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import (
+    Choices,
+    GenericGuardrailAPICompletionTokensDetails,
+    GenericGuardrailAPIUsage,
+    GenericGuardrailAPIPromptTokensDetails,
+    Message,
+)
 
 
 @pytest.fixture
@@ -377,6 +385,77 @@ class TestMetadataExtraction:
             # The token field should be mapped to user_api_key_hash
             assert "user_api_key_hash" in request_metadata
             assert request_metadata["user_api_key_user_id"] == "default_user_id"
+
+    @pytest.mark.asyncio
+    async def test_response_usage_forwarded_to_guardrail_api(self, generic_guardrail):
+        usage = GenericGuardrailAPIUsage(
+            prompt_tokens=10,
+            completion_tokens=20,
+            total_tokens=30,
+            prompt_tokens_details=GenericGuardrailAPIPromptTokensDetails(
+                cached_tokens=3
+            ),
+            completion_tokens_details=GenericGuardrailAPICompletionTokensDetails(
+                reasoning_tokens=7
+            ),
+        )
+        mock_api_response = MagicMock()
+        mock_api_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["checked"],
+        }
+        mock_api_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_api_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["checked"], "usage": usage},
+                request_data={},
+                input_type="response",
+            )
+
+        json_payload = mock_post.call_args.kwargs["json"]
+
+        assert json_payload["usage"] == {
+            "completion_tokens": 20,
+            "prompt_tokens": 10,
+            "total_tokens": 30,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": None,
+                "audio_tokens": None,
+                "reasoning_tokens": 7,
+                "rejected_prediction_tokens": None,
+            },
+            "prompt_tokens_details": {
+                "audio_tokens": None,
+                "cached_tokens": 3,
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_request_without_usage_forwards_null_usage(
+        self, generic_guardrail
+    ):
+        mock_api_response = MagicMock()
+        mock_api_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["checked"],
+        }
+        mock_api_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_api_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["checked"]},
+                request_data={},
+                input_type="request",
+            )
+
+        json_payload = mock_post.call_args.kwargs["json"]
+
+        assert json_payload["usage"] is None
 
     @pytest.mark.asyncio
     async def test_metadata_extraction_handles_token_to_hash_mapping(
@@ -1020,6 +1099,70 @@ class TestMultimodalSupport:
             call_args = mock_post.call_args
             json_payload = call_args.kwargs["json"]
             assert isinstance(json_payload["structured_messages"], list)
+
+    @pytest.mark.asyncio
+    async def test_tool_call_history_message_serialization(self):
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-tool-call-history-guardrail",
+        )
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "What is the current time?"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "arguments": "{}",
+                                "name": "current_time",
+                            },
+                            "id": "call_1",
+                            "type": "function",
+                        }
+                    ],
+                    "provider_specific_fields": {"refusal": None},
+                    "annotations": [],
+                    "content": None,
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "name": "current_time",
+                    "content": "2026-06-28T17:50:23+03:00",
+                },
+            ],
+        )
+        mock_response = httpx.Response(
+            200,
+            json={"action": "NONE"},
+            request=httpx.Request("POST", "https://api.test.guardrail.com"),
+        )
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs={
+                    "texts": [
+                        "What is the current time?",
+                        "2026-06-28T17:50:23+03:00",
+                    ],
+                    "structured_messages": messages,
+                },
+                request_data={"model": "gpt-4", "messages": messages},
+                input_type="request",
+            )
+
+        json_payload = mock_post.call_args.kwargs["json"]
+        assert json_payload["structured_messages"][1]["role"] == "assistant"
+        assert (
+            json_payload["structured_messages"][1]["tool_calls"][0]["id"]
+            == "call_1"
+        )
+        assert json_payload["structured_messages"][2]["role"] == "tool"
+        assert json_payload["structured_messages"][2]["tool_call_id"] == "call_1"
 
 
 def _make_stream_chunk(content: str, finish_reason=None):

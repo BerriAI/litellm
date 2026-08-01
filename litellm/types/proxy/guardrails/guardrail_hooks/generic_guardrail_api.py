@@ -8,7 +8,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-from litellm.types.utils import ChatCompletionMessageToolCall
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIUsage
 
 
 class GuardrailToolParam(BaseModel):
@@ -142,6 +142,7 @@ class GenericGuardrailAPIRequest(BaseModel):
     additional_provider_specific_params: Optional[Dict[str, Any]] = None
     tool_calls: Optional[Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]] = None
     model: Optional[str] = None  # the model being used for the LLM call
+    usage: Optional[GenericGuardrailAPIUsage] = None
 
 
 def coerce_stream_holdback_value(value: Any) -> int:

@@ -8,7 +8,6 @@ with guardrail transformations.
 import os
 import sys
 from typing import Any, List, Literal, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -24,9 +23,18 @@ from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    InputTokensDetails,
+    OutputTokensDetails,
+    ResponseAPIUsage,
+    ResponsesAPIResponse,
+)
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+from litellm.types.utils import (
+    CallTypes,
+    GenericGuardrailAPIInputs,
+    GenericGuardrailAPIUsage,
+)
 
 
 class MockGuardrail(CustomGuardrail):
@@ -52,6 +60,22 @@ class MockGuardrail(CustomGuardrail):
             )
         # For requests, we can still mask/transform
         inputs["texts"] = [f"{text} [GUARDRAILED]" for text in texts]
+        return inputs
+
+
+class CapturingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str = "test"):
+        super().__init__(guardrail_name=guardrail_name)
+        self.last_inputs: Optional[GenericGuardrailAPIInputs] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.last_inputs = inputs
         return inputs
 
 
@@ -222,6 +246,91 @@ class TestOpenAIResponsesHandlerOutputProcessing:
 
         assert exc_info.value.status_code == 400
         assert "Response blocked by guardrail" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_passes_generic_guardrail_usage(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = CapturingGuardrail(guardrail_name="test")
+
+        response = ResponsesAPIResponse(
+            id="resp_usage",
+            created_at=1234567890,
+            model="gpt-4",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Hello user"},
+                    ],
+                }
+            ],
+            usage=ResponseAPIUsage(
+                input_tokens=11,
+                output_tokens=22,
+                total_tokens=33,
+                input_tokens_details=InputTokensDetails(cached_tokens=4),
+                output_tokens_details=OutputTokensDetails(reasoning_tokens=7),
+            ),
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert guardrail.last_inputs is not None
+        usage = guardrail.last_inputs.get("usage")
+        assert isinstance(usage, GenericGuardrailAPIUsage)
+        assert usage.prompt_tokens == 11
+        assert usage.completion_tokens == 22
+        assert usage.total_tokens == 33
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 4
+        assert usage.completion_tokens_details is not None
+        assert usage.completion_tokens_details.reasoning_tokens == 7
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_passes_generic_guardrail_usage(
+        self,
+    ):
+        handler = OpenAIResponsesHandler()
+        guardrail = CapturingGuardrail(guardrail_name="test")
+        responses_so_far = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_stream_usage",
+                    "model": "gpt-4",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_123",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "Hello user"},
+                            ],
+                        }
+                    ],
+                    "usage": {
+                        "input_tokens": 3,
+                        "output_tokens": 4,
+                        "total_tokens": 7,
+                    },
+                },
+            }
+        ]
+
+        await handler.process_output_streaming_response(responses_so_far, guardrail)
+
+        assert guardrail.last_inputs is not None
+        usage = guardrail.last_inputs.get("usage")
+        assert isinstance(usage, GenericGuardrailAPIUsage)
+        assert usage.prompt_tokens == 3
+        assert usage.completion_tokens == 4
+        assert usage.total_tokens == 7
 
     @pytest.mark.asyncio
     async def test_process_output_response_multiple_items(self):
