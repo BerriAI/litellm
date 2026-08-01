@@ -332,7 +332,10 @@ async def update_credential(
         )
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        # Raised, not returned: returning the exception makes it the response body and
+        # FastAPI answers 200, so a rejected access shape reads as a successful write to
+        # any client checking the status (the destination edit modal does).
+        raise handle_exception_on_proxy(e)
 
 
 def _sync_in_memory_credential(

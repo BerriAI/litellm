@@ -165,6 +165,53 @@ def test_patch_credentials_route_targets_update_credential():
     assert patch_route.endpoint is endpoints.update_credential
 
 
+@pytest.mark.asyncio
+async def test_update_credential_raises_rejections_instead_of_answering_200(monkeypatch):
+    """Regression: the handler returned the ProxyException instead of raising it, so
+    FastAPI serialized it as the body of a 200. A rejected access shape then read as a
+    successful write to any client checking the status, including the destination edit
+    modal. The rejection has to reach the caller as a 4xx.
+    """
+    from litellm.proxy._types import ProxyException
+
+    class _Repo:
+        def __init__(self, _client):
+            pass
+
+        async def find_by_name(self, name):
+            return CredentialItem(
+                credential_name=name,
+                credential_values={},
+                credential_info={"credential_type": "logging", "description": "generic"},
+            )
+
+    monkeypatch.setattr(endpoints, "CredentialsRepository", _Repo)
+    monkeypatch.setattr(endpoints, "validate_credential_access", _boom_400)
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", object(), raising=False)
+
+    with pytest.raises(ProxyException) as excinfo:
+        await endpoints.update_credential(
+            request=MagicMock(),
+            fastapi_response=MagicMock(),
+            credential=CredentialItem(
+                credential_name="dest",
+                credential_values={},
+                credential_info={"credential_type": "logging", "access": "everyone"},
+            ),
+            credential_name="dest",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert excinfo.value.code in ("400", 400)
+
+
+def _boom_400(_info):
+    from fastapi import HTTPException
+
+    raise HTTPException(status_code=400, detail={"error": "credential_info.access must be an object"})
+
+
 # --- secret masking on read --------------------------------------------------
 
 @pytest.mark.asyncio
