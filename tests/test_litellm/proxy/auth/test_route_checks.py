@@ -1954,6 +1954,82 @@ def test_proxy_admin_viewer_can_access_logs_page_endpoints(route):
         )
 
 
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+def test_internal_user_can_access_logs_drawer_detail_route(user_role):
+    """
+    The Logs drawer detail fetch (GET /spend/logs/ui/{request_id}) must pass
+    route_checks for plain internal users, not just admins — the handler
+    itself already self-authorizes row ownership via
+    _assert_user_can_view_request_id.
+    """
+    route = "/spend/logs/ui/abc-request-id"
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=user_role.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=user_role.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=user_role.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(f"{user_role.value} should be able to access {route}. Got error: {str(e)}")
+
+
+@pytest.mark.parametrize(
+    "route_group_name",
+    [
+        "spend_tracking_routes",
+        "internal_user_routes",
+        "internal_user_view_only_routes",
+        "admin_viewer_routes",
+        "org_admin_allowed_routes",
+    ],
+)
+def test_logs_drawer_detail_route_in_every_route_group(route_group_name):
+    """
+    /spend/logs/ui/{request_id} must be reachable through
+    RouteChecks.check_route_access under each role's own route group, so a
+    partial revert (removing the route from `spend_tracking_routes` while
+    leaving `non_proxy_admin_allowed_routes_check` alone) is also caught.
+    """
+    from litellm.proxy._types import LiteLLMRoutes
+
+    allowed_routes = getattr(LiteLLMRoutes, route_group_name).value
+    assert RouteChecks.check_route_access(
+        route="/spend/logs/ui/req-34099", allowed_routes=allowed_routes
+    )
+
+
+def test_logs_drawer_detail_route_allowed_for_scoped_virtual_key():
+    """
+    A virtual key scoped to `allowed_routes=["spend_tracking_routes"]` must be
+    able to reach the Logs drawer detail route.
+    """
+    valid_token = UserAPIKeyAuth(
+        user_id="scoped_key_user",
+        allowed_routes=["spend_tracking_routes"],
+    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/spend/logs/ui/req-34099", valid_token=valid_token
+    )
+
+
 @pytest.mark.parametrize("route", ADMIN_VIEWER_LOGS_PAGE_ROUTES)
 def test_internal_user_blocked_from_admin_viewer_logs_routes(route):
     """
