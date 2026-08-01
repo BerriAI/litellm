@@ -4356,25 +4356,9 @@ export interface paths {
         };
         /**
          * Get Global Activity
-         * @description Get number of cache hits, vs misses
-         *
-         *     {
-         *         "daily_data": [
-         *                 const chartdata = [
-         *                 {
-         *                     date: 'Jan 22',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 2000
-         *                 },
-         *                 {
-         *                     date: 'Jan 23',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 12
-         *                 },
-         *         ],
-         *         "sum_cache_hits": 20,
-         *         "sum_llm_api_calls": 2012
-         *     }
+         * @description Cache activity for the Admin UI cache dashboard, aggregated per call_type:
+         *     cache hits vs successful LLM API requests vs failed requests, plus totals
+         *     for the stat cards and the available key-alias/model filter options.
          */
         get: operations["get_global_activity_global_activity_cache_hits_get"];
         put?: never;
@@ -6935,8 +6919,8 @@ export interface paths {
          * @description Update an existing API key's parameters.
          *
          *     Parameters:
-         *     - key: str - The key to update
-         *     - key_alias: Optional[str] - User-friendly key alias
+         *     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
+         *     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -7179,6 +7163,44 @@ export interface paths {
         put?: never;
         /** Login */
         post: operations["login_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Budgets
+         * @description The budgets defined on this proxy, paged, sortable and filterable, for the
+         *     Budgets page.
+         *
+         *     Readable by a proxy admin or an admin viewer; anyone else is refused 403. The
+         *     older `/budget/list` answers with the whole table as a bare array and has no
+         *     way to page, sort or filter it.
+         *
+         *     `sort` takes a comma-separated list of `budget_id`, `max_budget`, `tpm_limit`,
+         *     `rpm_limit` or `created_at`, each optionally prefixed with `-` for descending,
+         *     and defaults to `-created_at`. `budget_id` is appended to every sort as the
+         *     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
+         *     `page_size` defaults to 50 and is capped at 100. Filters are
+         *     `filter[budget_duration][in|is_null]`, `filter[max_budget][gte|lte|is_null]`
+         *     and `filter[created_at][gte|lte]`.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_budgets_management_v1_budgets_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9395,7 +9417,10 @@ export interface paths {
         };
         /**
          * List Policy Attachments
-         * @description List all policy attachments from the database.
+         * @description List all policy attachments from the database and config.yaml.
+         *
+         *     Config-defined attachments are returned with definition_location "config" and a
+         *     synthetic attachment_id ("config-<index>").
          *
          *     Example Request:
          *     ```bash
@@ -9503,7 +9528,10 @@ export interface paths {
         };
         /**
          * List Policies
-         * @description List all policies from the database. Optionally filter by version_status.
+         * @description List all policies from the database and config.yaml. Optionally filter by version_status.
+         *
+         *     Config-defined policies are returned with definition_location "config" and are treated
+         *     as production versions. On a name conflict with a DB policy, only the DB policy is returned.
          *
          *     Query params:
          *     - version_status: Optional. One of "draft", "published", "production".
@@ -14822,7 +14850,7 @@ export interface paths {
          *     - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
          *     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
          *     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
-         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -14903,7 +14931,7 @@ export interface paths {
          *         - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None.
          *         - duration: Optional[str] - [NOT IMPLEMENTED].
          *         - key_alias: Optional[str] - [NOT IMPLEMENTED].
-         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          */
@@ -21543,6 +21571,40 @@ export interface components {
             /** Reset At */
             reset_at?: string | null;
         };
+        /**
+         * BudgetListItem
+         * @description One budget as the Budgets page reads it, and as it comes back off the table.
+         *
+         *     Validating the raw row through here is what makes `tpm_limit` / `rpm_limit`
+         *     numbers: they are `BigInt?` in the schema, which the query engine hands back as
+         *     decimal strings, and a quoted "60000" breaks arithmetic in the dashboard.
+         */
+        BudgetListItem: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id: string;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** BudgetNewRequest */
         BudgetNewRequest: {
             /**
@@ -21741,6 +21803,48 @@ export interface components {
             successful_updates: number;
             /** Total Requested */
             total_requested: number;
+        };
+        /** CacheActivityFilterOptions */
+        CacheActivityFilterOptions: {
+            /** Key Aliases */
+            key_aliases: string[];
+            /** Models */
+            models: string[];
+        };
+        /** CacheActivityGroup */
+        CacheActivityGroup: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Call Type */
+            call_type: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Generated Completion Tokens */
+            generated_completion_tokens: number;
+        };
+        /** CacheActivityResponse */
+        CacheActivityResponse: {
+            filter_options: components["schemas"]["CacheActivityFilterOptions"];
+            /** Groups */
+            groups: components["schemas"]["CacheActivityGroup"][];
+            totals: components["schemas"]["CacheActivityTotals"];
+        };
+        /** CacheActivityTotals */
+        CacheActivityTotals: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hit Ratio */
+            cache_hit_ratio: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
         };
         /** CachePingResponse */
         CachePingResponse: {
@@ -22794,11 +22898,6 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
-            /**
-             * Skip User Budget On Team Key
-             * @description If True, restores the legacy behavior where a user's personal max_budget is NOT enforced when their key belongs to a team; only the team (and team-member) budgets apply. Defaults to False, meaning the user's personal max_budget is always enforced regardless of whether the key belongs to a team (see GitHub issue #12905).
-             */
-            skip_user_budget_on_team_key?: boolean | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -24902,6 +25001,36 @@ export interface components {
             guardrails: components["schemas"]["GuardrailInfoResponse"][];
         };
         /**
+         * ListLinks
+         * @description Page-mode counterpart to `PageLinks`. `first`/`last` are knowable here because the total count is.
+         */
+        ListLinks: {
+            /** First */
+            first: string;
+            /** Last */
+            last: string;
+            /** Next */
+            next?: string | null;
+            /** Prev */
+            prev?: string | null;
+            /** Self */
+            self: string;
+        };
+        /**
+         * ListMeta
+         * @description Page-mode counterpart to `PageMeta`: an entity list pays for the COUNT(*) so the table can show a page count.
+         */
+        ListMeta: {
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total Count */
+            total_count: number;
+            /** Total Pages */
+            total_pages: number;
+        };
+        /**
          * ListPluginsResponse
          * @description Response from listing plugins.
          */
@@ -24915,6 +25044,13 @@ export interface components {
         ListPromptsResponse: {
             /** Prompts */
             prompts: components["schemas"]["PromptSpec"][];
+        };
+        /** ListResponse[BudgetListItem] */
+        ListResponse_BudgetListItem_: {
+            /** Data */
+            data: components["schemas"]["BudgetListItem"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
         };
         /**
          * ListRunsResponse
@@ -25822,6 +25958,16 @@ export interface components {
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens */
+            cache_creation_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Flex */
+            cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Priority */
+            cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Flex */
+            cache_creation_input_token_cost_flex?: number | null;
+            /** Cache Creation Input Token Cost Priority */
+            cache_creation_input_token_cost_priority?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -25832,6 +25978,8 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
             cache_read_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Flex */
+            cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
@@ -25890,6 +26038,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
             input_cost_per_token_above_272k_tokens?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Flex */
+            input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
@@ -25981,6 +26131,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
             output_cost_per_token_above_272k_tokens?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Flex */
+            output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
@@ -29354,6 +29506,13 @@ export interface components {
              */
             created_by?: string | null;
             /**
+             * Definition Location
+             * @description Where this attachment is defined: 'db' (database) or 'config' (config.yaml).
+             * @default db
+             * @enum {string}
+             */
+            definition_location: "db" | "config";
+            /**
              * Keys
              * @description Key patterns.
              */
@@ -29484,6 +29643,13 @@ export interface components {
              * @description Who created the policy.
              */
             created_by?: string | null;
+            /**
+             * Definition Location
+             * @description Where this policy is defined: 'db' (database) or 'config' (config.yaml).
+             * @default db
+             * @enum {string}
+             */
+            definition_location: "db" | "config";
             /**
              * Description
              * @description Policy description.
@@ -32437,7 +32603,7 @@ export interface components {
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
-            key: string;
+            key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
             /** Max Budget */
@@ -33091,6 +33257,17 @@ export interface components {
              */
             model?: string | null;
         };
+        /** UsageChartPoint */
+        UsageChartPoint: {
+            /** Blocked */
+            blocked: number;
+            /** Date */
+            date: string;
+            /** Passed */
+            passed: number;
+            /** Score */
+            score?: number | null;
+        };
         /** UsageDetailResponse */
         UsageDetailResponse: {
             /** Avglatency */
@@ -33515,6 +33692,7 @@ export interface components {
              * @default []
              */
             models: string[];
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /**
              * Spend
              * @default 0
@@ -33912,6 +34090,16 @@ export interface components {
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens */
+            cache_creation_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Flex */
+            cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Priority */
+            cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Flex */
+            cache_creation_input_token_cost_flex?: number | null;
+            /** Cache Creation Input Token Cost Priority */
+            cache_creation_input_token_cost_priority?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -33922,6 +34110,8 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
             cache_read_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Flex */
+            cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
@@ -33980,6 +34170,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
             input_cost_per_token_above_272k_tokens?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Flex */
+            input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
@@ -34071,6 +34263,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
             output_cost_per_token_above_272k_tokens?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Flex */
+            output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
@@ -40613,11 +40807,15 @@ export interface operations {
     };
     get_global_activity_global_activity_cache_hits_get: {
         parameters: {
-            query?: {
+            query: {
                 /** @description Time from which to start viewing spend */
-                start_date?: string | null;
+                start_date: string;
                 /** @description Time till which to view spend */
-                end_date?: string | null;
+                end_date: string;
+                /** @description Only include spend from these key aliases */
+                key_aliases?: string[] | null;
+                /** @description Only include spend for these models */
+                models?: string[] | null;
             };
             header?: never;
             path?: never;
@@ -40631,7 +40829,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                    "application/json": components["schemas"]["CacheActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -43386,6 +43584,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_budgets_management_v1_budgets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_BudgetListItem_"];
                 };
             };
         };
@@ -58059,6 +58277,8 @@ export interface operations {
                 sortBy?: string | null;
                 /** @description Sort order. Options: asc, desc */
                 sortOrder?: string | null;
+                /** @description Omit auto-router deployments (litellm model prefixed `auto_router/`). They select among deployments rather than being deployments themselves, so a caller rendering a deployment list can leave them out. Defaults to false, so existing callers are unaffected */
+                exclude_auto_routers?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -58152,8 +58372,10 @@ export interface operations {
                 team_id?: string | null;
                 /** @description Only return teams which this 'team_alias' belongs to. Supports partial matching. */
                 team_alias?: string | null;
-                /** @description Combined search: matches teams whose 'team_id' equals the value OR whose 'team_alias' contains it (case-insensitive). */
+                /** @description Combined search: matches teams whose 'team_id' matches the value OR whose 'team_alias' contains it (case-insensitive). */
                 search?: string | null;
+                /** @description How 'search' matches 'team_id': 'exact' (default) or 'prefix' for a case-sensitive prefix match. */
+                search_team_id_match?: "exact" | "prefix";
                 /** @description Page number for pagination */
                 page?: number;
                 /** @description Number of teams per page */

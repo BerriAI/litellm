@@ -3627,9 +3627,9 @@ async def test_list_team_v2_with_invalid_status():
 @pytest.mark.asyncio
 async def test_list_team_v2_search_builds_or_clause():
     """
-    `search` should be passed as a Prisma OR across team_id (exact) and
-    team_alias (case-insensitive contains), so the UI can hit a single
-    backend filter with either a UUID or a name fragment.
+    `search` should be passed as a Prisma OR across an exact team_id match and a
+    case-insensitive team_alias contains, so the UI needs one backend filter.
+    Exact id matching is the documented default and must not change.
     """
     from unittest.mock import AsyncMock, Mock, patch
 
@@ -3667,6 +3667,54 @@ async def test_list_team_v2_search_builds_or_clause():
             "OR": [
                 {"team_id": "platform"},
                 {"team_alias": {"contains": "platform", "mode": "insensitive"}},
+            ]
+        }
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_search_team_id_match_prefix():
+    """
+    Opting into `search_team_id_match="prefix"` should widen the team_id side of
+    the search OR to an index-friendly prefix match, so the first characters of a
+    team id quoted in a proxy error find the team.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
+
+        await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            organization_id=None,
+            team_id=None,
+            team_alias=None,
+            search="66c432fa",
+            search_team_id_match="prefix",
+            user_api_key_dict=mock_admin,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        find_many_kwargs = mock_db.litellm_teamtable.find_many.call_args.kwargs
+        assert find_many_kwargs["where"] == {
+            "OR": [
+                {"team_id": {"startsWith": "66c432fa"}},
+                {"team_alias": {"contains": "66c432fa", "mode": "insensitive"}},
             ]
         }
 
@@ -3724,6 +3772,7 @@ async def test_list_team_v2_search_composes_with_user_id_filter():
             team_id=None,
             team_alias=None,
             search="team_a",
+            search_team_id_match="prefix",
             user_api_key_dict=mock_user_api_key_dict,
             page=1,
             page_size=10,
@@ -3733,7 +3782,7 @@ async def test_list_team_v2_search_composes_with_user_id_filter():
         find_many_kwargs = mock_db.litellm_teamtable.find_many.call_args.kwargs
         where = find_many_kwargs["where"]
         assert where["OR"] == [
-            {"team_id": "team_a"},
+            {"team_id": {"startsWith": "team_a"}},
             {"team_alias": {"contains": "team_a", "mode": "insensitive"}},
         ]
         assert where["team_id"] == {"in": ["team_a", "team_b"]}
@@ -6578,6 +6627,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
             return_value=mock_existing_team
         )
         mock_cache.async_set_cache = AsyncMock()
+        mock_logging.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
@@ -10223,3 +10273,68 @@ def test_patch_team_route_publishes_its_request_body_schema():
     assert schema == {"$ref": "#/components/schemas/PatchTeamRequest"}
     properties = app.openapi()["components"]["schemas"]["PatchTeamRequest"]["properties"]
     assert "tpm_limit" in properties and "metadata" in properties
+
+
+@pytest.mark.asyncio
+async def test_get_all_team_memberships_validates_rows():
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_all_team_memberships,
+    )
+
+    membership_row = MagicMock()
+    membership_row.model_dump = lambda: {
+        "user_id": "member-1",
+        "team_id": "team-1",
+        "spend": 2.5,
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[membership_row])
+
+    result = await get_all_team_memberships(mock_prisma_client, ["team-1"], user_id="member-1")
+
+    assert len(result) == 1
+    assert isinstance(result[0], LiteLLM_TeamMembership)
+    assert result[0].user_id == "member-1"
+    assert result[0].team_id == "team-1"
+    assert result[0].spend == 2.5
+    find_many_kwargs = mock_prisma_client.db.litellm_teammembership.find_many.call_args.kwargs
+    assert find_many_kwargs["where"] == {"team_id": {"in": ["team-1"]}, "user_id": {"in": ["member-1"]}}
+
+
+@pytest.mark.asyncio
+async def test_list_available_teams_filters_joined_and_validates_rows(monkeypatch):
+    from fastapi import Request
+
+    import litellm
+    from litellm.proxy.management_endpoints.team_endpoints import list_available_teams
+
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {"available_teams": ["team-open", "team-joined"]},
+    )
+
+    user_row = MagicMock()
+    user_row.model_dump = lambda: {"user_id": "u-1", "teams": ["team-joined"]}
+
+    open_team_row = MagicMock()
+    open_team_row.model_dump = lambda: {"team_id": "team-open", "team_alias": "open team"}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[open_team_row])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await list_available_teams(
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_id="u-1"),
+        )
+
+    assert len(result) == 1
+    assert isinstance(result[0], LiteLLM_TeamTable)
+    assert result[0].team_id == "team-open"
+    assert result[0].team_alias == "open team"
+    find_many_kwargs = mock_prisma_client.db.litellm_teamtable.find_many.call_args.kwargs
+    assert find_many_kwargs["where"] == {"team_id": {"in": ["team-open"]}}

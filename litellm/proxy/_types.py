@@ -44,6 +44,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
+    InternalCallOrigin,
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
@@ -53,6 +54,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingRoutingDecision,
     StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
@@ -839,6 +841,7 @@ class LiteLLMRoutes(enum.Enum):
             "/config/list",
             "/config/field/info",
             "/budget/list",
+            "/management/v1/budgets",
             "/budget/settings",
             # Invitation viewing (admin viewer cannot create/delete; can read).
             "/invitation/info",
@@ -1169,7 +1172,6 @@ class GenerateKeyResponse(KeyRequestBase):
 class UpdateKeyRequest(KeyRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
-    key: str  # type: ignore
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -1184,6 +1186,12 @@ class UpdateKeyRequest(KeyRequestBase):
         if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
             if self.temp_budget_increase is None or self.temp_budget_expiry is None:
                 raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
+
+    @model_validator(mode="after")
+    def validate_key_identifier(self) -> "UpdateKeyRequest":
+        if self.key is None and self.key_alias is None:
+            raise ValueError("either key or key_alias must be provided")
         return self
 
 
@@ -2455,16 +2463,6 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
-    skip_user_budget_on_team_key: bool | None = Field(
-        None,
-        description=(
-            "If True, restores the legacy behavior where a user's personal "
-            "max_budget is NOT enforced when their key belongs to a team; only "
-            "the team (and team-member) budgets apply. Defaults to False, meaning "
-            "the user's personal max_budget is always enforced regardless of "
-            "whether the key belongs to a team (see GitHub issue #12905)."
-        ),
-    )
     user_url_validation: Optional[bool] = Field(
         None,
         description=(
@@ -2777,6 +2775,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime] = None
     sso_user_id: Optional[str] = None
     teams: List[str] = []  # Just team IDs, not full team objects
+    object_permission: LiteLLM_ObjectPermissionTable | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3306,6 +3305,8 @@ class SpendLogsMetadata(TypedDict):
     applied_guardrails: Optional[List[str]]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
+    routing_decision: StandardLoggingRoutingDecision | None
+    internal_call_origin: InternalCallOrigin | None
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     eval_information: Optional[Any]
     status: StandardLoggingPayloadStatus

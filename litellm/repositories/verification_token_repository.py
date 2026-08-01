@@ -3,14 +3,18 @@ VerificationToken repository for database operations on LiteLLM_VerificationToke
 """
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from litellm.models.verification_token import (
     LiteLLM_VerificationToken,
 )
-from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.base_repository import (
+    BaseRepository,
+    DbRecord,
+    record_to_dict,
+)
 
 if TYPE_CHECKING:
     from prisma.models import (
@@ -19,11 +23,17 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import PrismaClient
 
-
-class _DictConvertible(Protocol):
-    def dict(self) -> dict[str, object]: ...
-
-    def __iter__(self) -> Iterator[tuple[str, object]]: ...
+_JSON_ENCODED_TOKEN_FIELDS = (
+    "aliases",
+    "config",
+    "permissions",
+    "metadata",
+    "model_spend",
+    "model_max_budget",
+    "router_settings",
+    "budget_limits",
+    "litellm_budget_table",
+)
 
 
 class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
@@ -46,31 +56,21 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     def model_class(self) -> type[LiteLLM_VerificationToken]:
         return LiteLLM_VerificationToken
 
-    def _to_model(self, record: _DictConvertible | None) -> LiteLLM_VerificationToken | None:
+    def _to_model(self, record: DbRecord | None) -> LiteLLM_VerificationToken | None:
         """Convert a database record to a VerificationToken model."""
         if record is None:
             return None
 
-        data = record.dict() if hasattr(record, "dict") else dict(record)
-
-        json_fields = [
-            "aliases",
-            "config",
-            "permissions",
-            "metadata",
-            "model_spend",
-            "model_max_budget",
-            "router_settings",
-            "budget_limits",
-            "litellm_budget_table",
-        ]
-        for field in json_fields:
-            value = data.get(field)
-            if isinstance(value, str):
-                data[field] = json.loads(value)
-
-        if data.get("org_id") is None and data.get("organization_id") is not None:
-            data["org_id"] = data["organization_id"]
+        decoded = {
+            field: json.loads(value) if field in _JSON_ENCODED_TOKEN_FIELDS and isinstance(value, str) else value
+            for field, value in record_to_dict(record).items()
+        }
+        organization_id = decoded.get("organization_id")
+        data = (
+            decoded
+            if decoded.get("org_id") is not None or organization_id is None
+            else {**decoded, "org_id": organization_id}
+        )
 
         return LiteLLM_VerificationToken.model_validate(data)
 

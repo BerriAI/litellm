@@ -3,7 +3,8 @@
 
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Tuple, TypedDict, cast
+from types import MappingProxyType
+from typing import Any, Literal, Mapping, Optional, Tuple, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -47,6 +48,14 @@ _ABOVE_TOKEN_THRESHOLD_COST_KEY = re.compile(
     r"cache_creation_input_token_cost(?:_above_1hr)?|"
     r"cache_read_input_token_cost"
     r")_above_\d+k?_tokens$"
+)
+
+_SERVICE_TIER_TO_COST_KEY_SUFFIX: Mapping[str, str] = MappingProxyType(
+    {
+        ServiceTier.FLEX.value: ServiceTier.FLEX.value,
+        ServiceTier.PRIORITY.value: ServiceTier.PRIORITY.value,
+        ServiceTier.FAST.value: ServiceTier.PRIORITY.value,
+    }
 )
 
 
@@ -187,7 +196,7 @@ def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> st
 
     Args:
         base_key: The base cost key (e.g., "input_cost_per_token")
-        service_tier: The service tier ("flex", "priority", or None for standard)
+        service_tier: The service tier ("flex", "priority", "fast", or None for standard)
 
     Returns:
         str: The cost key to use (e.g., "input_cost_per_token_flex" or "input_cost_per_token")
@@ -195,12 +204,11 @@ def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> st
     if service_tier is None:
         return base_key
 
-    # Only use service tier specific keys for "flex" and "priority"
-    if service_tier.lower() in [ServiceTier.FLEX.value, ServiceTier.PRIORITY.value]:
-        return f"{base_key}_{service_tier.lower()}"
+    suffix = _SERVICE_TIER_TO_COST_KEY_SUFFIX.get(service_tier.lower())
+    if suffix is None:
+        return base_key
 
-    # For any other service tier, use standard pricing
-    return base_key
+    return f"{base_key}_{suffix}"
 
 
 def _parse_above_token_threshold(key: str) -> float:

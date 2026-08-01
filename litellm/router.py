@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
     get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -210,8 +211,10 @@ from litellm.types.utils import (
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import (
+    PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     ModelResponseStream,
     StandardLoggingPayload,
+    StandardLoggingRoutingDecision,
     Usage,
 )
 from litellm.utils import (
@@ -276,7 +279,7 @@ def _cost_value_as_float(value: Union[str, int, float, None]) -> Optional[float]
 
 
 def _copy_custom_pricing_fields(
-    model_info: Dict[str, Any],
+    model_info: dict[str, Any],
     litellm_params: LiteLLM_Params,
 ) -> None:
     """Copy declared and arbitrary threshold pricing into a model-cost entry."""
@@ -8622,9 +8625,9 @@ class Router:
         deployment = self.get_deployment(model_id=model_id)
         if deployment is None or self._is_deployment_blocked(deployment):
             return None
-        return CredentialLiteLLMParams(**deployment.litellm_params.model_dump(exclude_none=True)).model_dump(
-            exclude_none=True
-        )
+        return CredentialLiteLLMParams.model_validate(
+            deployment.litellm_params.model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
 
     def get_deployment_by_model_group_name(self, model_group_name: str) -> Optional[Deployment]:
         """
@@ -8647,6 +8650,33 @@ class Router:
                 else:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
+
+    @staticmethod
+    def _deployment_usable_by_team(model: Union[Mapping, Deployment], team_id: str | None) -> bool:
+        """
+        A team-scoped deployment (``model_info.team_id`` set) is only usable by
+        callers from that same team; deployments without a team owner are shared.
+        """
+        model_info = model.get("model_info") if isinstance(model, dict) else model.model_info
+        owner_team_id = model_info.get("team_id") if model_info is not None else None
+        return owner_team_id is None or owner_team_id == team_id
+
+    def _get_model_group_deployment_usable_by_team(
+        self, model_group_name: str, team_id: str | None
+    ) -> Deployment | None:
+        """
+        Like ``get_deployment_by_model_group_name``, but skips deployments owned
+        by other teams so a shared model name never resolves another team's
+        credentials.
+        """
+        indices = self.model_name_to_deployment_indices.get(model_group_name) or ()
+        usable = (
+            self.model_list[idx] for idx in indices if self._deployment_usable_by_team(self.model_list[idx], team_id)
+        )
+        first_usable = next(usable, None)
+        if first_usable is None:
+            return None
+        return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
 
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """
@@ -8682,7 +8712,10 @@ class Router:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
             team_id: Optional team id of the caller. When set, team-scoped
                 deployments (indexed by team public model name, including team
-                wildcard models like "openai/*") are also considered.
+                wildcard models like "openai/*") are also considered. Name and
+                wildcard lookups never resolve a deployment owned by a
+                different team, so shared model names can't leak another
+                team's credentials.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -8699,7 +8732,7 @@ class Router:
 
         # If not found, try by model_group_name
         if deployment is None:
-            deployment = self.get_deployment_by_model_group_name(model_group_name=model_id)
+            deployment = self._get_model_group_deployment_usable_by_team(model_group_name=model_id, team_id=team_id)
 
         # If not found, check team-scoped deployments whose team public model
         # name exactly matches model_id (wildcard team names are matched via
@@ -8716,7 +8749,12 @@ class Router:
         if deployment is None:
             team_pattern_router = self.team_pattern_routers.get(team_id) if team_id is not None else None
             team_wildcard_models = (team_pattern_router.route(model_id) or []) if team_pattern_router else []
-            potential_wildcard_models = team_wildcard_models or self.pattern_router.route(model_id) or []
+            global_wildcard_models = [
+                wildcard_model
+                for wildcard_model in (self.pattern_router.route(model_id) or [])
+                if self._deployment_usable_by_team(wildcard_model, team_id)
+            ]
+            potential_wildcard_models = team_wildcard_models or global_wildcard_models
             if potential_wildcard_models:
                 # Use the first matching wildcard deployment
                 deployment_dict = potential_wildcard_models[0]
@@ -8729,9 +8767,9 @@ class Router:
             return None
 
         # Get basic credentials
-        credentials = CredentialLiteLLMParams(**deployment.litellm_params.model_dump(exclude_none=True)).model_dump(
-            exclude_none=True
-        )
+        credentials = CredentialLiteLLMParams.model_validate(
+            deployment.litellm_params.model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
 
         # Resolve litellm_credential_name to actual credentials
         if deployment.litellm_params.litellm_credential_name is not None:
@@ -9537,7 +9575,12 @@ class Router:
             return None
 
         # Strategy 1: Check if model_id directly matches a model_name or deployment ID
-        if model_id in self.model_names or self.has_model_id(model_id):
+        if model_id in self.model_names:
+            return model_id
+        if self.has_model_id(model_id):
+            deployment = self.get_deployment(model_id=model_id)
+            if deployment is not None and deployment.model_name:
+                return deployment.model_name
             return model_id
 
         # Strategy 2: Search through router's model_list to find by litellm_params.model
@@ -11130,6 +11173,7 @@ class Router:
 
         router_strategy = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
         if router_strategy is None:
+            self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             return None
 
         pre_routing_hook_response = await router_strategy.async_pre_routing_hook(
@@ -11138,6 +11182,10 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+        )
+        self._record_routing_decision(
+            request_kwargs=request_kwargs,
+            routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),
         )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
@@ -11156,6 +11204,68 @@ class Router:
                         request_kwargs.setdefault(key, value)
 
         return pre_routing_hook_response
+
+    @staticmethod
+    def _record_routing_decision(
+        request_kwargs: dict,
+        routing_decision: StandardLoggingRoutingDecision | None,
+    ) -> None:
+        """Make the request's metadata describe THIS routing attempt, and only this one.
+
+        Fallbacks re-enter the hook with the same `request_kwargs`, so an attempt that
+        picks a plain model group after an auto-router group failed must clear the
+        earlier decision; leaving it would attribute the first router's tier and cause
+        to the deployment that actually served the request. Every attempt therefore
+        writes or clears, never just writes.
+        """
+        if routing_decision is None:
+            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
+                if isinstance(bucket, dict):
+                    bucket.pop("routing_decision", None)
+            return
+
+        # `get_or_create_metadata_bucket` is the single owner of "which dict holds
+        # proxy-internal metadata": it picks `litellm_metadata` when present (so the
+        # decision never lands in the `metadata` dict that routes like /v1/messages
+        # forward to the provider) and replaces a non-dict value rather than silently
+        # skipping the write.
+        _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
+        metadata_bucket["routing_decision"] = Router._redact_prompt_text_if_needed(
+            request_kwargs=request_kwargs, routing_decision=routing_decision
+        )
+
+    @staticmethod
+    def _redact_prompt_text_if_needed(
+        request_kwargs: Mapping[str, Any],
+        routing_decision: StandardLoggingRoutingDecision,
+    ) -> StandardLoggingRoutingDecision:
+        """Drop verbatim prompt text from the record when message logging is redacted.
+
+        An operator who turns message logging off has said prompt content must not reach
+        the logs, so the fields that quote the prompt (the matched keywords, and the
+        signals that name them) are omitted. Derived values are kept, because a tier, a
+        cause, a score or an escalation flag aggregates the prompt rather than
+        reproducing any of it, and dropping them would leave the row unexplainable for
+        no privacy gain. Applied here rather than in each strategy so a strategy added
+        later cannot bypass it.
+        """
+        from litellm.litellm_core_utils.redact_messages import (
+            should_redact_message_logging,
+        )
+
+        if not should_redact_message_logging(
+            {
+                "litellm_params": request_kwargs,
+                "standard_callback_dynamic_params": request_kwargs.get("standard_callback_dynamic_params"),
+            }
+        ):
+            return routing_decision
+        kept = {
+            field: value
+            for field, value in routing_decision.items()
+            if field not in PROMPT_QUOTING_ROUTING_DECISION_FIELDS
+        }
+        return cast(StandardLoggingRoutingDecision, kept)  # cast-ok: dropping optional keys preserves the type
 
     def get_available_deployment(
         self,

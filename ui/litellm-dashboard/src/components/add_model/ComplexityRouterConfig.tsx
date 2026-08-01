@@ -12,6 +12,8 @@ const { Text } = Typography;
 
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
+export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
+export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
 
 export interface ComplexityTiers {
   SIMPLE: string[];
@@ -40,6 +42,8 @@ export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  classifier_context_window_size?: number;
+  classifier_context_per_turn_chars?: number;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
