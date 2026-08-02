@@ -208,8 +208,10 @@ class CodestralTextCompletion:
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        headers: dict = {},
+        headers: Optional[dict] = None,
     ) -> Union[TextCompletionResponse, CustomStreamWrapper]:
+        if headers is None:
+            headers = {}
         headers = self._validate_environment(api_key, headers)
 
         if optional_params.pop("custom_endpoint", None) is True:
@@ -351,8 +353,10 @@ class CodestralTextCompletion:
         timeout: Union[float, httpx.Timeout],
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
     ) -> TextCompletionResponse:
+        if headers is None:
+            headers = {}
         async_handler = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL,
             params={"timeout": timeout},
@@ -400,8 +404,10 @@ class CodestralTextCompletion:
         optional_params=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
     ) -> CustomStreamWrapper:
+        if headers is None:
+            headers = {}
         data["stream"] = True
 
         streamwrapper = CustomStreamWrapper(

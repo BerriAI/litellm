@@ -51,7 +51,7 @@ class VertexFineTuningAPI(VertexLLM):
     def convert_openai_request_to_vertex(
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
-        original_hyperparameters: dict = {},
+        original_hyperparameters: Optional[dict] = None,
         kwargs: Optional[dict] = None,
     ) -> FineTuneJobCreate:
         """
@@ -59,6 +59,8 @@ class VertexFineTuningAPI(VertexLLM):
         https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning
         supervised_tuning_spec = FineTunesupervisedTuningSpec(
         """
+        if original_hyperparameters is None:
+            original_hyperparameters = {}
 
         supervised_tuning_spec = FineTunesupervisedTuningSpec(
             training_dataset_uri=create_fine_tuning_job_data.training_file,
@@ -91,9 +93,11 @@ class VertexFineTuningAPI(VertexLLM):
     def _transform_openai_hyperparameters_to_vertex_hyperparameters(
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
-        original_hyperparameters: dict = {},
+        original_hyperparameters: Optional[dict] = None,
         kwargs: Optional[dict] = None,
     ) -> FineTuneHyperparameters:
+        if original_hyperparameters is None:
+            original_hyperparameters = {}
         _oai_hyperparameters = create_fine_tuning_job_data.hyperparameters
         _vertex_hyperparameters = FineTuneHyperparameters()
         if _oai_hyperparameters:
@@ -228,8 +232,10 @@ class VertexFineTuningAPI(VertexLLM):
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
         kwargs: Optional[dict] = None,
-        original_hyperparameters: Optional[dict] = {},
+        original_hyperparameters: Optional[dict] = None,
     ) -> Union[LiteLLMFineTuningJob, Coroutine[Any, Any, LiteLLMFineTuningJob]]:
+        if original_hyperparameters is None:
+            original_hyperparameters = {}
         verbose_logger.debug(
             "creating fine tuning job, args= %s", create_fine_tuning_job_data
         )

@@ -67,8 +67,10 @@ class PredibaseChatCompletion:
         timeout: Union[float, httpx.Timeout],
         acompletion=None,
         logger_fn=None,
-        headers: dict = {},
+        headers: Optional[dict] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
+        if headers is None:
+            headers = {}
         predibase_config = litellm.PredibaseConfig()
         headers = predibase_config.validate_environment(
             api_key=api_key,
@@ -206,9 +208,11 @@ class PredibaseChatCompletion:
         timeout: Union[float, httpx.Timeout],
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         predibase_config=None,
     ) -> ModelResponse:
+        if headers is None:
+            headers = {}
         if predibase_config is None:
             predibase_config = litellm.PredibaseConfig()
         async_handler = get_async_httpx_client(
@@ -261,8 +265,10 @@ class PredibaseChatCompletion:
         optional_params=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
     ) -> CustomStreamWrapper:
+        if headers is None:
+            headers = {}
         data["stream"] = True
 
         streamwrapper = CustomStreamWrapper(

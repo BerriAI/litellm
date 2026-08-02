@@ -41,7 +41,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        headers: dict = {},
+        headers: Optional[dict] = None,
         encoding=None,
         vertex_project=None,
         vertex_location=None,
@@ -50,6 +50,8 @@ class VertexMultimodalEmbedding(VertexLLM):
         timeout=300,
         client=None,
     ) -> EmbeddingResponse:
+        if headers is None:
+            headers = {}
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -150,10 +152,12 @@ class VertexMultimodalEmbedding(VertexLLM):
         model_response: EmbeddingResponse,
         timeout: Optional[Union[float, httpx.Timeout]],
         logging_obj: LiteLLMLoggingObj,
-        headers={},
+        headers=None,
         client: Optional[AsyncHTTPHandler] = None,
         api_key: Optional[str] = None,
     ) -> EmbeddingResponse:
+        if headers is None:
+            headers = {}
         if client is None:
             _params = {}
             if timeout is not None:

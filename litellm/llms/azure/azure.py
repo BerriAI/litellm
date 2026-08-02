@@ -402,8 +402,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token_provider: Optional[Callable] = None,
         convert_tool_call_to_json_mode: Optional[bool] = None,
         client=None,  # this is the AsyncAzureOpenAI
-        litellm_params: Optional[dict] = {},
+        litellm_params: Optional[dict] = None,
     ):
+        if litellm_params is None:
+            litellm_params = {}
         response = None
         try:
             # setting Azure client
@@ -510,8 +512,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         client=None,
-        litellm_params: Optional[dict] = {},
+        litellm_params: Optional[dict] = None,
     ):
+        if litellm_params is None:
+            litellm_params = {}
         # init AzureOpenAI Client
         azure_client_params = {
             "api_version": api_version,
@@ -588,8 +592,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         client=None,
-        litellm_params: Optional[dict] = {},
+        litellm_params: Optional[dict] = None,
     ):
+        if litellm_params is None:
+            litellm_params = {}
         try:
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
@@ -668,8 +674,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         max_retries: Optional[int] = None,
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
-        litellm_params: Optional[dict] = {},
+        litellm_params: Optional[dict] = None,
     ) -> EmbeddingResponse:
+        if litellm_params is None:
+            litellm_params = {}
         response = None
         try:
             openai_aclient = self.get_azure_openai_client(

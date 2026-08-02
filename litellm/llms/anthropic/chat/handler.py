@@ -224,8 +224,10 @@ class AnthropicChatCompletion(BaseLLM):
         optional_params=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
     ):
+        if headers is None:
+            headers = {}
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
         data["stream"] = True
@@ -276,9 +278,11 @@ class AnthropicChatCompletion(BaseLLM):
         litellm_params: dict,
         provider_config: "BaseConfig",
         logger_fn=None,
-        headers={},
+        headers=None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
+        if headers is None:
+            headers = {}
         async_handler = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.ANTHROPIC
         )
@@ -344,9 +348,11 @@ class AnthropicChatCompletion(BaseLLM):
         litellm_params: dict,
         acompletion=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         client=None,
     ):
+        if headers is None:
+            headers = {}
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.utils import ProviderConfigManager
 

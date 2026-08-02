@@ -44,10 +44,12 @@ def completion(
     encoding,
     logging_obj,
     optional_params: dict,
-    custom_prompt_dict={},
+    custom_prompt_dict=None,
     litellm_params=None,
     logger_fn=None,
 ):
+    if custom_prompt_dict is None:
+        custom_prompt_dict = {}
     global llm
     try:
         llm, SamplingParams = validate_environment(model=model)
@@ -111,7 +113,7 @@ def completion(
 
 
 def batch_completions(
-    model: str, messages: list, optional_params=None, custom_prompt_dict={}
+    model: str, messages: list, optional_params=None, custom_prompt_dict=None
 ):
     """
     Example usage:
@@ -138,6 +140,8 @@ def batch_completions(
         ]
     )
     """
+    if custom_prompt_dict is None:
+        custom_prompt_dict = {}
     try:
         llm, SamplingParams = validate_environment(model=model)
     except Exception as e:

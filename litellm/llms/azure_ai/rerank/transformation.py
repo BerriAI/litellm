@@ -95,10 +95,16 @@ class AzureAIRerankConfig(CohereRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Optional[dict] = None,
+        optional_params: Optional[dict] = None,
+        litellm_params: Optional[dict] = None,
     ) -> RerankResponse:
+        if request_data is None:
+            request_data = {}
+        if optional_params is None:
+            optional_params = {}
+        if litellm_params is None:
+            litellm_params = {}
         rerank_response = super().transform_rerank_response(
             model=model,
             raw_response=raw_response,

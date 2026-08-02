@@ -654,12 +654,14 @@ def _get_equivalent_key(key: str, available_keys: set) -> Optional[str]:
 
 
 def check_if_part_exists_in_parts(
-    parts: List[PartType], part: PartType, excluded_keys: List[str] = []
+    parts: List[PartType], part: PartType, excluded_keys: Optional[List[str]] = None
 ) -> bool:
     """
     Check if a part exists in a list of parts
     Handles both camelCase and snake_case key variations (e.g., function_call vs functionCall)
     """
+    if excluded_keys is None:
+        excluded_keys = []
     keys_to_compare = set(part.keys()) - set(excluded_keys)
     for p in parts:
         p_keys = set(p.keys())

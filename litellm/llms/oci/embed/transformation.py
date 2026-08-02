@@ -275,9 +275,9 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Optional[dict] = None,
+        optional_params: Optional[dict] = None,
+        litellm_params: Optional[dict] = None,
     ) -> EmbeddingResponse:
         """
         Transform OCI embedding response to standard EmbeddingResponse format.
@@ -290,6 +290,12 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
             "inputTextTokenCounts": [5, 4]
         }
         """
+        if request_data is None:
+            request_data = {}
+        if optional_params is None:
+            optional_params = {}
+        if litellm_params is None:
+            litellm_params = {}
         if raw_response.status_code != 200:
             raise OCIError(
                 message=raw_response.text,

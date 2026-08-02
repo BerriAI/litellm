@@ -259,7 +259,9 @@ class Router:
         redis_password: Optional[str] = None,
         redis_db: Optional[int] = None,
         cache_responses: Optional[bool] = False,
-        cache_kwargs: dict = {},  # additional kwargs to pass to RedisCache (see caching.py)
+        cache_kwargs: Optional[
+            dict
+        ] = None,  # additional kwargs to pass to RedisCache (see caching.py)
         caching_groups: Optional[
             List[tuple]
         ] = None,  # if you want to cache across model groups
@@ -283,12 +285,12 @@ class Router:
         default_fallbacks: Optional[
             List[str]
         ] = None,  # generic fallbacks, works across all deployments
-        fallbacks: List = [],
-        context_window_fallbacks: List = [],
-        content_policy_fallbacks: List = [],
+        fallbacks: Optional[List] = None,
+        context_window_fallbacks: Optional[List] = None,
+        content_policy_fallbacks: Optional[List] = None,
         model_group_alias: Optional[
             Dict[str, Union[str, RouterModelGroupAliasItem]]
-        ] = {},
+        ] = None,
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
         tag_filtering_match_any: bool = True,
@@ -296,9 +298,9 @@ class Router:
         retry_policy: Optional[
             Union[RetryPolicy, dict]
         ] = None,  # set custom retries for different exceptions
-        model_group_retry_policy: Dict[
-            str, RetryPolicy
-        ] = {},  # set custom retry policies based on model group
+        model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = None,  # set custom retry policies based on model group
         allowed_fails: Optional[
             int
         ] = None,  # Number of times a deployment can failbefore being added to cooldown
@@ -318,7 +320,7 @@ class Router:
             "usage-based-routing-v2",
         ] = "simple-shuffle",
         optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
-        routing_strategy_args: dict = {},  # just for latency-based
+        routing_strategy_args: Optional[dict] = None,  # just for latency-based
         routing_groups: Optional[List[Union[RoutingGroup, dict]]] = None,
         provider_budget_config: Optional[GenericBudgetConfigType] = None,
         alerting_config: Optional[AlertingConfig] = None,
@@ -404,6 +406,20 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
+        if cache_kwargs is None:
+            cache_kwargs = {}
+        if fallbacks is None:
+            fallbacks = []
+        if context_window_fallbacks is None:
+            context_window_fallbacks = []
+        if content_policy_fallbacks is None:
+            content_policy_fallbacks = []
+        if model_group_alias is None:
+            model_group_alias = {}
+        if model_group_retry_policy is None:
+            model_group_retry_policy = {}
+        if routing_strategy_args is None:
+            routing_strategy_args = {}
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments

@@ -552,11 +552,13 @@ class ProxyBaseLLMRequestProcessing:
         response_cost: Optional[Union[float, str]] = None,
         hidden_params: Optional[dict] = None,
         fastest_response_batch_completion: Optional[bool] = None,
-        request_data: Optional[dict] = {},
+        request_data: Optional[dict] = None,
         timeout: Optional[Union[float, int, httpx.Timeout]] = None,
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
         **kwargs,
     ) -> dict:
+        if request_data is None:
+            request_data = {}
         exclude_values = {"", None, "None"}
         hidden_params = hidden_params or {}
 

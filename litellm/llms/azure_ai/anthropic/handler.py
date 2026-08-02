@@ -48,13 +48,15 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
         litellm_params: dict,
         acompletion=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         client=None,
     ):
         """
         Completion method that uses Azure authentication instead of Anthropic's x-api-key.
         All other logic is the same as AnthropicChatCompletion.
         """
+        if headers is None:
+            headers = {}
 
         optional_params = copy.deepcopy(optional_params)
         stream = optional_params.pop("stream", None)

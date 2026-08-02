@@ -103,13 +103,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         litellm_params: dict,
         credentials: Credentials,
         logger_fn=None,
-        headers={},
+        headers=None,
         client: Optional[AsyncHTTPHandler] = None,
         fake_stream: bool = False,
         json_mode: Optional[bool] = False,
         api_key: Optional[str] = None,
         stream_chunk_size: int = 1024,
     ) -> CustomStreamWrapper:
+        if headers is None:
+            headers = {}
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
             messages=messages,
@@ -174,10 +176,12 @@ class BedrockConverseLLM(BaseAWSLLM):
         litellm_params: dict,
         credentials: Credentials,
         logger_fn=None,
-        headers: dict = {},
+        headers: Optional[dict] = None,
         client: Optional[AsyncHTTPHandler] = None,
         api_key: Optional[str] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
+        if headers is None:
+            headers = {}
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
             messages=messages,

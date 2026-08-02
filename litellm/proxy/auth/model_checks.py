@@ -178,7 +178,7 @@ def get_complete_model_list(
     infer_model_from_keys: Optional[bool],
     return_wildcard_routes: Optional[bool] = False,
     llm_router: Optional[Router] = None,
-    model_access_groups: Dict[str, List[str]] = {},
+    model_access_groups: Optional[Dict[str, List[str]]] = None,
     include_model_access_groups: Optional[bool] = False,
     only_model_access_groups: Optional[bool] = False,
     team_id: Optional[str] = None,
@@ -191,6 +191,8 @@ def get_complete_model_list(
 
     If list contains wildcard -> return known provider models
     """
+    if model_access_groups is None:
+        model_access_groups = {}
 
     unique_models = []
 

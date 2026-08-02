@@ -96,9 +96,9 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         model_response: "EmbeddingResponse",
         logging_obj: Any,
         api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Optional[dict] = None,
+        optional_params: Optional[dict] = None,
+        litellm_params: Optional[dict] = None,
     ) -> "EmbeddingResponse":
         """
         Transform embedding response for Cohere models on SageMaker.
@@ -108,6 +108,12 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         — the SageMaker embedding handler already logs `post_call` before
         invoking this transform.
         """
+        if request_data is None:
+            request_data = {}
+        if optional_params is None:
+            optional_params = {}
+        if litellm_params is None:
+            litellm_params = {}
         input_value = (
             logging_obj.model_call_details.get("input")
             or request_data.get("texts")

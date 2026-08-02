@@ -36,13 +36,15 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
         acompletion: bool = False,
         logger_fn=None,
         headers: Optional[dict] = None,
-        custom_prompt_dict: dict = {},
+        custom_prompt_dict: Optional[dict] = None,
         client=None,
         organization: Optional[str] = None,
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
         shared_session: Optional["ClientSession"] = None,
     ):
+        if custom_prompt_dict is None:
+            custom_prompt_dict = {}
         client = self.get_azure_openai_client(
             litellm_params=litellm_params,
             api_key=api_key,

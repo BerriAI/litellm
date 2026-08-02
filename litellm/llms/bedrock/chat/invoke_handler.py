@@ -1290,9 +1290,11 @@ class BedrockLLM(BaseAWSLLM):
         optional_params: dict,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
+        if headers is None:
+            headers = {}
         if client is None:
             _params = {}
             if timeout is not None:
@@ -1348,10 +1350,12 @@ class BedrockLLM(BaseAWSLLM):
         optional_params: dict,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         client: Optional[AsyncHTTPHandler] = None,
         stream_chunk_size: int = 1024,
     ) -> CustomStreamWrapper:
+        if headers is None:
+            headers = {}
         # The call is not made here; instead, we prepare the necessary objects for the stream.
 
         streaming_response = CustomStreamWrapper(

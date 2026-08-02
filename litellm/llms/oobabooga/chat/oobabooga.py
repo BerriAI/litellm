@@ -22,10 +22,12 @@ def completion(
     logging_obj,
     optional_params: dict,
     litellm_params: dict,
-    custom_prompt_dict={},
+    custom_prompt_dict=None,
     logger_fn=None,
     default_max_tokens_to_sample=None,
 ):
+    if custom_prompt_dict is None:
+        custom_prompt_dict = {}
     headers = oobabooga_config.validate_environment(
         api_key=api_key,
         headers={},

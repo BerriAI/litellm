@@ -144,7 +144,7 @@ class GCSBucketBase(CustomBatchLogger):
         return bucket_name, object_name
 
     async def get_gcs_logging_config(
-        self, kwargs: Optional[Dict[str, Any]] = {}
+        self, kwargs: Optional[Dict[str, Any]] = None
     ) -> GCSLoggingConfig:
         """
         This function is used to get the GCS logging config for the GCS Bucket Logger.

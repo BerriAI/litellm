@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Optional, Union
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -6,8 +6,13 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 class InfinityError(BaseLLMException):
     def __init__(
-        self, status_code: int, message: str, headers: Union[dict, httpx.Headers] = {}
+        self,
+        status_code: int,
+        message: str,
+        headers: Optional[Union[dict, httpx.Headers]] = None,
     ):
+        if headers is None:
+            headers = {}
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(

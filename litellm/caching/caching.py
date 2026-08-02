@@ -67,20 +67,7 @@ class Cache:
         default_in_memory_ttl: Optional[float] = None,
         default_in_redis_ttl: Optional[float] = None,
         similarity_threshold: Optional[float] = None,
-        supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
-            "completion",
-            "acompletion",
-            "embedding",
-            "aembedding",
-            "atranscription",
-            "transcription",
-            "atext_completion",
-            "text_completion",
-            "arerank",
-            "rerank",
-            "responses",
-            "aresponses",
-        ],
+        supported_call_types: Optional[List[CachingSupportedCallTypes]] = None,
         # s3 Bucket, boto3 configuration
         azure_account_url: Optional[str] = None,
         azure_blob_container: Optional[str] = None,
@@ -165,6 +152,21 @@ class Cache:
         Returns:
             None. Cache is set as a litellm param
         """
+        if supported_call_types is None:
+            supported_call_types = [
+                "completion",
+                "acompletion",
+                "embedding",
+                "aembedding",
+                "atranscription",
+                "transcription",
+                "atext_completion",
+                "text_completion",
+                "arerank",
+                "rerank",
+                "responses",
+                "aresponses",
+            ]
         if type == LiteLLMCacheType.REDIS:
             # Check REDIS_CLUSTER_NODES env var if no explicit startup nodes
             if not redis_startup_nodes:
@@ -858,20 +860,7 @@ def enable_cache(
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
-    supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
-        "completion",
-        "acompletion",
-        "embedding",
-        "aembedding",
-        "atranscription",
-        "transcription",
-        "atext_completion",
-        "text_completion",
-        "arerank",
-        "rerank",
-        "responses",
-        "aresponses",
-    ],
+    supported_call_types: Optional[List[CachingSupportedCallTypes]] = None,
     **kwargs,
 ):
     """
@@ -892,6 +881,21 @@ def enable_cache(
     Raises:
         None
     """
+    if supported_call_types is None:
+        supported_call_types = [
+            "completion",
+            "acompletion",
+            "embedding",
+            "aembedding",
+            "atranscription",
+            "transcription",
+            "atext_completion",
+            "text_completion",
+            "arerank",
+            "rerank",
+            "responses",
+            "aresponses",
+        ]
     print_verbose("LiteLLM: Enabling Cache")
     if "cache" not in litellm.input_callback:
         litellm.input_callback.append("cache")
@@ -918,20 +922,7 @@ def update_cache(
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
-    supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
-        "completion",
-        "acompletion",
-        "embedding",
-        "aembedding",
-        "atranscription",
-        "transcription",
-        "atext_completion",
-        "text_completion",
-        "arerank",
-        "rerank",
-        "responses",
-        "aresponses",
-    ],
+    supported_call_types: Optional[List[CachingSupportedCallTypes]] = None,
     **kwargs,
 ):
     """
@@ -950,6 +941,21 @@ def update_cache(
         None
 
     """
+    if supported_call_types is None:
+        supported_call_types = [
+            "completion",
+            "acompletion",
+            "embedding",
+            "aembedding",
+            "atranscription",
+            "transcription",
+            "atext_completion",
+            "text_completion",
+            "arerank",
+            "rerank",
+            "responses",
+            "aresponses",
+        ]
     print_verbose("LiteLLM: Updating Cache")
     litellm.cache = Cache(
         type=type,

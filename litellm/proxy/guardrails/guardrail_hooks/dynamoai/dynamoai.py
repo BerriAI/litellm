@@ -45,9 +45,11 @@ class DynamoAIGuardrails(CustomGuardrail):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         model_id: str = "",
-        policy_ids: List[str] = [],
+        policy_ids: Optional[List[str]] = None,
         **kwargs,
     ):
+        if policy_ids is None:
+            policy_ids = []
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )

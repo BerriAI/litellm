@@ -207,8 +207,10 @@ class AzureTextCompletion(BaseAzureLLM):
         max_retries: int,
         azure_ad_token: Optional[str] = None,
         client=None,  # this is the AsyncAzureOpenAI
-        litellm_params: dict = {},
+        litellm_params: Optional[dict] = None,
     ):
+        if litellm_params is None:
+            litellm_params = {}
         response = None
         try:
             # init AzureOpenAI Client
@@ -270,8 +272,10 @@ class AzureTextCompletion(BaseAzureLLM):
         timeout: Any,
         azure_ad_token: Optional[str] = None,
         client=None,
-        litellm_params: dict = {},
+        litellm_params: Optional[dict] = None,
     ):
+        if litellm_params is None:
+            litellm_params = {}
         max_retries = data.pop("max_retries", 2)
         if not isinstance(max_retries, int):
             raise AzureOpenAIError(
@@ -327,8 +331,10 @@ class AzureTextCompletion(BaseAzureLLM):
         timeout: Any,
         azure_ad_token: Optional[str] = None,
         client=None,
-        litellm_params: dict = {},
+        litellm_params: Optional[dict] = None,
     ):
+        if litellm_params is None:
+            litellm_params = {}
         try:
             # init AzureOpenAI Client
             azure_client = self.get_azure_openai_client(

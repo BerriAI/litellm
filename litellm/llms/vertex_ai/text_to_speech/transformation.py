@@ -206,7 +206,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         optional_params: Dict,
         voice: Optional[Union[str, Dict]] = None,
         drop_params: bool = False,
-        kwargs: Dict = {},
+        kwargs: Optional[Dict] = None,
     ) -> Tuple[Optional[str], Dict]:
         """
         Map OpenAI parameters to Vertex AI TTS parameters
@@ -222,6 +222,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Returns:
             Tuple of (mapped_voice_str, mapped_params)
         """
+        if kwargs is None:
+            kwargs = {}
         mapped_params: Dict[str, Any] = {}
 
         ##########################################################

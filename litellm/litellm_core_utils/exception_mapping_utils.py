@@ -237,10 +237,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
     model,
     original_exception,
     custom_llm_provider,
-    completion_kwargs={},
-    extra_kwargs={},
+    completion_kwargs=None,
+    extra_kwargs=None,
 ):
     """Maps an LLM Provider Exception to OpenAI Exception Format"""
+    if completion_kwargs is None:
+        completion_kwargs = {}
+    if extra_kwargs is None:
+        extra_kwargs = {}
     if any(
         isinstance(original_exception, exc_type)
         for exc_type in litellm.LITELLM_EXCEPTION_TYPES
@@ -2485,10 +2489,12 @@ def exception_type(  # type: ignore  # noqa: PLR0915
 
 
 def exception_logging(
-    additional_args={},
+    additional_args=None,
     logger_fn=None,
     exception=None,
 ):
+    if additional_args is None:
+        additional_args = {}
     try:
         model_call_details = {}
         if exception:

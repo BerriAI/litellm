@@ -145,7 +145,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: Dict,
         voice: Optional[Union[str, Dict]] = None,
         drop_params: bool = False,
-        kwargs: Dict = {},
+        kwargs: Optional[Dict] = None,
     ) -> Tuple[Optional[str], Dict]:
         """
         Map OpenAI parameters to RunwayML TTS parameters
@@ -156,6 +156,8 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         Note: Since RunwayML requires voice as a dict, we store it in
         mapped_params["runwayml_voice"] and return None for the voice string.
         """
+        if kwargs is None:
+            kwargs = {}
         mapped_params = {}
 
         # Map voice parameter to RunwayML format dict

@@ -63,10 +63,12 @@ class CustomLLM(BaseLLM):
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
+        if headers is None:
+            headers = {}
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     def streaming(
@@ -84,10 +86,12 @@ class CustomLLM(BaseLLM):
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
     ) -> Iterator[GenericStreamingChunk]:
+        if headers is None:
+            headers = {}
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def acompletion(
@@ -105,13 +109,15 @@ class CustomLLM(BaseLLM):
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[
         Coroutine[Any, Any, Union[ModelResponse, "CustomStreamWrapper"]],
         Union[ModelResponse, "CustomStreamWrapper"],
     ]:
+        if headers is None:
+            headers = {}
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def astreaming(
@@ -129,10 +135,12 @@ class CustomLLM(BaseLLM):
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> AsyncIterator[GenericStreamingChunk]:
+        if headers is None:
+            headers = {}
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     def image_generation(
