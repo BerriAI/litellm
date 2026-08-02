@@ -2491,9 +2491,6 @@ async def increment_spend_counters(
         )
 
     async def _global_proxy_scope() -> None:
-        # The proxy-wide accumulator is the "litellm-proxy-budget" user row that
-        # db_spend_update_writer also accrues into, so it shares the user counter
-        # key space and reseeds from that row like any other user counter.
         if GLOBAL_PROXY_SPEND_COUNTER_KEY in reserved_counter_keys:
             return
         await _init_and_increment_spend_counter(
