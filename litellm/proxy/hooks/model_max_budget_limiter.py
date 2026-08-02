@@ -162,16 +162,24 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self, model: str, internal_model_max_budget: Mapping[str, BudgetConfig]
     ) -> str | None:
         """
-        Resolve the budget-config entry name `model` matches (exact, then
-        `{provider}/{model}`-normalized). The entry name is the canonical form for
-        spend counter keys so prefixed and bare spellings of one model share a counter.
+        Resolve the budget-config entry name `model` matches: exact first, then with
+        the `{provider}/` prefix stripped from the request, the entry, or both. The
+        entry name is the canonical form for spend counter keys so prefixed and bare
+        spellings of one model share a counter.
         """
         if model in internal_model_max_budget:
             return model
         stripped_model = self._get_model_without_custom_llm_provider(model)
         if stripped_model in internal_model_max_budget:
             return stripped_model
-        return None
+        return next(
+            (
+                entry_name
+                for entry_name in internal_model_max_budget
+                if self._get_model_without_custom_llm_provider(entry_name) in (model, stripped_model)
+            ),
+            None,
+        )
 
     def _key_already_covers_model(
         self, key_model_max_budget: Mapping[str, Mapping[str, str | float]] | None, model: str

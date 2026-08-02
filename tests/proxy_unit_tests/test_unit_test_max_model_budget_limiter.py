@@ -966,3 +966,61 @@ async def test_team_window_start_key_is_per_model_and_duration(budget_limiter):
         "team_model_budget_start_time:team-windows:gpt-4:1d",
         "team_model_budget_start_time:team-windows:claude-3:7d",
     ]
+
+
+def test_get_matched_budget_model_name_strips_entry_prefix(budget_limiter):
+    """Config entries keyed provider/model must bind bare (and differently prefixed)
+    requests; before the fix only the request side was normalized, so an
+    openai/gpt-4 entry never matched a gpt-4 request (Greptile finding)."""
+    configs = budget_limiter._coerce_budget_configs(
+        {"openai/gpt-4": {"budget_limit": 5.0, "time_period": "1d"}}
+    )
+    assert (
+        budget_limiter._get_matched_budget_model_name(
+            model="gpt-4", internal_model_max_budget=configs
+        )
+        == "openai/gpt-4"
+    )
+    assert (
+        budget_limiter._get_matched_budget_model_name(
+            model="azure/gpt-4", internal_model_max_budget=configs
+        )
+        == "openai/gpt-4"
+    )
+    assert (
+        budget_limiter._get_matched_budget_model_name(
+            model="claude-3", internal_model_max_budget=configs
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_prefixed_team_budget_entry_matches_bare_request(budget_limiter):
+    """A team cap keyed openai/gpt-4 must govern a bare gpt-4 request end to end:
+    spend recorded under the canonical entry name, then enforcement raising for
+    either spelling. Uses the real DualCache, no spend-read mocks."""
+    team_budget = {"openai/gpt-4": {"budget_limit": 5.0, "time_period": "1d"}}
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 6.0,
+            "model_group": "gpt-4",
+            "model": "gpt-4",
+            "metadata": {"user_api_key_hash": "hash-1"},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_team_id": "team-prefixed",
+                "user_api_key_team_model_max_budget": team_budget,
+            }
+        },
+    }
+    await budget_limiter.async_log_success_event(kwargs, None, 0, 0)
+
+    for request_model in ("gpt-4", "openai/gpt-4"):
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-prefixed",
+                team_model_max_budget=team_budget,
+                model=request_model,
+            )

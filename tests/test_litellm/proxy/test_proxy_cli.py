@@ -2287,20 +2287,31 @@ class TestScriptModeImportsCanonicalProxyServer:
         full copy of proxy_server as a top-level module; that shadow copy won the
         litellm.callbacks registration while uvicorn served the canonical module, so
         in-memory budget counters were incremented on one instance and read on another
-        and budgets were never enforced without Redis."""
+        and budgets were never enforced without Redis.
+
+        Both module names are pre-stubbed in sys.modules (matching the other run_server
+        tests in this file) so the subprocess never performs the real, heavy proxy_server
+        import: the canonical stub carries the four names run_server pulls, while the
+        top-level stub is empty, so a regression to the bare import fails fast with
+        ImportError instead of timing out."""
         import subprocess
 
         repo_root = Path(__file__).resolve().parents[3]
         driver = (
-            "import sys, runpy\n"
+            "import sys, types, runpy\n"
+            "sys.modules['proxy_server'] = types.ModuleType('proxy_server')\n"
+            "canonical = types.ModuleType('litellm.proxy.proxy_server')\n"
+            "canonical.KeyManagementSettings = object\n"
+            "canonical.ProxyConfig = object\n"
+            "canonical.app = object()\n"
+            "canonical.save_worker_config = lambda **kwargs: None\n"
+            "sys.modules['litellm.proxy.proxy_server'] = canonical\n"
             "sys.path.insert(0, 'litellm/proxy')\n"
             "sys.argv = ['proxy_cli.py', '--version']\n"
             "try:\n"
             "    runpy.run_path('litellm/proxy/proxy_cli.py', run_name='__main__')\n"
-            "except SystemExit:\n"
-            "    pass\n"
-            "assert 'litellm.proxy.proxy_server' in sys.modules, 'canonical module not loaded'\n"
-            "assert 'proxy_server' not in sys.modules, 'shadow top-level proxy_server module loaded'\n"
+            "except SystemExit as e:\n"
+            "    sys.exit(e.code or 0)\n"
         )
         result = subprocess.run(
             [sys.executable, "-c", driver],
@@ -2310,3 +2321,4 @@ class TestScriptModeImportsCanonicalProxyServer:
             timeout=120,
         )
         assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+        assert "LiteLLM: Current Version" in result.stdout
