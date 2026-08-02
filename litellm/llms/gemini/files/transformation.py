@@ -5,15 +5,15 @@ For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 
 import time
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -43,11 +43,11 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         self,
         headers: dict[Any, Any],
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict[Any, Any],
         litellm_params: dict[Any, Any],
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict[Any, Any]:
         """
         Validate environment and add Gemini API key to headers.
@@ -62,12 +62,12 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         OPTIONAL
@@ -86,10 +86,10 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not final_api_key:
             raise ValueError("api_key is required")
 
-        url = "{}/{}".format(api_base, endpoint)
+        url = f"{api_base}/{endpoint}"
         return url
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return []
 
     def map_openai_params(
@@ -155,7 +155,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
     def transform_create_file_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
@@ -190,8 +190,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 status_details=None,
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing file upload response: {str(e)}")
-            raise ValueError(f"Error parsing file upload response: {str(e)}")
+            verbose_logger.exception(f"Error parsing file upload response: {e!s}")
+            raise ValueError(f"Error parsing file upload response: {e!s}")
 
     def transform_retrieve_file_request(
         self,
@@ -294,8 +294,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 status_details=(str(response_json.get("error", "")) if gemini_state == "FAILED" else None),
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing file retrieve response: {str(e)}")
-            raise ValueError(f"Error parsing file retrieve response: {str(e)}")
+            verbose_logger.exception(f"Error parsing file retrieve response: {e!s}")
+            raise ValueError(f"Error parsing file retrieve response: {e!s}")
 
     def transform_delete_file_request(
         self,
@@ -362,12 +362,12 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             else:
                 raise ValueError(f"Failed to delete file: {raw_response.text}")
         except Exception as e:
-            verbose_logger.exception(f"Error parsing file delete response: {str(e)}")
-            raise ValueError(f"Error parsing file delete response: {str(e)}")
+            verbose_logger.exception(f"Error parsing file delete response: {e!s}")
+            raise ValueError(f"Error parsing file delete response: {e!s}")
 
     def transform_list_files_request(
         self,
-        purpose: Optional[str],
+        purpose: str | None,
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
@@ -378,7 +378,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-    ) -> List[OpenAIFileObject]:
+    ) -> list[OpenAIFileObject]:
         raise NotImplementedError("GoogleAIStudioFilesHandler does not support file listing")
 
     def transform_file_content_request(

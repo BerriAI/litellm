@@ -1,5 +1,5 @@
 import types
-from typing import List, Literal, Optional, Union
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -19,8 +19,8 @@ class VertexAITextEmbeddingConfig(BaseModel):
         title: Optional(str) The title of the document to be embedded. (only valid with task_type=RETRIEVAL_DOCUMENT).
     """
 
-    auto_truncate: Optional[bool] = None
-    task_type: Optional[
+    auto_truncate: bool | None = None
+    task_type: (
         Literal[
             "RETRIEVAL_QUERY",
             "RETRIEVAL_DOCUMENT",
@@ -30,24 +30,24 @@ class VertexAITextEmbeddingConfig(BaseModel):
             "QUESTION_ANSWERING",
             "FACT_VERIFICATION",
         ]
-    ] = None
-    title: Optional[str] = None
+        | None
+    ) = None
+    title: str | None = None
 
     def __init__(
         self,
-        auto_truncate: Optional[bool] = None,
-        task_type: Optional[
-            Literal[
-                "RETRIEVAL_QUERY",
-                "RETRIEVAL_DOCUMENT",
-                "SEMANTIC_SIMILARITY",
-                "CLASSIFICATION",
-                "CLUSTERING",
-                "QUESTION_ANSWERING",
-                "FACT_VERIFICATION",
-            ]
-        ] = None,
-        title: Optional[str] = None,
+        auto_truncate: bool | None = None,
+        task_type: Literal[
+            "RETRIEVAL_QUERY",
+            "RETRIEVAL_DOCUMENT",
+            "SEMANTIC_SIMILARITY",
+            "CLASSIFICATION",
+            "CLUSTERING",
+            "QUESTION_ANSWERING",
+            "FACT_VERIFICATION",
+        ]
+        | None = None,
+        title: str | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -100,10 +100,10 @@ class VertexAITextEmbeddingConfig(BaseModel):
 
     def transform_openai_request_to_vertex_embedding_request(
         self,
-        input: Union[list, str],
+        input: list | str,
         optional_params: dict,
         model: str,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex embedding request.
@@ -129,8 +129,8 @@ class VertexAITextEmbeddingConfig(BaseModel):
             return vertex_request
 
         vertex_request = VertexEmbeddingRequest()
-        vertex_text_embedding_input_list: List[TextEmbeddingInput] = []
-        task_type: Optional[TaskType] = optional_params.get("task_type")
+        vertex_text_embedding_input_list: list[TextEmbeddingInput] = []
+        task_type: TaskType | None = optional_params.get("task_type")
         title = optional_params.get("title")
 
         if isinstance(input, str):
@@ -148,7 +148,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
         return vertex_request
 
     def _transform_openai_request_to_fine_tuned_embedding_request(
-        self, input: Union[list, str], optional_params: dict, model: str
+        self, input: list | str, optional_params: dict, model: str
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex fine-tuned embedding request.
@@ -173,7 +173,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
         ```
         """
         vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
-        vertex_text_embedding_input_list: List[TextEmbeddingFineTunedInput] = []
+        vertex_text_embedding_input_list: list[TextEmbeddingFineTunedInput] = []
         if isinstance(input, str):
             input = [input]  # Convert single string to list for uniform processing
 
@@ -192,8 +192,8 @@ class VertexAITextEmbeddingConfig(BaseModel):
     def create_embedding_input(
         self,
         content: str,
-        task_type: Optional[TaskType] = None,
-        title: Optional[str] = None,
+        task_type: TaskType | None = None,
+        title: str | None = None,
     ) -> TextEmbeddingInput:
         """
         Creates a TextEmbeddingInput object.

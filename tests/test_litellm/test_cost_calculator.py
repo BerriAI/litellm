@@ -1014,9 +1014,9 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     router = Router(
         model_list=[
             {
-                "model_name": "qwen-3.7-plus",
+                "model_name": "qwen-tier-only",
                 "litellm_params": {
-                    "model": "dashscope/qwen3.7-plus",
+                    "model": "dashscope/qwen-tier-only-test",
                     "api_key": "sk-fake",
                 },
                 "model_info": {
@@ -1037,10 +1037,12 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     assert entry.get("input_cost_per_token") is None
     assert entry.get("tiered_pricing") is not None
     # The stripped shared alias must not carry tiered pricing.
-    assert litellm.model_cost["dashscope/qwen3.7-plus"].get("tiered_pricing") is None
+    assert (
+        litellm.model_cost["dashscope/qwen-tier-only-test"].get("tiered_pricing") is None
+    )
 
     selected = _select_model_name_for_cost_calc(
-        model="dashscope/qwen3.7-plus",
+        model="dashscope/qwen-tier-only-test",
         completion_response=None,
         custom_pricing=True,
         custom_llm_provider="dashscope",

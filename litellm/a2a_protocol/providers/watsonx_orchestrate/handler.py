@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import json
 import time
-from typing import Any, AsyncIterator, Dict, NamedTuple, Optional, Tuple, cast
+from collections.abc import AsyncIterator
+from typing import Any, NamedTuple, cast
 
 import httpx
 
@@ -24,7 +25,7 @@ _IBM_CLOUD_IAM_URL = "https://iam.cloud.ibm.com/identity/token"
 _POLL_INTERVAL_S = 2.0
 _MAX_POLL_ATTEMPTS = 90
 _TOKEN_CACHE_TTL_BUFFER_S = 60
-_token_cache: Dict[str, Tuple[str, float]] = {}
+_token_cache: dict[str, tuple[str, float]] = {}
 
 
 class WXORequestParams(NamedTuple):
@@ -32,9 +33,9 @@ class WXORequestParams(NamedTuple):
     instance_id: str
     wxo_agent_id: str
     api_key: str
-    username: Optional[str]
+    username: str | None
     auth_mode: str
-    thread_id: Optional[str]
+    thread_id: str | None
 
 
 class WatsonxOrchestrateHandler:
@@ -50,13 +51,13 @@ class WatsonxOrchestrateHandler:
         auth_mode: str,
         cp4d_host: str,
         api_key: str,
-        username: Optional[str],
+        username: str | None,
     ) -> str:
         material = f"{auth_mode}:{cp4d_host}:{username or ''}:{api_key}"
         return hashlib.sha256(material.encode()).hexdigest()
 
     @staticmethod
-    def _cp4d_token_ttl_seconds(expiration: Any, now_wall: Optional[float] = None) -> int:
+    def _cp4d_token_ttl_seconds(expiration: Any, now_wall: float | None = None) -> int:
         # CP4D returns expiration as absolute Unix epoch seconds, not a duration.
         expires_at = int(expiration)
         wall = now_wall if now_wall is not None else time.time()
@@ -67,8 +68,8 @@ class WatsonxOrchestrateHandler:
         cp4d_host: str,
         auth_mode: str,
         api_key: str,
-        username: Optional[str] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        username: str | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> str:
         cache_key = WatsonxOrchestrateHandler._token_cache_key(auth_mode, cp4d_host, api_key, username)
         now = time.monotonic()
@@ -121,18 +122,18 @@ class WatsonxOrchestrateHandler:
     async def _poll_run(
         base_url: str,
         run_id: str,
-        auth_headers: Dict[str, str],
+        auth_headers: dict[str, str],
         client: AsyncHTTPHandler,
         max_attempts: int = _MAX_POLL_ATTEMPTS,
         interval_s: float = _POLL_INTERVAL_S,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         url = f"{base_url}/v1/orchestrate/runs/{run_id}"
 
         for attempt in range(max_attempts):
             await asyncio.sleep(interval_s)
             response = await client.get(url, headers=auth_headers)
             response.raise_for_status()
-            result: Dict[str, Any] = response.json()
+            result: dict[str, Any] = response.json()
             status = result.get("status", "")
             verbose_logger.debug(f"WXO: Poll {attempt + 1}/{max_attempts} run='{run_id}' status='{status}'")
             if status in WatsonxOrchestrateTransformation.TERMINAL_STATES:
@@ -144,11 +145,11 @@ class WatsonxOrchestrateHandler:
 
     @staticmethod
     async def _get_successful_run_data(
-        run_data: Dict[str, Any],
+        run_data: dict[str, Any],
         base_url: str,
-        auth_headers: Dict[str, str],
+        auth_headers: dict[str, str],
         client: AsyncHTTPHandler,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         status = run_data.get("status", "")
         if status not in WatsonxOrchestrateTransformation.TERMINAL_STATES:
             run_id = run_data.get("run_id") or run_data.get("id") or ""
@@ -186,7 +187,7 @@ class WatsonxOrchestrateHandler:
         return accumulated_text
 
     @staticmethod
-    def _extract_litellm_params(litellm_params: Dict[str, Any]) -> WXORequestParams:
+    def _extract_litellm_params(litellm_params: dict[str, Any]) -> WXORequestParams:
         cp4d_host = litellm_params.get("cp4d_host") or ""
         instance_id = litellm_params.get("instance_id") or ""
         wxo_agent_id = litellm_params.get("wxo_agent_id") or ""
@@ -214,9 +215,9 @@ class WatsonxOrchestrateHandler:
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
-        params: Dict[str, Any],
-        litellm_params: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        litellm_params: dict[str, Any],
+    ) -> dict[str, Any]:
         wxo = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
         client = WatsonxOrchestrateHandler._http_client(timeout=90.0)
@@ -245,7 +246,7 @@ class WatsonxOrchestrateHandler:
             headers=auth_headers,
         )
         run_response.raise_for_status()
-        run_data: Dict[str, Any] = run_response.json()
+        run_data: dict[str, Any] = run_response.json()
 
         run_data = await WatsonxOrchestrateHandler._get_successful_run_data(
             run_data=run_data,
@@ -260,11 +261,11 @@ class WatsonxOrchestrateHandler:
     @staticmethod
     async def handle_streaming(
         request_id: str,
-        params: Dict[str, Any],
-        litellm_params: Dict[str, Any],
+        params: dict[str, Any],
+        litellm_params: dict[str, Any],
         chunk_size: int = 50,
         delay_ms: int = 10,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         wxo = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
         client = WatsonxOrchestrateHandler._http_client(timeout=120.0)

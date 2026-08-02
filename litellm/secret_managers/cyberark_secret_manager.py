@@ -1,6 +1,6 @@
 import base64
 import os
-from typing import Any, Dict, Optional, Union
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -172,9 +172,9 @@ class CyberArkSecretManager(BaseSecretManager):
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Optional[str]:
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
         """
         Reads a secret from CyberArk Conjur using an async HTTPX client.
 
@@ -218,9 +218,9 @@ class CyberArkSecretManager(BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Optional[str]:
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
         """
         Reads a secret from CyberArk Conjur using a sync HTTPX client.
 
@@ -262,11 +262,11 @@ class CyberArkSecretManager(BaseSecretManager):
         self,
         secret_name: str,
         secret_value: str,
-        description: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tags: Optional[Union[dict, list]] = None,
-    ) -> Dict[str, Any]:
+        description: str | None = None,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        tags: dict | list | None = None,
+    ) -> dict[str, Any]:
         """
         Writes a secret to CyberArk Conjur using an async HTTPX client.
 
@@ -309,9 +309,9 @@ class CyberArkSecretManager(BaseSecretManager):
     async def async_delete_secret(
         self,
         secret_name: str,
-        recovery_window_in_days: Optional[int] = 7,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        recovery_window_in_days: int | None = 7,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> dict:
         """
         CyberArk Conjur does not support direct secret deletion via API.

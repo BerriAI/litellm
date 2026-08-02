@@ -8,7 +8,8 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 
 import copy
 import json
-from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Union
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 
@@ -45,7 +46,7 @@ class _StreamTerminated(Exception):
     its terminal chunks (block message or in-stream error) and must stop."""
 
 
-def _get_a2a_request_id(responses_so_far: List[Any], request_data: dict) -> str | None:
+def _get_a2a_request_id(responses_so_far: list[Any], request_data: dict) -> str | None:
     """Get JSON-RPC request id from first A2A chunk or request body for in-stream error reporting."""
     for item in responses_so_far:
         if isinstance(item, dict) and "id" in item:
@@ -99,7 +100,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -210,14 +211,13 @@ class UnifiedLLMGuardrails(CustomLogger):
         Uses Enkrypt AI guardrails to check the response for policy violations, PII, and injection attacks
         """
         global endpoint_guardrail_translation_mappings
+        # Local import avoids a module-level cyclic import with
+        # litellm.integrations.custom_guardrail.
+        from litellm.integrations.custom_guardrail import ModifyResponseException
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
         from litellm.types.guardrails import GuardrailEventHooks
-
-        # Local import avoids a module-level cyclic import with
-        # litellm.integrations.custom_guardrail.
-        from litellm.integrations.custom_guardrail import ModifyResponseException
 
         guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
 
@@ -804,6 +804,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
+        guardrail_to_apply: CustomGuardrail | None = None,
+        buffer_until_moderated_default: bool = False,
     ) -> AsyncGenerator[Any, None]:
         """
         Passes the entire stream to the guardrail
@@ -824,7 +826,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         # litellm.integrations.custom_guardrail.
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
-        guardrail_to_apply: CustomGuardrail = request_data.pop("guardrail_to_apply", None)
+        if guardrail_to_apply is None:
+            guardrail_to_apply = request_data.pop("guardrail_to_apply", None)
 
         # Get streaming configuration. Resolution order (later wins): default
         # < guardrail attribute < guardrail_config dict < this callback's
@@ -852,7 +855,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         # release the original chunks are replayed as-is, so a
         # content-rewriting guardrail (e.g. PII masking) would leak
         # unredacted content. Guarded below via mask_response_content.
-        buffer_until_moderated = _streaming_flag("streaming_buffer_until_moderated", False)
+        buffer_until_moderated = _streaming_flag("streaming_buffer_until_moderated", buffer_until_moderated_default)
 
         if (
             buffer_until_moderated
@@ -923,7 +926,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         # Infer call type from first chunk
         call_type = None
         chunk_counter = 0
-        responses_so_far: List[Any] = []
+        responses_so_far: list[Any] = []
         responses_yielded: list[Any] = []
         pending_end_of_stream_items: list[Any] = []
         # Whether any real response chunk has been forwarded to the client.

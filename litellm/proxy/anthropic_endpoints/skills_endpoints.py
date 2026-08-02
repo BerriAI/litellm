@@ -2,8 +2,6 @@
 Anthropic Skills API endpoints - /v1/skills
 """
 
-from typing import Optional
-
 import orjson
 from fastapi import APIRouter, Depends, Request, Response
 
@@ -32,7 +30,7 @@ router = APIRouter()
 async def create_skill(
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "anthropic",
+    custom_llm_provider: str | None = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -130,10 +128,10 @@ async def create_skill(
 async def list_skills(
     fastapi_response: Response,
     request: Request,
-    limit: Optional[int] = 10,
-    after_id: Optional[str] = None,
-    before_id: Optional[str] = None,
-    custom_llm_provider: Optional[str] = "anthropic",
+    limit: int | None = 10,
+    after_id: str | None = None,
+    before_id: str | None = None,
+    custom_llm_provider: str | None = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -235,7 +233,7 @@ async def get_skill(
     skill_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "anthropic",
+    custom_llm_provider: str | None = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -332,7 +330,7 @@ async def delete_skill(
     skill_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "anthropic",
+    custom_llm_provider: str | None = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """

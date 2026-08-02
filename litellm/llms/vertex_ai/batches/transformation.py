@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any
 
 from litellm._uuid import uuid
 from litellm.llms.vertex_ai.common_utils import (
@@ -59,8 +59,8 @@ class VertexAIBatchTransformation:
 
     @classmethod
     def transform_vertex_ai_batch_list_response_to_openai_list_response(
-        cls, response: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        cls, response: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Transforms Vertex AI batch list response into OpenAI-compatible list response.
         """
@@ -152,7 +152,7 @@ class VertexAIBatchTransformation:
 
         ref: https://cloud.google.com/vertex-ai/docs/reference/rest/v1/JobState
         """
-        state_mapping: Dict[str, BatchJobStatus] = {
+        state_mapping: dict[str, BatchJobStatus] = {
             "JOB_STATE_UNSPECIFIED": "failed",
             "JOB_STATE_QUEUED": "validating",
             "JOB_STATE_PENDING": "validating",
@@ -210,7 +210,7 @@ class VertexAIBatchTransformation:
         return model
 
     @classmethod
-    def is_unmanaged_gcs_batch_input_file_id(cls, input_file_id: Optional[str]) -> bool:
+    def is_unmanaged_gcs_batch_input_file_id(cls, input_file_id: str | None) -> bool:
         """
         Returns True if `input_file_id` is a raw gs:// Vertex batch input file (i.e. not a
         LiteLLM-managed unified file id) with a `publishers/` model path that

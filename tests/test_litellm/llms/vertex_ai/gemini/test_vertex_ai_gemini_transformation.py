@@ -2097,3 +2097,319 @@ def test_multi_turn_function_calling_roles():
                 assert (
                     content["role"] == "user"
                 ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+
+
+def test_gemini_thought_signature_preservation_real_response():
+    """Test that thought signatures are preserved on the text part if originally there, without dropping or duplicating (real response case)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    real_candidate = {
+        "content": {
+            "parts": [
+                {
+                    "text": "I will explain and then list files.",
+                    "thoughtSignature": "mock_signature_from_text_part",
+                },
+                {
+                    "functionCall": {
+                        "name": "list_files",
+                        "args": {},
+                    }
+                },
+            ]
+        }
+    }
+
+    parts = real_candidate["content"]["parts"]
+
+    content, reasoning_content = (
+        VertexGeminiConfig().get_assistant_content_message(parts=parts)
+    )
+    thought_signatures = (
+        VertexGeminiConfig()._extract_thought_signatures_from_parts(
+            parts=parts
+        )
+    )
+    functions, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
+
+    msg: dict = {"role": "assistant"}
+    if content is not None:
+        msg["content"] = content
+    if tools:
+        msg["tool_calls"] = tools
+    if functions is not None:
+        msg["function_call"] = functions
+    if thought_signatures is not None:
+        msg["provider_specific_fields"] = {
+            "thought_signatures": thought_signatures
+        }
+
+    converted_real = _gemini_convert_messages_with_history(
+        messages=[msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted_real) == 1
+    assert "parts" in converted_real[0]
+    parts_out = converted_real[0]["parts"]
+    assert len(parts_out) == 2
+    assert "text" in parts_out[0]
+    assert (
+        parts_out[0]["thoughtSignature"] == "mock_signature_from_text_part"
+    )
+    assert "function_call" in parts_out[1]
+    assert "thoughtSignature" not in parts_out[1]
+
+
+def test_gemini_thought_signature_deduplication_assumed_response():
+    """Test that thought signatures are deduplicated and not attached to the text part if already present in the tool call (assumed response case)."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    pr_assumed_msg = {
+        "role": "assistant",
+        "content": "I will list the directory.",
+        "provider_specific_fields": {
+            "thought_signatures": ["mock_signature_63k"]
+        },
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+                "provider_specific_fields": {
+                    "thought_signature": "mock_signature_63k"
+                },
+            }
+        ],
+    }
+
+    converted_pr = _gemini_convert_messages_with_history(
+        messages=[pr_assumed_msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted_pr) == 1
+    assert "parts" in converted_pr[0]
+    parts_out = converted_pr[0]["parts"]
+    assert len(parts_out) == 2
+    assert "text" in parts_out[0]
+    assert "thoughtSignature" not in parts_out[0]
+    assert "function_call" in parts_out[1]
+    assert parts_out[1]["thoughtSignature"] == "mock_signature_63k"
+
+
+def test_gemini_thought_signature_pure_text():
+    """Test that thought signatures are preserved on the text part for responses with no tool calls."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "Hello, I am a model.",
+        "provider_specific_fields": {
+            "thought_signatures": ["pure_text_signature"]
+        },
+    }
+
+    converted = _gemini_convert_messages_with_history(
+        messages=[msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted) == 1
+    assert "parts" in converted[0]
+    parts_out = converted[0]["parts"]
+    assert len(parts_out) == 1
+    assert "text" in parts_out[0]
+    assert parts_out[0]["thoughtSignature"] == "pure_text_signature"
+
+
+def test_gemini_thought_signature_pure_tool_call():
+    """Test that thought signatures are preserved on the tool call for responses with no intermediate text."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": None,
+        "provider_specific_fields": {
+            "thought_signatures": ["pure_tool_signature"]
+        },
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+                "provider_specific_fields": {
+                    "thought_signature": "pure_tool_signature"
+                },
+            }
+        ],
+    }
+
+    converted = _gemini_convert_messages_with_history(
+        messages=[msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted) == 1
+    assert "parts" in converted[0]
+    parts_out = converted[0]["parts"]
+    assert len(parts_out) == 1
+    assert "function_call" in parts_out[0]
+    assert parts_out[0]["thoughtSignature"] == "pure_tool_signature"
+
+
+def test_gemini_distinct_text_and_tool_signatures_are_both_preserved():
+    """A text-part signature that differs from the tool-call signature must stay on the text part."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "Some analysis.",
+        "provider_specific_fields": {
+            "thought_signatures": ["text_signature", "tool_signature"]
+        },
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+                "provider_specific_fields": {"thought_signature": "tool_signature"},
+            }
+        ],
+    }
+
+    parts = _gemini_convert_messages_with_history(
+        messages=[msg], model="gemini-2.5-pro"
+    )[0]["parts"]
+
+    assert parts[0]["text"] == "Some analysis."
+    assert parts[0]["thoughtSignature"] == "text_signature"
+    assert "function_call" in parts[1]
+    assert parts[1]["thoughtSignature"] == "tool_signature"
+
+
+def test_gemini_25_text_signature_survives_replay_to_gemini_3():
+    """gemini-2.5 history (signed text, unsigned tool call) replayed to gemini-3 keeps the real
+    text signature; the dummy signature synthesized for the unsigned tool call must not suppress it."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _get_dummy_thought_signature,
+    )
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "I will list the directory.",
+        "provider_specific_fields": {"thought_signatures": ["real_25_signature"]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+            }
+        ],
+    }
+
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
+        0
+    ]["parts"]
+
+    assert parts[0]["text"] == "I will list the directory."
+    assert parts[0]["thoughtSignature"] == "real_25_signature"
+    assert "function_call" in parts[1]
+    assert parts[1]["thoughtSignature"] == _get_dummy_thought_signature()
+
+
+def test_gemini_function_call_signature_round_trip_no_duplicate():
+    """End to end: a gemini-3-style response (unsigned text + signed functionCall) parsed and
+    re-serialized sends the signature exactly once, on the function-call part."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    response_parts = [
+        {"text": "I will calculate the result for you."},
+        {
+            "functionCall": {"name": "add_numbers", "args": {"a": 17, "b": 25}},
+            "thoughtSignature": "signature_from_function_call",
+        },
+    ]
+
+    config = VertexGeminiConfig()
+    content, _ = config.get_assistant_content_message(parts=response_parts)
+    thought_signatures = config._extract_thought_signatures_from_parts(
+        parts=response_parts
+    )
+    _, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=response_parts, cumulative_tool_call_idx=0, is_function_call=False
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": tools,
+        "provider_specific_fields": {"thought_signatures": thought_signatures},
+    }
+
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
+        0
+    ]["parts"]
+
+    signatures = [p["thoughtSignature"] for p in parts if "thoughtSignature" in p]
+    assert signatures == ["signature_from_function_call"]
+    assert "thoughtSignature" not in parts[0]
+    assert "function_call" in parts[1]
+
+
+def test_gemini_server_side_tool_signature_not_duplicated_on_text():
+    """A signature already re-injected on a server-side toolCall part is not attached to the text part again."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "The weather in Buenos Aires is sunny.",
+        "provider_specific_fields": {
+            "thought_signatures": ["server_side_signature"],
+            "server_side_tool_invocations": [
+                {
+                    "tool_type": "GOOGLE_SEARCH_WEB",
+                    "id": "abc123",
+                    "args": {"queries": ["weather Buenos Aires"]},
+                    "response": {"weather": "Sunny"},
+                    "thought_signature": "server_side_signature",
+                }
+            ],
+        },
+    }
+
+    parts = _gemini_convert_messages_with_history(
+        messages=[msg], model="gemini-2.5-pro"
+    )[0]["parts"]
+
+    text_part = next(p for p in parts if "text" in p)
+    assert "thoughtSignature" not in text_part
+    tool_call_part = next(p for p in parts if "toolCall" in p)
+    assert tool_call_part["thoughtSignature"] == "server_side_signature"

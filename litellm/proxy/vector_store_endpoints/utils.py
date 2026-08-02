@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 
 from fastapi import HTTPException, Request
 
@@ -52,7 +52,7 @@ def assert_proxy_admin_for_vector_store_index_management(
     )
 
 
-def _suffix_after_index_name(request_path: str, index_name: str) -> Optional[str]:
+def _suffix_after_index_name(request_path: str, index_name: str) -> str | None:
     """Return the path suffix after ``/indexes/{index_name}``, or None if absent."""
     match = re.search(rf"/indexes/{re.escape(index_name)}(?=$|[/?])", request_path)
     if match is None:
@@ -94,7 +94,7 @@ def _is_vector_store_index_lifecycle_request(
 
 
 def _object_permission_allows_vector_store(
-    object_permission: Optional[LiteLLM_ObjectPermissionTable],
+    object_permission: LiteLLM_ObjectPermissionTable | None,
     vector_store_id: str,
 ) -> bool:
     """Returns True if an object permission explicitly allowlists the vector store."""
@@ -107,8 +107,8 @@ def _object_permission_allows_vector_store(
 
 
 async def _get_object_permission_for_id(
-    object_permission_id: Optional[str],
-) -> Optional[LiteLLM_ObjectPermissionTable]:
+    object_permission_id: str | None,
+) -> LiteLLM_ObjectPermissionTable | None:
     """Load an object permission record by id, using the shared cache/DB helper."""
     if not object_permission_id:
         return None
@@ -172,7 +172,7 @@ async def can_user_access_vector_store(
     if _object_permission_allows_vector_store(key_object_permission, vector_store_id):
         return True
 
-    team_object_permission: Optional[LiteLLM_ObjectPermissionTable] = user_api_key_dict.team_object_permission
+    team_object_permission: LiteLLM_ObjectPermissionTable | None = user_api_key_dict.team_object_permission
     if team_object_permission is None:
         team_object_permission = await _get_object_permission_for_id(user_api_key_dict.team_object_permission_id)
     if _object_permission_allows_vector_store(team_object_permission, vector_store_id):
@@ -186,7 +186,7 @@ async def can_user_access_vector_store(
 
 async def get_litellm_managed_vector_store(
     vector_store_id: str,
-) -> Optional[LiteLLM_ManagedVectorStore]:
+) -> LiteLLM_ManagedVectorStore | None:
     """
     Resolve a LiteLLM-managed vector store from the registry or shared cache.
 
@@ -262,7 +262,7 @@ async def assert_user_can_access_vector_store_id(
     vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     detail: str = "Access denied: You do not have permission to access this vector store",
-) -> Optional[LiteLLM_ManagedVectorStore]:
+) -> LiteLLM_ManagedVectorStore | None:
     """
     Resolve a managed vector store id and enforce ownership if it exists.
 
@@ -291,8 +291,8 @@ def _does_endpoint_match(endpoint_path: str, request_path: str) -> bool:
 def check_vector_store_permission(
     index_name: str,
     permission: str,
-    key_metadata: Optional[Dict[str, Any]],
-    team_metadata: Optional[Dict[str, Any]],
+    key_metadata: dict[str, Any] | None,
+    team_metadata: dict[str, Any] | None,
 ) -> bool:
     """
     Check if a specific permission is allowed for a given vector store index.
@@ -343,7 +343,7 @@ def is_allowed_to_call_vector_store_endpoint(
     index_name: str,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Literal[True]]:
+) -> Literal[True] | None:
     """
     Check if the user is allowed to call the vector store endpoint.
 
@@ -432,7 +432,7 @@ def is_allowed_to_call_vector_store_files_endpoint(
     vector_store_id: str,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Literal[True]]:
+) -> Literal[True] | None:
     if (
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
@@ -453,7 +453,7 @@ def is_allowed_to_call_vector_store_files_endpoint(
 
     request_route = get_request_route(request)
 
-    permission_type: Optional[str] = None
+    permission_type: str | None = None
     for endpoint in provider_vector_store_endpoints.get("read", ()):
         if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
             permission_type = "read"

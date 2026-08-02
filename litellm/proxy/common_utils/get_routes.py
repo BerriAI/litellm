@@ -2,7 +2,7 @@
 Utility class for getting routes from a FastAPI app.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from starlette.routing import BaseRoute
 
@@ -14,11 +14,11 @@ class GetRoutes:
     def get_app_routes(
         route: BaseRoute,
         endpoint_route: Any,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get routes for a regular route.
         """
-        routes: List[Dict[str, Any]] = []
+        routes: list[dict[str, Any]] = []
         route_info = {
             "path": getattr(route, "path", None),
             "methods": getattr(route, "methods", None),
@@ -31,11 +31,11 @@ class GetRoutes:
     @staticmethod
     def get_routes_for_mounted_app(
         route: BaseRoute,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get routes for a mounted sub-application.
         """
-        routes: List[Dict[str, Any]] = []
+        routes: list[dict[str, Any]] = []
         mount_path = getattr(route, "path", "")
         sub_app = getattr(route, "app", None)
         if sub_app and hasattr(sub_app, "routes"):
@@ -58,7 +58,7 @@ class GetRoutes:
         return routes
 
     @staticmethod
-    def _safe_get_endpoint_name(endpoint_function: Any) -> Optional[str]:
+    def _safe_get_endpoint_name(endpoint_function: Any) -> str | None:
         """
         Safely get the name of the endpoint function.
         """

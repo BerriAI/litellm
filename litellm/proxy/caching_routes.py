@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -19,7 +19,7 @@ router = APIRouter(
 )
 
 
-def _extract_cache_params() -> Dict[str, Any]:
+def _extract_cache_params() -> dict[str, Any]:
     """
     Safely extracts and cleans cache parameters.
 
@@ -43,7 +43,7 @@ def _extract_cache_params() -> Dict[str, Any]:
         cleaned_params = HealthCheckCacheParams(**cache_params).model_dump() if cache_params else {}
         return masker.mask_dict(cleaned_params)
     except (AttributeError, TypeError) as e:
-        verbose_proxy_logger.debug(f"Error extracting cache params: {str(e)}")
+        verbose_proxy_logger.debug(f"Error extracting cache params: {e!s}")
         return {}
 
 
@@ -56,8 +56,8 @@ async def cache_ping():
     """
     Endpoint for checking if cache can be pinged
     """
-    litellm_cache_params: Dict[str, Any] = {}
-    cleaned_cache_params: Dict[str, Any] = {}
+    litellm_cache_params: dict[str, Any] = {}
+    cleaned_cache_params: dict[str, Any] = {}
     if litellm.cache is None:
         raise ProxyException(
             message=safe_dumps(
@@ -158,11 +158,11 @@ async def cache_delete(request: Request):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Cache Delete Failed({str(e)})",
+            detail=f"Cache Delete Failed({e!s})",
         )
 
 
-def _get_redis_client_info(cache_instance) -> Tuple[List, int]:
+def _get_redis_client_info(cache_instance) -> tuple[list, int]:
     """
     Helper function to safely get Redis client list information.
 
@@ -173,7 +173,7 @@ def _get_redis_client_info(cache_instance) -> Tuple[List, int]:
         client_list = cache_instance.client_list()
         return client_list, len(client_list)
     except Exception as e:
-        verbose_proxy_logger.warning(f"CLIENT LIST command failed (likely restricted on managed Redis): {str(e)}")
+        verbose_proxy_logger.warning(f"CLIENT LIST command failed (likely restricted on managed Redis): {e!s}")
         return ["CLIENT LIST command not available on this Redis instance"], -1
 
 
@@ -209,7 +209,7 @@ async def cache_redis_info():
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Service Unhealthy ({str(e)})",
+            detail=f"Service Unhealthy ({e!s})",
         )
 
 
@@ -245,5 +245,5 @@ async def cache_flushall():
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Service Unhealthy ({str(e)})",
+            detail=f"Service Unhealthy ({e!s})",
         )

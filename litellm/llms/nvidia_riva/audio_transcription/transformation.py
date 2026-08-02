@@ -11,7 +11,7 @@ dict at call time.
 Reference: https://docs.nvidia.com/deeplearning/riva/user-guide/docs/asr/asr-overview.html
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from httpx import Headers, Response
 
@@ -43,7 +43,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     optional TLS via ``use_ssl``).
     """
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         # Riva natively understands language + word timestamps.
         # `response_format` is honored at response-shaping time in the handler.
         return ["language", "response_format", "timestamp_granularities"]
@@ -77,7 +77,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return NvidiaRivaException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_audio_transcription_request(
@@ -102,7 +102,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if endpointing_config is not None:
             recognition_config["endpointing_config"] = endpointing_config
 
-        request_payload: Dict[str, Any] = {
+        request_payload: dict[str, Any] = {
             "recognition_config": recognition_config,
             "response_format": optional_params.get("response_format") or "json",
             "timestamp_granularities": optional_params.get("timestamp_granularities"),
@@ -126,16 +126,16 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         # gRPC auth is constructed in the handler, not via HTTP headers.
         return headers
 
-    def _build_recognition_config_dict(self, model: str, optional_params: dict) -> Dict[str, Any]:
+    def _build_recognition_config_dict(self, model: str, optional_params: dict) -> dict[str, Any]:
         """
         Build the Riva ``RecognitionConfig`` shape as a plain dict.
 
@@ -159,7 +159,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             "profanity_filter": optional_params.get("profanity_filter", False),
         }
 
-    def _build_endpointing_config_dict(self, optional_params: dict) -> Optional[Dict[str, Any]]:
+    def _build_endpointing_config_dict(self, optional_params: dict) -> dict[str, Any] | None:
         """
         Translate an OpenAI-style ``chunking_strategy`` into Riva's
         ``EndpointingConfig`` shape, or pass through an explicit
@@ -177,7 +177,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return None
 
         if isinstance(chunking, dict) and chunking.get("type") == "server_vad":
-            config: Dict[str, Any] = {}
+            config: dict[str, Any] = {}
             if "threshold" in chunking:
                 threshold = float(chunking["threshold"])
                 config["start_threshold"] = threshold
@@ -219,10 +219,10 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     @staticmethod
     def build_transcription_response(
-        final_results: List[Dict[str, Any]],
+        final_results: list[dict[str, Any]],
         response_format: str,
-        duration_seconds: Optional[float],
-        timestamp_granularities: Optional[List[str]],
+        duration_seconds: float | None,
+        timestamp_granularities: list[str] | None,
     ) -> TranscriptionResponse:
         """
         Aggregate a list of normalized "final result" dicts into a
@@ -245,7 +245,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         response["task"] = "transcribe"
 
         if response_format == "verbose_json":
-            words: List[Dict[str, Any]] = []
+            words: list[dict[str, Any]] = []
             if timestamp_granularities and "word" in timestamp_granularities:
                 for item in final_results:
                     for word in item.get("words", []) or []:

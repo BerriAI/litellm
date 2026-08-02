@@ -5,8 +5,6 @@ Provides guardrail-agnostic compliance validation based on guardrail modes
 and execution results rather than specific guardrail names.
 """
 
-from typing import Dict, List
-
 from litellm.types.proxy.compliance_endpoints import (
     ComplianceCheckRequest,
     ComplianceCheckResult,
@@ -28,7 +26,7 @@ class ComplianceChecker:
         self.data = data
         self.guardrails = data.guardrail_information or []
 
-    def _get_guardrails_by_mode(self, mode: str) -> List[Dict]:
+    def _get_guardrails_by_mode(self, mode: str) -> list[dict]:
         """
         Get all guardrails that ran in a specific mode.
 
@@ -79,7 +77,7 @@ class ComplianceChecker:
             return all(_branch_runs_in_mode(branch) for branch in [default, *tag_branches])
         return False
 
-    def _has_guardrail_intervention(self, guardrails: List[Dict]) -> bool:
+    def _has_guardrail_intervention(self, guardrails: list[dict]) -> bool:
         """Check if any guardrail intervened (blocked/masked content)."""
         for g in guardrails:
             status = g.get("guardrail_status", "")
@@ -87,7 +85,7 @@ class ComplianceChecker:
                 return True
         return False
 
-    def _all_guardrails_passed(self, guardrails: List[Dict]) -> bool:
+    def _all_guardrails_passed(self, guardrails: list[dict]) -> bool:
         """Check if all guardrails passed (no issues detected)."""
         if not guardrails:
             return False
@@ -210,7 +208,7 @@ class ComplianceChecker:
 
     # ── Main Compliance Check Methods ────────────────────────────────────────
 
-    def check_eu_ai_act(self) -> List[ComplianceCheckResult]:
+    def check_eu_ai_act(self) -> list[ComplianceCheckResult]:
         """
         Check EU AI Act compliance.
 
@@ -226,7 +224,7 @@ class ComplianceChecker:
             self._check_art_12_audit_complete(),
         ]
 
-    def check_gdpr(self) -> List[ComplianceCheckResult]:
+    def check_gdpr(self) -> list[ComplianceCheckResult]:
         """
         Check GDPR compliance.
 

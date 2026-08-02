@@ -2,14 +2,13 @@
 #   picks based on response time (for streaming, this is time to first token)
 import random
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import safe_divide_seconds
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs, safe_divide_seconds
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -73,14 +72,21 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
                 response_ms = end_time - start_time
+                if isinstance(response_ms, timedelta):
+                    # normalize to float seconds up-front: non-chat responses
+                    # (embeddings, speech, image) skip the ModelResponse branch
+                    # below, and a raw timedelta appended to the latency list
+                    # breaks JSON serialization when the router cache syncs to
+                    # Redis (issue #33169)
+                    response_ms = response_ms.total_seconds()
                 time_to_first_token_response_time = None
 
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
                     time_to_first_token_response_time = kwargs.get("completion_start_time", end_time) - start_time
 
-                final_value: Union[float, timedelta] = response_ms
-                time_to_first_token: Optional[float] = None
+                final_value: float = response_ms
+                time_to_first_token: float | None = None
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
@@ -89,15 +95,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
 
-                        # Handle both timedelta and float response times
-                        if isinstance(response_ms, timedelta):
-                            response_seconds = response_ms.total_seconds()
-                        else:
-                            response_seconds = response_ms
+                        # response_ms is already normalized to float seconds above
+                        response_seconds = response_ms
 
-                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
-                        if final_value is not None:
-                            final_value = float(final_value)
+                        normalized_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if normalized_value is not None:
+                            final_value = float(normalized_value)
                         else:
                             final_value = response_seconds
 
@@ -157,11 +160,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
-                    str(e)
-                )
+                f"litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {e!s}"
             )
-            pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -217,11 +217,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 return
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
-                    str(e)
-                )
+                f"litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {e!s}"
             )
-            pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -262,14 +259,21 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
                 response_ms = end_time - start_time
+                if isinstance(response_ms, timedelta):
+                    # normalize to float seconds up-front: non-chat responses
+                    # (embeddings, speech, image) skip the ModelResponse branch
+                    # below, and a raw timedelta appended to the latency list
+                    # breaks JSON serialization when the router cache syncs to
+                    # Redis (issue #33169)
+                    response_ms = response_ms.total_seconds()
                 time_to_first_token_response_time = None
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
                     time_to_first_token_response_time = kwargs.get("completion_start_time", end_time) - start_time
 
-                final_value: Union[float, timedelta] = response_ms
+                final_value: float = response_ms
                 total_tokens = 0
-                time_to_first_token: Optional[float] = None
+                time_to_first_token: float | None = None
 
                 if isinstance(response_obj, ModelResponse):
                     _usage = getattr(response_obj, "usage", None)
@@ -277,17 +281,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
 
-                        # Handle both timedelta and float response times
-                        if isinstance(response_ms, timedelta):
-                            response_seconds = response_ms.total_seconds()
-                        else:
-                            response_seconds = response_ms
+                        # response_ms is already normalized to float seconds above
+                        response_seconds = response_ms
 
-                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
-                        if final_value is not None:
-                            final_value = float(final_value)
+                        normalized_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if normalized_value is not None:
+                            final_value = float(normalized_value)
                         else:
-                            final_value = response_ms
+                            final_value = response_seconds
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):
@@ -349,20 +350,17 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.router_strategy.lowest_latency.py::async_log_success_event(): Exception occured - {}".format(
-                    str(e)
-                )
+                f"litellm.router_strategy.lowest_latency.py::async_log_success_event(): Exception occured - {e!s}"
             )
-            pass
 
     def _get_available_deployments(
         self,
         model_group: str,
         healthy_deployments: list,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-        request_kwargs: Optional[Dict] = None,
-        request_count_dict: Optional[Dict] = None,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        request_kwargs: dict | None = None,
+        request_count_dict: dict | None = None,
     ):
         """Common logic for both sync and async get_available_deployments"""
 
@@ -496,14 +494,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self,
         model_group: str,
         healthy_deployments: list,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-        request_kwargs: Optional[Dict] = None,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        request_kwargs: dict | None = None,
     ):
         # get list of potential deployments
         latency_key = f"{model_group}_map"
 
-        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(request_kwargs)
+        parent_otel_span: Span | None = _get_parent_otel_span_from_kwargs(request_kwargs)
         request_count_dict = (
             await self.router_cache.async_get_cache(key=latency_key, parent_otel_span=parent_otel_span) or {}
         )
@@ -521,9 +519,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self,
         model_group: str,
         healthy_deployments: list,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-        request_kwargs: Optional[Dict] = None,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        request_kwargs: dict | None = None,
     ):
         """
         Returns a deployment with the lowest latency
@@ -531,7 +529,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # get list of potential deployments
         latency_key = f"{model_group}_map"
 
-        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(request_kwargs)
+        parent_otel_span: Span | None = _get_parent_otel_span_from_kwargs(request_kwargs)
         request_count_dict = self.router_cache.get_cache(key=latency_key, parent_otel_span=parent_otel_span) or {}
 
         return self._get_available_deployments(
