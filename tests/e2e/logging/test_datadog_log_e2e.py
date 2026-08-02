@@ -141,6 +141,12 @@ class TestDataDogLogDelivery:
             events, model_group=CHEAP_ANTHROPIC_MODEL, call_type="acompletion", cost_anchor=outcome.response_cost
         )
 
+    @pytest.mark.skip(
+        reason=(
+            "LIT-5121: flaky - the /v1/messages log event missed the Datadog poll window on the "
+            "2026-08-02 stage run; skipped while delivery vs ingest-latency is investigated"
+        )
+    )
     @pytest.mark.covers("logging.datadog.success.exports_metric", exercised_on=["messages"])
     def test_messages_emits_one_log_event(
         self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
