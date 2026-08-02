@@ -107,6 +107,32 @@ async def test_register_plugin_git_subdir_update():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".claude/skills/my-skill",
+        ".github/plugins/my-plugin",
+        "plugins/.hidden/my-plugin",
+    ],
+)
+async def test_register_plugin_git_subdir_dot_prefixed_path(path):
+    """git-subdir paths with dot-prefixed segments (e.g. .claude/) register successfully."""
+    request = RegisterPluginRequest(
+        name="dot-prefixed-plugin",
+        source={
+            "source": "git-subdir",
+            "url": "https://github.com/org/monorepo.git",
+            "path": path,
+        },
+    )
+
+    response = await register_plugin(request=request, user_api_key_dict=_USER)
+
+    assert response["status"] == "success"
+    assert response["plugin"]["source"]["path"] == path
+
+
+@pytest.mark.asyncio
 async def test_register_plugin_git_subdir_missing_url():
     """git-subdir without url field raises HTTP 400."""
     request = RegisterPluginRequest(
@@ -181,6 +207,10 @@ async def test_register_plugin_git_subdir_path_traversal():
         "plugins/%2e%2e/secrets",  # percent-encoded traversal
         "plugins/%2E%2E/secrets",  # uppercase percent-encoded traversal
         "plugins/%252e%252e/secrets",  # double-encoded traversal
+        ".claude/../secrets",  # dot-prefixed segment must not open a traversal bypass
+        ".",  # bare current-dir segment
+        "..",  # bare parent-dir segment
+        "plugins/./my-plugin",  # embedded current-dir segment
     ]:
         request = RegisterPluginRequest(
             name="bad-plugin",
