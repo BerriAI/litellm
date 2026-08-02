@@ -147,6 +147,66 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+async def _raise_on_model_id_name_collision(
+    candidate_id: str | None,
+    llm_router: Router | None,
+    prisma_client: PrismaClient,
+) -> None:
+    """Reject a deployment id that equals an existing model_name.
+
+    The router resolves incoming ``model`` strings against deployment ids before
+    model names, so a deployment whose id equals a model_name captures all
+    traffic for that name and bypasses load balancing, cooldowns, and fallbacks.
+    The id colliding with its own model_name is rejected too: it is invisible in
+    a 1-member pool but pins the pool as soon as a second member is added.
+
+    Checks the router's in-memory names first, then falls back to one DB probe
+    so a name written via another proxy instance (visible in the router only
+    after the next DB poll) is still caught.
+    """
+    if candidate_id is None:
+        return
+    router_collision = llm_router is not None and candidate_id in llm_router.model_names
+    db_collision = (
+        not router_collision
+        and await ModelRepository(prisma_client).table.find_first(
+            where={"model_name": candidate_id}  # mutable-ok: prisma's query builder isinstance-checks for a plain dict
+        )
+        is not None
+    )
+    if not router_collision and not db_collision:
+        return
+    raise ProxyException(
+        message=(
+            f"model_info.id '{candidate_id}' collides with the existing model_name '{candidate_id}'. "
+            "Deployment ids are resolved before model names at request time, so this deployment "
+            "would capture all traffic for that model name and bypass load balancing, cooldowns, "
+            "and fallbacks. Choose a different model_info.id, or omit it to auto-generate one."
+        ),
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="model_info.id",
+    )
+
+
+def _warn_on_model_name_shadowed_by_id(model_name: str | None, llm_router: Router | None) -> None:
+    """Warn when a model_name equals an existing deployment id.
+
+    The id wins at request time, so requests for this name pin to that
+    deployment instead of load balancing across the pool. Warn rather than
+    reject: the colliding id already exists, so this write is not the one
+    introducing the broken state.
+    """
+    if model_name is None or llm_router is None or not llm_router.has_model_id(model_name):
+        return
+    verbose_proxy_logger.warning(
+        "model_name '%s' equals an existing deployment id. Requests for this model name will "
+        "resolve to that deployment id and pin to it, bypassing load balancing, cooldowns, and "
+        "fallbacks for this name. Rename the model or change the colliding deployment's model_info.id.",
+        model_name,
+    )
+
+
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
     merged_deployment_dict = DeploymentTypedDict(
         model_name=db_model.model_name,
@@ -308,6 +368,8 @@ async def patch_model(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
         )
+
+        _warn_on_model_name_shadowed_by_id(model_name=patch_data.model_name, llm_router=llm_router)
 
         # Handle team model updates with proper alias management
         update_data = await _update_team_model_in_db(
@@ -1323,6 +1385,7 @@ async def add_new_model(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        llm_router,
         premium_user,
         prisma_client,
         proxy_config,
@@ -1351,6 +1414,17 @@ async def add_new_model(
             incoming_params=model_params.litellm_params,
             existing_params=None,
         )
+
+        if model_params.model_info.id is not None and model_params.model_info.id.strip() == "":
+            model_params.model_info.id = str(uuid.uuid4())
+
+        await _raise_on_model_id_name_collision(
+            candidate_id=model_params.model_info.id,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+        )
+
+        _warn_on_model_name_shadowed_by_id(model_name=model_params.model_name, llm_router=llm_router)
 
         model_response: LiteLLM_ProxyModelTable | None = None
         # update DB

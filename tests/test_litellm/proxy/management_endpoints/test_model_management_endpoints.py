@@ -1879,6 +1879,7 @@ class TestAddAndDeleteModelLifecycle:
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
         mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_first = AsyncMock(return_value=None)
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=db_row
         )
@@ -3609,3 +3610,212 @@ class TestStrategyRouterWriteValidation:
                 )
             assert "does not start with" in str(exc_info.value.message)
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+
+class TestModelIdNameCollisionValidation:
+    def _admin(self) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    def _router_with_pool(self, name: str = "haiku"):
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "fake-key"},
+                    "model_info": {"id": f"{name}-dep-1"},
+                }
+            ]
+        )
+
+    def _mock_prisma(self, find_first_row=None) -> MagicMock:
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_first = AsyncMock(return_value=find_first_row)
+        return mock_prisma
+
+    @pytest.mark.asyncio
+    async def test_helper_rejects_id_matching_router_model_name(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _raise_on_model_id_name_collision,
+        )
+
+        mock_prisma = self._mock_prisma()
+        with pytest.raises(ProxyException) as exc_info:
+            await _raise_on_model_id_name_collision(
+                candidate_id="haiku",
+                llm_router=self._router_with_pool("haiku"),
+                prisma_client=mock_prisma,
+            )
+        assert exc_info.value.param == "model_info.id"
+        assert "haiku" in str(exc_info.value.message)
+        mock_prisma.db.litellm_proxymodeltable.find_first.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_helper_rejects_id_matching_db_model_name(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _raise_on_model_id_name_collision,
+        )
+
+        mock_prisma = self._mock_prisma(find_first_row=MagicMock())
+        with pytest.raises(ProxyException) as exc_info:
+            await _raise_on_model_id_name_collision(
+                candidate_id="haiku",
+                llm_router=self._router_with_pool("other-pool"),
+                prisma_client=mock_prisma,
+            )
+        assert exc_info.value.param == "model_info.id"
+        mock_prisma.db.litellm_proxymodeltable.find_first.assert_awaited_once_with(where={"model_name": "haiku"})
+
+    @pytest.mark.asyncio
+    async def test_helper_allows_unique_id(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _raise_on_model_id_name_collision,
+        )
+
+        mock_prisma = self._mock_prisma(find_first_row=None)
+        await _raise_on_model_id_name_collision(
+            candidate_id="a-unique-deployment-id",
+            llm_router=self._router_with_pool("haiku"),
+            prisma_client=mock_prisma,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("colliding_model_name", ["haiku", "other-pool"])
+    async def test_add_new_model_rejects_colliding_id_before_db_write(self, colliding_model_name):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+        from litellm.types.router import ModelInfo
+
+        mock_prisma = self._mock_prisma()
+        mock_add_to_db = AsyncMock()
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", self._router_with_pool("haiku")),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints._add_model_to_db",
+                mock_add_to_db,
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name=colliding_model_name,
+                        litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-4-5", api_key="fake-key"),
+                        model_info=ModelInfo(id="haiku"),
+                    ),
+                    user_api_key_dict=self._admin(),
+                )
+        assert exc_info.value.param == "model_info.id"
+        mock_add_to_db.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("blank_id", ["", "   "])
+    async def test_add_new_model_normalizes_blank_id_to_uuid(self, blank_id):
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+        from litellm.types.router import ModelInfo
+
+        mock_prisma = self._mock_prisma()
+        written_row = MagicMock()
+        written_row.model_id = "placeholder"
+        mock_add_to_db = AsyncMock(return_value=written_row)
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock(return_value=frozenset())
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", self._router_with_pool("haiku")),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints._add_model_to_db",
+                mock_add_to_db,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.create_object_audit_log",
+                AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.raise_if_reload_degraded_serving",
+                MagicMock(),
+            ),
+        ):
+            model_params = Deployment(
+                model_name="brand-new-pool",
+                litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-4-5", api_key="fake-key"),
+                model_info=ModelInfo(id=blank_id),
+            )
+            result = await add_new_model(model_params=model_params, user_api_key_dict=self._admin())
+
+        assert result is written_row
+        mock_add_to_db.assert_awaited_once()
+        written_params = mock_add_to_db.await_args.kwargs["model_params"]
+        assert written_params.model_info.id != blank_id
+        uuid.UUID(written_params.model_info.id)
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_warns_when_model_name_shadowed_by_existing_id(self, caplog):
+        import logging
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+        from litellm.types.router import ModelInfo
+
+        mock_prisma = self._mock_prisma()
+        written_row = MagicMock()
+        mock_add_to_db = AsyncMock(return_value=written_row)
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock(return_value=frozenset())
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", self._router_with_pool("haiku")),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints._add_model_to_db",
+                mock_add_to_db,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.create_object_audit_log",
+                AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.raise_if_reload_degraded_serving",
+                MagicMock(),
+            ),
+            caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        ):
+            await add_new_model(
+                model_params=Deployment(
+                    model_name="haiku-dep-1",
+                    litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-4-5", api_key="fake-key"),
+                    model_info=ModelInfo(id="a-unique-deployment-id"),
+                ),
+                user_api_key_dict=self._admin(),
+            )
+
+        assert "equals an existing deployment id" in caplog.text
+        mock_add_to_db.assert_awaited_once()
+
+    def test_warn_helper_only_fires_on_shadowed_name(self, caplog):
+        import logging
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _warn_on_model_name_shadowed_by_id,
+        )
+
+        llm_router = self._router_with_pool("haiku")
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            _warn_on_model_name_shadowed_by_id(model_name="haiku-dep-1", llm_router=llm_router)
+        assert "equals an existing deployment id" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            _warn_on_model_name_shadowed_by_id(model_name="fresh-name", llm_router=llm_router)
+            _warn_on_model_name_shadowed_by_id(model_name=None, llm_router=llm_router)
+            _warn_on_model_name_shadowed_by_id(model_name="haiku-dep-1", llm_router=None)
+        assert caplog.text == ""

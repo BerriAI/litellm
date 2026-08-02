@@ -6574,3 +6574,131 @@ def test_model_info_is_active_for_environment_matrix(monkeypatch):
     monkeypatch.delenv("LITELLM_ENVIRONMENT")
     with pytest.raises(ValueError, match="LITELLM_ENVIRONMENT"):
         model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})
+
+
+class TestDeploymentIdModelNameCollisionWarning:
+    def _pool_member(self, model_name: str, deployment_id: str, api_key: str = "fake-key") -> dict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": api_key},
+            "model_info": {"id": deployment_id},
+        }
+
+    def test_router_init_warns_on_pre_existing_id_name_collision(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router = litellm.Router(
+                model_list=[
+                    self._pool_member("haiku", "dep-a"),
+                    self._pool_member("haiku", "haiku", api_key="fake-key-2"),
+                ]
+            )
+        assert "Deployment id 'haiku'" in caplog.text
+        assert len(router.model_list) == 2
+
+    def test_add_deployment_warns_on_cross_pool_collision(self, caplog):
+        import logging
+
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(model_list=[self._pool_member("haiku", "dep-a")])
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router.add_deployment(
+                deployment=Deployment(
+                    model_name="gpt-4o",
+                    litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="fake-key"),
+                    model_info=ModelInfo(id="haiku"),
+                )
+            )
+        assert "Deployment id 'haiku'" in caplog.text
+        assert "model_name 'gpt-4o'" in caplog.text
+
+    def test_add_deployment_warns_when_id_equals_own_new_pool_name(self, caplog):
+        import logging
+
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(model_list=[self._pool_member("haiku", "dep-a")])
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router.add_deployment(
+                deployment=Deployment(
+                    model_name="sonnet",
+                    litellm_params=LiteLLM_Params(model="anthropic/claude-sonnet-4-5", api_key="fake-key"),
+                    model_info=ModelInfo(id="sonnet"),
+                )
+            )
+        assert "Deployment id 'sonnet'" in caplog.text
+
+    def test_no_warning_for_distinct_ids(self, caplog):
+        import logging
+
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router = litellm.Router(
+                model_list=[
+                    self._pool_member("haiku", "dep-a"),
+                    self._pool_member("haiku", "dep-b", api_key="fake-key-2"),
+                ]
+            )
+            router.add_deployment(
+                deployment=Deployment(
+                    model_name="haiku",
+                    litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-4-5", api_key="fake-key-3"),
+                    model_info=ModelInfo(id="dep-c"),
+                )
+            )
+        assert "collides with the model name" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_pool_with_distinct_ids_load_balances_across_members(self):
+        router = litellm.Router(
+            model_list=[
+                self._pool_member("haiku", "dep-a"),
+                self._pool_member("haiku", "dep-b", api_key="fake-key-2"),
+            ]
+        )
+        selected_ids = {
+            (await router.async_get_available_deployment(model="haiku", request_kwargs={}))["model_info"]["id"]
+            for _ in range(50)
+        }
+        assert selected_ids == {"dep-a", "dep-b"}
+
+    def test_add_deployment_warns_when_new_pool_name_shadowed_by_existing_id(self, caplog):
+        import logging
+
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(model_list=[self._pool_member("haiku", "qa-haiku-b")])
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router.add_deployment(
+                deployment=Deployment(
+                    model_name="qa-haiku-b",
+                    litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-4-5", api_key="fake-key"),
+                    model_info=ModelInfo(id="dep-z"),
+                )
+            )
+        assert "Model name 'qa-haiku-b' equals an existing deployment id" in caplog.text
+
+    def test_add_deployment_own_id_equals_own_name_warns_once(self, caplog):
+        import logging
+
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(model_list=[self._pool_member("haiku", "dep-a")])
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router.add_deployment(
+                deployment=Deployment(
+                    model_name="sonnet",
+                    litellm_params=LiteLLM_Params(model="anthropic/claude-sonnet-4-5", api_key="fake-key"),
+                    model_info=ModelInfo(id="sonnet"),
+                )
+            )
+        collision_warnings = [
+            r
+            for r in caplog.records
+            if "collides with the model name" in r.getMessage() or "equals an existing deployment id" in r.getMessage()
+        ]
+        assert len(collision_warnings) == 1
+        assert "Deployment id 'sonnet'" in collision_warnings[0].getMessage()
