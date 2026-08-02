@@ -257,6 +257,17 @@ def test_a_native_failure_never_falls_back_to_proxy_sso(monkeypatch):
     assert "issuer mismatch" in result.output
 
 
+def test_native_login_handles_keyboard_interrupt(monkeypatch):
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(f"{AUTH_MODULE}.run_native_login", interrupted)
+
+    result = invoke_login()
+    assert result.exit_code == 1
+    assert "Authentication cancelled by user" in result.output
+
+
 @pytest.mark.parametrize("flow", ["browser", "device"])
 def test_an_explicit_native_flow_does_not_fall_back_when_unavailable(monkeypatch, flow):
     def unavailable(*args, **kwargs):
