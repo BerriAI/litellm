@@ -16,7 +16,7 @@ import socketserver
 import time
 from collections.abc import Mapping, Sequence
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import cast
+from typing import cast  # noqa: TID251  # stdlib types BaseHTTPRequestHandler.server as BaseServer
 from urllib.parse import parse_qs, urlsplit
 
 from litellm.litellm_core_utils.native_oidc_validation import is_numeric_loopback_host
