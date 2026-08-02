@@ -8,8 +8,8 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
-import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
-import { Tag } from "antd";
+import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
+import { Switch, Tag } from "antd";
 import Link from "next/link";
 import React from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
@@ -35,7 +35,7 @@ const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const baseUrl = getProxyBaseUrl();
   const proxySettings = useProxySettings(accessToken);
-  const { logoUrl } = useTheme();
+  const { logoUrl, isDarkMode, toggleDarkMode } = useTheme();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
@@ -61,7 +61,7 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white">
+    <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white dark:border-[#1e1e1e] dark:bg-[#0e0e0e]">
       <div className="w-full">
         <div className="flex h-14 items-center px-4">
           <div className="flex shrink-0 items-center">
@@ -149,17 +149,26 @@ const Navbar: React.FC<NavbarProps> = ({
               </div>
             )}
 
+            <div className="flex shrink-0 items-center border-l border-gray-200 pl-4 dark:border-[#1e1e1e]">
+              <Switch
+                data-testid="dark-mode-toggle"
+                checked={isDarkMode}
+                onChange={toggleDarkMode}
+                checkedChildren={<MoonOutlined />}
+                unCheckedChildren={<SunOutlined />}
+              />
+            </div>
+
             {!isPublicPage && (
-              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
-                <div className="flex items-center gap-0.5 rounded-lg bg-gray-50 px-1 py-0 transition-colors hover:bg-gray-100">
+              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4 dark:border-[#1e1e1e]">
+                <div className="flex items-center gap-0.5 rounded-lg bg-gray-50 px-1 py-0 transition-colors hover:bg-gray-100 dark:bg-[#1a1a1a] dark:hover:bg-[#1f1f1f]">
                   <NotificationsBell />
-                  <span className="mx-0.5 h-6 w-px shrink-0 bg-gray-200" aria-hidden />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-gray-200 dark:bg-[#282828]" aria-hidden />
                   <UserDropdown onLogout={handleLogout} />
                 </div>
               </div>
             )}
           </div>
-          {/* Dark mode toggle: keep disabled until the dashboard supports dark styles end-to-end. */}
         </div>
       </div>
     </nav>

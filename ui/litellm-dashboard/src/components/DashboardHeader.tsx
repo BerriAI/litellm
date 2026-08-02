@@ -19,6 +19,9 @@ import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
+import { useTheme } from "@/contexts/ThemeContext";
+import { MoonOutlined, SunOutlined } from "@ant-design/icons";
+import { Switch } from "antd";
 
 interface DashboardHeaderProps {
   page: string;
@@ -31,6 +34,7 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
   const hideCommunityLinks = useDisableShowPrompts();
+  const { isDarkMode, toggleDarkMode } = useTheme();
 
   const handleWorkerSwitch = (workerId: string) => {
     clearTokenCookies();
@@ -72,6 +76,14 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
         </Button>
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
+        <ToolbarSeparator />
+        <Switch
+          data-testid="dark-mode-toggle"
+          checked={isDarkMode}
+          onChange={toggleDarkMode}
+          checkedChildren={<MoonOutlined />}
+          unCheckedChildren={<SunOutlined />}
+        />
         <ToolbarSeparator />
         <NotificationsBell />
       </div>
