@@ -5038,6 +5038,73 @@ async def test_get_end_user_object_db_fetch_returns_validated_end_user():
     assert result.spend == 3.0
 
 
+def _end_user_lookup_mocks(find_unique: AsyncMock):
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_endusertable.find_unique = find_unique
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+    return mock_prisma_client, mock_cache
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_missing_row_is_not_a_lookup_failure(monkeypatch):
+    """A genuinely absent end user stays unbudgeted even under fail-closed enforcement."""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
+    mock_prisma_client, mock_cache = _end_user_lookup_mocks(AsyncMock(return_value=None))
+
+    result = await get_end_user_object(
+        end_user_id="eu-missing",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_db_error_fails_closed(monkeypatch):
+    """#35529: a DB error must not look like 'no such end user', which silently
+    drops _check_end_user_budget from the auth path."""
+    import litellm.proxy.proxy_server as proxy_server
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
+    mock_prisma_client, mock_cache = _end_user_lookup_mocks(AsyncMock(side_effect=RuntimeError("database unavailable")))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_end_user_object(
+            end_user_id="eu-1",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+        )
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_db_error_defaults_to_open(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    mock_prisma_client, mock_cache = _end_user_lookup_mocks(AsyncMock(side_effect=RuntimeError("database unavailable")))
+
+    result = await get_end_user_object(
+        end_user_id="eu-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert result is None
+
+
 @pytest.mark.asyncio
 async def test_get_team_membership_db_fetch_returns_validated_membership():
     from litellm.proxy._types import LiteLLM_TeamMembership

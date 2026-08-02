@@ -1478,9 +1478,9 @@ async def _user_api_key_auth_builder(
                             budget_info=default_budget,
                             end_user_id=end_user_id,
                         )
+            except (HTTPException, ProxyException, litellm.BudgetExceededError):
+                raise
             except Exception as e:
-                if isinstance(e, litellm.BudgetExceededError):
-                    raise e
                 verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e!s}")
 
         ### CHECK IF ADMIN ###
@@ -2751,9 +2751,9 @@ async def _lookup_end_user_and_apply_budget(
                 valid_token = update_valid_token_with_end_user_params(
                     valid_token=valid_token, end_user_params=end_user_params
                 )
+    except (HTTPException, ProxyException, litellm.BudgetExceededError):
+        raise
     except Exception as e:
-        if isinstance(e, litellm.BudgetExceededError):
-            raise e
         verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e!s}")
     return valid_token, end_user_object
 

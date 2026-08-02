@@ -1114,6 +1114,37 @@ async def _check_end_user_budget(
         )
 
 
+def _handle_end_user_lookup_failure(end_user_id: str, error: Exception) -> None:
+    """An end-user row could not be loaded because the lookup itself failed.
+
+    This is not the same as "end user has no row": the budget recorded against
+    that end user is unknown, so returning ``None`` silently drops
+    ``_check_end_user_budget`` from the auth path. Reject instead when the
+    deployment opted into ``fail_closed_budget_enforcement``, matching how
+    unverifiable spend counters and unwritable budget reservations behave.
+    """
+    from litellm.proxy.proxy_server import general_settings
+
+    verbose_proxy_logger.warning(
+        "end-user lookup for %s failed (%s: %s); its budget cannot be enforced for this request",
+        end_user_id,
+        type(error).__name__,
+        error,
+    )
+    if general_settings.get("fail_closed_budget_enforcement") is True:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": (
+                    "Budget enforcement unavailable: the end user object could not be loaded, "
+                    "so its budget could not be evaluated, and fail_closed_budget_enforcement "
+                    "is enabled, so the request was rejected. Retry shortly."
+                )
+            },
+        )
+    return None
+
+
 @log_db_metrics
 async def get_end_user_object(
     end_user_id: str | None,
@@ -1171,11 +1202,13 @@ async def get_end_user_object(
             where={"user_id": end_user_id},
             include={"litellm_budget_table": True, "object_permission": True},
         )
+    except Exception as e:
+        return _handle_end_user_lookup_failure(end_user_id=end_user_id, error=e)
 
-        if response is None:
-            raise Exception
+    if response is None:
+        return None
 
-        # Convert to LiteLLM_EndUserTable object
+    try:
         _response = LiteLLM_EndUserTable.model_validate(response.dict())
 
         # Apply default budget if needed
@@ -1185,18 +1218,19 @@ async def get_end_user_object(
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
         )
+    except Exception as e:
+        return _handle_end_user_lookup_failure(end_user_id=end_user_id, error=e)
 
-        # Save to cache
+    try:
         await user_api_key_cache.async_set_cache(
             key=f"end_user_id:{end_user_id}",
             value=_response,
             model_type=LiteLLM_EndUserTable,
         )
+    except Exception as e:
+        verbose_proxy_logger.debug("failed caching end user %s: %s", end_user_id, e)
 
-        return _response
-
-    except Exception:
-        return None
+    return _response
 
 
 _END_USER_VALIDATION_NEGATIVE_TTL = 60
@@ -1288,6 +1322,8 @@ async def _end_user_id_exists_in_db(
         )
         if end_user_obj is not None:
             return True
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.debug(f"end_user validation: get_end_user_object lookup failed: {e}")
 
