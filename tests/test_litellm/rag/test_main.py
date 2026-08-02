@@ -11,7 +11,7 @@ aquery carries the completion response with real usage and cost.
 """
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -87,6 +87,35 @@ async def test_aquery_single_billing_event_carries_completion_usage_and_cost(use
     assert standard_logging_object["prompt_tokens"] > 0
     assert standard_logging_object["completion_tokens"] > 0
     assert standard_logging_object["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_aquery_forwards_provider_credentials_to_vector_store_search():
+    """Retrieval config credentials must be forwarded into the vector store search call."""
+    captured_kwargs = {}
+
+    async def fake_asearch(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"data": []}
+
+    with patch("litellm.vector_stores.asearch", new=AsyncMock(side_effect=fake_asearch)):
+        await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={
+                "vector_store_id": "vs_test_123",
+                "custom_llm_provider": "azure_ai_search",
+                "api_key": "search-key",
+                "api_base": "https://example.com",
+                "api_version": "2024-01-01",
+            },
+            mock_response="hi there",
+        )
+
+    assert captured_kwargs["custom_llm_provider"] == "azure_ai_search"
+    assert captured_kwargs["api_key"] == "search-key"
+    assert captured_kwargs["api_base"] == "https://example.com"
+    assert captured_kwargs["api_version"] == "2024-01-01"
 
 
 @pytest.mark.asyncio
