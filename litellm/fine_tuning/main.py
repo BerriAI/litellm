@@ -11,8 +11,9 @@ https://platform.openai.com/docs/api-reference/fine-tuning
 import asyncio
 import contextvars
 import os
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union
+from typing import Any, Literal
 
 import httpx
 
@@ -35,10 +36,10 @@ vertex_fine_tuning_apis_instance = VertexFineTuningAPI()
 
 
 def _prepare_azure_extra_body(
-    extra_body: Optional[Dict[str, Any]],
-    kwargs: Dict[str, Any],
-    azure_specific_hyperparams: Dict[str, Any],
-) -> Dict[str, Any]:
+    extra_body: dict[str, Any] | None,
+    kwargs: dict[str, Any],
+    azure_specific_hyperparams: dict[str, Any],
+) -> dict[str, Any]:
     """
     Prepare extra_body for Azure fine-tuning API by combining Azure-specific parameters.
 
@@ -76,14 +77,14 @@ def _prepare_azure_extra_body(
 async def acreate_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[dict] = {},
-    suffix: Optional[str] = None,
-    validation_file: Optional[str] = None,
-    integrations: Optional[List[str]] = None,
-    seed: Optional[int] = None,
+    hyperparameters: dict | None = {},
+    suffix: str | None = None,
+    validation_file: str | None = None,
+    integrations: List[str] | None = None,
+    seed: int | None = None,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, str]] = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, str] | None = None,
     **kwargs,
 ) -> LiteLLMFineTuningJob:
     """
@@ -139,7 +140,7 @@ def _build_fine_tuning_job_data(model, training_file, hyperparameters, suffix, v
 def _resolve_fine_tuning_timeout(
     timeout: Any,
     custom_llm_provider: str,
-) -> Union[float, httpx.Timeout]:
+) -> float | httpx.Timeout:
     """Normalise a raw timeout value to a float (seconds) or httpx.Timeout for fine-tuning calls."""
     timeout = timeout or 600.0
     if isinstance(timeout, httpx.Timeout):
@@ -153,16 +154,16 @@ def _resolve_fine_tuning_timeout(
 def create_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[dict] = {},
-    suffix: Optional[str] = None,
-    validation_file: Optional[str] = None,
-    integrations: Optional[List[str]] = None,
-    seed: Optional[int] = None,
+    hyperparameters: dict | None = {},
+    suffix: str | None = None,
+    validation_file: str | None = None,
+    integrations: List[str] | None = None,
+    seed: int | None = None,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, str]] = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> Union[LiteLLMFineTuningJob, Coroutine[Any, Any, LiteLLMFineTuningJob]]:
+) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
     """
     Creates a fine-tuning job which begins the process of creating a new model from a given dataset.
 
@@ -314,9 +315,7 @@ def create_fine_tuning_job(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
-                    custom_llm_provider
-                ),
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'create_batch'. Only 'openai' is supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
@@ -335,8 +334,8 @@ def create_fine_tuning_job(
 async def acancel_fine_tuning_job(
     fine_tuning_job_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, str]] = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, str] | None = None,
     **kwargs,
 ) -> LiteLLMFineTuningJob:
     """
@@ -373,10 +372,10 @@ async def acancel_fine_tuning_job(
 def cancel_fine_tuning_job(
     fine_tuning_job_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, str]] = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> Union[LiteLLMFineTuningJob, Coroutine[Any, Any, LiteLLMFineTuningJob]]:
+) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
     """
     Immediately cancel a fine-tune job.
 
@@ -468,9 +467,7 @@ def cancel_fine_tuning_job(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
-                    custom_llm_provider
-                ),
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'create_batch'. Only 'openai' is supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
@@ -485,11 +482,11 @@ def cancel_fine_tuning_job(
 
 
 async def alist_fine_tuning_jobs(
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
+    after: str | None = None,
+    limit: int | None = None,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, str]] = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, str] | None = None,
     **kwargs,
 ):
     """
@@ -524,11 +521,11 @@ async def alist_fine_tuning_jobs(
 
 
 def list_fine_tuning_jobs(
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
+    after: str | None = None,
+    limit: int | None = None,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, str]] = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, str] | None = None,
     **kwargs,
 ):
     """
@@ -626,9 +623,7 @@ def list_fine_tuning_jobs(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
-                    custom_llm_provider
-                ),
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'create_batch'. Only 'openai' is supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
@@ -646,8 +641,8 @@ def list_fine_tuning_jobs(
 async def aretrieve_fine_tuning_job(
     fine_tuning_job_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, str]] = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, str] | None = None,
     **kwargs,
 ) -> LiteLLMFineTuningJob:
     """
@@ -684,10 +679,10 @@ async def aretrieve_fine_tuning_job(
 def retrieve_fine_tuning_job(
     fine_tuning_job_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, str]] = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> Union[LiteLLMFineTuningJob, Coroutine[Any, Any, LiteLLMFineTuningJob]]:
+) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
     """
     Get info about a fine-tuning job.
     """
@@ -766,9 +761,7 @@ def retrieve_fine_tuning_job(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'retrieve_fine_tuning_job'. Only 'openai' and 'azure' are supported.".format(
-                    custom_llm_provider
-                ),
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'retrieve_fine_tuning_job'. Only 'openai' and 'azure' are supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(

@@ -2,7 +2,7 @@ import json
 import os
 import re
 from importlib.resources import files
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -39,7 +39,7 @@ router = APIRouter()
 # /public/endpoints — helpers
 # ---------------------------------------------------------------------------
 
-_ENDPOINT_METADATA: Dict[str, Dict[str, str]] = {
+_ENDPOINT_METADATA: dict[str, dict[str, str]] = {
     "chat_completions": {"label": "Chat Completions", "endpoint": "/chat/completions"},
     "messages": {"label": "Messages", "endpoint": "/messages"},
     "responses": {"label": "Responses", "endpoint": "/responses"},
@@ -101,33 +101,33 @@ _ENDPOINT_METADATA: Dict[str, Dict[str, str]] = {
 _SLUG_SUFFIX_RE = re.compile(r"\s*\(`[^`]+`\)\s*$")
 
 # Loaded once on first request; never invalidated (local file, no TTL needed).
-_cached_endpoints: Optional[SupportedEndpointsResponse] = None
+_cached_endpoints: SupportedEndpointsResponse | None = None
 
 
 def _clean_display_name(raw: str) -> str:
     return _SLUG_SUFFIX_RE.sub("", raw).strip()
 
 
-def _build_endpoints(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _build_endpoints(raw: dict[str, Any]) -> list[dict[str, Any]]:
     """Transform raw provider_endpoints_support_backup.json into the response shape."""
-    providers: Dict[str, Any] = raw.get("providers", {})
+    providers: dict[str, Any] = raw.get("providers", {})
 
     # Collect endpoint keys in insertion order (union across all providers).
     seen: set = set()
-    all_keys: List[str] = []
+    all_keys: list[str] = []
     for provider_data in providers.values():
         for key in provider_data.get("endpoints", {}):
             if key not in seen:
                 seen.add(key)
                 all_keys.append(key)
 
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     for key in all_keys:
         meta = _ENDPOINT_METADATA.get(key)
         label = meta["label"] if meta else key.replace("_", " ").title()
         path = meta["endpoint"] if meta else "/" + key.replace("_", "/")
 
-        supporting: List[Dict[str, str]] = [
+        supporting: list[dict[str, str]] = [
             {
                 "slug": slug,
                 "display_name": _clean_display_name(pd.get("display_name", slug)),
@@ -140,7 +140,7 @@ def _build_endpoints(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
     return result
 
 
-def _load_endpoints() -> List[Dict[str, Any]]:
+def _load_endpoints() -> list[dict[str, Any]]:
     raw = json.loads(files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8"))
     return _build_endpoints(raw)
 
@@ -151,7 +151,7 @@ def _load_endpoints() -> List[Dict[str, Any]]:
 @router.get(
     "/public/model_hub",
     tags=["public", "model management"],
-    response_model=List[ModelGroupInfoProxy],
+    response_model=list[ModelGroupInfoProxy],
 )
 async def public_model_hub():
     import litellm
@@ -167,7 +167,7 @@ async def public_model_hub():
     if llm_router is None:
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 
-    model_groups: List[ModelGroupInfoProxy] = []
+    model_groups: list[ModelGroupInfoProxy] = []
     if litellm.public_model_groups is not None:
         model_groups = _get_model_group_info(
             llm_router=llm_router,
@@ -203,7 +203,7 @@ async def public_model_hub():
 @router.get(
     "/public/agent_hub",
     tags=["[beta] Agents", "public"],
-    response_model=List[AgentCard],
+    response_model=list[AgentCard],
 )
 async def get_agents(request: Request):
     import litellm
@@ -227,7 +227,7 @@ async def get_agents(request: Request):
 @router.get(
     "/public/mcp_hub",
     tags=["[beta] MCP", "public"],
-    response_model=List[MCPPublicServer],
+    response_model=list[MCPPublicServer],
 )
 async def get_mcp_servers():
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -314,9 +314,9 @@ async def public_model_hub_info():
 @router.get(
     "/public/providers",
     tags=["public", "providers"],
-    response_model=List[str],
+    response_model=list[str],
 )
-async def get_supported_providers() -> List[str]:
+async def get_supported_providers() -> list[str]:
     """
     Return a sorted list of all providers supported by LiteLLM.
     """
@@ -327,9 +327,9 @@ async def get_supported_providers() -> List[str]:
 @router.get(
     "/public/providers/fields",
     tags=["public", "providers"],
-    response_model=List[ProviderCreateInfo],
+    response_model=list[ProviderCreateInfo],
 )
-async def get_provider_fields() -> List[ProviderCreateInfo]:
+async def get_provider_fields() -> list[ProviderCreateInfo]:
     """
     Return provider metadata required by the dashboard create-model flow.
     """
@@ -364,7 +364,7 @@ async def get_litellm_model_cost_map():
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Internal Server Error ({str(e)})",
+            detail=f"Internal Server Error ({e!s})",
         )
 
 
@@ -411,9 +411,9 @@ async def get_supported_endpoints() -> SupportedEndpointsResponse:
 @router.get(
     "/public/agents/fields",
     tags=["public", "[beta] Agents"],
-    response_model=List[AgentCreateInfo],
+    response_model=list[AgentCreateInfo],
 )
-async def get_agent_fields() -> List[AgentCreateInfo]:
+async def get_agent_fields() -> list[AgentCreateInfo]:
     """
     Return agent type metadata required by the dashboard create-agent flow.
 

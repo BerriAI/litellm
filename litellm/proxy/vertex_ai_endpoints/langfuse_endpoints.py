@@ -11,7 +11,6 @@ Logging Pass-Through Endpoints
 import base64
 import os
 from base64 import b64encode
-from typing import Optional
 from urllib.parse import unquote
 
 import httpx
@@ -61,7 +60,7 @@ def _normalize_langfuse_base_url(base_target_url: str) -> str:
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": f"Invalid Langfuse host: {str(e)}"},
+            detail={"error": f"Invalid Langfuse host: {e!s}"},
         )
 
     if base_url.scheme not in ("http", "https") or not base_url.host:
@@ -104,8 +103,8 @@ def _validate_langfuse_proxy_path(endpoint: str) -> str:
 def _get_langfuse_proxy_credentials(
     *,
     dynamic_host_supplied: bool,
-    dynamic_langfuse_public_key: Optional[str],
-    dynamic_langfuse_secret_key: Optional[str],
+    dynamic_langfuse_public_key: str | None,
+    dynamic_langfuse_secret_key: str | None,
 ):
     if dynamic_host_supplied:
         if not dynamic_langfuse_public_key or not dynamic_langfuse_secret_key:
@@ -138,7 +137,7 @@ def _build_langfuse_proxy_target(
         except SSRFError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": f"Invalid Langfuse host: {str(e)}"},
+                detail={"error": f"Invalid Langfuse host: {e!s}"},
             )
         custom_headers["Host"] = host_header
         return target_url, custom_headers
@@ -173,15 +172,15 @@ async def langfuse_proxy_route(
     decoded_str = decoded_bytes.decode("utf-8")
     api_key = decoded_str.split(":")[1]  # assume api key is passed in as secret key
 
-    user_api_key_dict = await user_api_key_auth(request=request, api_key="Bearer {}".format(api_key))
+    user_api_key_dict = await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
 
-    callback_settings_obj: Optional[TeamCallbackMetadata] = _get_dynamic_logging_metadata(
+    callback_settings_obj: TeamCallbackMetadata | None = _get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
-    dynamic_langfuse_public_key: Optional[str] = None
-    dynamic_langfuse_secret_key: Optional[str] = None
-    dynamic_langfuse_host: Optional[str] = None
+    dynamic_langfuse_public_key: str | None = None
+    dynamic_langfuse_secret_key: str | None = None
+    dynamic_langfuse_host: str | None = None
     if callback_settings_obj is not None and callback_settings_obj.callback_vars is not None:
         for k, v in callback_settings_obj.callback_vars.items():
             if k == "langfuse_public_key":
@@ -206,7 +205,7 @@ async def langfuse_proxy_route(
         dynamic_host_supplied=dynamic_host_supplied,
     )
 
-    langfuse_combined_key = "Basic " + b64encode(f"{langfuse_public_key}:{langfuse_secret_key}".encode("utf-8")).decode(
+    langfuse_combined_key = "Basic " + b64encode(f"{langfuse_public_key}:{langfuse_secret_key}".encode()).decode(
         "ascii"
     )
     target_headers["Authorization"] = langfuse_combined_key

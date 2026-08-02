@@ -1,5 +1,3 @@
-from typing import Optional
-
 from litellm.types.llms.openai import CreateFileRequest
 from litellm.types.utils import ExtractedFileData
 
@@ -37,7 +35,7 @@ class FilesAPIUtils:
         )
 
     @staticmethod
-    def is_batch_jsonl_request(create_file_data: CreateFileRequest, content_type: Optional[str]) -> bool:
+    def is_batch_jsonl_request(create_file_data: CreateFileRequest, content_type: str | None) -> bool:
         """
         Batch-jsonl check from metadata only, so the body can stay a streamable
         Path/handle instead of being read into memory.
@@ -49,7 +47,7 @@ class FilesAPIUtils:
         )
 
     @staticmethod
-    def valid_content_type(content_type: Optional[str]) -> bool:
+    def valid_content_type(content_type: str | None) -> bool:
         """
         Whether the upload's MIME type is one a batch JSONL file is plausibly
         sent as (see ``_BATCH_JSONL_CONTENT_TYPES``).

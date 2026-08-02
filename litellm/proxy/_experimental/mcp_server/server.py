@@ -806,7 +806,7 @@ if MCP_AVAILABLE:
             }
             return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
         except Exception as e:
-            verbose_logger.exception(f"Error in list_tools endpoint: {str(e)}")
+            verbose_logger.exception(f"Error in list_tools endpoint: {e!s}")
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
@@ -1081,26 +1081,26 @@ if MCP_AVAILABLE:
                     isError=True,
                 )
             except BlockedPiiEntityError as e:
-                verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
+                verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {e!s}")
                 return CallToolResult(
                     content=[
                         TextContent(
-                            text=f"Error: Blocked PII entity detected - {str(e)}",
+                            text=f"Error: Blocked PII entity detected - {e!s}",
                             type="text",
                         )
                     ],
                     isError=True,
                 )
             except GuardrailRaisedException as e:
-                verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
+                verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {e!s}")
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: Guardrail violation - {str(e)}", type="text")],
+                    content=[TextContent(text=f"Error: Guardrail violation - {e!s}", type="text")],
                     isError=True,
                 )
             except HTTPException as e:
-                verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
+                verbose_logger.error(f"HTTPException in MCP tool call: {e!s}")
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: {str(e.detail)}", type="text")],
+                    content=[TextContent(text=f"Error: {e.detail!s}", type="text")],
                     isError=True,
                 )
             except MCPUpstreamAuthError as e:
@@ -1122,7 +1122,7 @@ if MCP_AVAILABLE:
             except Exception as e:
                 verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: {str(e)}", type="text")],
+                    content=[TextContent(text=f"Error: {e!s}", type="text")],
                     isError=True,
                 )
 
@@ -1174,7 +1174,7 @@ if MCP_AVAILABLE:
             verbose_logger.info(f"MCP list_prompts - Successfully returned {len(prompts)} prompts")
             return prompts
         except Exception as e:
-            verbose_logger.exception(f"Error in list_prompts endpoint: {str(e)}")
+            verbose_logger.exception(f"Error in list_prompts endpoint: {e!s}")
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
@@ -1266,7 +1266,7 @@ if MCP_AVAILABLE:
             verbose_logger.info(f"MCP list_resources - Successfully returned {len(resources)} resources")
             return resources
         except Exception as e:
-            verbose_logger.exception(f"Error in list_resources endpoint: {str(e)}")
+            verbose_logger.exception(f"Error in list_resources endpoint: {e!s}")
             return []
         finally:
             if _session_reset_token is not None:
@@ -1311,7 +1311,7 @@ if MCP_AVAILABLE:
             )
             return resource_templates
         except Exception as e:
-            verbose_logger.exception(f"Error in list_resource_templates endpoint: {str(e)}")
+            verbose_logger.exception(f"Error in list_resource_templates endpoint: {e!s}")
             return []
         finally:
             if _session_reset_token is not None:
@@ -2037,7 +2037,7 @@ if MCP_AVAILABLE:
                     verbose_logger.debug(f"MCP list_tools: omitting {server.name}; it needs upstream auth")
                     return [], classify_list_exception(e)
                 except Exception as e:
-                    verbose_logger.exception(f"Error getting tools from server {server.name}: {str(e)}")
+                    verbose_logger.exception(f"Error getting tools from server {server.name}: {e!s}")
                     return [], classify_list_exception(e)
 
             # Fetch tools from all servers in parallel
@@ -2170,7 +2170,7 @@ if MCP_AVAILABLE:
 
                 verbose_logger.debug(f"Successfully fetched {len(prompts)} prompts from server {server.name}")
             except Exception as e:
-                verbose_logger.exception(f"Error getting prompts from server {server.name}: {str(e)}")
+                verbose_logger.exception(f"Error getting prompts from server {server.name}: {e!s}")
                 # Continue with other servers instead of failing completely
 
         verbose_logger.info(f"Successfully fetched {len(all_prompts)} prompts total from all MCP servers")
@@ -2222,7 +2222,7 @@ if MCP_AVAILABLE:
 
                 verbose_logger.debug(f"Successfully fetched {len(resources)} resources from server {server.name}")
             except Exception as e:
-                verbose_logger.exception(f"Error getting resources from server {server.name}: {str(e)}")
+                verbose_logger.exception(f"Error getting resources from server {server.name}: {e!s}")
 
         verbose_logger.info(f"Successfully fetched {len(all_resources)} resources total from all MCP servers")
 
@@ -2360,7 +2360,7 @@ if MCP_AVAILABLE:
             verbose_logger.debug(f"Successfully fetched {len(listing.tools)} tools from managed MCP servers")
             return listing
         except Exception as e:
-            verbose_logger.exception(f"Error getting tools from managed MCP servers: {str(e)}")
+            verbose_logger.exception(f"Error getting tools from managed MCP servers: {e!s}")
             # Continue with an empty listing instead of failing completely
             return AggregateToolListing(tools=[], outcomes={})
 
@@ -2399,7 +2399,7 @@ if MCP_AVAILABLE:
             )
             verbose_logger.debug(f"Successfully fetched {len(managed_prompts)} prompts from managed MCP servers")
         except Exception as e:
-            verbose_logger.exception(f"Error getting tools from managed MCP servers: {str(e)}")
+            verbose_logger.exception(f"Error getting tools from managed MCP servers: {e!s}")
             # Continue with empty managed tools list instead of failing completely
 
         return managed_prompts
@@ -2429,7 +2429,7 @@ if MCP_AVAILABLE:
             )
             verbose_logger.debug(f"Successfully fetched {len(managed_resources)} resources from managed MCP servers")
         except Exception as e:
-            verbose_logger.exception(f"Error getting resources from managed MCP servers: {str(e)}")
+            verbose_logger.exception(f"Error getting resources from managed MCP servers: {e!s}")
 
         return managed_resources
 
@@ -3336,8 +3336,8 @@ if MCP_AVAILABLE:
                 result = tool.handler(**arguments)
             return [TextContent(text=str(result), type="text")]
         except Exception as e:
-            verbose_logger.exception(f"Error executing local tool {name}: {str(e)}")
-            return [TextContent(text=f"Error: {str(e)}", type="text")]
+            verbose_logger.exception(f"Error executing local tool {name}: {e!s}")
+            return [TextContent(text=f"Error: {e!s}", type="text")]
 
     def _get_mcp_servers_in_path(path: str) -> list[str] | None:
         """

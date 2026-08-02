@@ -57,6 +57,42 @@ migrationJob:
   backoffLimit: 4
   ttlSecondsAfterFinished: 120
   resources: {}
+  # ServiceAccount for the Job pod only.
+  #
+  # The Job is a pre-install / pre-upgrade hook, so it runs before the chart's
+  # ordinary resources exist. With `serviceAccounts.backend.create: true` the
+  # backend ServiceAccount is one of those ordinary resources, so a Job that
+  # borrowed its name would reference an account that does not exist yet and
+  # the first install would fail with a forbidden pod creation. The name set
+  # here always wins; when it is empty the Job falls back to `default` if the
+  # chart creates the backend ServiceAccount, and to the backend
+  # ServiceAccount name otherwise (that name is either an existing account you
+  # supplied or `default`).
+  #
+  # Point this at a pre-existing ServiceAccount when the Job needs credentials
+  # of its own, e.g. the IRSA / Workload Identity annotations that
+  # `database.writer.useIAMAuth` relies on. That is also the upgrade path to
+  # watch: a release already running with `serviceAccounts.backend.create:
+  # true` used to hand the Job the created backend account on every upgrade,
+  # and now hands it `default` unless you name an account here.
+  serviceAccountName: ""
+  # The Job runs `prisma migrate deploy` against Postgres and never calls the
+  # K8s API, so it defaults to no projected ServiceAccount token, the same
+  # reasoning the ui SA above uses. Flip to true if your Job genuinely needs
+  # one; IAM database auth does not, since EKS Pod Identity injects its own
+  # projected token volume and GKE Workload Identity goes through the
+  # metadata server, neither of which is the default token mount.
+  automountServiceAccountToken: false
+  # Standard k8s pod-level and container-level securityContext for the Job
+  # pod. Same shape as gateway.podSecurityContext / gateway.securityContext.
+  podSecurityContext: {}
+  securityContext: {}
+  # Extra pod labels on the Job pod, merged into the chart's common labels.
+  podLabels: {}
+  # Additional volumes on the Job pod and volumeMounts on its container, e.g.
+  # the writable scratch space a read-only root filesystem needs.
+  volumes: []
+  volumeMounts: []
   image:
     repository: ghcr.io/berriai/litellm-migrations
     tag: ""              # defaults to .Chart.AppVersion
@@ -180,10 +216,13 @@ gateway:
     httpGet: { path: /health/liveliness, port: http }
     initialDelaySeconds: 10
     periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 6
   readinessProbe:
     httpGet: { path: /health/readiness, port: http }
     initialDelaySeconds: 5
     periodSeconds: 10
+    timeoutSeconds: 10
   hpa:
     enabled: true
     minReplicas: 1
@@ -200,6 +239,37 @@ gateway:
     minAvailable: ""
     maxUnavailable: ""
   podAnnotations: {}
+  # Extra pod labels, merged into the chart's selector labels. Do not
+  # re-declare `app.kubernetes.io/name` / `instance` / `component` here: they
+  # form the Deployment's immutable selector.
+  podLabels: {}
+  # Pod-level securityContext, applied to every container in the pod
+  # (runAsNonRoot, runAsUser, fsGroup, seccompProfile, ...). Empty by default
+  # so the cluster's own defaults keep applying to existing installs; clusters
+  # enforcing a restricted Pod Security Standard usually want at least
+  # `runAsNonRoot: true` and `seccompProfile.type: RuntimeDefault`.
+  podSecurityContext: {}
+  # Container-level securityContext for the gateway container. Empty by
+  # default for the same reason. Example:
+  #   allowPrivilegeEscalation: false
+  #   readOnlyRootFilesystem: true
+  #   capabilities:
+  #     drop:
+  #       - ALL
+  # `readOnlyRootFilesystem: true` needs writable scratch space; supply it
+  # through `volumes` / `volumeMounts` above rather than expecting the chart
+  # to guess the paths your workload writes to.
+  securityContext: {}
+  # Extra sidecar containers appended to the gateway pod, e.g. an auth or
+  # egress proxy. Rendered through `tpl`, so entries may reference chart
+  # values and release metadata.
+  extraContainers: []
+  # Container lifecycle hooks (postStart / preStop) for the gateway container.
+  lifecycle: {}
+  # Grace period the kubelet allows between SIGTERM and SIGKILL. Leave empty
+  # to inherit the Kubernetes default of 30s. Set it a few seconds above the
+  # proxy's GRACEFUL_SHUTDOWN_TIMEOUT when you use a draining preStop hook.
+  terminationGracePeriodSeconds: ""
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -242,10 +312,13 @@ backend:
     httpGet: { path: /health/liveliness, port: http }
     initialDelaySeconds: 10
     periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 6
   readinessProbe:
     httpGet: { path: /health/readiness, port: http }
     initialDelaySeconds: 5
     periodSeconds: 10
+    timeoutSeconds: 10
   hpa:
     enabled: true
     minReplicas: 1
@@ -257,6 +330,13 @@ backend:
     minAvailable: ""
     maxUnavailable: ""
   podAnnotations: {}
+  # Same shape as the gateway blocks of the same name.
+  podLabels: {}
+  podSecurityContext: {}
+  securityContext: {}
+  extraContainers: []
+  lifecycle: {}
+  terminationGracePeriodSeconds: ""
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -310,6 +390,16 @@ ui:
     minAvailable: ""
     maxUnavailable: ""
   podAnnotations: {}
+  # Same shape as the gateway blocks of the same name. The nginx runtime
+  # writes its pid, cache, and proxy temp files under the image's root
+  # filesystem, so `securityContext.readOnlyRootFilesystem: true` here needs
+  # emptyDir volumes mounted over those paths.
+  podLabels: {}
+  podSecurityContext: {}
+  securityContext: {}
+  extraContainers: []
+  lifecycle: {}
+  terminationGracePeriodSeconds: ""
   nodeSelector: {}
   tolerations: []
   affinity: {}

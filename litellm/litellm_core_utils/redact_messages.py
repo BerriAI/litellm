@@ -10,7 +10,7 @@
 import asyncio
 import copy
 import inspect
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -338,7 +338,7 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     return litellm.turn_off_message_logging is True
 
 
-def redact_message_input_output_from_logging(model_call_details: dict, result, input: Optional[Any] = None) -> Any:
+def redact_message_input_output_from_logging(model_call_details: dict, result, input: Any | None = None) -> Any:
     """
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True
@@ -350,13 +350,13 @@ def redact_message_input_output_from_logging(model_call_details: dict, result, i
 
 def _get_turn_off_message_logging_from_dynamic_params(
     model_call_details: dict,
-) -> Optional[bool]:
+) -> bool | None:
     """
     gets the value of `turn_off_message_logging` from the dynamic params, if it exists.
 
     handles boolean and string values of `turn_off_message_logging`
     """
-    standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = model_call_details.get(
+    standard_callback_dynamic_params: StandardCallbackDynamicParams | None = model_call_details.get(
         "standard_callback_dynamic_params", None
     )
     if standard_callback_dynamic_params:

@@ -1,6 +1,7 @@
 """Provider / exporter factory + the Baggage span processor."""
 
-from typing import TYPE_CHECKING, Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import _logs, baggage, metrics
 from opentelemetry._events import EventLogger

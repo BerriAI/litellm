@@ -5,11 +5,11 @@ Handles routing for A2A agents (models with "a2a/<agent-name>" prefix).
 Looks up agents in the registry and injects their API base URL.
 """
 
-from typing import Any, Optional
+from typing import Any
 
-import litellm
 from fastapi import HTTPException
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
@@ -17,8 +17,8 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 async def route_a2a_agent_request(
     data: dict,
     route_type: str,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-) -> Optional[Any]:
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+) -> Any | None:
     """
     Route A2A agent requests directly to litellm with injected API base.
 

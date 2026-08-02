@@ -8,7 +8,7 @@ login endpoints (e.g., /login and /v2/login).
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Optional, cast
+from typing import Literal, cast
 
 import jwt
 from fastapi import HTTPException
@@ -55,7 +55,7 @@ async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -
         )
 
 
-def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
+def get_ui_credentials(master_key: str | None) -> tuple[str, str]:
     """
     Get UI username and password from environment variables or master key.
 
@@ -87,7 +87,7 @@ class LoginResult:
 
     user_id: str
     key: str
-    user_email: Optional[str]
+    user_email: str | None
     user_role: str
     login_method: Literal["sso", "username_password"]
 
@@ -95,7 +95,7 @@ class LoginResult:
         self,
         user_id: str,
         key: str,
-        user_email: Optional[str],
+        user_email: str | None,
         user_role: str,
         login_method: Literal["sso", "username_password"] = "username_password",
     ):
@@ -109,8 +109,8 @@ class LoginResult:
 async def authenticate_user(
     username: str,
     password: str,
-    master_key: Optional[str],
-    prisma_client: Optional[PrismaClient],
+    master_key: str | None,
+    prisma_client: PrismaClient | None,
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -142,19 +142,20 @@ async def authenticate_user(
     ui_username, ui_password = get_ui_credentials(master_key)
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
-    _user_row: Optional[LiteLLM_UserTable] = None
-    user_role: Optional[
+    _user_row: LiteLLM_UserTable | None = None
+    user_role: (
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
-    ] = None
+        | None
+    ) = None
 
     if prisma_client is not None:
         _user_row = cast(
-            Optional[LiteLLM_UserTable],
+            LiteLLM_UserTable | None,
             await UserRepository(prisma_client).table.find_first(
                 where={"user_email": {"equals": username, "mode": "insensitive"}}
             ),
@@ -221,7 +222,7 @@ async def authenticate_user(
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
             from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
-            user_info: Optional[LiteLLM_UserTable] = None
+            user_info: LiteLLM_UserTable | None = None
             if _user_row is not None:
                 user_info = _user_row
             elif user_id is not None:  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD

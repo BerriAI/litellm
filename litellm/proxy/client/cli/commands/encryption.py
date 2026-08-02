@@ -9,7 +9,6 @@ from ...http_client import HTTPClient
 @click.group()
 def encryption():
     """Migrate at-rest credentials to AES-256-GCM and attest residual state."""
-    pass
 
 
 @encryption.command(name="migrate")

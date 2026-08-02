@@ -6,7 +6,7 @@ Litellm provider slug: `anthropic_text/<model_name>`
 
 import json
 import time
-from typing import AsyncIterator, Dict, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
 
 import httpx
 
@@ -53,21 +53,21 @@ class AnthropicTextConfig(BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens_to_sample: Optional[int] = litellm.max_tokens  # anthropic requires a default
-    stop_sequences: Optional[list] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    top_k: Optional[int] = None
-    metadata: Optional[dict] = None
+    max_tokens_to_sample: int | None = litellm.max_tokens  # anthropic requires a default
+    stop_sequences: list | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    top_k: int | None = None
+    metadata: dict | None = None
 
     def __init__(
         self,
-        max_tokens_to_sample: Optional[int] = DEFAULT_MAX_TOKENS,  # anthropic requires a default
-        stop_sequences: Optional[list] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        top_k: Optional[int] = None,
-        metadata: Optional[dict] = None,
+        max_tokens_to_sample: int | None = DEFAULT_MAX_TOKENS,  # anthropic requires a default
+        stop_sequences: list | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        top_k: int | None = None,
+        metadata: dict | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -79,11 +79,11 @@ class AnthropicTextConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             raise ValueError(
@@ -101,7 +101,7 @@ class AnthropicTextConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -178,12 +178,12 @@ class AnthropicTextConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: str,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
             completion_response = raw_response.json()
@@ -219,9 +219,7 @@ class AnthropicTextConfig(BaseConfig):
         setattr(model_response, "usage", usage)
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return AnthropicTextError(
             status_code=status_code,
             message=error_message,
@@ -231,7 +229,7 @@ class AnthropicTextConfig(BaseConfig):
     def _is_anthropic_text_model(model: str) -> bool:
         return model == "claude-2" or model == "claude-instant-1"
 
-    def _get_anthropic_text_prompt_from_messages(self, messages: List[AllMessageValues], model: str) -> str:
+    def _get_anthropic_text_prompt_from_messages(self, messages: list[AllMessageValues], model: str) -> str:
         custom_prompt_dict = litellm.custom_prompt_dict
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
@@ -249,9 +247,9 @@ class AnthropicTextConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         return AnthropicTextCompletionResponseIterator(
             streaming_response=streaming_response,
@@ -264,10 +262,10 @@ class AnthropicTextCompletionResponseIterator(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            tool_use: ChatCompletionToolCallChunk | None = None
             is_finished = False
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: ChatCompletionUsageBlock | None = None
             provider_specific_fields = None
             index = int(chunk.get("index", 0))
             _chunk_text = chunk.get("completion", None)
