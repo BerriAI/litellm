@@ -9172,13 +9172,14 @@ async def chat_completion(
         return _chat_response
     except RejectedRequestError as e:
         _data = e.request_data
+        _logging_obj = _data.get("litellm_logging_obj")
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=_data,
         )
         _chat_response = litellm.ModelResponse()
-        _chat_response.choices[0].message.content = e.message  # type: ignore
+        _chat_response.choices[0].message.content = e.raw_message  # type: ignore
 
         if data.get("stream", None) is not None and data["stream"] is True:
             _iterator = litellm.utils.ModelResponseIterator(model_response=_chat_response, convert_to_delta=True)
@@ -9186,7 +9187,7 @@ async def chat_completion(
                 completion_stream=_iterator,
                 model=data.get("model", ""),
                 custom_llm_provider="cached_response",
-                logging_obj=_data.get("litellm_logging_obj", None),
+                logging_obj=_logging_obj,
             )
             selected_data_generator = select_data_generator(
                 response=_streaming_response,
@@ -9340,7 +9341,7 @@ async def completion(
                 total_tokens=0,
             )
             _chat_response.usage = _usage  # type: ignore
-            _chat_response.choices[0].message.content = e.message  # type: ignore
+            _chat_response.choices[0].message.content = e.raw_message  # type: ignore
             _iterator = litellm.utils.ModelResponseIterator(model_response=_chat_response, convert_to_delta=True)
             _streaming_response = litellm.TextCompletionStreamWrapper(
                 completion_stream=_iterator,
@@ -9362,7 +9363,7 @@ async def completion(
             )
         else:
             _response = litellm.TextCompletionResponse()
-            _response.choices[0].text = e.message
+            _response.choices[0].text = e.raw_message
             return _response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(

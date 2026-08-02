@@ -189,6 +189,16 @@ unified_guardrail = UnifiedLLMGuardrails()
 
 NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset({CallTypes.anthropic_messages})
 
+REJECTED_REQUEST_SUPPORTED_CALL_TYPES: "frozenset[str]" = frozenset(
+    call_type.value
+    for call_type in (
+        CallTypes.completion,
+        CallTypes.acompletion,
+        CallTypes.text_completion,
+        CallTypes.atext_completion,
+    )
+)
+
 
 def print_verbose(print_statement):
     """
@@ -920,7 +930,7 @@ class ProxyLogging:
         if isinstance(response, dict):
             return response
         if isinstance(response, str):
-            if call_type in ["completion", "text_completion"]:
+            if call_type in REJECTED_REQUEST_SUPPORTED_CALL_TYPES:
                 raise RejectedRequestError(
                     message=response,
                     model=data.get("model", ""),
