@@ -506,6 +506,141 @@ async def test_increment_spend_counters_runs_scopes_concurrently(monkeypatch):
     }
 
 
+class _AtomicRedisCounter:
+    """Redis double with INCRBYFLOAT semantics and a read barrier.
+
+    ``async_get_cache`` releases only once ``expected`` callers have read the
+    counter, so every concurrent caller observes the same pre-increment value.
+    A read-add-write implementation collapses to a single increment under that
+    barrier; an atomic increment does not.
+    """
+
+    def __init__(self, expected_readers: int):
+        self.values: dict[str, float] = {}
+        self.barrier = asyncio.Barrier(expected_readers)
+
+    async def async_get_cache(self, key, **kwargs):
+        if key.startswith("spend:"):
+            await self.barrier.wait()
+        return self.values.get(key)
+
+    async def async_increment(self, *, key, value, refresh_ttl=True, **kwargs):
+        self.values[key] = self.values.get(key, 0.0) + value
+        return self.values[key]
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_global_proxy_counter_keeps_concurrent_costs(
+    monkeypatch,
+):
+    """Regression for gh#35567: the proxy-wide accumulator enforced against
+    ``litellm.max_budget`` must be an atomic shared increment. Two concurrent
+    completions that both read the counter before either writes must leave the
+    counter at the sum of their costs, not at one of them."""
+    import litellm
+
+    redis = _AtomicRedisCounter(expected_readers=2)
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_get_cache = redis.async_get_cache
+    fake_cache.redis_cache.async_increment = redis.async_increment
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", _make_user_api_key_cache(get_value=None))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
+
+    await asyncio.gather(
+        ps.increment_spend_counters(token=None, team_id=None, user_id=None, response_cost=1.0),
+        ps.increment_spend_counters(token=None, team_id=None, user_id=None, response_cost=1.0),
+    )
+
+    assert redis.values["spend:user:litellm-proxy-budget"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_skips_global_proxy_counter_without_max_budget(
+    monkeypatch,
+):
+    """No global cap configured means no proxy-wide row to accrue into, so the
+    counter must not be created (and must not cost an extra Redis round trip)."""
+    import litellm
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=1.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", _make_user_api_key_cache(get_value=None))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
+
+    await ps.increment_spend_counters(token=None, team_id=None, user_id="u1", response_cost=1.0)
+
+    incremented_keys = {call.kwargs["key"] for call in fake_cache.redis_cache.async_increment.call_args_list}
+    assert incremented_keys == {"spend:user:u1"}
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_does_not_double_count_proxy_budget_user(
+    monkeypatch,
+):
+    """The proxy-wide accumulator lives in the user counter key space, so a
+    request attributed to that user id must increment it once, not twice."""
+    import litellm
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=1.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", _make_user_api_key_cache(get_value=None))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
+
+    await ps.increment_spend_counters(
+        token=None, team_id=None, user_id="litellm-proxy-budget", response_cost=1.0
+    )
+
+    incremented_keys = [call.kwargs["key"] for call in fake_cache.redis_cache.async_increment.call_args_list]
+    assert incremented_keys == ["spend:user:litellm-proxy-budget"]
+
+
+@pytest.mark.asyncio
+async def test_update_cache_does_not_write_the_global_spend_scalar(monkeypatch):
+    """gh#35567: the cached-object refresh must stay per-pod. Any shared write
+    of the proxy-wide spend from here is a read-add-write that loses concurrent
+    increments; the atomic counter owns that value now."""
+    import litellm
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+
+    cached = {
+        "u1": CacheCodec.serialize(LiteLLM_UserTable(user_id="u1", spend=0.0), model_type=LiteLLM_UserTable),
+        "default_user_id:spend": 10.0,
+    }
+    fake_user_cache = _make_user_api_key_cache(get_side_effect=lambda key, **kwargs: cached.get(key))
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
+
+    await ps.update_cache(
+        token=None,
+        user_id="u1",
+        end_user_id=None,
+        team_id=None,
+        response_cost=1.0,
+        parent_otel_span=None,
+        tags=None,
+    )
+    await asyncio.sleep(0)
+
+    written_keys = [
+        key
+        for call in fake_user_cache.async_set_cache_pipeline.call_args_list
+        for key, _ in call.kwargs["cache_list"]
+    ]
+    assert written_keys == ["u1"]
+    assert all(
+        call.kwargs.get("local_only") is True
+        for call in fake_user_cache.async_set_cache_pipeline.call_args_list
+    )
+
+
 @pytest.mark.asyncio
 async def test_increment_spend_counters_skips_reserved_counter_keys(monkeypatch):
     """Counters already reserved by a budget reservation are skipped, every

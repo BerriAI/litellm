@@ -232,7 +232,7 @@ from litellm.constants import (
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
-    GLOBAL_PROXY_SPEND_CACHE_KEY,
+    GLOBAL_PROXY_SPEND_COUNTER_KEY,
     LITELLM_PROXY_ADMIN_NAME,
     LITELLM_PROXY_BUDGET_NAME,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
@@ -286,7 +286,6 @@ from litellm.proxy.auth.model_checks import (
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
-    _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
@@ -1073,7 +1072,6 @@ async def proxy_startup_event(app: FastAPI):
         ProxyStartupEvent._add_proxy_budget_to_db()
         asyncio.create_task(
             ProxyStartupEvent._warm_global_spend_cache(
-                user_api_key_cache=user_api_key_cache,
                 prisma_client=prisma_client,
             )
         )
@@ -2492,6 +2490,18 @@ async def increment_spend_counters(
             increment=cost,
         )
 
+    async def _global_proxy_scope() -> None:
+        # The proxy-wide accumulator is the "litellm-proxy-budget" user row that
+        # db_spend_update_writer also accrues into, so it shares the user counter
+        # key space and reseeds from that row like any other user counter.
+        if GLOBAL_PROXY_SPEND_COUNTER_KEY in reserved_counter_keys:
+            return
+        await _init_and_increment_spend_counter(
+            counter_key=GLOBAL_PROXY_SPEND_COUNTER_KEY,
+            source_cache_key=LITELLM_PROXY_BUDGET_NAME,
+            increment=cost,
+        )
+
     scope_coros = tuple(
         coro
         for coro in (
@@ -2499,6 +2509,7 @@ async def increment_spend_counters(
             _team_scope(team_id) if team_id is not None else None,
             _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
             _user_scope(user_id) if user_id is not None else None,
+            _global_proxy_scope() if litellm.max_budget > 0 and user_id != LITELLM_PROXY_BUDGET_NAME else None,
             _increment_end_user_and_tag_spend_counters(
                 end_user_id=end_user_id,
                 tags=tags,
@@ -2904,14 +2915,6 @@ async def update_cache(
                         CacheCodec.serialize(existing_spend_obj, model_type=LiteLLM_UserTable),
                     )
                 )
-            ## UPDATE GLOBAL PROXY ##
-            global_proxy_spend = await user_api_key_cache.async_get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
-            if global_proxy_spend is None:
-                # do nothing if not in cache
-                return
-            elif response_cost is not None and global_proxy_spend is not None:
-                increment = global_proxy_spend + response_cost
-                values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update user spend in cache. "
@@ -3072,25 +3075,13 @@ async def update_cache(
     if tags is not None:
         await _update_tag_cache()
 
-    global_proxy_spend_key = GLOBAL_PROXY_SPEND_CACHE_KEY
-    local_object_updates = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
-    shared_scalar_updates = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
-
-    if local_object_updates:
+    if values_to_update_in_cache:
         asyncio.create_task(
             user_api_key_cache.async_set_cache_pipeline(
-                cache_list=list(local_object_updates),
+                cache_list=values_to_update_in_cache,
                 ttl=get_management_object_ttl(user_api_key_cache),
                 litellm_parent_otel_span=parent_otel_span,
                 local_only=True,
-            )
-        )
-    if shared_scalar_updates:
-        asyncio.create_task(
-            user_api_key_cache.async_set_cache_pipeline(
-                cache_list=list(shared_scalar_updates),
-                ttl=get_management_object_ttl(user_api_key_cache),
-                litellm_parent_otel_span=parent_otel_span,
             )
         )
 
@@ -7977,16 +7968,14 @@ class ProxyStartupEvent:
     @classmethod
     async def _warm_global_spend_cache(
         cls,
-        user_api_key_cache: UserApiKeyCache,
         prisma_client: PrismaClient,
     ) -> None:
-        """Warm global spend cache once at startup to reduce impact of first wave of requests."""
+        """Warm global spend counter once at startup to reduce impact of first wave of requests."""
         try:
-            cache_key = GLOBAL_PROXY_SPEND_CACHE_KEY
-            await _fetch_global_spend_with_event_coordination(
-                cache_key=cache_key,
-                user_api_key_cache=user_api_key_cache,
+            await SpendCounterReseed.coalesced(
                 prisma_client=prisma_client,
+                spend_counter_cache=spend_counter_cache,
+                counter_key=GLOBAL_PROXY_SPEND_COUNTER_KEY,
             )
         except Exception as e:
             verbose_proxy_logger.debug("Global spend cache warm-up at startup skipped or failed: %s", e)

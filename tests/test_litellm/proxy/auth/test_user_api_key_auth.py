@@ -5082,17 +5082,16 @@ class TestCheckKeyModelBudgetWithFallback:
 
 
 @pytest.mark.asyncio
-async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
+async def test_global_proxy_spend_reads_resettable_proxy_budget_row(monkeypatch):
     """Regression for the global proxy budget ignoring budget_duration
     (LIT-4309 / gh#31292): the enforced global spend must be loaded from the
     "litellm-proxy-budget" user row, which the spend writer increments per
     request and ResetBudgetJob zeroes every budget_duration. It must NOT be
     loaded from the MonthlyGlobalSpend view, whose window is hardcoded to a
     trailing 30 days and never resets on the configured duration."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-    )
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    import litellm.proxy.proxy_server as ps
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.user_api_key_auth import _fetch_global_proxy_spend
 
     proxy_budget_row = MagicMock()
     proxy_budget_row.spend = 42.5
@@ -5101,12 +5100,11 @@ async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
     prisma_client.db.query_raw = AsyncMock(
         side_effect=AssertionError("global spend must not be loaded from the fixed-30d MonthlyGlobalSpend view")
     )
+    monkeypatch.setattr(ps, "prisma_client", prisma_client)
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
 
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
-        user_api_key_cache=UserApiKeyCache(),
-        prisma_client=prisma_client,
-    )
+    result = await _fetch_global_proxy_spend()
 
     assert result == 42.5
     prisma_client.db.litellm_usertable.find_unique.assert_awaited_once_with(
@@ -5115,24 +5113,46 @@ async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
 
 
 @pytest.mark.asyncio
-async def test_global_proxy_spend_none_when_proxy_budget_row_missing():
+async def test_global_proxy_spend_zero_when_proxy_budget_row_missing(monkeypatch):
     """Before the startup upsert creates the aggregate row, enforcement must
-    see None (no cap applied) rather than raising."""
-    from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
-    )
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    see no recorded spend (no cap applied) rather than raising."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.user_api_key_auth import _fetch_global_proxy_spend
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(ps, "prisma_client", prisma_client)
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
 
-    result = await _fetch_global_spend_with_event_coordination(
-        cache_key="default_user_id:spend",
-        user_api_key_cache=UserApiKeyCache(),
-        prisma_client=prisma_client,
-    )
+    result = await _fetch_global_proxy_spend()
 
-    assert result is None
+    assert result == 0.0
+
+
+@pytest.mark.asyncio
+async def test_global_proxy_spend_reads_shared_counter_not_the_db_row(monkeypatch):
+    """Once the counter is warm, the enforced value is the shared counter that
+    every pod increments atomically, so spend recorded by other pods since the
+    last DB flush is visible without another read of the lagging DB row."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.user_api_key_auth import _fetch_global_proxy_spend
+
+    proxy_budget_row = MagicMock()
+    proxy_budget_row.spend = 5.0
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=proxy_budget_row)
+    counter_cache = DualCache()
+    counter_cache.in_memory_cache.set_cache(key="spend:user:litellm-proxy-budget", value=9.0)
+    monkeypatch.setattr(ps, "prisma_client", prisma_client)
+    monkeypatch.setattr(ps, "spend_counter_cache", counter_cache)
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
+
+    result = await _fetch_global_proxy_spend()
+
+    assert result == 9.0
 
 
 @pytest.mark.asyncio
