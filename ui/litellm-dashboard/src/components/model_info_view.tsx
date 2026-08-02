@@ -1499,4 +1499,3 @@ export default function ModelInfoView({
     </div>
   );
 }
-

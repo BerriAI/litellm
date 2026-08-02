@@ -2643,6 +2643,33 @@ def _build_db_model_with_pricing():
     )
 
 
+class TestUpdateDBModelClearCredential:
+    def test_clear_credential_name_removes_existing_value(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="gpt-4o",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                litellm_credential_name="existing-credential",
+            ),
+            model_info=ModelInfo(id="dep-credential-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(litellm_credential_name=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert "litellm_credential_name" not in params
+
+
 class TestUpdateDBModelClearPricing:
     """Sending an explicit `null` for a pricing field must remove it from both
     `litellm_params` and `model_info` (SPECIAL_MODEL_INFO_PARAMS are mirrored
