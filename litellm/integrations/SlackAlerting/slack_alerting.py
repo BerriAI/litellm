@@ -6,7 +6,7 @@ import os
 import random
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Literal
 
 from openai import APIError
 
@@ -61,16 +61,15 @@ class SlackAlerting(CustomBatchLogger):
     # Class variables or attributes
     def __init__(
         self,
-        internal_usage_cache: Optional[DualCache] = None,
-        alerting_threshold: Optional[float] = None,  # threshold for slow / hanging llm responses (in seconds)
-        alerting: Optional[List] = [],
-        alert_types: List[AlertType] = DEFAULT_ALERT_TYPES,
-        alert_to_webhook_url: Optional[
-            Dict[AlertType, Union[List[str], str]]
-        ] = None,  # if user wants to separate alerts to diff channels
+        internal_usage_cache: DualCache | None = None,
+        alerting_threshold: float | None = None,  # threshold for slow / hanging llm responses (in seconds)
+        alerting: list | None = [],
+        alert_types: list[AlertType] = DEFAULT_ALERT_TYPES,
+        alert_to_webhook_url: dict[AlertType, list[str] | str]
+        | None = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
-        default_webhook_url: Optional[str] = None,
-        alert_type_config: Optional[Dict[str, dict]] = None,
+        default_webhook_url: str | None = None,
+        alert_type_config: dict[str, dict] | None = None,
         **kwargs,
     ):
         if alerting_threshold is None:
@@ -89,23 +88,23 @@ class SlackAlerting(CustomBatchLogger):
         self.hanging_request_check = AlertingHangingRequestCheck(
             slack_alerting_object=self,
         )
-        self.alert_type_config: Dict[str, AlertTypeConfig] = {}
+        self.alert_type_config: dict[str, AlertTypeConfig] = {}
         if alert_type_config:
             for key, val in alert_type_config.items():
                 self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
-        self.digest_buckets: Dict[str, DigestEntry] = {}
+        self.digest_buckets: dict[str, DigestEntry] = {}
         self.digest_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def update_values(
         self,
-        alerting: Optional[List] = None,
-        alerting_threshold: Optional[float] = None,
-        alert_types: Optional[List[AlertType]] = None,
-        alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]] = None,
-        alerting_args: Optional[Dict] = None,
-        llm_router: Optional[Router] = None,
-        alert_type_config: Optional[Dict[str, dict]] = None,
+        alerting: list | None = None,
+        alerting_threshold: float | None = None,
+        alert_types: list[AlertType] | None = None,
+        alert_to_webhook_url: dict[AlertType, list[str] | str] | None = None,
+        alerting_args: dict | None = None,
+        llm_router: Router | None = None,
+        alert_type_config: dict[str, dict] | None = None,
     ):
         if alerting is not None:
             self.alerting = alerting
@@ -134,9 +133,7 @@ class SlackAlerting(CustomBatchLogger):
         if llm_router is not None:
             self.llm_router = llm_router
 
-    def _prepare_outage_value_for_cache(
-        self, outage_value: Union[dict, ProviderRegionOutageModel, OutageModel]
-    ) -> dict:
+    def _prepare_outage_value_for_cache(self, outage_value: dict | ProviderRegionOutageModel | OutageModel) -> dict:
         """
         Helper method to prepare outage value for Redis caching.
         Converts set objects to lists for JSON serialization.
@@ -148,7 +145,7 @@ class SlackAlerting(CustomBatchLogger):
             cache_value["deployment_ids"] = list(cache_value["deployment_ids"])
         return cache_value
 
-    def _restore_outage_value_from_cache(self, outage_value: Optional[dict]) -> Optional[dict]:
+    def _restore_outage_value_from_cache(self, outage_value: dict | None) -> dict | None:
         """
         Helper method to restore outage value after retrieving from cache.
         Converts list objects back to sets for proper handling.
@@ -210,7 +207,7 @@ class SlackAlerting(CustomBatchLogger):
             _deployment_latencies = metadata["_latency_per_deployment"]
             if len(_deployment_latencies) == 0:
                 return None
-            _deployment_latency_map: Optional[dict] = None
+            _deployment_latency_map: dict | None = None
             try:
                 # try sorting deployments by latency
                 _deployment_latencies = sorted(_deployment_latencies.items(), key=lambda x: x[1])
@@ -290,10 +287,7 @@ class SlackAlerting(CustomBatchLogger):
             ## FAILED REQUESTS ##
             if deployment_metrics.failed_request:
                 await self.internal_usage_cache.async_increment_cache(
-                    key="{}:{}".format(
-                        deployment_metrics.id,
-                        SlackAlertingCacheKeys.failed_requests_key.value,
-                    ),
+                    key=f"{deployment_metrics.id}:{SlackAlertingCacheKeys.failed_requests_key.value}",
                     value=1,
                     parent_otel_span=None,  # no attached request, this is a background operation
                 )
@@ -303,7 +297,7 @@ class SlackAlerting(CustomBatchLogger):
             ## LATENCY ##
             if deployment_metrics.latency_per_output_token is not None:
                 await self.internal_usage_cache.async_increment_cache(
-                    key="{}:{}".format(deployment_metrics.id, SlackAlertingCacheKeys.latency_key.value),
+                    key=f"{deployment_metrics.id}:{SlackAlertingCacheKeys.latency_key.value}",
                     value=deployment_metrics.latency_per_output_token,
                     parent_otel_span=None,  # no attached request, this is a background operation
                 )
@@ -333,8 +327,8 @@ class SlackAlerting(CustomBatchLogger):
         ids = router.get_model_ids()
 
         # get keys
-        failed_request_keys = ["{}:{}".format(id, SlackAlertingCacheKeys.failed_requests_key.value) for id in ids]
-        latency_keys = ["{}:{}".format(id, SlackAlertingCacheKeys.latency_key.value) for id in ids]
+        failed_request_keys = [f"{id}:{SlackAlertingCacheKeys.failed_requests_key.value}" for id in ids]
+        latency_keys = [f"{id}:{SlackAlertingCacheKeys.latency_key.value}" for id in ids]
 
         combined_metrics_keys = failed_request_keys + latency_keys  # reduce cache calls
 
@@ -445,7 +439,7 @@ class SlackAlerting(CustomBatchLogger):
 
     async def response_taking_too_long(
         self,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ):
         if self.alerting is None or self.alert_types is None:
             return
@@ -471,7 +465,7 @@ class SlackAlerting(CustomBatchLogger):
 
         _cache: DualCache = self.internal_usage_cache
         message = "Failed Tracking Cost for " + error_message
-        _cache_key = "budget_alerts:failed_tracking:{}".format(failing_model)
+        _cache_key = f"budget_alerts:failed_tracking:{failing_model}"
         result = await _cache.async_get_cache(key=_cache_key)
         if result is None:
             await self.send_alert(
@@ -528,16 +522,11 @@ class SlackAlerting(CustomBatchLogger):
         event_message = budget_alert_class.get_event_message()
 
         # Set default event unless we're in projected_limit_exceeded
-        event: Optional[
-            Literal[
-                "budget_crossed",
-                "threshold_crossed",
-                "projected_limit_exceeded",
-                "soft_budget_crossed",
-            ]
-        ] = "projected_limit_exceeded" if type == "projected_limit_exceeded" else None
+        event: (
+            Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded", "soft_budget_crossed"] | None
+        ) = "projected_limit_exceeded" if type == "projected_limit_exceeded" else None
 
-        webhook_event: Optional[WebhookEvent] = None
+        webhook_event: WebhookEvent | None = None
 
         # percent of max_budget left to spend
         if user_info.max_budget is None and user_info.soft_budget is None:
@@ -552,7 +541,7 @@ class SlackAlerting(CustomBatchLogger):
 
         # send alert
         if event is not None and user_info.event_group is not None:
-            _cache_key = "budget_alerts:{}:{}".format(event, _id)
+            _cache_key = f"budget_alerts:{event}:{_id}"
             result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 webhook_event = WebhookEvent(
@@ -579,24 +568,10 @@ class SlackAlerting(CustomBatchLogger):
     def _get_event_and_event_message(
         self,
         user_info: CallInfo,
-        event: Optional[
-            Literal[
-                "budget_crossed",
-                "threshold_crossed",
-                "soft_budget_crossed",
-                "projected_limit_exceeded",
-            ]
-        ],
+        event: Literal["budget_crossed", "threshold_crossed", "soft_budget_crossed", "projected_limit_exceeded"] | None,
         event_message: str,
-    ) -> Tuple[
-        Optional[
-            Literal[
-                "budget_crossed",
-                "threshold_crossed",
-                "soft_budget_crossed",
-                "projected_limit_exceeded",
-            ]
-        ],
+    ) -> tuple[
+        Literal["budget_crossed", "threshold_crossed", "soft_budget_crossed", "projected_limit_exceeded"] | None,
         str,
     ]:
         """
@@ -642,7 +617,7 @@ class SlackAlerting(CustomBatchLogger):
         """
         percent_left: float = 0.0
         current_spend: float = user_info.spend
-        max_budget: Optional[float] = user_info.max_budget
+        max_budget: float | None = user_info.max_budget
         if max_budget is None:
             return percent_left
         if max_budget <= 0:
@@ -666,11 +641,11 @@ class SlackAlerting(CustomBatchLogger):
 
     async def customer_spend_alert(
         self,
-        token: Optional[str],
-        key_alias: Optional[str],
-        end_user_id: Optional[str],
-        response_cost: Optional[float],
-        max_budget: Optional[float],
+        token: str | None,
+        key_alias: str | None,
+        end_user_id: str | None,
+        response_cost: float | None,
+        max_budget: float | None,
     ):
         if (
             self.alerting is not None
@@ -693,12 +668,12 @@ class SlackAlerting(CustomBatchLogger):
                 projected_spend=None,
                 event="spend_tracked",
                 event_group=Litellm_EntityType.END_USER,
-                event_message="Customer spend tracked. Customer={}, spend={}".format(end_user_id, response_cost),
+                event_message=f"Customer spend tracked. Customer={end_user_id}, spend={response_cost}",
             )
 
             await self.send_webhook_alert(webhook_event=event)
 
-    def _count_outage_alerts(self, alerts: List[int]) -> str:
+    def _count_outage_alerts(self, alerts: list[int]) -> str:
         """
         Parameters:
         - alerts: List[int] -> list of error codes (either 408 or 500+)
@@ -718,7 +693,7 @@ class SlackAlerting(CustomBatchLogger):
         error_msg = ""
         for key, value in error_breakdown.items():
             if value > 0:
-                error_msg += "\n{}: {}\n".format(key, value)
+                error_msg += f"\n{key}: {value}\n"
 
         return error_msg
 
@@ -728,7 +703,7 @@ class SlackAlerting(CustomBatchLogger):
         key: Literal["Model", "Region"],
         key_val: str,
         provider: str,
-        api_base: Optional[str],
+        api_base: str | None,
         outage_value: BaseOutageModel,
     ) -> str:
         """Format an alert message for slack"""
@@ -788,9 +763,7 @@ class SlackAlerting(CustomBatchLogger):
         ### UNIQUE CACHE KEY ###
         cache_key = provider + region_name
 
-        outage_value: Optional[ProviderRegionOutageModel] = await self.internal_usage_cache.async_get_cache(
-            key=cache_key
-        )
+        outage_value: ProviderRegionOutageModel | None = await self.internal_usage_cache.async_get_cache(key=cache_key)
 
         # Convert deployment_ids back to set if it was stored as a list
         if outage_value is not None:
@@ -911,7 +884,7 @@ class SlackAlerting(CustomBatchLogger):
         max_alerts_size = 10
         """
         try:
-            outage_value: Optional[OutageModel] = await self.internal_usage_cache.async_get_cache(key=deployment_id)  # type: ignore
+            outage_value: OutageModel | None = await self.internal_usage_cache.async_get_cache(key=deployment_id)  # type: ignore
             if (
                 getattr(exception, "status_code", None) is None
                 or (
@@ -1024,7 +997,7 @@ class SlackAlerting(CustomBatchLogger):
         for k, v in model_info.items():
             if k == "input_cost_per_token" or k == "output_cost_per_token":
                 # when converting to string it should not be 1.63e-06
-                v = "{:.8f}".format(v)
+                v = f"{v:.8f}"
 
             model_info_str += f"{k}: {v}\n"
 
@@ -1105,15 +1078,14 @@ Model Info:
     async def _check_if_using_premium_email_feature(
         self,
         premium_user: bool,
-        email_logo_url: Optional[str] = None,
-        email_support_contact: Optional[str] = None,
+        email_logo_url: str | None = None,
+        email_support_contact: str | None = None,
     ):
         from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
         if premium_user is not True:
             if email_logo_url is not None or email_support_contact is not None:
                 raise ValueError(f"Trying to Customize Email Alerting\n {CommonProxyErrors.not_premium_user.value}")
-        return
 
     async def send_key_created_or_user_invited_email(self, webhook_event: WebhookEvent) -> bool:
         try:
@@ -1274,9 +1246,9 @@ Model Info:
         level: Literal["Low", "Medium", "High"],
         alert_type: AlertType,
         alerting_metadata: dict,
-        user_info: Optional[WebhookEvent] = None,
-        request_model: Optional[str] = None,
-        api_base: Optional[str] = None,
+        user_info: WebhookEvent | None = None,
+        request_model: str | None = None,
+        api_base: str | None = None,
         **kwargs,
     ):
         """
@@ -1323,7 +1295,7 @@ Model Info:
         if _atc is not None and _atc.digest:
             # Resolve webhook URL for this alert type (needed for digest entry)
             if self.alert_to_webhook_url is not None and alert_type in self.alert_to_webhook_url:
-                _digest_webhook: Optional[Union[str, List[str]]] = self.alert_to_webhook_url[alert_type]
+                _digest_webhook: str | list[str] | None = self.alert_to_webhook_url[alert_type]
             elif self.default_webhook_url is not None:
                 _digest_webhook = self.default_webhook_url
             else:
@@ -1376,7 +1348,7 @@ Model Info:
 
         # check if we find the slack webhook url in self.alert_to_webhook_url
         if self.alert_to_webhook_url is not None and alert_type in self.alert_to_webhook_url:
-            slack_webhook_url: Optional[Union[str, List[str]]] = self.alert_to_webhook_url[alert_type]
+            slack_webhook_url: str | list[str] | None = self.alert_to_webhook_url[alert_type]
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
@@ -1431,7 +1403,7 @@ Model Info:
         from datetime import datetime
 
         now = datetime.now()
-        flushed_keys: List[str] = []
+        flushed_keys: list[str] = []
 
         async with self.digest_lock:
             for key, entry in self.digest_buckets.items():
@@ -1495,7 +1467,7 @@ Model Info:
             try:
                 await self._flush_digest_buckets()
             except Exception as e:
-                verbose_proxy_logger.debug(f"Error flushing digest buckets: {str(e)}")
+                verbose_proxy_logger.debug(f"Error flushing digest buckets: {e!s}")
             await self.flush_queue()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -1530,9 +1502,8 @@ Model Info:
                 )
         except Exception as e:
             verbose_proxy_logger.error(
-                f"[Non-Blocking Error] Slack Alerting: Got error in logging LLM deployment latency: {str(e)}"
+                f"[Non-Blocking Error] Slack Alerting: Got error in logging LLM deployment latency: {e!s}"
             )
-            pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """Log failure + deployment latency"""
@@ -1551,7 +1522,7 @@ Model Info:
                         )
                     )
                 except Exception as e:
-                    verbose_logger.debug(f"Exception raises -{str(e)}")
+                    verbose_logger.debug(f"Exception raises -{e!s}")
 
             if isinstance(kwargs.get("exception", ""), APIError):
                 if "outage_alerts" in self.alert_types:
@@ -1601,7 +1572,7 @@ Model Info:
 
         return report_sent_bool
 
-    async def _run_scheduled_daily_report(self, llm_router: Optional[Any] = None):
+    async def _run_scheduled_daily_report(self, llm_router: Any | None = None):
         """
         If 'daily_reports' enabled
 
@@ -1785,8 +1756,6 @@ Model Info:
         except Exception as e:
             verbose_proxy_logger.error("Error sending weekly spend report %s", e)
 
-        pass
-
     async def send_virtual_key_event_slack(
         self,
         key_event: VirtualKeyEvent,
@@ -1830,9 +1799,7 @@ Model Info:
         except Exception as e:
             verbose_proxy_logger.error("Error sending send_virtual_key_event_slack %s", e)
 
-        return
-
-    async def _request_is_completed(self, request_data: Optional[dict]) -> bool:
+    async def _request_is_completed(self, request_data: dict | None) -> bool:
         """
         Returns True if the request is completed - either as a success or failure
         """
@@ -1842,8 +1809,8 @@ Model Info:
         if request_data.get("litellm_status", "") != "success" and request_data.get("litellm_status", "") != "fail":
             ## CHECK IF CACHE IS UPDATED
             litellm_call_id = request_data.get("litellm_call_id", "")
-            status: Optional[str] = await self.internal_usage_cache.async_get_cache(
-                key="request_status:{}".format(litellm_call_id), local_only=True
+            status: str | None = await self.internal_usage_cache.async_get_cache(
+                key=f"request_status:{litellm_call_id}", local_only=True
             )
             if status is not None and (status == "success" or status == "fail"):
                 return True

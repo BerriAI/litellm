@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 from openai.types.image import Image
@@ -18,9 +18,9 @@ from litellm.types.utils import ImageResponse
 class VertexImageGeneration(VertexLLM):
     def process_image_generation_response(
         self,
-        json_response: Dict[str, Any],
+        json_response: dict[str, Any],
         model_response: ImageResponse,
-        model: Optional[str] = None,
+        model: str | None = None,
     ) -> ImageResponse:
         if "predictions" not in json_response:
             raise litellm.InternalServerError(
@@ -30,7 +30,7 @@ class VertexImageGeneration(VertexLLM):
             )
 
         predictions = json_response["predictions"]
-        response_data: List[Image] = []
+        response_data: list[Image] = []
 
         for prediction in predictions:
             bytes_base64_encoded = prediction["bytesBase64Encoded"]
@@ -40,7 +40,7 @@ class VertexImageGeneration(VertexLLM):
         model_response.data = response_data
         return model_response
 
-    def transform_optional_params(self, optional_params: Optional[dict]) -> dict:
+    def transform_optional_params(self, optional_params: dict | None) -> dict:
         """
         Transform the optional params to the format expected by the Vertex AI API.
         For example, "aspect_ratio" is transformed to "aspectRatio".
@@ -69,18 +69,18 @@ class VertexImageGeneration(VertexLLM):
     def image_generation(
         self,
         prompt: str,
-        api_base: Optional[str],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        api_base: str | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         model_response: ImageResponse,
         logging_obj: Any,
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
-        client: Optional[Any] = None,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[int] = None,
+        client: Any | None = None,
+        optional_params: dict | None = None,
+        timeout: int | None = None,
         aimg_generation=False,
-        extra_headers: Optional[dict] = None,
+        extra_headers: dict | None = None,
     ) -> ImageResponse:
         if aimg_generation is True:
             return self.aimage_generation(  # type: ignore
@@ -112,7 +112,7 @@ class VertexImageGeneration(VertexLLM):
 
         # url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
 
-        auth_header: Optional[str] = None
+        auth_header: str | None = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -168,17 +168,17 @@ class VertexImageGeneration(VertexLLM):
     async def aimage_generation(
         self,
         prompt: str,
-        api_base: Optional[str],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        api_base: str | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         model_response: ImageResponse,
         logging_obj: Any,
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
-        client: Optional[AsyncHTTPHandler] = None,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[int] = None,
-        extra_headers: Optional[dict] = None,
+        client: AsyncHTTPHandler | None = None,
+        optional_params: dict | None = None,
+        timeout: int | None = None,
+        extra_headers: dict | None = None,
     ):
         response = None
         if client is None:
@@ -217,7 +217,7 @@ class VertexImageGeneration(VertexLLM):
         } \
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
-        auth_header: Optional[str] = None
+        auth_header: str | None = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -269,7 +269,7 @@ class VertexImageGeneration(VertexLLM):
         json_response = response.json()
         return self.process_image_generation_response(json_response, model_response, model)
 
-    def is_image_generation_response(self, json_response: Dict[str, Any]) -> bool:
+    def is_image_generation_response(self, json_response: dict[str, Any]) -> bool:
         if "predictions" in json_response:
             if "bytesBase64Encoded" in json_response["predictions"][0]:
                 return True

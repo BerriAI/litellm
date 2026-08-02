@@ -36,8 +36,9 @@ model. They coincide on the SDK path, which is correct.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Mapping, cast
+from typing import TYPE_CHECKING, Any, cast
 
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
@@ -67,7 +68,7 @@ class RequestIdentity:
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_payload(cls, payload: "StandardLoggingPayload") -> "RequestIdentity":
+    def from_payload(cls, payload: StandardLoggingPayload) -> RequestIdentity:
         """Parse caller identity out of a closed request's payload metadata.
 
         ``provider_model`` is resolved here too (see :func:`resolve_provider_model`)
@@ -91,7 +92,7 @@ class RequestIdentity:
         )
 
     @classmethod
-    def from_user_api_key_auth(cls, auth: object) -> "RequestIdentity":
+    def from_user_api_key_auth(cls, auth: object) -> RequestIdentity:
         """Identity from a ``UserAPIKeyAuth`` (duck-typed to keep this module
         free of a proxy import).
 
@@ -146,7 +147,7 @@ class RequestContext:
         return self.identity.provider_model
 
     @classmethod
-    def from_standard_logging_payload(cls, payload: "StandardLoggingPayload") -> "RequestContext":
+    def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> RequestContext:
         raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
         hidden = cast(Mapping[str, object], payload.get("hidden_params") or {})
         raw_response = payload.get("response")
@@ -192,7 +193,7 @@ class LLMCallEvent:
     # The ``StandardLoggingPayload`` carried on a success/failure callback; ``None``
     # at ``pre_call``, or when the call closed before any payload materialized (so
     # there is nothing to stamp on the span).
-    payload: "StandardLoggingPayload | None"
+    payload: StandardLoggingPayload | None
     otel_destinations: tuple[OtelDestination, ...]
     # The ``standard_callback_dynamic_params`` routing the call to a per-tenant
     # tracer (its own exporter/endpoint), or ``None`` when the call isn't scoped.
@@ -207,7 +208,7 @@ class LLMCallEvent:
     time_to_first_chunk_seconds: float | None
 
     @classmethod
-    def from_dict(cls, kwargs: Mapping[str, Any]) -> "LLMCallEvent":
+    def from_dict(cls, kwargs: Mapping[str, Any]) -> LLMCallEvent:
         # Imported here rather than at module scope: this module is reachable from
         # ``litellm/__init__`` and ``plumbing.context`` imports opentelemetry eagerly, so a
         # top-level import makes the whole package a hard dependency of the proxy, which
@@ -244,7 +245,7 @@ def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
     return completion_start - api_call_start
 
 
-def _call_id(payload: "StandardLoggingPayload | None", kwargs: Mapping[str, Any]) -> str | None:
+def _call_id(payload: StandardLoggingPayload | None, kwargs: Mapping[str, Any]) -> str | None:
     """The call id from the payload (when closed) or the bare kwargs (at pre_call)."""
     if payload is not None:
         call_id = as_str(payload.get("litellm_call_id")) or as_str(payload.get("id"))
@@ -264,7 +265,7 @@ def model_from_request_data(data: object) -> str | None:
     return None
 
 
-def resolve_provider_model(payload: "StandardLoggingPayload") -> str | None:
+def resolve_provider_model(payload: StandardLoggingPayload) -> str | None:
     """The model litellm dispatched to the provider, from the payload.
 
     Prefers the explicit ``hidden_params.litellm_model_name`` (set on call paths

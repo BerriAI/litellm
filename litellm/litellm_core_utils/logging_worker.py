@@ -2,19 +2,20 @@
 # for the sake of performance and scalability.
 
 import asyncio
+import atexit
 import contextvars
 import logging
-from typing import Coroutine, Optional
-import atexit
+from collections.abc import Coroutine
+
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
+    LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS,
+    LOGGING_WORKER_CLEAR_PERCENTAGE,
     LOGGING_WORKER_CONCURRENCY,
     LOGGING_WORKER_MAX_QUEUE_SIZE,
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
-    LOGGING_WORKER_CLEAR_PERCENTAGE,
-    LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS,
     MAX_ITERATIONS_TO_CLEAR_QUEUE,
     MAX_TIME_TO_CLEAR_QUEUE,
 )
@@ -48,11 +49,11 @@ class LoggingWorker:
         self.timeout = timeout
         self.max_queue_size = max_queue_size
         self.concurrency = concurrency
-        self._queue: Optional[asyncio.Queue[LoggingTask]] = None
-        self._worker_task: Optional[asyncio.Task] = None
+        self._queue: asyncio.Queue[LoggingTask] | None = None
+        self._worker_task: asyncio.Task | None = None
         self._running_tasks: set[asyncio.Task] = set()
-        self._sem: Optional[asyncio.Semaphore] = None
-        self._bound_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._sem: asyncio.Semaphore | None = None
+        self._bound_loop: asyncio.AbstractEventLoop | None = None
         self._last_aggressive_clear_time: float = 0.0
         self._aggressive_clear_in_progress: bool = False
 
@@ -276,7 +277,7 @@ class LoggingWorker:
 
         return extracted_tasks
 
-    async def _aggressively_clear_queue_async(self, new_task: Optional[LoggingTask] = None) -> None:
+    async def _aggressively_clear_queue_async(self, new_task: LoggingTask | None = None) -> None:
         """
         Aggressively clear the queue by extracting and processing items.
         This is called when the queue is full to prevent dropping logs.

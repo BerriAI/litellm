@@ -2,7 +2,7 @@ import base64
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -51,7 +51,6 @@ class LangfuseOtelLogger(OpenTelemetry):
         # Set Langfuse specific attributes
         #########################################################
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
-        return
 
     @staticmethod
     def _extract_langfuse_metadata(kwargs: dict) -> dict:
@@ -245,7 +244,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
 
     @staticmethod
-    def _get_langfuse_otel_host() -> Optional[str]:
+    def _get_langfuse_otel_host() -> str | None:
         """
         Returns the Langfuse OTEL host based on environment variables.
 
@@ -307,7 +306,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     @staticmethod
     def _build_langfuse_otel_config(
-        public_key: str, secret_key: str, langfuse_host: Optional[str]
+        public_key: str, secret_key: str, langfuse_host: str | None
     ) -> "OpenTelemetryConfig":
         """
         Builds an OTLP HTTP config pointing at the Langfuse OTEL endpoint for the
@@ -343,7 +342,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         return f"Basic {auth_header}"
 
     @staticmethod
-    def _build_langfuse_otel_headers(auth_header: str) -> Dict[str, str]:
+    def _build_langfuse_otel_headers(auth_header: str) -> dict[str, str]:
         """
         Build the OTLP header set Langfuse expects.
 
@@ -356,7 +355,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         }
 
     @staticmethod
-    def _format_otel_headers(headers: Dict[str, str]) -> str:
+    def _format_otel_headers(headers: dict[str, str]) -> str:
         """
         Serialize a header mapping into the comma-separated OTLP header string
         """
@@ -364,7 +363,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Construct dynamic Langfuse headers from standard callback dynamic params
 
@@ -413,7 +412,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         self,
         start_time: datetime,
         headers: dict,
-    ) -> Optional[Span]:
+    ) -> Span | None:
         """
         Override to prevent creating empty proxy request spans.
 
@@ -429,10 +428,8 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         Langfuse should not receive service success logs.
         """
-        pass
 
     async def async_service_failure_hook(self, *args, **kwargs):
         """
         Langfuse should not receive service failure logs.
         """
-        pass

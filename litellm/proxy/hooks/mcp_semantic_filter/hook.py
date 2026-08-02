@@ -5,7 +5,7 @@ Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 
@@ -66,7 +66,7 @@ class SemanticToolFilterHook(CustomLogger):
             f"enabled={semantic_filter.enabled}, top_k={semantic_filter.top_k}"
         )
 
-    def _should_expand_mcp_tools(self, tools: List[Any]) -> bool:
+    def _should_expand_mcp_tools(self, tools: list[Any]) -> bool:
         """
         Check if tools contain MCP references with server_url="litellm_proxy".
 
@@ -80,9 +80,9 @@ class SemanticToolFilterHook(CustomLogger):
 
     async def _expand_mcp_tools(
         self,
-        tools: List[Any],
+        tools: list[Any],
         user_api_key_dict: "UserAPIKeyAuth",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Expand MCP references to actual tool definitions.
 
@@ -276,7 +276,7 @@ class SemanticToolFilterHook(CustomLogger):
         cache: "DualCache",
         data: dict,
         call_type: str,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Filter tools before LLM call based on user query.
 
@@ -412,9 +412,9 @@ class SemanticToolFilterHook(CustomLogger):
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
         response: Any,
-        request_headers: Optional[Dict[str, str]] = None,
-        litellm_call_info: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, str]]:
+        request_headers: dict[str, str] | None = None,
+        litellm_call_info: dict[str, Any] | None = None,
+    ) -> dict[str, str] | None:
         """Add semantic filter stats and tool names to response headers."""
         from litellm.constants import MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH
 
@@ -438,7 +438,7 @@ class SemanticToolFilterHook(CustomLogger):
 
         return headers
 
-    def _get_tool_names_csv(self, tools: List[Any]) -> str:
+    def _get_tool_names_csv(self, tools: list[Any]) -> str:
         """Extract tool names and return as CSV string."""
         if not tools:
             return ""
@@ -453,7 +453,7 @@ class SemanticToolFilterHook(CustomLogger):
 
     @staticmethod
     async def initialize_from_config(
-        config: Optional[Dict[str, Any]],
+        config: dict[str, Any] | None,
         llm_router: Optional["Router"],
     ) -> Optional["SemanticToolFilterHook"]:
         """

@@ -15,7 +15,7 @@ tracer for the integrations that support it; ``dynamic_otlp_headers`` below buil
 those per-request headers.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from litellm.integrations.otel.presets.agentops import agentops_preset
 from litellm.integrations.otel.presets.arize import arize_dynamic_headers, arize_preset

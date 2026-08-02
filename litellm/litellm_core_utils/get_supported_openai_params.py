@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal
 
 import litellm
 from litellm.exceptions import BadRequestError
@@ -7,10 +7,10 @@ from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 def get_supported_openai_params(
     model: str,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     request_type: Literal["chat_completion", "embeddings", "transcription"] = "chat_completion",
-    base_model: Optional[str] = None,
-) -> Optional[list]:
+    base_model: str | None = None,
+) -> list | None:
     """
     Returns the supported openai params for a given model + provider
 
@@ -284,9 +284,7 @@ def get_supported_openai_params(
             )
             if provider_config:
                 return provider_config.get_supported_openai_params(model=model)
-        elif request_type == "embeddings":
-            return None
-        elif request_type == "transcription":
+        elif request_type == "embeddings" or request_type == "transcription":
             return None
 
     return None

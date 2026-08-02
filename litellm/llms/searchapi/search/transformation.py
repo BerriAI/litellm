@@ -4,7 +4,7 @@ Calls SearchAPI.io's Google Search API endpoint.
 SearchAPI.io API Reference: https://www.searchapi.io/docs/google
 """
 
-from typing import Dict, List, Literal, Optional, TypedDict, Union, cast
+from typing import Literal, TypedDict, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -66,11 +66,11 @@ class SearchAPIConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
@@ -91,9 +91,9 @@ class SearchAPIConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -113,13 +113,13 @@ class SearchAPIConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         api_base: str | None = None,
-        search_engine_id: Optional[str] = None,
+        search_engine_id: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to SearchAPI.io format.
 
@@ -189,7 +189,7 @@ class SearchAPIConfig(BaseSearchConfig):
         }
 
     @staticmethod
-    def _append_domain_filters(query: str, domains: List[str]) -> str:
+    def _append_domain_filters(query: str, domains: list[str]) -> str:
         """
         Add site: filters to restrict search to specific domains.
         """
@@ -201,7 +201,7 @@ class SearchAPIConfig(BaseSearchConfig):
     def transform_search_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Optional[LiteLLMLoggingObj],
+        logging_obj: LiteLLMLoggingObj | None,
         **kwargs,
     ) -> SearchResponse:
         """
@@ -216,7 +216,7 @@ class SearchAPIConfig(BaseSearchConfig):
         response_json = raw_response.json()
 
         # Transform results to SearchResult objects
-        results: List[SearchResult] = []
+        results: list[SearchResult] = []
 
         # Process organic results
         for result in response_json.get("organic_results", []):

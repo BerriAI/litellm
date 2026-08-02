@@ -1,5 +1,4 @@
 import json
-from typing import Optional
 
 import litellm
 from litellm import verbose_logger
@@ -20,10 +19,10 @@ class ModelResponseIterator:
             processed_chunk = litellm.ModelResponseStream(**chunk)
 
             text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            tool_use: ChatCompletionToolCallChunk | None = None
             is_finished = False
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: ChatCompletionUsageBlock | None = None
 
             # Usage-only final chunk (OpenAI ``stream_options.include_usage``)
             # arrives with an empty ``choices`` list — return usage without
@@ -75,7 +74,7 @@ class ModelResponseIterator:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
 
-            usage_chunk: Optional[Usage] = getattr(processed_chunk, "usage", None)
+            usage_chunk: Usage | None = getattr(processed_chunk, "usage", None)
             if usage_chunk is not None:
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=usage_chunk.prompt_tokens,

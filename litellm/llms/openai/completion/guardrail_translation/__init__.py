@@ -10,4 +10,4 @@ guardrail_translation_mappings = {
     CallTypes.atext_completion: OpenAITextCompletionHandler,
 }
 
-__all__ = ["guardrail_translation_mappings", "OpenAITextCompletionHandler"]
+__all__ = ["OpenAITextCompletionHandler", "guardrail_translation_mappings"]

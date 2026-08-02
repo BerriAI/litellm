@@ -10,7 +10,7 @@ Validates:
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -63,7 +63,7 @@ class PolicyValidator:
         """
         return "*" in pattern or "?" in pattern
 
-    def get_available_guardrails(self) -> Set[str]:
+    def get_available_guardrails(self) -> set[str]:
         """
         Get set of available guardrail names from the guardrail registry.
 
@@ -78,7 +78,7 @@ class PolicyValidator:
             guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
             return {g.get("guardrail_name", "") for g in guardrails if g.get("guardrail_name")}
         except Exception as e:
-            verbose_proxy_logger.warning(f"Could not get guardrails from registry: {str(e)}")
+            verbose_proxy_logger.warning(f"Could not get guardrails from registry: {e!s}")
             return set()
 
     async def check_team_alias_exists(self, team_alias: str) -> bool:
@@ -100,7 +100,7 @@ class PolicyValidator:
             )
             return team is not None
         except Exception as e:
-            verbose_proxy_logger.warning(f"Could not check team alias '{team_alias}': {str(e)}")
+            verbose_proxy_logger.warning(f"Could not check team alias '{team_alias}': {e!s}")
             return True  # Assume valid on error
 
     async def check_key_alias_exists(self, key_alias: str) -> bool:
@@ -122,7 +122,7 @@ class PolicyValidator:
             )
             return key is not None
         except Exception as e:
-            verbose_proxy_logger.warning(f"Could not check key alias '{key_alias}': {str(e)}")
+            verbose_proxy_logger.warning(f"Could not check key alias '{key_alias}': {e!s}")
             return True  # Assume valid on error
 
     def check_model_exists(self, model: str) -> bool:
@@ -151,7 +151,7 @@ class PolicyValidator:
 
             return False
         except Exception as e:
-            verbose_proxy_logger.warning(f"Could not check model '{model}': {str(e)}")
+            verbose_proxy_logger.warning(f"Could not check model '{model}': {e!s}")
             return True  # Assume valid on error
 
     @staticmethod
@@ -222,10 +222,10 @@ class PolicyValidator:
     def _validate_inheritance_chain(
         self,
         policy_name: str,
-        policies: Dict[str, Policy],
-        visited: Optional[Set[str]] = None,
+        policies: dict[str, Policy],
+        visited: set[str] | None = None,
         max_depth: int = 100,
-    ) -> List[PolicyValidationError]:
+    ) -> list[PolicyValidationError]:
         """
         Validate the inheritance chain for a policy.
 
@@ -243,7 +243,7 @@ class PolicyValidator:
         Returns:
             List of validation errors
         """
-        errors: List[PolicyValidationError] = []
+        errors: list[PolicyValidationError] = []
 
         # Prevent infinite recursion
         if max_depth <= 0:
@@ -295,7 +295,7 @@ class PolicyValidator:
 
     async def validate_policies(
         self,
-        policies: Dict[str, Policy],
+        policies: dict[str, Policy],
         validate_db: bool = True,
     ) -> PolicyValidationResponse:
         """
@@ -308,8 +308,8 @@ class PolicyValidator:
         Returns:
             PolicyValidationResponse with errors and warnings
         """
-        errors: List[PolicyValidationError] = []
-        warnings: List[PolicyValidationError] = []
+        errors: list[PolicyValidationError] = []
+        warnings: list[PolicyValidationError] = []
 
         # Get available guardrails
         available_guardrails = self.get_available_guardrails()
@@ -363,10 +363,10 @@ class PolicyValidator:
     def _validate_pipeline(
         policy_name: str,
         policy: Policy,
-        available_guardrails: Set[str],
-    ) -> List[PolicyValidationError]:
+        available_guardrails: set[str],
+    ) -> list[PolicyValidationError]:
         """Validate a policy's pipeline configuration."""
-        errors: List[PolicyValidationError] = []
+        errors: list[PolicyValidationError] = []
         pipeline = policy.pipeline
         if pipeline is None:
             return errors
@@ -404,7 +404,7 @@ class PolicyValidator:
 
     async def validate_policy_config(
         self,
-        policy_config: Dict[str, Any],
+        policy_config: dict[str, Any],
         validate_db: bool = True,
     ) -> PolicyValidationResponse:
         """
@@ -422,8 +422,8 @@ class PolicyValidator:
         from litellm.proxy.policy_engine.policy_registry import PolicyRegistry
 
         # First, try to parse the policies
-        errors: List[PolicyValidationError] = []
-        policies: Dict[str, Policy] = {}
+        errors: list[PolicyValidationError] = []
+        policies: dict[str, Policy] = {}
 
         temp_registry = PolicyRegistry()
 
@@ -436,7 +436,7 @@ class PolicyValidator:
                     PolicyValidationError(
                         policy_name=policy_name,
                         error_type=PolicyValidationErrorType.INVALID_SYNTAX,
-                        message=f"Failed to parse policy: {str(e)}",
+                        message=f"Failed to parse policy: {e!s}",
                     )
                 )
 

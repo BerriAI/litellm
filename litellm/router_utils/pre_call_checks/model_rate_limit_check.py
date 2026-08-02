@@ -11,7 +11,7 @@ is logged the first time such a deployment is seen.
 """
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import httpx
 
@@ -20,6 +20,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    ITPM_RESERVED_KEY,
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     async_io_token_refund_failure,
@@ -28,7 +29,6 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     io_token_pre_call_check,
     io_token_reconcile_success,
     io_token_refund_failure,
-    ITPM_RESERVED_KEY,
 )
 from litellm.types.router import RouterErrors
 from litellm.types.utils import StandardLoggingPayload
@@ -86,7 +86,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
     async def _async_refund_io_token_reservation_if_any(
         self,
-        parent_otel_span: Optional[Span] = None,
+        parent_otel_span: Span | None = None,
     ) -> None:
         request_kwargs = get_io_token_rate_limit_request_kwargs()
         if request_kwargs is not None:
@@ -96,7 +96,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 parent_otel_span=parent_otel_span,
             )
 
-    def _get_deployment_limits(self, deployment: Dict) -> tuple[Optional[int], Optional[int]]:
+    def _get_deployment_limits(self, deployment: dict) -> tuple[int | None, int | None]:
         """
         Extract TPM and RPM limits from a deployment configuration.
 
@@ -126,7 +126,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
         return tpm, rpm
 
-    def _get_cache_keys(self, deployment: Dict, current_minute: str) -> tuple[str, str]:
+    def _get_cache_keys(self, deployment: dict, current_minute: str) -> tuple[str, str]:
         """Get the cache keys for TPM and RPM tracking."""
         model_id = deployment.get("model_info", {}).get("id")
         deployment_name = deployment.get("litellm_params", {}).get("model")
@@ -136,7 +136,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
         return tpm_key, rpm_key
 
-    def pre_call_check(self, deployment: Dict) -> Optional[Dict]:
+    def pre_call_check(self, deployment: dict) -> dict | None:
         """
         Synchronous pre-call check for model rate limits.
 
@@ -212,11 +212,11 @@ class ModelRateLimitingCheck(CustomLogger):
                 self._refund_io_token_reservation_if_any()
             raise
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.pre_call_check: {str(e)}")
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.pre_call_check: {e!s}")
             # Don't fail the request if rate limit check fails
             return deployment
 
-    async def async_pre_call_check(self, deployment: Dict, parent_otel_span: Optional[Span] = None) -> Optional[Dict]:
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None = None) -> dict | None:
         """
         Async pre-call check for model rate limits.
 
@@ -300,7 +300,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 await self._async_refund_io_token_reservation_if_any(parent_otel_span=parent_otel_span)
             raise
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_pre_call_check: {str(e)}")
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_pre_call_check: {e!s}")
             # Don't fail the request if rate limit check fails
             return deployment
 
@@ -310,7 +310,7 @@ class ModelRateLimitingCheck(CustomLogger):
         )
 
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
 
             # IO token reconciliation works purely from the cache keys stashed in
             # kwargs/metadata, so it must run before the model_id guard below
@@ -360,7 +360,7 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_log_success_event: {str(e)}")
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_log_success_event: {e!s}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.litellm_core_utils.core_helpers import (
@@ -381,7 +381,7 @@ class ModelRateLimitingCheck(CustomLogger):
         Always tracks tokens - the pre-call check handles enforcement.
         """
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
             slo_metadata = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
             kwargs_metadata = kwargs.get("metadata") or {}
             if ITPM_RESERVED_KEY in slo_metadata or ITPM_RESERVED_KEY in kwargs_metadata:
@@ -418,7 +418,7 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.log_success_event: {str(e)}")
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.log_success_event: {e!s}")
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         with contextlib.suppress(Exception):

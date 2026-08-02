@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -52,27 +52,27 @@ class ReplicateConfig(BaseConfig):
     Please note that Replicate's mapping of these parameters can be inconsistent across different models, indicating that not all of these parameters may be available for use with all models.
     """
 
-    system_prompt: Optional[str] = None
-    max_new_tokens: Optional[int] = None
-    min_new_tokens: Optional[int] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    top_k: Optional[int] = None
-    stop_sequences: Optional[str] = None
-    seed: Optional[int] = None
-    debug: Optional[bool] = None
+    system_prompt: str | None = None
+    max_new_tokens: int | None = None
+    min_new_tokens: int | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    top_k: int | None = None
+    stop_sequences: str | None = None
+    seed: int | None = None
+    debug: bool | None = None
 
     def __init__(
         self,
-        system_prompt: Optional[str] = None,
-        max_new_tokens: Optional[int] = None,
-        min_new_tokens: Optional[int] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        top_k: Optional[int] = None,
-        stop_sequences: Optional[str] = None,
-        seed: Optional[int] = None,
-        debug: Optional[bool] = None,
+        system_prompt: str | None = None,
+        max_new_tokens: int | None = None,
+        min_new_tokens: int | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        top_k: int | None = None,
+        stop_sequences: str | None = None,
+        seed: int | None = None,
+        debug: bool | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -130,19 +130,17 @@ class ReplicateConfig(BaseConfig):
             return split_model[1]
         return model
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return ReplicateError(status_code=status_code, message=error_message, headers=headers)
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         version_id = self.model_to_version_id(model)
         base_url = api_base
@@ -158,7 +156,7 @@ class ReplicateConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -201,7 +199,7 @@ class ReplicateConfig(BaseConfig):
         if prompt is None or not isinstance(prompt, str):
             raise ReplicateError(
                 status_code=400,
-                message="LiteLLM Error - prompt is not a string - {}".format(prompt),
+                message=f"LiteLLM Error - prompt is not a string - {prompt}",
                 headers={},
             )
 
@@ -234,12 +232,12 @@ class ReplicateConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LoggingClass,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         logging_obj.post_call(
             input=messages,
@@ -251,7 +249,7 @@ class ReplicateConfig(BaseConfig):
         if raw_response_json.get("status") != "succeeded":
             raise ReplicateError(
                 status_code=422,
-                message="LiteLLM Error - prediction not succeeded - {}".format(raw_response_json),
+                message=f"LiteLLM Error - prediction not succeeded - {raw_response_json}",
                 headers=raw_response.headers,
             )
         outputs = raw_response_json.get("output", [])
@@ -292,7 +290,7 @@ class ReplicateConfig(BaseConfig):
         if prediction_url is None:
             raise ReplicateError(
                 status_code=400,
-                message="LiteLLM Error - prediction url is None - {}".format(response_json),
+                message=f"LiteLLM Error - prediction url is None - {response_json}",
                 headers=response.headers,
             )
         return prediction_url
@@ -301,11 +299,11 @@ class ReplicateConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = {
             "Authorization": f"Token {api_key}",

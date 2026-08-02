@@ -1,10 +1,11 @@
+import builtins
 import json
 from datetime import datetime
-from typing import Literal, Optional, List, Dict, Any
+from typing import Any, Literal
 
 import click
-import rich
 import requests
+import rich
 from rich.table import Table
 
 from ...keys import KeysManagementClient
@@ -13,7 +14,6 @@ from ...keys import KeysManagementClient
 @click.group()
 def keys():
     """Manage API keys for the LiteLLM proxy server"""
-    pass
 
 
 @keys.command()
@@ -41,13 +41,13 @@ def keys():
 @click.pass_context
 def list(
     ctx: click.Context,
-    page: Optional[int],
-    size: Optional[int],
-    user_id: Optional[str],
-    team_id: Optional[str],
-    organization_id: Optional[str],
-    key_hash: Optional[str],
-    key_alias: Optional[str],
+    page: int | None,
+    size: int | None,
+    user_id: str | None,
+    team_id: str | None,
+    organization_id: str | None,
+    key_hash: str | None,
+    key_alias: str | None,
     include_team_keys: bool,
     output_format: Literal["table", "json"],
     return_full_object: bool,
@@ -105,15 +105,15 @@ def list(
 @click.pass_context
 def generate(
     ctx: click.Context,
-    models: Optional[str],
-    aliases: Optional[str],
-    spend: Optional[float],
-    duration: Optional[str],
-    key_alias: Optional[str],
-    team_id: Optional[str],
-    user_id: Optional[str],
-    budget_id: Optional[str],
-    config: Optional[str],
+    models: str | None,
+    aliases: str | None,
+    spend: float | None,
+    duration: str | None,
+    key_alias: str | None,
+    team_id: str | None,
+    user_id: str | None,
+    budget_id: str | None,
+    config: str | None,
 ):
     """Generate a new API key"""
     client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
@@ -122,7 +122,7 @@ def generate(
         aliases_dict = json.loads(aliases) if aliases else None
         config_dict = json.loads(config) if config else None
     except json.JSONDecodeError as e:
-        raise click.BadParameter(f"Invalid JSON: {str(e)}")
+        raise click.BadParameter(f"Invalid JSON: {e!s}")
     try:
         response = client.generate(
             models=models_list,
@@ -150,7 +150,7 @@ def generate(
 @click.option("--keys", type=str, help="Comma-separated list of API keys to delete")
 @click.option("--key-aliases", type=str, help="Comma-separated list of key aliases to delete")
 @click.pass_context
-def delete(ctx: click.Context, keys: Optional[str], key_aliases: Optional[str]):
+def delete(ctx: click.Context, keys: str | None, key_aliases: str | None):
     """Delete API keys by key or alias"""
     client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
     keys_list = [k.strip() for k in keys.split(",")] if keys else None
@@ -168,7 +168,7 @@ def delete(ctx: click.Context, keys: Optional[str], key_aliases: Optional[str]):
         raise click.Abort()
 
 
-def _parse_created_since_filter(created_since: Optional[str]) -> Optional[datetime]:
+def _parse_created_since_filter(created_since: str | None) -> datetime | None:
     """Parse and validate the created_since date filter."""
     if not created_since:
         return None
@@ -187,7 +187,9 @@ def _parse_created_since_filter(created_since: Optional[str]) -> Optional[dateti
         raise click.Abort()
 
 
-def _fetch_all_keys_with_pagination(source_client: KeysManagementClient, source_base_url: str) -> List[Dict[str, Any]]:
+def _fetch_all_keys_with_pagination(
+    source_client: KeysManagementClient, source_base_url: str
+) -> builtins.list[dict[str, Any]]:
     """Fetch all keys from source instance using pagination."""
     click.echo(f"Fetching keys from source server: {source_base_url}")
     source_keys = []
@@ -216,10 +218,10 @@ def _fetch_all_keys_with_pagination(source_client: KeysManagementClient, source_
 
 
 def _filter_keys_by_created_since(
-    source_keys: List[Dict[str, Any]],
-    created_since_dt: Optional[datetime],
+    source_keys: builtins.list[dict[str, Any]],
+    created_since_dt: datetime | None,
     created_since: str,
-) -> List[Dict[str, Any]]:
+) -> builtins.list[dict[str, Any]]:
     """Filter keys by created_since date if specified."""
     if not created_since_dt:
         return source_keys
@@ -246,7 +248,7 @@ def _filter_keys_by_created_since(
     return filtered_keys
 
 
-def _display_dry_run_table(source_keys: List[Dict[str, Any]]) -> None:
+def _display_dry_run_table(source_keys: builtins.list[dict[str, Any]]) -> None:
     """Display a table of keys that would be imported in dry-run mode."""
     click.echo("\n--- DRY RUN MODE ---")
     table = Table(title="Keys that would be imported")
@@ -269,7 +271,7 @@ def _display_dry_run_table(source_keys: List[Dict[str, Any]]) -> None:
     rich.print(table)
 
 
-def _prepare_key_import_data(key: Dict[str, Any]) -> Dict[str, Any]:
+def _prepare_key_import_data(key: dict[str, Any]) -> dict[str, Any]:
     """Prepare key data for import by extracting relevant fields."""
     import_data = {}
 
@@ -291,7 +293,7 @@ def _prepare_key_import_data(key: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _import_keys_to_destination(
-    source_keys: List[Dict[str, Any]], dest_client: KeysManagementClient
+    source_keys: builtins.list[dict[str, Any]], dest_client: KeysManagementClient
 ) -> tuple[int, int]:
     """Import each key to the destination instance and return counts."""
     imported_count = 0
@@ -314,7 +316,7 @@ def _import_keys_to_destination(
         except Exception as e:
             failed_count += 1
             key_alias = key.get("key_alias", "N/A")
-            click.echo(f"Failed to import key {key_alias}: {str(e)}", err=True)
+            click.echo(f"Failed to import key {key_alias}: {e!s}", err=True)
 
     return imported_count, failed_count
 
@@ -339,9 +341,9 @@ def _import_keys_to_destination(
 def import_keys(
     ctx: click.Context,
     source_base_url: str,
-    source_api_key: Optional[str],
+    source_api_key: str | None,
     dry_run: bool,
-    created_since: Optional[str],
+    created_since: str | None,
 ):
     """Import API keys from another LiteLLM instance"""
     # Parse created_since filter if provided
@@ -387,5 +389,5 @@ def import_keys(
             click.echo(e.response.text, err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {str(e)}", err=True)
+        click.echo(f"Error: {e!s}", err=True)
         raise click.Abort()

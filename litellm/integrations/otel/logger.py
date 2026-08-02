@@ -1,9 +1,10 @@
 """``CustomLogger`` adapter on the OpenTelemetry span engine."""
 
 from collections import OrderedDict
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
@@ -763,9 +764,9 @@ class OpenTelemetryV2(CustomLogger):
         SDK dropped it, leaving the POST that actually failed unmarked."""
         span = mcp_message_transport_span() or request_root_span() or user_api_key_dict.parent_otel_span
         if span is None or not is_recordable_span(span):
-            return None
+            return
         stamp_error(span, _span_error_from_exception(original_exception, traceback_str=traceback_str))
-        return None
+        return
 
     def emit_guardrail_span(self, entry: "StandardLoggingGuardrailInformation") -> None:
         # Emitted by the guardrail-recording code the moment a guardrail finishes,

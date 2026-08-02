@@ -16,7 +16,7 @@ import io
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Tuple, cast
+from typing import Any, cast
 
 from litellm.llms.nvidia_riva.audio_transcription.transformation import (
     RIVA_TARGET_NUM_CHANNELS,
@@ -83,7 +83,7 @@ def resample_to_riva_pcm(file_bytes: bytes) -> ResampledAudio:
     )
 
 
-def _decode_to_float32(file_bytes: bytes) -> Tuple["FloatArray", int]:
+def _decode_to_float32(file_bytes: bytes) -> tuple["FloatArray", int]:
     """
     Decode arbitrary audio bytes into a float32 array shaped either
     ``(n_samples,)`` (mono) or ``(n_samples, n_channels)`` plus the source

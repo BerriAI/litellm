@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Literal, Union
+from typing import Literal
 
 from mcp import ClientSession
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
@@ -92,7 +92,7 @@ def transform_mcp_tool_to_anthropic_tool(mcp_tool: MCPTool) -> AnthropicMessages
 
 async def load_mcp_tools(
     session: ClientSession, format: Literal["mcp", "openai"] = "mcp"
-) -> Union[List[MCPTool], List[ChatCompletionToolParam]]:
+) -> list[MCPTool] | list[ChatCompletionToolParam]:
     """
     Load all available MCP tools
 
@@ -138,7 +138,7 @@ def _get_function_arguments(function: FunctionDefinition) -> dict:
 
 
 def transform_openai_tool_call_request_to_mcp_tool_call_request(
-    openai_tool: Union[ChatCompletionMessageToolCall, Dict],
+    openai_tool: ChatCompletionMessageToolCall | dict,
 ) -> MCPCallToolRequestParams:
     """Convert an OpenAI ChatCompletionMessageToolCall to an MCP CallToolRequestParams."""
     function = openai_tool["function"]

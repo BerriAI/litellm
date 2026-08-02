@@ -13,6 +13,7 @@ from litellm.proxy.management_endpoints.management_v1.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
     build_page_links,
+    escape_like,
     reject_unknown_query_params,
 )
 from litellm.proxy.utils import PrismaClient
@@ -32,10 +33,6 @@ SPEND_LOGS_FACET_SCAN_CAP = 10000
 
 def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
-
-
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def _end_user_scope_clause(
@@ -133,7 +130,7 @@ async def list_spend_log_end_users(
             )
 
         window_params: tuple[Any, ...] = (_as_utc(start_time), _as_utc(end_time))
-        search_params: tuple[Any, ...] = (f"%{_escape_like(q)}%",) if q else ()
+        search_params: tuple[Any, ...] = (f"%{escape_like(q)}%",) if q else ()
         search_clause = (f"end_user ILIKE ${len(window_params) + 1} ESCAPE '\\'",) if q else ()
 
         scope_clause, scope_params = await _end_user_scope_clause(
@@ -191,7 +188,7 @@ async def list_spend_log_end_users(
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.management_v1.spend_logs.list_spend_log_end_users(): "
-            "Exception occured - {}".format(str(e))
+            f"Exception occured - {e!s}"
         )
         raise ManagementProblem(
             ProblemDetail(

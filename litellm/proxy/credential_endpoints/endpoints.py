@@ -2,8 +2,6 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
 import litellm
@@ -26,9 +24,7 @@ router = APIRouter()
 
 class CredentialHelperUtils:
     @staticmethod
-    def encrypt_credential_values(
-        credential: CredentialItem, new_encryption_key: Optional[str] = None
-    ) -> CredentialItem:
+    def encrypt_credential_values(credential: CredentialItem, new_encryption_key: str | None = None) -> CredentialItem:
         """Encrypt values in credential.credential_values and add to DB"""
         encrypted_credential_values = {}
         for key, value in (credential.credential_values or {}).items():
@@ -211,7 +207,7 @@ async def get_credential_by_model(
             number_of_asterisks=4,
         )
         credential = CredentialItem(
-            credential_name="{}-credential-{}".format(model.model_name, model_id),
+            credential_name=f"{model.model_name}-credential-{model_id}",
             credential_values=masked_credential_values,
             credential_info={},
         )
@@ -255,7 +251,7 @@ async def delete_credential(
 def update_db_credential(
     db_credential: CredentialItem,
     updated_patch: CredentialItem,
-    new_encryption_key: Optional[str] = None,
+    new_encryption_key: str | None = None,
 ) -> CredentialItem:
     """
     Update a credential in the DB.

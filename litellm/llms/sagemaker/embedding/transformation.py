@@ -4,7 +4,7 @@ Translate from OpenAI's `/v1/embeddings` to Sagemaker's `/invoke`
 In the Huggingface TGI format.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -46,7 +46,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
             return SagemakerCohereEmbeddingConfig()
         return cls()
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         model_lower = model.lower()
         if "voyage" in model_lower:
             return VoyageEmbeddingConfig().get_supported_openai_params(model)
@@ -63,7 +63,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
     ) -> dict:
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
     def transform_embedding_request(
@@ -85,7 +85,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: Response,
         model_response: "EmbeddingResponse",
         logging_obj: Any,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -97,7 +97,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
             response_data = raw_response.json()
         except Exception as e:
             raise SagemakerError(
-                message=f"Failed to parse response: {str(e)}",
+                message=f"Failed to parse response: {e!s}",
                 status_code=raw_response.status_code,
             )
 
@@ -146,11 +146,11 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment for SageMaker embeddings

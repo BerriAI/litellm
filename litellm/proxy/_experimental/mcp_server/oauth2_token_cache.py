@@ -7,7 +7,7 @@ with ``client_id``, ``client_secret``, and ``token_url``.
 
 import asyncio
 import hashlib
-from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -23,13 +23,13 @@ from litellm.constants import (
     MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-    encrypt_value_helper,
-)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     build_upstream_oauth2_token_request,
     resolve_upstream_resource,
+)
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -58,7 +58,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
             max_size_in_memory=MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
             default_ttl=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
         )
-        self._locks: Dict[str, asyncio.Lock] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
     @staticmethod
     def _token_identity(server: "MCPServer") -> str:
@@ -84,7 +84,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
     def _has_client_credentials_config(server: "MCPServer") -> bool:
         return bool(server.client_id and server.client_secret and server.token_url)
 
-    async def async_get_token(self, server: "MCPServer") -> Optional[str]:
+    async def async_get_token(self, server: "MCPServer") -> str | None:
         """Return a valid access token, fetching or refreshing as needed.
 
         Returns ``None`` when the server lacks client credentials config.
@@ -111,7 +111,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
             self.set_cache(identity, token, ttl=ttl)
             return token
 
-    async def _fetch_token(self, server: "MCPServer") -> Tuple[str, int]:
+    async def _fetch_token(self, server: "MCPServer") -> tuple[str, int]:
         """POST to ``token_url`` with ``grant_type=client_credentials``.
 
         Returns ``(access_token, ttl_seconds)`` where ttl accounts for the
@@ -133,7 +133,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
             client_id=server.client_id,
             client_secret=server.client_secret,
         )
-        data: Dict[str, str] = {
+        data: dict[str, str] = {
             "grant_type": "client_credentials",
             **token_request.body,
         }
@@ -200,7 +200,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
 mcp_oauth2_token_cache = MCPOAuth2TokenCache()
 
 
-def _compute_per_user_token_ttl(server: "MCPServer", expires_in: Optional[int]) -> int:
+def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> int:
     """Compute Redis TTL for a per-user token.
 
     Uses server.token_storage_ttl_seconds when configured, capped at the token's
@@ -232,7 +232,7 @@ class MCPPerUserTokenCache:
     def _cache_key(self, user_id: str, server_id: str) -> str:
         return f"{MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX}:{user_id}:{server_id}"
 
-    async def get(self, user_id: str, server_id: str) -> Optional[str]:
+    async def get(self, user_id: str, server_id: str) -> str | None:
         """Return the plaintext access_token, or None on miss/error."""
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
@@ -305,8 +305,8 @@ mcp_per_user_token_cache = MCPPerUserTokenCache()
 
 async def resolve_mcp_auth(
     server: "MCPServer",
-    mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
-) -> Optional[Union[str, Dict[str, str]]]:
+    mcp_auth_header: str | dict[str, str] | None = None,
+) -> str | dict[str, str] | None:
     """Resolve the auth value for an MCP server.
 
     Priority:
