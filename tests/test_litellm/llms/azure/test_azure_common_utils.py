@@ -419,6 +419,11 @@ def test_select_azure_base_url_called(setup_mocks):
             "avector_store_search",
             "acreate_skill",
             "acreate_interaction",
+            "acreate_realtime_client_secret",
+            "acreate_realtime_transcription_session",
+            "acreate_realtime_translation_client_secret",
+            "arealtime_calls",
+            "arealtime_translation_calls",
         ]
     ],
 )

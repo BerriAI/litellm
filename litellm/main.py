@@ -7711,13 +7711,9 @@ def _validate_gpt_transcription_request(
             llm_provider=custom_llm_provider,
         )
     if custom_llm_provider == "azure" and model == "gpt-transcribe":
-        if api_version is not None and api_version not in ("v1", "latest", "preview"):
-            raise litellm.UnsupportedParamsError(
-                message="gpt-transcribe requires the Azure OpenAI v1 API",
-                model=model,
-                llm_provider=custom_llm_provider,
-            )
-        return api_version or "v1"
+        if api_version in (None, "v1", "latest", "preview"):
+            return litellm.AZURE_DEFAULT_API_VERSION
+        return api_version
     return api_version
 
 
