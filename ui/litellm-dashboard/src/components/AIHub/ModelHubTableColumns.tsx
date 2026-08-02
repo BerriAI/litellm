@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
+import { getCapabilityBadgeClassName } from "./capabilityColors";
 
 export interface ModelHubData {
   model_group: string;
@@ -200,7 +201,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
       return (
         <div className="flex flex-wrap gap-1">
           {capabilities.map((capability) => (
-            <Badge key={capability} variant="outline">
+            <Badge key={capability} variant="outline" className={getCapabilityBadgeClassName(capability)}>
               {formatCapabilityName(capability)}
             </Badge>
           ))}

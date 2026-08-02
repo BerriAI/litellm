@@ -19,6 +19,7 @@ import {
 } from "./networking";
 import { Plugin } from "./claude_code_plugins/types";
 import SkillHubDashboard from "./AIHub/SkillHubDashboard";
+import { getCapabilityColor } from "./AIHub/capabilityColors";
 import {
   AgentCard,
   MCPServerData,
@@ -963,14 +964,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 <div className="flex flex-wrap gap-2">
                   {(() => {
                     const capabilities = getModelCapabilities(selectedModel);
-                    const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
 
                     if (capabilities.length === 0) {
                       return <Text className="text-gray-500">No special capabilities listed</Text>;
                     }
 
-                    return capabilities.map((capability, index) => (
-                      <Tag key={capability} color={colors[index % colors.length]}>
+                    return capabilities.map((capability) => (
+                      <Tag key={capability} color={getCapabilityColor(capability)}>
                         {formatCapabilityName(capability)}
                       </Tag>
                     ));
