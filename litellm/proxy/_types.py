@@ -2163,6 +2163,15 @@ class ConfigList(LiteLLMPydanticObjectBase):
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
     """
     Map an incoming HTTP header to a LiteLLM user role.
+
+    Security note: once configured, the header value is trusted as-is - this
+    mirrors the existing behavior for litellm_user_role="internal_user"
+    mappings, which have always trusted the header to populate user_id.
+    Only map a header your edge/gateway sets and that callers cannot set or
+    override directly. When user_field="user_email", this same trust
+    boundary also flows into UserAPIKeyAuth.user_email, which some
+    downstream consumers (e.g. MCPJWTSigner token claims) treat as an
+    authoritative identity assertion, so the same caution applies there.
     """
 
     header_name: str

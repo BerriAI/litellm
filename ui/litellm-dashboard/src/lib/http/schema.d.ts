@@ -33650,6 +33650,15 @@ export interface components {
         /**
          * UserHeaderMapping
          * @description Map an incoming HTTP header to a LiteLLM user role.
+         *
+         *     Security note: once configured, the header value is trusted as-is - this
+         *     mirrors the existing behavior for litellm_user_role="internal_user"
+         *     mappings, which have always trusted the header to populate user_id.
+         *     Only map a header your edge/gateway sets and that callers cannot set or
+         *     override directly. When user_field="user_email", this same trust
+         *     boundary also flows into UserAPIKeyAuth.user_email, which some
+         *     downstream consumers (e.g. MCPJWTSigner token claims) treat as an
+         *     authoritative identity assertion, so the same caution applies there.
          */
         UserHeaderMapping: {
             /** Header Name */
@@ -33659,6 +33668,13 @@ export interface components {
              * @enum {string}
              */
             litellm_user_role: "internal_user" | "customer";
+            /**
+             * User Field
+             * @description Which UserAPIKeyAuth attribute to populate with this header's value. Only applies to litellm_user_role='internal_user' mappings. Use 'user_email' when the header carries the user's email (e.g. for a LiteLLM user created via SSO and identified by email) instead of their LiteLLM user_id.
+             * @default user_id
+             * @enum {string}
+             */
+            user_field: "user_id" | "user_email";
         };
         /** UserInfoResponse */
         UserInfoResponse: {

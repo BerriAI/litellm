@@ -819,6 +819,10 @@ class LiteLLMProxyRequestSetup:
         if header_value:
             target_field = LiteLLMProxyRequestSetup.get_internal_user_field_from_mapping(user_header_mapping)
             if target_field == "user_email":
+                # SECURITY: user_field="user_email" trusts header_value as an
+                # authoritative email for this caller, same trust model as the
+                # user_id mapping below. Only configure this for a header your
+                # edge/gateway sets - see UserHeaderMapping's docstring.
                 user_api_key_dict.user_email = header_value
             else:
                 user_api_key_dict.user_id = header_value
