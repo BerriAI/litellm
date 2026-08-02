@@ -94,9 +94,11 @@ class SingulrGuardrail(CustomGuardrail):
 
     @classmethod
     def _is_a2a_call(cls, request_data: Mapping[str, Any]) -> bool:
-        if "params" in request_data and "jsonrpc" in request_data:
-            return True
-        return False
+        # custom_llm_provider is set server-side by the A2A route handler based on
+        # the resolved agent/route, not by client-supplied body fields (e.g.
+        # "params"/"jsonrpc"), which a /v1/chat/completions caller could forge
+        # alongside a real "messages" prompt to hide it from the guardrail.
+        return request_data.get("custom_llm_provider") == "a2a_agent"
 
     @classmethod
     def _agent_request_messages(cls, request_data: Mapping[str, Any]) -> list[dict[str, Any]] | None:
@@ -108,10 +110,12 @@ class SingulrGuardrail(CustomGuardrail):
 
     @staticmethod
     def _model_response_for_a2a(inputs: GenericGuardrailAPIInputs) -> str | None:
-        return "".join(inputs.get("texts", ())) or None
+        return " ".join(inputs.get("texts", ())) or None
 
     @staticmethod
-    def _model_response_for_chat(response: Any) -> dict[str, Any] | None:  # mutable-ok: SingulrGuardrailRequest.model_response is a pydantic dict field
+    def _model_response_for_chat(
+        response: Any,
+    ) -> dict[str, Any] | None:  # mutable-ok: SingulrGuardrailRequest.model_response is a pydantic dict field
         if response is None:
             return None
         return response.model_dump(mode="json") if hasattr(response, "model_dump") else response
@@ -132,7 +136,9 @@ class SingulrGuardrail(CustomGuardrail):
     ) -> SingulrGuardrailPayload:
         is_a2a_call = self._is_a2a_call(request_data)
 
-        model_response: dict[str, Any] | str | None = None  # mutable-ok: pydantic dict field, see _model_response_for_chat
+        model_response: dict[str, Any] | str | None = (
+            None  # mutable-ok: pydantic dict field, see _model_response_for_chat
+        )
         if input_type == "response":
             if is_a2a_call:
                 model_response = self._model_response_for_a2a(inputs)

@@ -235,6 +235,7 @@ class TestSingulrBuildPayloadA2A:
         _is_a2a_call, call_type stayed "model" and the guardrail request
         wouldn't carry the agent-specific messages shape Singulr expects."""
         request_data = {
+            "custom_llm_provider": "a2a_agent",
             "jsonrpc": "2.0",
             "params": {
                 "message": {
@@ -251,11 +252,31 @@ class TestSingulrBuildPayloadA2A:
         payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
         assert payload["request_data"]["call_type"] == "model"
 
+    def test_forged_jsonrpc_params_without_a2a_provider_is_not_treated_as_agent_call(self, singulr_guardrail):
+        """Security regression: a client can call /v1/chat/completions with the
+        real prompt in "messages" while also adding a benign top-level
+        "jsonrpc"/"params" pair. If A2A detection trusted client-supplied field
+        presence, the guardrail would scan only the forged decoy message and
+        never see the real prompt in "messages", which still reaches the
+        model. custom_llm_provider is set server-side by the A2A route
+        handler, not by request body content, so it must be the only signal
+        that flips call_type to "agent" and swaps in params.message."""
+        request_data = {
+            "model": "gpt-4o",
+            "custom_llm_provider": "openai",
+            "messages": [{"role": "user", "content": "the real, unsafe prompt"}],
+            "jsonrpc": "2.0",
+            "params": {"message": {"parts": [{"kind": "text", "text": "harmless decoy"}]}},
+        }
+        payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
+        assert payload["request_data"]["call_type"] == "model"
+        assert payload["request_data"]["messages"] == request_data["messages"]
+
     def test_a2a_request_missing_message_yields_none_messages(self, singulr_guardrail):
-        """A2A shape detected (jsonrpc + params present) but no message under
+        """A2A call (custom_llm_provider=a2a_agent) but no message under
         params - must not raise, and must forward None rather than a
         fabricated placeholder."""
-        request_data = {"jsonrpc": "2.0", "params": {}}
+        request_data = {"custom_llm_provider": "a2a_agent", "jsonrpc": "2.0", "params": {}}
         payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
         assert payload["request_data"]["call_type"] == "agent"
         assert payload["request_data"]["messages"] is None
@@ -268,6 +289,7 @@ class TestSingulrBuildPayloadA2A:
         the already-extracted, guardrail-normalized text from
         inputs["texts"] - not request_data["response"]."""
         request_data = {
+            "custom_llm_provider": "a2a_agent",
             "jsonrpc": "2.0",
             "params": {"message": {"parts": [{"kind": "text", "text": "What's the weather?"}]}},
             "response": {"result": {"parts": [{"kind": "text", "text": "It's sunny."}]}},
@@ -276,8 +298,37 @@ class TestSingulrBuildPayloadA2A:
         assert payload["request_data"]["call_type"] == "agent"
         assert payload["request_data"]["model_response"] == "It's sunny."
 
+    def test_a2a_response_multiple_text_parts_are_joined_with_a_separator(self, singulr_guardrail):
+        """Regression: joining multiple response text parts with "".join
+        collapses adjacent words at part boundaries (e.g. ["Hello", "world"]
+        -> "Helloworld"), so Singulr would scan content that differs from
+        what's actually presented to the user and could reach the wrong
+        allow/block decision. Parts must be joined with a separator, matching
+        the convention used elsewhere in the A2A pipeline
+        (litellm/llms/a2a/common_utils.py's extract_text_from_a2a_message)."""
+        request_data = {
+            "custom_llm_provider": "a2a_agent",
+            "jsonrpc": "2.0",
+            "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+            "response": {
+                "result": {
+                    "parts": [
+                        {"kind": "text", "text": "Hello"},
+                        {"kind": "text", "text": "world"},
+                    ]
+                }
+            },
+        }
+        payload = singulr_guardrail._build_payload(request_data, {"texts": ["Hello", "world"]}, "response")
+        assert payload["request_data"]["model_response"] == "Hello world"
+        assert "Helloworld" not in payload["request_data"]["model_response"]
+
     def test_a2a_response_with_no_texts_yields_none_model_response(self, singulr_guardrail):
-        request_data = {"jsonrpc": "2.0", "params": {"message": {"parts": []}}}
+        request_data = {
+            "custom_llm_provider": "a2a_agent",
+            "jsonrpc": "2.0",
+            "params": {"message": {"parts": []}},
+        }
         payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "response")
         assert payload["request_data"]["model_response"] is None
 
@@ -285,6 +336,7 @@ class TestSingulrBuildPayloadA2A:
         """model_response must stay None on the request side even for A2A
         calls - the response hasn't happened yet."""
         request_data = {
+            "custom_llm_provider": "a2a_agent",
             "jsonrpc": "2.0",
             "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
         }
