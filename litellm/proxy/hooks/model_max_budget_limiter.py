@@ -1,4 +1,5 @@
 import json
+import math
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import List, Optional
@@ -158,22 +159,42 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             {_model: BudgetConfig(**_budget_info) for _model, _budget_info in model_max_budget.items()}
         )
 
+    def _get_matched_budget_model_name(
+        self, model: str, internal_model_max_budget: Mapping[str, BudgetConfig]
+    ) -> str | None:
+        """
+        Resolve the budget-config entry name `model` matches (exact, then
+        `{provider}/{model}`-normalized). The entry name is the canonical form for
+        spend counter keys so prefixed and bare spellings of one model share a counter.
+        """
+        if model in internal_model_max_budget:
+            return model
+        stripped_model = self._get_model_without_custom_llm_provider(model)
+        if stripped_model in internal_model_max_budget:
+            return stripped_model
+        return None
+
     def _key_already_covers_model(
         self, key_model_max_budget: Mapping[str, Mapping[str, str | float]] | None, model: str
     ) -> bool:
         """
-        True iff the requesting key declares its own model_max_budget entry for `model`
-        (exact or `{provider}/{model}`-normalized match). Key entries take precedence
-        over team-level defaults, so the team budget is neither checked nor incremented
-        for such (key, model) pairs.
+        True iff the requesting key declares its own ENFORCEABLE model_max_budget entry
+        for `model` (exact or `{provider}/{model}`-normalized match) — a finite cap
+        strictly greater than zero, matching what is_key_within_model_budget actually
+        enforces. Only such entries take precedence over team-level defaults; a zero,
+        missing, or non-finite cap is never enforced key-side, so treating it as
+        covering would silently disable the team budget for that key.
         """
         if not key_model_max_budget:
             return False
+        budget_config = self._get_request_model_budget_config(
+            model=model, internal_model_max_budget=self._coerce_budget_configs(key_model_max_budget)
+        )
         return (
-            self._get_request_model_budget_config(
-                model=model, internal_model_max_budget=self._coerce_budget_configs(key_model_max_budget)
-            )
-            is not None
+            budget_config is not None
+            and budget_config.max_budget is not None
+            and math.isfinite(budget_config.max_budget)
+            and budget_config.max_budget > 0
         )
 
     async def is_team_within_model_budget(
@@ -201,19 +222,20 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         verbose_proxy_logger.debug("team internal_model_max_budget %s", internal_model_max_budget)
 
-        budget_config = self._get_request_model_budget_config(
+        matched_model = self._get_matched_budget_model_name(
             model=model, internal_model_max_budget=internal_model_max_budget
         )
-        if budget_config is None:
+        if matched_model is None:
             verbose_proxy_logger.debug(f"Model {model} not found in team_model_max_budget")
             return True
+        budget_config = internal_model_max_budget[matched_model]
 
         if not budget_config.max_budget or budget_config.max_budget <= 0:
             return True
 
         current_spend = await self._get_team_spend_for_model(
             team_id=team_id,
-            model=model,
+            matched_model=matched_model,
             budget_config=budget_config,
         )
         verbose_proxy_logger.debug(
@@ -233,29 +255,21 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     async def _get_team_spend_for_model(
         self,
         team_id: str,
-        model: str,
+        matched_model: str,
         budget_config: BudgetConfig,
     ) -> float | None:
         """
-        Get the current team spend for a model.
-
-        Lookup model in this order:
-            1. model: directly look up `model`
-            2. If 1, does not exist, check if passed as {custom_llm_provider}/model
+        Get the current team spend for a model. `matched_model` is the canonical
+        budget-config entry name from _get_matched_budget_model_name, so read and
+        write always address one counter regardless of how the request spelled the
+        model.
         """
         team_model_spend_cache_key = (
-            f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{model}:{budget_config.budget_duration}"
+            f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{matched_model}:{budget_config.budget_duration}"
         )
-        _current_spend = await self.dual_cache.async_get_cache(
+        return await self.dual_cache.async_get_cache(
             key=team_model_spend_cache_key,
         )
-
-        if _current_spend is None:
-            team_model_spend_cache_key = f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{self._get_model_without_custom_llm_provider(model)}:{budget_config.budget_duration}"
-            _current_spend = await self.dual_cache.async_get_cache(
-                key=team_model_spend_cache_key,
-            )
-        return _current_spend
 
     async def _track_team_spend_for_model(
         self,
@@ -267,21 +281,31 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> None:
         """
         Increment the shared team counter for `model`, unless the requesting key
-        declares its own model_max_budget entry for it — mirror of the precedence
-        rule in is_team_within_model_budget, so keys with private caps never drive
-        the team counter and block sibling keys.
+        declares its own enforceable model_max_budget entry for it — mirror of the
+        precedence rule in is_team_within_model_budget, so keys with private caps
+        never drive the team counter and block sibling keys.
+
+        The counter and its window start time are keyed by the canonical config
+        entry name plus the window duration: spellings of one model share a
+        counter, and each (model, duration) window resets independently.
         """
         if self._key_already_covers_model(key_model_max_budget, model):
             return
 
-        budget_config = self._get_request_model_budget_config(
-            model=model, internal_model_max_budget=self._coerce_budget_configs(team_model_max_budget)
+        internal_model_max_budget = self._coerce_budget_configs(team_model_max_budget)
+        matched_model = self._get_matched_budget_model_name(
+            model=model, internal_model_max_budget=internal_model_max_budget
         )
-        if budget_config is None or not budget_config.budget_duration:
+        if matched_model is None:
+            return
+        budget_config = internal_model_max_budget[matched_model]
+        if not budget_config.budget_duration:
             return
 
-        team_spend_key = f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{model}:{budget_config.budget_duration}"
-        team_start_time_key = f"team_model_budget_start_time:{team_id}"
+        team_spend_key = (
+            f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{matched_model}:{budget_config.budget_duration}"
+        )
+        team_start_time_key = f"team_model_budget_start_time:{team_id}:{matched_model}:{budget_config.budget_duration}"
         await self._increment_spend_for_key(
             budget_config=budget_config,
             spend_key=team_spend_key,
