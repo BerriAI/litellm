@@ -1497,6 +1497,8 @@ class RealTimeStreaming:
                         session = client_event.get("session", {})
                         if isinstance(session, dict):
                             session = self._remap_beta_session_to_ga(session)
+                            if self._is_translation_session:
+                                session.pop("type", None)
                             msg_obj["session"] = session
                             message = json.dumps(msg_obj)
 

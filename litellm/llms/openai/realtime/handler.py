@@ -9,7 +9,7 @@ from contextlib import AbstractAsyncContextManager
 from types import TracebackType
 from typing import Any, Final, cast
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, omit
 from openai.resources.realtime.realtime import (
     AsyncRealtimeConnection,
     AsyncRealtimeConnectionManager,
@@ -202,8 +202,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
         extra_query = {  # mutable-ok: OpenAI SDK accepts a mutable query-parameter mapping
             key: value for key, value in query_params.items() if key != "model"
         }
+        sdk_model = omit if query_params.get("intent") == "transcription" else model_query or model
         sdk_connection_manager = openai_client.realtime.connect(
-            model=model_query or model,
+            model=sdk_model,
             extra_query=extra_query,
             extra_headers=headers,
             websocket_connection_options={  # mutable-ok: OpenAI SDK forwards a mutable options mapping

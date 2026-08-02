@@ -14,10 +14,6 @@ from litellm.litellm_core_utils.realtime_streaming import (
 )
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import (
-    OpenAIRealtimeStreamResponseBaseObject,
-    OpenAIRealtimeStreamSessionEvents,
-)
 
 
 def _make_transcript_event(text: str, item_id: str = "item_x") -> bytes:
@@ -601,6 +597,42 @@ async def test_client_ack_messages_keeps_beta_session_shape_for_beta_backend():
     assert "audio" not in session
 
 
+@pytest.mark.asyncio
+async def test_translation_session_update_omits_session_type():
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": []}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "translation",
+                        "audio": {"output": {"language": "fr"}},
+                    },
+                }
+            ),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        translation_session=True,
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend = json.loads(backend_ws.send.call_args_list[0].args[0])
+    assert "type" not in sent_to_backend["session"]
+    assert sent_to_backend["session"]["audio"]["output"]["language"] == "fr"
+
+
 def test_translate_event_to_beta_renames_delta_types():
     ev = RealTimeStreaming._translate_event_to_beta(
         {"type": "response.output_audio.delta", "delta": "abc", "event_id": "e1"}
@@ -806,8 +838,6 @@ async def test_transcription_captured_in_backend_to_client():
     Test that conversation.item.input_audio_transcription.completed events
     from the backend are captured as user input during the WebSocket session.
     """
-    import litellm
-
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
 
@@ -1094,8 +1124,6 @@ def test_capture_transcription_usage_deduplicates_when_already_stored():
     When the event is already in messages (logged via store_message), it must not
     be appended a second time by _capture_transcription_usage.
     """
-    import litellm
-
     streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
     # Add the event type to the default logged list so _should_store_message returns True.
     streaming.logged_real_time_event_types = ["conversation.item.input_audio_transcription.completed"]

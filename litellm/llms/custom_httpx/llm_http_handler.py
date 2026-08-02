@@ -6232,9 +6232,14 @@ class BaseLLMHTTPHandler:
                     extra_headers=extra_headers,
                     timeout=timeout,
                 )
+                response_headers = {
+                    key: value
+                    for key, value in raw_response.headers.items()
+                    if key.lower() not in ("content-encoding", "content-length", "transfer-encoding")
+                }
                 return httpx.Response(
                     status_code=raw_response.status_code,
-                    headers=raw_response.headers,
+                    headers=response_headers,
                     content=raw_response.content,
                     request=httpx.Request("POST", f"{normalized_api_base}/realtime/client_secrets"),
                 )

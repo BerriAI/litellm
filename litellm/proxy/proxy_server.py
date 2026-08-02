@@ -39,7 +39,6 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from openai import AsyncStream
 from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, assert_never
@@ -11302,19 +11301,26 @@ async def audio_transcriptions(
         finally:
             file_object.close()  # close the file read in by io library
 
-        if isinstance(response, AsyncStream):
+        if data.get("stream") is True:
+            if not hasattr(response, "__aiter__"):
+                raise TypeError(f"Streaming transcription returned {type(response).__name__}, expected an async stream")
+            stream_response = cast(AsyncIterator[TranscriptionStreamEvent], response)
 
             async def transcription_event_stream(
-                stream: AsyncStream[TranscriptionStreamEvent],
+                stream: AsyncIterator[TranscriptionStreamEvent],
             ) -> AsyncGenerator[str, None]:
                 try:
                     async for event in stream:
                         yield f"data: {event.model_dump_json()}\n\n"
                 finally:
-                    await stream.close()
+                    close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+                    if callable(close):
+                        close_result = close()
+                        if inspect.isawaitable(close_result):
+                            await close_result
 
             return StreamingResponse(
-                transcription_event_stream(response),
+                transcription_event_stream(stream_response),
                 media_type="text/event-stream",
             )
 
@@ -11455,6 +11461,19 @@ def _resolve_realtime_route_model(
     return None
 
 
+def _resolve_realtime_upstream_query_model(
+    model: str | None,
+    intent: str | None,
+    is_translation: bool,
+    route_model: str,
+) -> str | None:
+    if intent == "transcription":
+        return None
+    if is_translation:
+        return route_model
+    return model
+
+
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
@@ -11497,7 +11516,12 @@ async def realtime_websocket_endpoint(
     await websocket.accept(**accept_kwargs)
 
     # Only use explicit parameters, not all query params
-    query_model: Final = route_model if is_translation else model
+    query_model: Final = _resolve_realtime_upstream_query_model(
+        model=model,
+        intent=intent,
+        is_translation=is_translation,
+        route_model=route_model,
+    )
     query_params: Final = cast(  # cast-ok: cached tuples contain only the declared realtime query keys
         RealtimeQueryParams,
         dict(  # mutable-ok: downstream realtime routing normalizes this request-scoped query mapping
