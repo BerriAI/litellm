@@ -2754,6 +2754,57 @@ def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
     assert user_api_key_dict.user_id == "internal-user-123"
 
 
+def test_add_internal_user_from_user_mapping_sets_user_email_when_configured():
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+    headers = {"X-OpenWebUI-User-Email": "user@example.com"}
+    general_settings = {
+        "user_header_mappings": [
+            {
+                "header_name": "X-OpenWebUI-User-Email",
+                "litellm_user_role": "internal_user",
+                "user_field": "user_email",
+            },
+        ]
+    }
+    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, headers
+    )
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_email == "user@example.com"
+    assert user_api_key_dict.user_id is None
+
+
+def test_add_internal_user_from_user_mapping_defaults_to_user_id_without_user_field():
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+    headers = {"X-OpenWebUI-User-Id": "internal-user-123"}
+    general_settings = {
+        "user_header_mappings": [
+            {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        ]
+    }
+    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, headers
+    )
+    assert result.user_id == "internal-user-123"
+    assert result.user_email is None
+
+
+def test_get_internal_user_field_from_mapping_returns_user_email_when_configured():
+    mappings = [
+        {"header_name": "X-Id", "litellm_user_role": "internal_user", "user_field": "user_email"},
+    ]
+    assert LiteLLMProxyRequestSetup.get_internal_user_field_from_mapping(mappings) == "user_email"
+
+
+def test_get_internal_user_field_from_mapping_defaults_to_user_id():
+    mappings = [
+        {"header_name": "X-Id", "litellm_user_role": "internal_user"},
+    ]
+    assert LiteLLMProxyRequestSetup.get_internal_user_field_from_mapping(mappings) == "user_id"
+    assert LiteLLMProxyRequestSetup.get_internal_user_field_from_mapping(None) == "user_id"
+    assert LiteLLMProxyRequestSetup.get_internal_user_field_from_mapping([]) == "user_id"
+
+
 def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchanged():
     user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
 

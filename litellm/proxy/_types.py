@@ -2170,6 +2170,15 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
         LitellmUserRoles.INTERNAL_USER,
         LitellmUserRoles.CUSTOMER,
     ]
+    user_field: Literal["user_id", "user_email"] = Field(
+        default="user_id",
+        description=(
+            "Which UserAPIKeyAuth attribute to populate with this header's value. "
+            "Only applies to litellm_user_role='internal_user' mappings. Use 'user_email' "
+            "when the header carries the user's email (e.g. for a LiteLLM user created via SSO "
+            "and identified by email) instead of their LiteLLM user_id."
+        ),
+    )
 
     model_config = {
         "extra": "forbid",

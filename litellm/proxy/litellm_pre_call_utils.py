@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import HTTPException, Request
 from pydantic import ValidationError as PydanticValidationError
@@ -817,7 +817,11 @@ class LiteLLMProxyRequestSetup:
             return user_api_key_dict
         header_value = LiteLLMProxyRequestSetup._get_case_insensitive_header(headers, header_name)
         if header_value:
-            user_api_key_dict.user_id = header_value
+            target_field = LiteLLMProxyRequestSetup.get_internal_user_field_from_mapping(user_header_mapping)
+            if target_field == "user_email":
+                user_api_key_dict.user_email = header_value
+            else:
+                user_api_key_dict.user_id = header_value
             return user_api_key_dict
         return user_api_key_dict
 
@@ -913,11 +917,17 @@ class LiteLLMProxyRequestSetup:
         return data
 
     @staticmethod
-    def get_internal_user_header_from_mapping(user_header_mapping) -> str | None:
+    def _iter_user_header_mapping_items(user_header_mapping) -> tuple:
+        """Normalize `user_header_mappings` (a single dict or a list of dicts) into a tuple of dicts."""
         if not user_header_mapping:
-            return None
-        items = user_header_mapping if isinstance(user_header_mapping, list) else [user_header_mapping]
-        for item in items:
+            return ()
+        if isinstance(user_header_mapping, list):
+            return tuple(user_header_mapping)
+        return (user_header_mapping,)
+
+    @staticmethod
+    def get_internal_user_header_from_mapping(user_header_mapping) -> str | None:
+        for item in LiteLLMProxyRequestSetup._iter_user_header_mapping_items(user_header_mapping):
             if not isinstance(item, dict):
                 continue
             role = item.get("litellm_user_role")
@@ -927,6 +937,22 @@ class LiteLLMProxyRequestSetup:
             if str(role).lower() == str(LitellmUserRoles.INTERNAL_USER).lower():
                 return header_name
         return None
+
+    @staticmethod
+    def get_internal_user_field_from_mapping(user_header_mapping) -> Literal["user_id", "user_email"]:
+        """Return the UserAPIKeyAuth field that the matching INTERNAL_USER mapping entry says the
+        header value should populate. Defaults to 'user_id' for backwards compatibility with
+        mappings that don't set 'user_field'.
+        """
+        for item in LiteLLMProxyRequestSetup._iter_user_header_mapping_items(user_header_mapping):
+            if not isinstance(item, dict):
+                continue
+            role = item.get("litellm_user_role")
+            if role is None:
+                continue
+            if str(role).lower() == str(LitellmUserRoles.INTERNAL_USER).lower():
+                return "user_email" if item.get("user_field") == "user_email" else "user_id"
+        return "user_id"
 
     @staticmethod
     def add_litellm_data_for_backend_llm_call(
