@@ -23,11 +23,13 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
         model: str,
         api_key: str | None = None,
     ) -> dict:
-        return {
+        validated_headers = {  # mutable-ok: provider authentication headers are extended before dispatch
             **headers,
-            "api-key": api_key or "",
             "Content-Type": "application/json",
         }
+        if api_key:
+            validated_headers["api-key"] = api_key
+        return validated_headers
 
     def get_realtime_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
         base = self.get_api_base(api_base).rstrip("/")
@@ -38,6 +40,16 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
         base = self.get_api_base(api_base).rstrip("/")
         version = api_version or get_secret_str("AZURE_API_VERSION") or "2024-12-17"
         return f"{base}/openai/realtime/transcription_sessions?api-version={version}"
+
+    def get_translation_client_secret_url(
+        self, api_base: str | None, model: str, api_version: str | None = None
+    ) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        return f"{base}/openai/v1/realtime/translations/client_secrets"
+
+    def get_translation_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        return f"{base}/openai/v1/realtime/translations/calls"
 
     def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
         return {

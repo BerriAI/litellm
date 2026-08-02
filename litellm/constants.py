@@ -633,9 +633,24 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
 
 OPENAI_TRANSCRIPTION_PARAMS = [
     "language",
+    "languages",
+    "keywords",
     "response_format",
+    "stream",
     "timestamp_granularities",
 ]
+
+OPENAI_REALTIME_AND_TRANSCRIPTION_MODELS = frozenset(
+    {
+        "gpt-realtime-2",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2.1-mini",
+        "gpt-realtime-translate",
+        "gpt-realtime-whisper",
+        "gpt-transcribe",
+        "gpt-live-transcribe",
+    }
+)
 
 OPENAI_EMBEDDING_PARAMS = ["dimensions", "encoding_format", "user"]
 
