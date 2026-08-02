@@ -9,7 +9,7 @@ The only provider quirks:
 Ref: https://docs.perplexity.ai/api-reference/responses-post
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -40,7 +40,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.PERPLEXITY
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = (
             litellm_params.api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
@@ -49,16 +49,16 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def get_complete_url(self, api_base: Optional[str], litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
         api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
         return f"{api_base.rstrip('/')}/v1/responses"
 
-    def _ensure_message_type(self, input: Union[str, ResponseInputParam]) -> Union[str, ResponseInputParam]:
+    def _ensure_message_type(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """Ensure list input items have type='message' (required by Perplexity)."""
         if isinstance(input, str):
             return input
         if isinstance(input, list):
-            result: List[Any] = []
+            result: list[Any] = []
             for item in input:
                 if isinstance(item, dict) and "type" not in item:
                     new_item = dict(item)  # convert to plain dict to avoid TypedDict checking
@@ -72,16 +72,16 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def transform_responses_api_request(
         self,
         model: str,
-        input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: Dict,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """Handle preset/ model prefix: send as {"preset": name} instead of {"model": name}."""
         input = self._ensure_message_type(input)
         if model.startswith("preset/"):
             input = self._validate_input_param(input)
-            data: Dict = {
+            data: dict = {
                 "preset": model[len("preset/") :],
                 "input": input,
             }

@@ -119,4 +119,10 @@ describe("deriveErrorMessage", () => {
   it("falls back to a string detail field", () => {
     expect(deriveErrorMessage({ detail: "detail text" })).toBe("detail text");
   });
+
+  it("unwraps the HTTPException detail.error shape management endpoints raise", () => {
+    expect(deriveErrorMessage({ detail: { error: "Team(s) not found: ghost-team" } })).toBe(
+      "Team(s) not found: ghost-team",
+    );
+  });
 });

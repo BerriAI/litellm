@@ -5,7 +5,6 @@ Handles tiered pricing and prompt caching scenarios.
 """
 
 from dataclasses import dataclass
-from typing import Tuple
 
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
@@ -94,7 +93,7 @@ def _calculate_completion_cost(
     return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculate cost per token for Dashscope models.
 

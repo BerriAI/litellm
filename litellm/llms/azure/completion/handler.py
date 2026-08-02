@@ -1,4 +1,5 @@
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
@@ -30,12 +31,12 @@ class AzureTextCompletion(BaseAzureLLM):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        api_key: Optional[str],
+        api_key: str | None,
         api_base: str,
         api_version: str,
         api_type: str,
-        azure_ad_token: Optional[str],
-        azure_ad_token_provider: Optional[Callable],
+        azure_ad_token: str | None,
+        azure_ad_token_provider: Callable | None,
         print_verbose: Callable,
         timeout,
         logging_obj,
@@ -43,7 +44,7 @@ class AzureTextCompletion(BaseAzureLLM):
         litellm_params,
         logger_fn,
         acompletion: bool = False,
-        headers: Optional[dict] = None,
+        headers: dict | None = None,
         client=None,
     ):
         try:
@@ -184,7 +185,7 @@ class AzureTextCompletion(BaseAzureLLM):
 
     async def acompletion(
         self,
-        api_key: Optional[str],
+        api_key: str | None,
         api_version: str,
         model: str,
         api_base: str,
@@ -193,7 +194,7 @@ class AzureTextCompletion(BaseAzureLLM):
         model_response: ModelResponse,
         logging_obj: Any,
         max_retries: int,
-        azure_ad_token: Optional[str] = None,
+        azure_ad_token: str | None = None,
         client=None,  # this is the AsyncAzureOpenAI
         litellm_params: dict = {},
     ):
@@ -247,12 +248,12 @@ class AzureTextCompletion(BaseAzureLLM):
         self,
         logging_obj,
         api_base: str,
-        api_key: Optional[str],
+        api_key: str | None,
         api_version: str,
         data: dict,
         model: str,
         timeout: Any,
-        azure_ad_token: Optional[str] = None,
+        azure_ad_token: str | None = None,
         client=None,
         litellm_params: dict = {},
     ):
@@ -300,12 +301,12 @@ class AzureTextCompletion(BaseAzureLLM):
         self,
         logging_obj,
         api_base: str,
-        api_key: Optional[str],
+        api_key: str | None,
         api_version: str,
         data: dict,
         model: str,
         timeout: Any,
-        azure_ad_token: Optional[str] = None,
+        azure_ad_token: str | None = None,
         client=None,
         litellm_params: dict = {},
     ):

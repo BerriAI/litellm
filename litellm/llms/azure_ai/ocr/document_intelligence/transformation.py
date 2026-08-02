@@ -11,20 +11,19 @@ The operation location must be polled until the analysis completes.
 import asyncio
 import re
 import time
-from typing import Any, Dict
+from typing import Any
 from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.constants import (
     AZURE_DOCUMENT_INTELLIGENCE_API_VERSION,
     AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI,
     AZURE_OPERATION_POLLING_TIMEOUT,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin, encode_url_path_segment
 from litellm.llms.base_llm.ocr.transformation import (
     BaseOCRConfig,
     DocumentType,
@@ -205,13 +204,13 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
         litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers for Azure Document Intelligence.
 
@@ -374,7 +373,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             raise ValueError("Document URL is required")
 
         # Build Azure DI request
-        data: Dict[str, Any] = {}
+        data: dict[str, Any] = {}
 
         # Check if it's a data URI (base64)
         if document_url.startswith("data:"):
@@ -498,7 +497,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def _poll_operation_sync(
         self,
         operation_url: str,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         timeout_secs: int,
     ) -> httpx.Response:
         """
@@ -541,7 +540,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     async def _poll_operation_async(
         self,
         operation_url: str,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         timeout_secs: int,
     ) -> httpx.Response:
         """
@@ -579,7 +578,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 retry_after = self._get_retry_after(response=response)
                 await asyncio.sleep(retry_after)
 
-    def _get_polling_target(self, raw_response: httpx.Response) -> tuple[str, Dict[str, str]]:
+    def _get_polling_target(self, raw_response: httpx.Response) -> tuple[str, dict[str, str]]:
         operation_url = raw_response.headers.get("Operation-Location")
         if not operation_url:
             raise ValueError("Azure Document Intelligence returned 202 but no Operation-Location header found")

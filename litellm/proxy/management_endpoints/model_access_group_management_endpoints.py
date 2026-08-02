@@ -6,7 +6,8 @@ Endpoints here:
 """
 
 import json
-from typing import Any, Dict, List, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -17,6 +18,9 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 # Clear cache and reload models to pick up the access group changes
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     clear_cache,
+    live_model_ids_snapshot,
+    model_info_as_mapping,
+    reload_serving_verdict,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
@@ -32,7 +36,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 router = APIRouter()
 
 
-def validate_models_exist(model_names: List[str], llm_router) -> Tuple[bool, List[str]]:
+def validate_models_exist(model_names: list[str], llm_router) -> tuple[bool, list[str]]:
     """
     Validate that all requested model names exist in the router.
     Checks only exact model name matches.
@@ -48,7 +52,7 @@ def validate_models_exist(model_names: List[str], llm_router) -> Tuple[bool, Lis
     return (len(missing) == 0, missing)
 
 
-def add_access_group_to_deployment(model_info: Dict[str, Any], access_group: str) -> Tuple[Dict[str, Any], bool]:
+def add_access_group_to_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, Any], bool]:
     """
     Add an access group to a deployment's model_info.
 
@@ -72,11 +76,92 @@ def add_access_group_to_deployment(model_info: Dict[str, Any], access_group: str
     return model_info, True
 
 
-async def update_deployments_with_access_group(
-    model_names: List[str],
+def _raise_http_if_reload_degraded_serving(
+    before: frozenset[str],
+    written_models: Sequence[tuple[str, object]],
+    access_group: str,
+) -> None:
+    """Same verdict as the model-write endpoints, expressed through this file's
+    HTTPException error convention, with the metadata-only obligation: these writes
+    change group membership, not the models themselves, so a row that was already not
+    serving before the reload is never blamed here; only a model this reload stopped
+    serving is reported."""
+    missing, collateral = reload_serving_verdict(before=before, written_models=written_models, written_must_serve=False)
+    gone = tuple(dict.fromkeys((*missing, *collateral)))
+    if not gone:
+        return
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "error": (
+                f"Access group '{access_group}' was saved to the database, but model id(s) {list(gone)} that "
+                "this pod was serving are no longer live after the reload it triggered. Other pods reload on "
+                "their own interval. Check server logs for 'Error upserting deployment' for the cause."
+            )
+        },
+    )
+
+
+async def _tag_deployment_with_access_group(
+    model_id: str,
+    model_info: object,
     access_group: str,
     prisma_client: PrismaClient,
-) -> int:
+) -> tuple[str, Mapping[str, object]] | None:
+    """Write `access_group` into one deployment's model_info; returns the
+    (model_id, updated model_info) pair when a write happened, None when the
+    deployment already carried the group."""
+    updated_model_info, was_modified = add_access_group_to_deployment(
+        model_info=dict(_readable_model_info_or_raise(model_id=model_id, model_info=model_info)),
+        access_group=access_group,
+    )
+    if not was_modified:
+        return None
+    await ModelRepository(prisma_client).table.update(
+        where={"model_id": model_id},
+        data={"model_info": json.dumps(updated_model_info)},
+    )
+    verbose_proxy_logger.debug(f"Updated deployment {model_id} with access group: {access_group}")
+    return (model_id, updated_model_info)
+
+
+def _readable_model_info_or_raise(model_id: str, model_info: object) -> Mapping[str, object]:
+    """These helpers rewrite the model_info column wholesale, so a present-but-unreadable
+    value must refuse loudly rather than be silently replaced with a fresh object; an
+    absent value stays a legitimate empty start."""
+    parsed = model_info_as_mapping(model_info)
+    if parsed is None and model_info is not None:
+        raise ValueError(f"model_info for deployment {model_id} is not a readable JSON object; refusing to rewrite it")
+    return parsed or {}
+
+
+async def _strip_access_group_from_deployment(
+    model_id: str,
+    model_info: object,
+    access_group: str,
+    prisma_client: PrismaClient,
+) -> tuple[str, Mapping[str, object]] | None:
+    """Remove `access_group` from one deployment's model_info; returns the
+    (model_id, updated model_info) pair when a write happened, None when the
+    deployment did not carry the group."""
+    updated_model_info, was_modified = remove_access_group_from_deployment(
+        model_info=dict(_readable_model_info_or_raise(model_id=model_id, model_info=model_info)),
+        access_group=access_group,
+    )
+    if not was_modified:
+        return None
+    await ModelRepository(prisma_client).table.update(
+        where={"model_id": model_id},
+        data={"model_info": json.dumps(updated_model_info)},
+    )
+    return (model_id, updated_model_info)
+
+
+async def update_deployments_with_access_group(
+    model_names: list[str],
+    access_group: str,
+    prisma_client: PrismaClient,
+) -> tuple[tuple[str, Mapping[str, object]], ...]:
     """
     Update all deployments for the given model names to include the access group.
 
@@ -86,20 +171,15 @@ async def update_deployments_with_access_group(
         prisma_client: Database client
 
     Returns:
-        int: Number of deployments updated
+        The (model_id, updated model_info) pair of every deployment actually written,
+        so callers can verify each one survived the post-write reload
     """
-    models_updated = 0
+    deployments = await ModelRepository(prisma_client).table.find_many(where={"model_name": {"in": model_names}})
+    verbose_proxy_logger.debug(f"Found {len(deployments)} deployments for model_names: {model_names}")
 
+    found_names = {deployment.model_name for deployment in deployments}
     for model_name in model_names:
-        verbose_proxy_logger.debug(f"Updating deployments for model_name: {model_name}")
-
-        # Get all deployments with this model_name
-        deployments = await ModelRepository(prisma_client).table.find_many(where={"model_name": model_name})
-
-        verbose_proxy_logger.debug(f"Found {len(deployments)} deployments for model_name: {model_name}")
-
-        # If no deployments found, this is a config model (not in DB)
-        if len(deployments) == 0:
+        if model_name not in found_names:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -107,68 +187,55 @@ async def update_deployments_with_access_group(
                 },
             )
 
-        # Update each deployment
-        for deployment in deployments:
-            model_info = deployment.model_info or {}
-
-            # Add access group using helper
-            updated_model_info, was_modified = add_access_group_to_deployment(
-                model_info=model_info,
-                access_group=access_group,
-            )
-
-            # Only update in DB if modified
-            if was_modified:
-                await ModelRepository(prisma_client).table.update(
-                    where={"model_id": deployment.model_id},
-                    data={"model_info": json.dumps(updated_model_info)},
-                )
-
-                models_updated += 1
-                verbose_proxy_logger.debug(
-                    f"Updated deployment {deployment.model_id} with access group: {access_group}"
-                )
-
-    return models_updated
+    tagged = [
+        await _tag_deployment_with_access_group(
+            model_id=deployment.model_id,
+            model_info=deployment.model_info,
+            access_group=access_group,
+            prisma_client=prisma_client,
+        )
+        for deployment in deployments
+    ]
+    return tuple(pair for pair in tagged if pair is not None)
 
 
 async def update_specific_deployments_with_access_group(
-    model_ids: List[str],
+    model_ids: list[str],
     access_group: str,
     prisma_client: PrismaClient,
-) -> int:
+) -> tuple[tuple[str, Mapping[str, object]], ...]:
     """
     Update specific deployments (by model_id) to include the access group.
 
     Unlike update_deployments_with_access_group which tags ALL deployments sharing
     a model_name, this function only tags the specific deployments identified by
-    their unique model_id.
+    their unique model_id. Returns the (model_id, updated model_info) pair of every
+    deployment actually written.
     """
-    models_updated = 0
-    for model_id in model_ids:
-        verbose_proxy_logger.debug(f"Updating specific deployment model_id: {model_id}")
-        deployment = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_id})
-        if deployment is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Deployment with model_id '{model_id}' not found in Database."},
-            )
-        model_info = deployment.model_info or {}
-        updated_model_info, was_modified = add_access_group_to_deployment(
-            model_info=model_info,
+    verbose_proxy_logger.debug(f"Updating specific deployment model_ids: {model_ids}")
+    tagged = [
+        await _tag_deployment_with_access_group(
+            model_id=model_id,
+            model_info=(await _find_deployment_or_400(model_id=model_id, prisma_client=prisma_client)),
             access_group=access_group,
+            prisma_client=prisma_client,
         )
-        if was_modified:
-            await ModelRepository(prisma_client).table.update(
-                where={"model_id": model_id},
-                data={"model_info": json.dumps(updated_model_info)},
-            )
-            models_updated += 1
-            verbose_proxy_logger.debug(f"Updated deployment {model_id} with access group: {access_group}")
-    return models_updated
+        for model_id in model_ids
+    ]
+    return tuple(pair for pair in tagged if pair is not None)
 
 
-def remove_access_group_from_deployment(model_info: Dict[str, Any], access_group: str) -> Tuple[Dict[str, Any], bool]:
+async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) -> Mapping[str, object] | None:
+    deployment = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_id})
+    if deployment is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Deployment with model_id '{model_id}' not found in Database."},
+        )
+    return deployment.model_info
+
+
+def remove_access_group_from_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, Any], bool]:
     """
     Remove an access group from a deployment's model_info.
 
@@ -194,7 +261,7 @@ def remove_access_group_from_deployment(model_info: Dict[str, Any], access_group
 
 async def get_all_access_groups_from_db(
     prisma_client: PrismaClient,
-) -> Dict[str, AccessGroupInfo]:
+) -> dict[str, AccessGroupInfo]:
     """
     Get all access groups from the database.
 
@@ -205,7 +272,7 @@ async def get_all_access_groups_from_db(
     deployments = await ModelRepository(prisma_client).table.find_many()
 
     # Build access group map
-    access_group_map: Dict[str, Dict[str, Any]] = {}
+    access_group_map: dict[str, dict[str, Any]] = {}
 
     for deployment in deployments:
         model_info = deployment.model_info or {}
@@ -335,20 +402,28 @@ async def create_model_group(
         # Update deployments using the appropriate method
         if use_model_ids:
             assert data.model_ids is not None
-            models_updated = await update_specific_deployments_with_access_group(
+            updated_pairs = await update_specific_deployments_with_access_group(
                 model_ids=data.model_ids,
                 access_group=data.access_group,
                 prisma_client=prisma_client,
             )
         else:
             assert data.model_names is not None
-            models_updated = await update_deployments_with_access_group(
+            updated_pairs = await update_deployments_with_access_group(
                 model_names=data.model_names,
                 access_group=data.access_group,
                 prisma_client=prisma_client,
             )
+        models_updated = len(updated_pairs)
+
+        live_before_reload = live_model_ids_snapshot()
 
         await clear_cache()
+        _raise_http_if_reload_degraded_serving(
+            before=live_before_reload,
+            written_models=updated_pairs,
+            access_group=data.access_group,
+        )
 
         verbose_proxy_logger.info(
             f"Successfully created access group '{data.access_group}' with {models_updated} models updated"
@@ -364,10 +439,10 @@ async def create_model_group(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating access group '{data.access_group}': {str(e)}")
+        verbose_proxy_logger.exception(f"Error creating access group '{data.access_group}': {e!s}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to create access group: {str(e)}"},
+            detail={"error": f"Failed to create access group: {e!s}"},
         )
 
 
@@ -414,10 +489,10 @@ async def list_access_groups(
         return ListAccessGroupsResponse(access_groups=access_groups_list)
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing access groups: {str(e)}")
+        verbose_proxy_logger.exception(f"Error listing access groups: {e!s}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to list access groups: {str(e)}"},
+            detail={"error": f"Failed to list access groups: {e!s}"},
         )
 
 
@@ -471,10 +546,10 @@ async def get_access_group_info(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting access group info for '{access_group}': {str(e)}")
+        verbose_proxy_logger.exception(f"Error getting access group info for '{access_group}': {e!s}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to get access group info: {str(e)}"},
+            detail={"error": f"Failed to get access group info: {e!s}"},
         )
 
 
@@ -552,7 +627,7 @@ async def update_access_group(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to check access group existence: {str(e)}"},
+            detail={"error": f"Failed to check access group existence: {e!s}"},
         )
 
     # Validation: Check if all new models exist (only if using model_names path)
@@ -573,38 +648,42 @@ async def update_access_group(
         # Step 1: Remove access group from ALL DB deployments (skip config models)
         all_deployments = await ModelRepository(prisma_client).table.find_many()
 
-        for deployment in all_deployments:
-            model_info = deployment.model_info or {}
-
-            updated_model_info, was_modified = remove_access_group_from_deployment(
-                model_info=model_info,
+        stripped = [
+            await _strip_access_group_from_deployment(
+                model_id=deployment.model_id,
+                model_info=deployment.model_info,
                 access_group=access_group,
+                prisma_client=prisma_client,
             )
-
-            if was_modified:
-                await ModelRepository(prisma_client).table.update(
-                    where={"model_id": deployment.model_id},
-                    data={"model_info": json.dumps(updated_model_info)},
-                )
+            for deployment in all_deployments
+        ]
+        stripped_pairs = tuple(pair for pair in stripped if pair is not None)
 
         # Step 2: Add access group using the appropriate method
         if use_model_ids:
             assert data.model_ids is not None
-            models_updated = await update_specific_deployments_with_access_group(
+            updated_pairs = await update_specific_deployments_with_access_group(
                 model_ids=data.model_ids,
                 access_group=access_group,
                 prisma_client=prisma_client,
             )
         else:
             assert data.model_names is not None
-            models_updated = await update_deployments_with_access_group(
+            updated_pairs = await update_deployments_with_access_group(
                 model_names=data.model_names,
                 access_group=access_group,
                 prisma_client=prisma_client,
             )
+        models_updated = len(updated_pairs)
 
         # Clear cache and reload models to pick up the access group changes
+        live_before_reload = live_model_ids_snapshot()
         await clear_cache()
+        _raise_http_if_reload_degraded_serving(
+            before=live_before_reload,
+            written_models=list({**dict(stripped_pairs), **dict(updated_pairs)}.items()),
+            access_group=access_group,
+        )
 
         verbose_proxy_logger.info(
             f"Successfully updated access group '{access_group}' with {models_updated} models updated"
@@ -620,10 +699,10 @@ async def update_access_group(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating access group '{access_group}': {str(e)}")
+        verbose_proxy_logger.exception(f"Error updating access group '{access_group}': {e!s}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update access group: {str(e)}"},
+            detail={"error": f"Failed to update access group: {e!s}"},
         )
 
 
@@ -680,31 +759,33 @@ async def delete_access_group(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to check access group existence: {str(e)}"},
+            detail={"error": f"Failed to check access group existence: {e!s}"},
         )
 
     try:
         # Remove access group from all DB deployments (skip config models)
         all_deployments = await ModelRepository(prisma_client).table.find_many()
-        models_updated = 0
 
-        for deployment in all_deployments:
-            model_info = deployment.model_info or {}
-
-            updated_model_info, was_modified = remove_access_group_from_deployment(
-                model_info=model_info,
+        removed = [
+            await _strip_access_group_from_deployment(
+                model_id=deployment.model_id,
+                model_info=deployment.model_info,
                 access_group=access_group,
+                prisma_client=prisma_client,
             )
-
-            if was_modified:
-                await ModelRepository(prisma_client).table.update(
-                    where={"model_id": deployment.model_id},
-                    data={"model_info": json.dumps(updated_model_info)},
-                )
-                models_updated += 1
+            for deployment in all_deployments
+        ]
+        removed_pairs = tuple(pair for pair in removed if pair is not None)
+        models_updated = len(removed_pairs)
 
         # Clear cache and reload models to pick up the access group changes
+        live_before_reload = live_model_ids_snapshot()
         await clear_cache()
+        _raise_http_if_reload_degraded_serving(
+            before=live_before_reload,
+            written_models=removed_pairs,
+            access_group=access_group,
+        )
 
         verbose_proxy_logger.info(
             f"Successfully deleted access group '{access_group}' from {models_updated} deployments"
@@ -719,8 +800,8 @@ async def delete_access_group(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting access group '{access_group}': {str(e)}")
+        verbose_proxy_logger.exception(f"Error deleting access group '{access_group}': {e!s}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to delete access group: {str(e)}"},
+            detail={"error": f"Failed to delete access group: {e!s}"},
         )

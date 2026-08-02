@@ -1,6 +1,6 @@
 import functools
 import json
-from typing import AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
 
 import httpx
 
@@ -44,18 +44,18 @@ class SagemakerError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[Union[dict, httpx.Headers]] = None,
+        headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
 class AWSEventStreamDecoder:
-    def __init__(self, model: str, is_messages_api: Optional[bool] = None) -> None:
+    def __init__(self, model: str, is_messages_api: bool | None = None) -> None:
         from botocore.parsers import EventStreamJSONParser
 
         self.model = model
         self.parser = EventStreamJSONParser()
-        self.content_blocks: List = []
+        self.content_blocks: list = []
         self.is_messages_api = is_messages_api
 
     def _chunk_parser_messages_api(self, chunk_data: dict) -> StreamingChatCompletionChunk:
@@ -88,7 +88,7 @@ class AWSEventStreamDecoder:
             usage=None,
         )
 
-    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[Optional[Union[GChunk, StreamingChatCompletionChunk]]]:
+    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -135,7 +135,7 @@ class AWSEventStreamDecoder:
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
-    ) -> AsyncIterator[Optional[Union[GChunk, StreamingChatCompletionChunk]]]:
+    ) -> AsyncIterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -189,7 +189,7 @@ class AWSEventStreamDecoder:
             except Exception as e:
                 verbose_logger.error(f"Final error parsing accumulated JSON: {e}")
 
-    def _parse_message_from_event(self, event) -> Optional[str]:
+    def _parse_message_from_event(self, event) -> str | None:
         response_stream_shape = get_sagemaker_response_stream_shape()
         if response_stream_shape is None:
             raise SagemakerError(

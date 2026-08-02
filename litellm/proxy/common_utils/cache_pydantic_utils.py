@@ -16,7 +16,7 @@ are encoded; pass a Pydantic model or convert with e.g. ``dataclasses.asdict`` f
 
 from __future__ import annotations
 
-from typing import Any, Optional, Type, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -37,7 +37,7 @@ class CacheCodec:
     """
 
     @staticmethod
-    def serialize(value: Any, model_type: Optional[Type[T]] = None) -> Any:
+    def serialize(value: Any, model_type: type[T] | None = None) -> Any:
         """
         Encode a value for DualCache / Redis (``json.dumps``-safe).
 
@@ -63,7 +63,7 @@ class CacheCodec:
         return value
 
     @staticmethod
-    def deserialize(cached: Any, model_type: Type[T]) -> Optional[T]:
+    def deserialize(cached: Any, model_type: type[T]) -> T | None:
         """
         Decode a cache entry to ``model_type``.
 

@@ -1,6 +1,6 @@
 import enum
 import re
-from typing import Any, List, Optional, Tuple, cast
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -29,7 +29,7 @@ class AzureFoundryErrorStrings(str, enum.Enum):
 
 
 class AzureAIStudioConfig(OpenAIConfig):
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         model_supports_tool_choice = True  # azure ai supports this by default
         if not supports_tool_choice(model=f"azure_ai/{model}"):
             model_supports_tool_choice = False
@@ -61,11 +61,11 @@ class AzureAIStudioConfig(OpenAIConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key:
             if api_base and self._should_use_api_key_header(api_base):
@@ -93,12 +93,12 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Constructs a complete URL for the API request.
@@ -123,7 +123,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         original_url = httpx.URL(api_base)
 
         # Extract api_version or use default
-        api_version = cast(Optional[str], litellm_params.get("api_version"))
+        api_version = cast(str | None, litellm_params.get("api_version"))
 
         # Create a new dictionary with existing params
         query_params = dict(original_url.params)
@@ -143,7 +143,7 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         return str(final_url)
 
-    def get_required_params(self) -> List[ProviderField]:
+    def get_required_params(self) -> list[ProviderField]:
         """For a given provider, return it's required fields with a description"""
         return [
             ProviderField(
@@ -162,9 +162,9 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
-    ) -> List:
+    ) -> list:
         """
         - Azure AI Studio doesn't support content as a list. This handles:
             1. Transforms list content to a string.
@@ -180,7 +180,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 message["content"] = texts
         return messages
 
-    def _is_azure_openai_model(self, model: str, api_base: Optional[str]) -> bool:
+    def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
         try:
             if "/" in model:
                 model = model.split("/", 1)[1]
@@ -198,22 +198,22 @@ class AzureAIStudioConfig(OpenAIConfig):
     def _get_openai_compatible_provider_info(
         self,
         model: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         custom_llm_provider: str,
-    ) -> Tuple[Optional[str], Optional[str], str]:
+    ) -> tuple[str | None, str | None, str]:
         api_base = api_base or get_secret_str("AZURE_AI_API_BASE")
         dynamic_api_key = api_key or get_secret_str("AZURE_AI_API_KEY")
 
         if self._is_azure_openai_model(model=model, api_base=api_base):
-            verbose_logger.debug("Model={} is Azure OpenAI model. Setting custom_llm_provider='azure'.".format(model))
+            verbose_logger.debug(f"Model={model} is Azure OpenAI model. Setting custom_llm_provider='azure'.")
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -231,12 +231,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         model_response.model = f"azure_ai/{model}"
         return super().transform_response(
@@ -277,7 +277,7 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def transform_request_on_unprocessable_entity_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
         error_text = e.response.text
-        _messages = cast(Optional[List[AllMessageValues]], request_data.get("messages"))
+        _messages = cast(list[AllMessageValues] | None, request_data.get("messages"))
         if "unknown field: parameter index is not a valid field" in error_text and _messages is not None:
             litellm.remove_index_from_tool_calls(
                 messages=_messages,
@@ -307,7 +307,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                     request_data.pop(param, None)
         return request_data
 
-    def _extract_params_to_drop_from_error_text(self, error_text: str) -> Optional[List[str]]:
+    def _extract_params_to_drop_from_error_text(self, error_text: str) -> list[str] | None:
         """
         Error text looks like this"
             "Extra parameters ['stream_options', 'extra-parameters'] are not allowed when extra-parameters is not set or set to be 'error'.

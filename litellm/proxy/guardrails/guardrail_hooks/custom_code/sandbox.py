@@ -15,7 +15,7 @@ restriction intact.
 """
 
 import operator
-from typing import Any, Dict
+from typing import Any
 
 from RestrictedPython import (
     RestrictingNodeTransformer,
@@ -58,7 +58,7 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
         return self.node_contents_visit(node)
 
 
-_INPLACE_OPS: Dict[str, Any] = {
+_INPLACE_OPS: dict[str, Any] = {
     "+=": operator.iadd,
     "-=": operator.isub,
     "*=": operator.imul,
@@ -86,7 +86,7 @@ def _inplacevar_(op: str, x: Any, y: Any) -> Any:
     return fn(x, y)
 
 
-def _build_sandbox_builtins() -> Dict[str, Any]:
+def _build_sandbox_builtins() -> dict[str, Any]:
     # ``limited_builtins`` overrides ``list``/``tuple``/``range`` from
     # ``safe_builtins`` with bounds-checking variants (e.g. ``limited_range``
     # rejects ``range(10**18)``). ``utility_builtins`` adds ``set``,
@@ -98,14 +98,14 @@ def _build_sandbox_builtins() -> Dict[str, Any]:
     }
 
 
-def build_sandbox_globals() -> Dict[str, Any]:
+def build_sandbox_globals() -> dict[str, Any]:
     """Assemble the globals dict for executing guardrail code.
 
     Includes the LiteLLM-provided primitives (``regex_match``, ``http_get``,
     ``allow``/``block``/``modify``, etc.) plus the RestrictedPython guards
     that the compiled bytecode expects to find by name.
     """
-    sandbox: Dict[str, Any] = get_custom_code_primitives().copy()
+    sandbox: dict[str, Any] = get_custom_code_primitives().copy()
     sandbox["__builtins__"] = _build_sandbox_builtins()
     sandbox["_getattr_"] = safer_getattr
     sandbox["_getitem_"] = default_guarded_getitem

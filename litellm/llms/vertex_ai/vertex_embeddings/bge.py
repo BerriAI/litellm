@@ -10,8 +10,6 @@ Model name handling:
 - This module focuses on request/response transformation only
 """
 
-from typing import List, Optional, Union
-
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from .types import (
@@ -57,7 +55,7 @@ class VertexBGEConfig:
         return model_lower.startswith("bge/") or "bge" in model_lower
 
     @staticmethod
-    def transform_request(input: Union[list, str], optional_params: dict, model: str) -> VertexEmbeddingRequest:
+    def transform_request(input: list | str, optional_params: dict, model: str) -> VertexEmbeddingRequest:
         """
         Transforms an OpenAI request to a Vertex BGE embedding request.
 
@@ -72,8 +70,8 @@ class VertexBGEConfig:
             VertexEmbeddingRequest: The transformed request
         """
         vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
-        vertex_text_embedding_input_list: List[TextEmbeddingBGEInput] = []
-        task_type: Optional[TaskType] = optional_params.get("task_type")
+        vertex_text_embedding_input_list: list[TextEmbeddingBGEInput] = []
+        task_type: TaskType | None = optional_params.get("task_type")
         title = optional_params.get("title")
 
         if isinstance(input, str):
@@ -91,8 +89,8 @@ class VertexBGEConfig:
     @staticmethod
     def _create_embedding_input(
         prompt: str,
-        task_type: Optional[TaskType] = None,
-        title: Optional[str] = None,
+        task_type: TaskType | None = None,
+        title: str | None = None,
     ) -> TextEmbeddingBGEInput:
         """
         Creates a TextEmbeddingBGEInput object for BGE models.
