@@ -3,11 +3,10 @@ import os
 import sys
 import time
 import webbrowser
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
-
-from collections.abc import Mapping
 
 import click
 import requests
