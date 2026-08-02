@@ -1222,28 +1222,6 @@ async def new_team(
             if isinstance(default_organization_id, str):
                 data.organization_id = default_organization_id
 
-        # check org key limits - done here to handle inheriting org id from team
-        if data.organization_id is not None and prisma_client is not None:
-            try:
-                org_table = await get_org_object(
-                    org_id=data.organization_id,
-                    user_api_key_cache=user_api_key_cache,
-                    prisma_client=prisma_client,
-                )
-            except OrganizationNotFoundError:
-                org_table = None
-            if org_table is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Organization not found for organization_id={data.organization_id}",
-                )
-
-            await _check_org_team_limits(
-                org_table=org_table,
-                data=data,
-                prisma_client=prisma_client,
-            )
-
         # Apply defaults from litellm.default_team_params for any fields
         # not explicitly provided in the request.
         for field in (
@@ -1269,6 +1247,29 @@ async def new_team(
                 default_budget = litellm.default_team_settings[0].get("max_budget")
                 if default_budget is not None:
                     data.max_budget = default_budget
+
+        # check org key limits - done here to handle inheriting org id from team
+        if data.organization_id is not None and prisma_client is not None:
+            try:
+                org_table = await get_org_object(
+                    org_id=data.organization_id,
+                    user_api_key_cache=user_api_key_cache,
+                    prisma_client=prisma_client,
+                    include_budget_table=True,
+                )
+            except OrganizationNotFoundError:
+                org_table = None
+            if org_table is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Organization not found for organization_id={data.organization_id}",
+                )
+
+            await _check_org_team_limits(
+                org_table=org_table,
+                data=data,
+                prisma_client=prisma_client,
+            )
 
         if (
             user_api_key_dict.user_role is None or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
