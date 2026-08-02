@@ -12,9 +12,7 @@ from typing import Any, Literal, Optional
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.openai.chat.guardrail_translation.handler import (
@@ -197,9 +195,7 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
         tool = guardrail.last_inputs["tools"][0]
         assert tool["type"] == "function"
         assert tool["function"]["name"] == "get_weather"
-        assert (
-            tool["function"]["description"] == "Get the current weather in a location"
-        )
+        assert tool["function"]["description"] == "Get the current weather in a location"
         assert "parameters" in tool["function"]
 
     @pytest.mark.asyncio
@@ -254,10 +250,7 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
 
         assert guardrail.last_inputs is not None
         # tools should not be in inputs if not provided
-        assert (
-            "tools" not in guardrail.last_inputs
-            or guardrail.last_inputs.get("tools") is None
-        )
+        assert "tools" not in guardrail.last_inputs or guardrail.last_inputs.get("tools") is None
 
     @pytest.mark.asyncio
     async def test_tools_and_tool_calls_both_passed(self):
@@ -329,9 +322,7 @@ class TestOpenAIChatCompletionsHandlerToolCallsInput:
                             "type": "function",
                             "function": {
                                 "name": "get_weather",
-                                "arguments": json.dumps(
-                                    {"location": "San Francisco", "unit": "celsius"}
-                                ),
+                                "arguments": json.dumps({"location": "San Francisco", "unit": "celsius"}),
                             },
                         }
                     ],
@@ -405,10 +396,7 @@ class TestOpenAIChatCompletionsHandlerToolCallsInput:
 
         # Should have 1 tool call
         assert len(guardrail.last_inputs["tool_calls"]) == 1
-        assert (
-            guardrail.last_inputs["tool_calls"][0]["function"]["name"]
-            == "get_current_weather"
-        )
+        assert guardrail.last_inputs["tool_calls"][0]["function"]["name"] == "get_current_weather"
 
         # Verify text content was modified
         assert data["messages"][0]["content"] == "WHAT'S THE WEATHER?"
@@ -648,9 +636,7 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
                                 type="function",
                                 function=Function(
                                     name="web_search",
-                                    arguments=json.dumps(
-                                        {"keywords": "litellm documentation"}
-                                    ),
+                                    arguments=json.dumps({"keywords": "litellm documentation"}),
                                 ),
                             )
                         ],
@@ -673,9 +659,7 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert len(guardrail.last_inputs["tool_calls"]) == 1
 
         # Verify both were modified
-        assert (
-            response.choices[0].message.content == "I'LL SEARCH FOR THAT INFORMATION."
-        )
+        assert response.choices[0].message.content == "I'LL SEARCH FOR THAT INFORMATION."
         response_tool_call = response.choices[0].message.tool_calls[0]
         args = json.loads(response_tool_call.function.arguments)
         assert args["keywords"] == "LITELLM DOCUMENTATION"
@@ -865,9 +849,7 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
                             ChatCompletionMessageToolCall(
                                 id="call_email",
                                 type="function",
-                                function=Function(
-                                    name="send_email", arguments=original
-                                ),
+                                function=Function(name="send_email", arguments=original),
                             )
                         ],
                     ),
@@ -905,16 +887,12 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
                             ChatCompletionMessageToolCall(
                                 id="call_1",
                                 type="function",
-                                function=Function(
-                                    name="send_email", arguments=first_args
-                                ),
+                                function=Function(name="send_email", arguments=first_args),
                             ),
                             ChatCompletionMessageToolCall(
                                 id="call_2",
                                 type="function",
-                                function=Function(
-                                    name="send_email", arguments=second_args
-                                ),
+                                function=Function(name="send_email", arguments=second_args),
                             ),
                         ],
                     ),
@@ -1132,6 +1110,191 @@ class TestGetStructuredMessages:
         assert result is not None
         assert len(result) == 1
         assert isinstance(result[0]["content"], list)
+
+
+class MockImageRewriteGuardrail(CustomGuardrail):
+    """Returns rewritten image urls (same count) and echoes texts."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        result = GenericGuardrailAPIInputs(texts=inputs.get("texts", []))
+        images = inputs.get("images", [])
+        result["images"] = [f"redacted::{img}" for img in images]  # type: ignore
+        return result
+
+
+class MockImageStripGuardrail(CustomGuardrail):
+    """Strips all images via modify(images=[])."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        result = GenericGuardrailAPIInputs(texts=inputs.get("texts", []))
+        result["images"] = []  # type: ignore
+        return result
+
+
+class MockTextOnlyGuardrail(CustomGuardrail):
+    """Returns only texts, never an images key -> images must be left untouched."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(texts=inputs.get("texts", []))
+
+
+class TestOpenAIChatCompletionsHandlerImagesInput:
+    """Issue #31071: guardrail modify(images=...) must be applied back to messages."""
+
+    @pytest.mark.asyncio
+    async def test_images_rewritten_in_input_messages(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockImageRewriteGuardrail(guardrail_name="img")
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look"},
+                        {"type": "image_url", "image_url": {"url": "http://x/a.png"}},
+                    ],
+                }
+            ]
+        }
+        await handler.process_input_messages(data, guardrail)
+        content = data["messages"][0]["content"]
+        assert content[1]["image_url"]["url"] == "redacted::http://x/a.png"
+
+    @pytest.mark.asyncio
+    async def test_images_stripped_in_input_messages(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockImageStripGuardrail(guardrail_name="strip")
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe"},
+                        {"type": "image_url", "image_url": {"url": "http://x/a.png"}},
+                    ],
+                }
+            ]
+        }
+        await handler.process_input_messages(data, guardrail)
+        content = data["messages"][0]["content"]
+        assert all(item.get("type") != "image_url" for item in content)
+        assert any(item.get("type") == "text" for item in content)
+
+    @pytest.mark.asyncio
+    async def test_images_untouched_when_guardrail_omits_images_key(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockTextOnlyGuardrail(guardrail_name="textonly")
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hi"},
+                        {"type": "image_url", "image_url": {"url": "http://x/a.png"}},
+                    ],
+                }
+            ]
+        }
+        await handler.process_input_messages(data, guardrail)
+        content = data["messages"][0]["content"]
+        assert content[1]["image_url"]["url"] == "http://x/a.png"
+
+    @pytest.mark.asyncio
+    async def test_apply_images_str_form_and_partial_removal(self):
+        handler = OpenAIChatCompletionsHandler()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": "http://x/a.png"},
+                    {"type": "image_url", "image_url": {"url": "http://x/b.png"}},
+                ],
+            }
+        ]
+        # One response -> first replaced (str form), second removed.
+        await handler._apply_guardrail_responses_to_input_images(
+            messages=messages,
+            responses=["http://x/A.png"],
+            task_mappings=[(0, 0), (0, 1)],
+        )
+        content = messages[0]["content"]
+        assert len(content) == 1
+        assert content[0]["image_url"] == "http://x/A.png"
+
+    @pytest.mark.asyncio
+    async def test_images_str_form_rewritten_via_process_input_messages(self):
+        # string-form image_url is extracted, sent, and written back end-to-end
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockImageRewriteGuardrail(guardrail_name="imgstr")
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hi"},
+                        {"type": "image_url", "image_url": "http://x/a.png"},
+                    ],
+                }
+            ]
+        }
+        await handler.process_input_messages(data, guardrail)
+        content = data["messages"][0]["content"]
+        assert content[1]["image_url"] == "redacted::http://x/a.png"
+
+    @pytest.mark.asyncio
+    async def test_apply_images_skips_invalid_mappings(self):
+        # non-list content and out-of-range index are skipped without error
+        handler = OpenAIChatCompletionsHandler()
+        messages = [
+            {"role": "user", "content": "just text"},
+            {"role": "user", "content": [{"type": "text", "text": "x"}]},
+        ]
+        await handler._apply_guardrail_responses_to_input_images(
+            messages=messages,
+            responses=["ignored"],
+            task_mappings=[(0, 0), (1, 5)],
+        )
+        assert messages[0]["content"] == "just text"
+        assert messages[1]["content"] == [{"type": "text", "text": "x"}]
+
+    @pytest.mark.asyncio
+    async def test_image_only_request_invokes_image_guardrail(self):
+        # An image-only message (no text / tool_calls) must still invoke the
+        # guardrail, or image strip/rewrite is bypassed (issue #31071 review).
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockImageStripGuardrail(guardrail_name="imgonly")
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "http://x/a.png"}},
+                    ],
+                }
+            ]
+        }
+        await handler.process_input_messages(data, guardrail)
+        content = data["messages"][0]["content"]
+        # guardrail ran and stripped the image -> no image_url blocks remain
+        assert all(item.get("type") != "image_url" for item in content)
 
 
 if __name__ == "__main__":
