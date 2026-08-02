@@ -252,7 +252,7 @@ def _get_token_base_cost(
     cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
 
     ## CHECK IF ABOVE THRESHOLD
-    selected_threshold_keys: dict[str, tuple[float, str]] = {}
+    selected_threshold_keys: dict[str, tuple[float, str]] = {}  # mutable-ok: threshold accumulator
 
     for key in model_info:
         if "_above_" not in key or not key.endswith("_tokens"):
@@ -279,7 +279,7 @@ def _get_token_base_cost(
                 key,
             )
 
-    costs_by_base_key = {
+    costs_by_base_key = {  # mutable-ok: selected-rate updates
         "input_cost_per_token": prompt_base_cost,
         "output_cost_per_token": completion_base_cost,
         "cache_creation_input_token_cost": cache_creation_cost,
