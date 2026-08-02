@@ -9,7 +9,7 @@ admin pick which ones to expose through the proxy. The actual merge into a
 LiteLLM-fronted card happens when the agent is saved via ``POST /v1/agents``.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -49,7 +49,7 @@ class DiscoverAgentRequest(BaseModel):
             "query parameter."
         ),
     )
-    params: Optional[Dict[str, Any]] = Field(
+    params: dict[str, Any] | None = Field(
         default=None,
         description=(
             "Mode-specific parameters. ``langgraph_platform`` requires "
@@ -60,7 +60,7 @@ class DiscoverAgentRequest(BaseModel):
 
 class DiscoverAgentResponse(BaseModel):
     url: str
-    agent_card: Dict[str, Any]
+    agent_card: dict[str, Any]
 
 
 @router.post(

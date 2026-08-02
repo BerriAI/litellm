@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 
-import { useInfiniteEndUserAliases } from "@/app/(dashboard)/hooks/customers/useEndUserAliases";
+import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { DataTableFilterField } from "@/components/shared/DataTable";
@@ -154,7 +154,7 @@ function EndUserFilterField({
   logsWindow: LogsWindow;
 }) {
   const [search, setSearch] = useState("");
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteEndUserAliases(
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteSpendLogEndUsers(
     logsWindow,
     PAGE_SIZE,
     emptyToUndefined(search),
@@ -163,10 +163,10 @@ function EndUserFilterField({
   const options = useMemo<SearchSelectOption[]>(() => {
     const seen = new Set<string>();
     return (data?.pages ?? []).flatMap((page) =>
-      page.aliases.flatMap((alias) => {
-        if (!alias || seen.has(alias)) return [];
-        seen.add(alias);
-        return [{ label: alias, value: alias }];
+      page.data.flatMap((endUser) => {
+        if (!endUser || seen.has(endUser)) return [];
+        seen.add(endUser);
+        return [{ label: endUser, value: endUser }];
       }),
     );
   }, [data]);

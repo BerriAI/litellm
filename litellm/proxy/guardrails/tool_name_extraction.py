@@ -6,19 +6,19 @@ knowledge lives in one place. Uses guardrail translation handlers where availabl
 with standalone extractors for generate_content and MCP.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.types.utils import CallTypes
 
 # Call types that have no guardrail translation handler; we use standalone extractors
-STANDALONE_EXTRACTORS: Dict[str, Any] = {}
+STANDALONE_EXTRACTORS: dict[str, Any] = {}
 
 
-def _extract_generate_content_tool_names(data: dict) -> List[str]:
+def _extract_generate_content_tool_names(data: dict) -> list[str]:
     """Google generateContent: tools[].functionDeclarations[].name"""
-    names: List[str] = []
+    names: list[str] = []
     for tool in data.get("tools") or []:
         if not isinstance(tool, dict):
             continue
@@ -28,9 +28,9 @@ def _extract_generate_content_tool_names(data: dict) -> List[str]:
     return names
 
 
-def _extract_mcp_tool_names(data: dict) -> List[str]:
+def _extract_mcp_tool_names(data: dict) -> list[str]:
     """MCP call_tool: name or mcp_tool_name in body"""
-    names: List[str] = []
+    names: list[str] = []
     name = data.get("name") or data.get("mcp_tool_name")
     if name:
         names.append(str(name))
@@ -60,7 +60,7 @@ TOOL_CAPABLE_CALL_TYPES = frozenset(
 )
 
 
-def extract_request_tool_names(route: str, data: dict) -> List[str]:
+def extract_request_tool_names(route: str, data: dict) -> list[str]:
     """
     Extract tool names from the request body for the given route.
     Uses guardrail translation handlers when available, else standalone extractors

@@ -6,16 +6,16 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Invoke
 
 import base64
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -49,7 +49,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         This is a base invoke agent model mapping. For Invoke Agent - define a bedrock provider specific config that extends this class.
 
@@ -73,12 +73,12 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -110,11 +110,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
         return self._sign_request(
             service_name="bedrock",
             headers=headers,
@@ -147,7 +147,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -222,7 +222,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
         return events
 
-    def _parse_message_from_event(self, event, parser) -> Optional[str]:
+    def _parse_message_from_event(self, event, parser) -> str | None:
         """Extract message content from an AWS event, adapted from AWSEventStreamDecoder."""
         try:
             response_dict = event.to_response_dict()
@@ -314,7 +314,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             model=None,
         )
 
-        response_model: Optional[str] = None
+        response_model: str | None = None
 
         for event in events:
             if not self._is_trace_event(event):
@@ -346,7 +346,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         payload = event.get("payload")
         return event_type == "trace" and payload is not None
 
-    def _get_trace_data(self, event: InvokeAgentEvent) -> Optional[InvokeAgentTrace]:
+    def _get_trace_data(self, event: InvokeAgentEvent) -> InvokeAgentTrace | None:
         """Extract trace data from a trace event."""
         payload = event.get("payload")
         if not payload:
@@ -359,34 +359,34 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         self, trace_data: InvokeAgentTrace, usage_info: InvokeAgentUsage
     ) -> None:
         """Extract usage information from preprocessing trace."""
-        pre_processing: Optional[InvokeAgentPreProcessingTrace] = trace_data.get("preProcessingTrace")
+        pre_processing: InvokeAgentPreProcessingTrace | None = trace_data.get("preProcessingTrace")
         if not pre_processing:
             return
 
-        model_output: Optional[InvokeAgentModelInvocationOutput] = (
+        model_output: InvokeAgentModelInvocationOutput | None = (
             pre_processing.get("modelInvocationOutput") or InvokeAgentModelInvocationOutput()
         )
         if not model_output:
             return
 
-        metadata: Optional[InvokeAgentMetadata] = model_output.get("metadata") or InvokeAgentMetadata()
+        metadata: InvokeAgentMetadata | None = model_output.get("metadata") or InvokeAgentMetadata()
         if not metadata:
             return
 
-        usage: Optional[Union[InvokeAgentUsage, Dict]] = metadata.get("usage", {})
+        usage: InvokeAgentUsage | dict | None = metadata.get("usage", {})
         if not usage:
             return
 
         usage_info["inputTokens"] += usage.get("inputTokens", 0)
         usage_info["outputTokens"] += usage.get("outputTokens", 0)
 
-    def _extract_orchestration_model(self, trace_data: InvokeAgentTrace) -> Optional[str]:
+    def _extract_orchestration_model(self, trace_data: InvokeAgentTrace) -> str | None:
         """Extract model information from orchestration trace."""
-        orchestration_trace: Optional[InvokeAgentOrchestrationTrace] = trace_data.get("orchestrationTrace")
+        orchestration_trace: InvokeAgentOrchestrationTrace | None = trace_data.get("orchestrationTrace")
         if not orchestration_trace:
             return None
 
-        model_invocation: Optional[InvokeAgentModelInvocationInput] = (
+        model_invocation: InvokeAgentModelInvocationInput | None = (
             orchestration_trace.get("modelInvocationInput") or InvokeAgentModelInvocationInput()
         )
         if not model_invocation:
@@ -433,12 +433,12 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
             # Get the raw binary content
@@ -464,9 +464,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             )
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Bedrock Invoke Agent response: {str(e)}")
+            verbose_logger.error(f"Error processing Bedrock Invoke Agent response: {e!s}")
             raise BedrockError(
-                message=f"Error processing response: {str(e)}",
+                message=f"Error processing response: {e!s}",
                 status_code=raw_response.status_code,
             )
 
@@ -474,23 +474,21 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message)
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         return True

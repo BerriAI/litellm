@@ -12,7 +12,8 @@ All /policy management endpoints
 import copy
 import json
 import os
-from typing import TYPE_CHECKING, Any, AsyncIterator, List, Literal, Optional, cast
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -83,7 +84,7 @@ class _ApplyPoliciesResultBase(TypedDict):
     """Base result of apply_policies: inputs plus any guardrail failures."""
 
     inputs: GenericGuardrailAPIInputs
-    guardrail_errors: List[GuardrailErrorEntry]
+    guardrail_errors: list[GuardrailErrorEntry]
 
 
 class ApplyPoliciesResult(_ApplyPoliciesResultBase, total=False):
@@ -96,7 +97,7 @@ class _ApplyPoliciesPerItemResultBase(TypedDict):
     """Base result for one input when using inputs_list."""
 
     inputs: GenericGuardrailAPIInputs
-    guardrail_errors: List[GuardrailErrorEntry]
+    guardrail_errors: list[GuardrailErrorEntry]
 
 
 class ApplyPoliciesPerItemResult(_ApplyPoliciesPerItemResultBase, total=False):
@@ -108,16 +109,16 @@ class ApplyPoliciesPerItemResult(_ApplyPoliciesPerItemResultBase, total=False):
 class ApplyPoliciesListResult(TypedDict):
     """Result when using inputs_list: one result per input."""
 
-    results: List[ApplyPoliciesPerItemResult]
+    results: list[ApplyPoliciesPerItemResult]
 
 
 async def apply_policies(
-    policy_names: Optional[list[str]],
+    policy_names: list[str] | None,
     inputs: GenericGuardrailAPIInputs,
     request_data: dict,
     input_type: Literal["request", "response"],
     proxy_logging_obj: "LiteLLMLoggingObj",
-    guardrail_names: Optional[list[str]] = None,
+    guardrail_names: list[str] | None = None,
 ) -> ApplyPoliciesResult:
     """
     Apply guardrails to inputs from policy names and/or a direct list of guardrail names.
@@ -134,7 +135,7 @@ async def apply_policies(
         ApplyPoliciesResult with "inputs" (final GenericGuardrailAPIInputs) and
         "guardrail_errors" (list of {"guardrail_name", "message"} for each failure).
     """
-    guardrail_errors: List[GuardrailErrorEntry] = []
+    guardrail_errors: list[GuardrailErrorEntry] = []
 
     guardrail_name_set: set[str] = set()
 
@@ -207,7 +208,7 @@ async def apply_policies(
 
 def _chat_body_from_inputs(inputs: GenericGuardrailAPIInputs, agent_id: str, request_data: dict) -> dict:
     """Build a chat completion request body from guardrail inputs and agent_id."""
-    messages: List[dict]
+    messages: list[dict]
     structured = inputs.get("structured_messages")
     texts = inputs.get("texts")
     if structured:
@@ -228,7 +229,7 @@ def _chat_body_from_inputs(inputs: GenericGuardrailAPIInputs, agent_id: str, req
 def _request_with_json_body(body: dict) -> Request:
     """Create a Starlette Request that will return the given dict as parsed JSON body."""
     body_bytes = json.dumps(body).encode()
-    received: List[bool] = [False]
+    received: list[bool] = [False]
 
     async def receive() -> dict:
         if received[0]:
@@ -255,9 +256,9 @@ def _request_with_json_body(body: dict) -> Request:
 class TestPoliciesAndGuardrailsRequest(BaseModel):
     """Request body for POST /utils/test_policies_and_guardrails."""
 
-    policy_names: Optional[List[str]] = Field(default=None, description="Policy names to resolve guardrails from")
-    guardrail_names: Optional[List[str]] = Field(default=None, description="Guardrail names to apply directly")
-    inputs_list: List[GenericGuardrailAPIInputs] = Field(
+    policy_names: list[str] | None = Field(default=None, description="Policy names to resolve guardrails from")
+    guardrail_names: list[str] | None = Field(default=None, description="Guardrail names to apply directly")
+    inputs_list: list[GenericGuardrailAPIInputs] = Field(
         default=[],
         description="List of GenericGuardrailAPIInputs; each item processed separately (for batch compliance testing).",
     )
@@ -265,7 +266,7 @@ class TestPoliciesAndGuardrailsRequest(BaseModel):
     input_type: Literal["request", "response"] = Field(
         default="request", description="Whether inputs are request or response"
     )
-    agent_id: Optional[str] = Field(
+    agent_id: str | None = Field(
         default=None,
         description="When set, call chat completion with this model/agent for each input and include the response in the result.",
     )
@@ -320,7 +321,7 @@ async def test_policies_and_guardrails(
     try:
         logging_obj = cast(LiteLLMLoggingObj, proxy_logging_obj)
 
-        results: List[ApplyPoliciesPerItemResult] = []
+        results: list[ApplyPoliciesPerItemResult] = []
         for inp in data.inputs_list:
             item_result = await apply_policies(
                 policy_names=data.policy_names,
@@ -661,13 +662,13 @@ async def get_policy_templates(
 class EnrichTemplateRequest(BaseModel):
     template_id: str
     parameters: dict
-    model: Optional[str] = None
-    competitors: Optional[List[str]] = Field(
+    model: str | None = None
+    competitors: list[str] | None = Field(
         default=None,
         max_length=MAX_COMPETITOR_NAMES,
         description="Optional list of competitor names",
     )
-    instruction: Optional[str] = Field(
+    instruction: str | None = Field(
         default=None,
         description="Refinement instruction for modifying the competitor list (e.g. 'add 10 more from Asia')",
     )
@@ -768,7 +769,7 @@ async def _stream_llm_competitor_names(
     prompt: str,
     model: str,
     existing: list[str],
-) -> AsyncIterator[tuple[Optional[str], bool]]:
+) -> AsyncIterator[tuple[str | None, bool]]:
     """
     Stream competitor names from LLM. Yields (name, is_error) tuples.
 
@@ -888,7 +889,7 @@ async def enrich_policy_template_stream(
     )
 
 
-def _clean_competitor_line(line: str) -> Optional[str]:
+def _clean_competitor_line(line: str) -> str | None:
     """Strip numbering, bullets, and whitespace from a competitor name line."""
     name = line.strip().strip(".-) ").strip()
     return name if name and len(name) > 1 else None
@@ -981,7 +982,7 @@ def _build_competitor_guardrail_definitions(
     definitions: list,
     competitors: list,
     brand_name: str,
-    variations_map: Optional[dict] = None,
+    variations_map: dict | None = None,
 ) -> list:
     """Build enriched guardrailDefinitions with competitor names and variations populated."""
     variations_map = variations_map or {}
@@ -1075,9 +1076,9 @@ def _build_comparison_blocked_words(
 
 
 class SuggestTemplatesRequest(BaseModel):
-    attack_examples: List[str] = Field(default_factory=list)
+    attack_examples: list[str] = Field(default_factory=list)
     description: str = Field(default="")
-    model: Optional[str] = None
+    model: str | None = None
 
 
 @router.post(
@@ -1118,13 +1119,13 @@ class GuardrailTestResultEntry(TypedDict):
 
 
 class TestPolicyTemplateRequest(BaseModel):
-    guardrail_definitions: List[dict] = Field(description="All guardrailDefinitions from the policy template")
+    guardrail_definitions: list[dict] = Field(description="All guardrailDefinitions from the policy template")
     text: str = Field(description="Test input text to run guardrails against")
 
 
 class TestPolicyTemplateResponse(TypedDict):
     overall_action: str  # worst-case across all guardrails
-    results: List[GuardrailTestResultEntry]
+    results: list[GuardrailTestResultEntry]
 
 
 @router.post(
@@ -1162,15 +1163,15 @@ async def test_policy_template(
 
 
 async def _test_guardrail_definitions(
-    guardrail_definitions: List[dict],
+    guardrail_definitions: list[dict],
     text: str,
-) -> List[GuardrailTestResultEntry]:
+) -> list[GuardrailTestResultEntry]:
     """Instantiate and run each guardrail definition against the text."""
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
         ContentFilterGuardrail,
     )
 
-    results: List[GuardrailTestResultEntry] = []
+    results: list[GuardrailTestResultEntry] = []
 
     for guardrail_def in guardrail_definitions:
         guardrail_name = guardrail_def.get("guardrail_name", "unknown")
@@ -1245,7 +1246,7 @@ async def _test_guardrail_definitions(
     return results
 
 
-def _compute_overall_action(results: List[GuardrailTestResultEntry]) -> str:
+def _compute_overall_action(results: list[GuardrailTestResultEntry]) -> str:
     """Return the worst-case action: blocked > masked > error > unsupported > passed."""
     priority = {"blocked": 4, "masked": 3, "error": 2, "unsupported": 1, "passed": 0}
     worst = "passed"
