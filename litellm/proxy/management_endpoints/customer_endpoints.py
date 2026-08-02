@@ -10,6 +10,7 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 import fastapi
@@ -42,7 +43,7 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 router = APIRouter()
 
 
-async def _invalidate_end_user_cache(user_ids: list[str]) -> None:
+async def _invalidate_end_user_cache(user_ids: Sequence[str]) -> None:
     """Drop every cached view of an end-user row so a block/unblock takes effect now.
 
     Core auth caches the row under ``end_user_id:{id}`` and the enterprise
@@ -168,8 +169,8 @@ async def unblock_user(data: BlockUsers):
 
     try:
         await EndUserRepository(prisma_client).table.update_many(
-            where={"user_id": {"in": data.user_ids}},
-            data={"blocked": False},
+            where={"user_id": {"in": data.user_ids}},  # mutable-ok: prisma query arguments are plain dicts
+            data={"blocked": False},  # mutable-ok: prisma query arguments are plain dicts
         )
     except Exception as e:
         verbose_proxy_logger.error(f"An error occurred - {e!s}")
@@ -177,11 +178,13 @@ async def unblock_user(data: BlockUsers):
 
     await _invalidate_end_user_cache(user_ids=data.user_ids)
 
-    unblocked_ids = set(data.user_ids)
     if isinstance(litellm.blocked_user_list, list):
-        litellm.blocked_user_list = [user_id for user_id in litellm.blocked_user_list if user_id not in unblocked_ids]
+        unblocked_ids = frozenset(data.user_ids)
+        litellm.blocked_user_list = [  # mutable-ok: blocked_user_list is a public list attribute
+            user_id for user_id in litellm.blocked_user_list if user_id not in unblocked_ids
+        ]
 
-    return {"blocked_users": litellm.blocked_user_list or []}
+    return UnblockUsersResponse(blocked_users=litellm.blocked_user_list or ())
 
 
 def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
