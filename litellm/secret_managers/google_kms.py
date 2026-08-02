@@ -9,7 +9,6 @@ Requires:
 """
 
 import os
-from typing import Optional
 
 import litellm
 from litellm.proxy._types import KeyManagementSystem
@@ -22,7 +21,7 @@ def validate_environment():
         raise ValueError("Missing required environment variable - GOOGLE_KMS_RESOURCE_NAME")
 
 
-def load_google_kms(use_google_kms: Optional[bool]):
+def load_google_kms(use_google_kms: bool | None):
     if use_google_kms is None or use_google_kms is False:
         return
     try:

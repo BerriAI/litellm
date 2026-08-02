@@ -2,7 +2,6 @@
 #   identifies lowest tpm deployment
 import traceback
 from datetime import datetime
-from typing import Dict, List, Optional, Union
 
 from litellm import token_counter
 from litellm._logging import verbose_router_logger
@@ -74,12 +73,9 @@ class LowestTPMLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_router_logger.error(
-                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {}".format(
-                    str(e)
-                )
+                f"litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {e!s}"
             )
             verbose_router_logger.debug(traceback.format_exc())
-            pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -139,19 +135,16 @@ class LowestTPMLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_router_logger.exception(
-                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {}".format(
-                    str(e)
-                )
+                f"litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {e!s}"
             )
             verbose_router_logger.debug(traceback.format_exc())
-            pass
 
     def get_available_deployments(
         self,
         model_group: str,
         healthy_deployments: list,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
@@ -222,9 +215,11 @@ class LowestTPMLoggingHandler(CustomLogger):
             if _deployment_rpm is None:
                 _deployment_rpm = float("inf")
 
-            if item_tpm + input_tokens > _deployment_tpm:
-                continue
-            elif (rpm_dict is not None and item in rpm_dict) and (rpm_dict[item] + 1 >= _deployment_rpm):
+            if (
+                item_tpm + input_tokens > _deployment_tpm
+                or (rpm_dict is not None and item in rpm_dict)
+                and (rpm_dict[item] + 1 >= _deployment_rpm)
+            ):
                 continue
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm

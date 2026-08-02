@@ -12,7 +12,7 @@ every other mode so the caller defers to v1 (parity-safe); it grows one branch p
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, Literal, NoReturn, Optional
+from typing import TYPE_CHECKING, Literal, NoReturn
 
 from fastapi import HTTPException
 from pydantic import SecretStr
@@ -45,7 +45,7 @@ _TOKEN_EXCHANGE_SUBJECT_TOKEN_DEFAULT = "urn:ietf:params:oauth:token-type:access
 _ID_JAG_SUBJECT_TOKEN_DEFAULT = "urn:ietf:params:oauth:token-type:id_token"
 
 
-def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]) -> Subject:
+def to_subject(user_api_key_auth: UserAPIKeyAuth | None, subject_token: str | None) -> Subject:
     """Map v1's authenticated principal onto the resolver's Subject.
 
     tenant_id / subject_id are empty for an unauthenticated caller; the per-user arms must reject
@@ -61,7 +61,7 @@ def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optio
     )
 
 
-def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
+def to_server_spec(server: MCPServer) -> ServerSpec | None:
     """Map a v1 server onto a ServerSpec for a migrated mode, or None to defer to v1.
 
     BYOK is the per-user source of the ``api_key`` mode; its scheme rides on ``auth_type`` just
@@ -151,7 +151,7 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
     )
 
 
-def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
+def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
     """Build a token_exchange (OBO) spec, or defer (None) when it is not OBO-configured.
 
     An OBO server with ``client_id``/``client_secret`` is owned by the v2 arm even if the
@@ -192,7 +192,7 @@ def _shared_key_spec(
     value_prefix: str,
     *,
     encode: bool = False,
-) -> Optional[ServerSpec]:
+) -> ServerSpec | None:
     """Build an api_key spec from the server's static token, or defer (None) if it is absent.
 
     Covers the whole shared-key static-header family: ``api_key`` on ``X-API-Key`` and the
@@ -213,7 +213,7 @@ def _shared_key_spec(
     )
 
 
-def _id_jag_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
+def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
     """Build an ID-JAG spec from the v1 server's raw fields, or defer (None) if half-configured.
 
     The enum already routes here, but a server missing an endpoint, ``client_id``, or any client-auth
@@ -243,7 +243,7 @@ def _id_jag_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
     )
 
 
-def _id_jag_client_auth(server: MCPServer) -> Optional[ClientAuth]:
+def _id_jag_client_auth(server: MCPServer) -> ClientAuth | None:
     """Private-key JWT when a key is configured, else client_secret, else None (defer to v1)."""
     if server.client_private_key:
         return PrivateKeyJwtAuth(

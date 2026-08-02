@@ -1,5 +1,4 @@
 import json
-from typing import List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -86,7 +85,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         model: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         budget_fallbacks: dict[str, list[str]] = user_api_key_dict.budget_fallbacks or {}
         for fallback_model in budget_fallbacks.get(model, []):
             try:
@@ -153,7 +152,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         end_user_id: str,
         model: str,
         key_budget_config: BudgetConfig,
-    ) -> Optional[float]:
+    ) -> float | None:
         # 1. model: directly look up `model`
         end_user_model_spend_cache_key = (
             f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
@@ -172,10 +171,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
     async def _get_virtual_key_spend_for_model(
         self,
-        user_api_key_hash: Optional[str],
+        user_api_key_hash: str | None,
         model: str,
         key_budget_config: BudgetConfig,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Get the current spend for a virtual key for a model
 
@@ -203,7 +202,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
     def _get_request_model_budget_config(
         self, model: str, internal_model_max_budget: GenericBudgetConfigType
-    ) -> Optional[BudgetConfig]:
+    ) -> BudgetConfig | None:
         """
         Get the budget config for the request model
 
@@ -222,11 +221,11 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     async def async_filter_deployments(
         self,
         model: str,
-        healthy_deployments: List,
-        messages: Optional[List[AllMessageValues]],
-        request_kwargs: Optional[dict] = None,
-        parent_otel_span: Optional[Span] = None,  # type: ignore
-    ) -> List[dict]:
+        healthy_deployments: list,
+        messages: list[AllMessageValues] | None,
+        request_kwargs: dict | None = None,
+        parent_otel_span: Span | None = None,  # type: ignore
+    ) -> list[dict]:
         return healthy_deployments
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -236,7 +235,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
         """
         verbose_proxy_logger.debug("in RouterBudgetLimiting.async_log_success_event")
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+        standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
         if standard_logging_payload is None:
             verbose_proxy_logger.debug(
                 "Skipping _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: standard_logging_payload is None"
@@ -245,8 +244,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         _litellm_params: dict = kwargs.get("litellm_params", {}) or {}
         _metadata: dict = _litellm_params.get("metadata", {}) or {}
-        user_api_key_model_max_budget: Optional[dict] = _metadata.get("user_api_key_model_max_budget", None)
-        user_api_key_end_user_model_max_budget: Optional[dict] = _metadata.get(
+        user_api_key_model_max_budget: dict | None = _metadata.get("user_api_key_model_max_budget", None)
+        user_api_key_end_user_model_max_budget: dict | None = _metadata.get(
             "user_api_key_end_user_model_max_budget", None
         )
         if (user_api_key_model_max_budget is None or len(user_api_key_model_max_budget) == 0) and (

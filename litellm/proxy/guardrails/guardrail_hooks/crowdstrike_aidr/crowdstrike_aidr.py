@@ -4,11 +4,9 @@ from collections.abc import Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Annotated,
-    List,
     Literal,
     NamedTuple,
     Optional,
-    Union,
     cast,
 )
 
@@ -44,8 +42,6 @@ if TYPE_CHECKING:
 class CrowdStrikeAIDRGuardrailMissingSecrets(Exception):
     """Custom exception for missing CrowdStrike AIDR secrets."""
 
-    pass
-
 
 class _TextContentPart(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -65,32 +61,32 @@ class _ImageUrlContentPart(BaseModel):
     image_url: _ImageUrl
 
 
-_ContentPart = Annotated[Union[_TextContentPart, _ImageUrlContentPart], Field(discriminator="type")]
+_ContentPart = Annotated[_TextContentPart | _ImageUrlContentPart, Field(discriminator="type")]
 
 
 class _Message(BaseModel):
     role: str
-    content: Optional[Union[str, list[_ContentPart]]] = None
+    content: str | list[_ContentPart] | None = None
 
 
 class _GuardInput(BaseModel):
     messages: list[_Message]
-    tools: Optional[Sequence[OpenAIChatCompletionToolParam]] = None
+    tools: Sequence[OpenAIChatCompletionToolParam] | None = None
 
 
 class _GuardChatCompletionsResult(BaseModel):
-    guard_output: Optional[_GuardInput] = None
+    guard_output: _GuardInput | None = None
     """Updated structured prompt."""
-    blocked: Optional[bool] = None
+    blocked: bool | None = None
     """Whether or not the prompt triggered a block detection."""
-    transformed: Optional[bool] = None
+    transformed: bool | None = None
     """Whether or not the original input was transformed."""
-    detectors: Optional[dict[str, Any]] = None
+    detectors: dict[str, Any] | None = None
     """Result of the policy analyzing and input prompt."""
 
 
 class _GuardChatCompletionsResponse(BaseModel):
-    result: Optional[_GuardChatCompletionsResult] = None
+    result: _GuardChatCompletionsResult | None = None
 
 
 class _FilteredMessages(NamedTuple):
@@ -239,7 +235,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
     """
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,

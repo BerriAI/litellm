@@ -1,7 +1,8 @@
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, AsyncIterator, List, Protocol, Union, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter
@@ -121,7 +122,7 @@ class BaseAnthropicMessagesStreamingIterator:
         self.start_time = datetime.now()
         self.completion_start_time: datetime | None = None
 
-    async def _handle_streaming_logging(self, collected_chunks: List[bytes]):
+    async def _handle_streaming_logging(self, collected_chunks: list[bytes]):
         """Handle the logging after all chunks have been collected."""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
@@ -168,7 +169,7 @@ class BaseAnthropicMessagesStreamingIterator:
             url_route="/v1/messages",
         )
 
-    def _convert_chunk_to_sse_format(self, chunk: Union[dict, Any]) -> bytes:
+    def _convert_chunk_to_sse_format(self, chunk: dict | Any) -> bytes:
         """
         Convert a chunk to Server-Sent Events format.
 
@@ -185,7 +186,7 @@ class BaseAnthropicMessagesStreamingIterator:
 
     async def async_sse_wrapper(
         self,
-        completion_stream: AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]],
+        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
     ) -> AsyncIterator[bytes]:
         """
         Generic async SSE wrapper that converts streaming chunks to SSE format

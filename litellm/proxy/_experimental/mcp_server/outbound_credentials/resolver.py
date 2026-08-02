@@ -27,7 +27,6 @@ import httpx
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
-
 from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
     ClientCredentialsBearerAuth,
     ClientCredentialsTokenSource,

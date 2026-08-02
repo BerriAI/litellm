@@ -338,7 +338,9 @@ class ComplexityRouterConfig(BaseModel):
         description=(
             "Number of prior user turns (tool output and harness reminders excluded) to include as context "
             "in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is "
-            "classified against what it refers to. These turns are sent to the classifier model, which may "
+            "classified against what it refers to. Counts turns of both roles when "
+            "classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier "
+            "model, which may "
             "be a different deployment or provider than the routed completion model; that call already "
             "carries the current user ask and the caller's system prompt in full. Set to 0 to send neither "
             "prior turns nor any conversation context beyond the current ask. Only applies when "
@@ -351,6 +353,21 @@ class ComplexityRouterConfig(BaseModel):
         description=(
             "Maximum character length for each prior turn's text in the classifier context window. "
             "Turns exceeding this are truncated. Only applies when classifier_type is 'llm'."
+        ),
+    )
+    classifier_context_include_assistant_turns: bool = Field(
+        default=False,
+        description=(
+            "Include assistant turns in the classifier context window, so difficulty stated by the "
+            "model rather than by the user stays visible: a plan the assistant calls complex, which "
+            "the user approves with 'yes', is classified on the work being approved instead of on the "
+            "word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the "
+            "conversation across both roles rather than the last N user turns, and assistant text is "
+            "sent to the classifier model, which may be a different deployment or provider than the "
+            "routed completion model. Assistant replies share classifier_context_per_turn_chars with "
+            "user turns, so raise it if replies are truncated before the part that carries the "
+            "difficulty. Off by default because enabling it shifts tier decisions, and therefore "
+            "spend, for an already-deployed router. Only applies when classifier_type is 'llm'."
         ),
     )
 

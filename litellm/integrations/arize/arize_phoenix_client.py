@@ -3,7 +3,7 @@ Arize Phoenix API client for fetching prompt versions from Arize Phoenix.
 """
 
 import urllib.parse
-from typing import Any, Dict, Optional
+from typing import Any
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -27,7 +27,7 @@ class ArizePhoenixClient:
     - Direct API base URL configuration
     """
 
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
+    def __init__(self, api_key: str | None = None, api_base: str | None = None):
         """
         Initialize the Arize Phoenix client.
 
@@ -53,7 +53,7 @@ class ArizePhoenixClient:
         # Initialize HTTPHandler
         self.http_handler = HTTPHandler(disable_default_headers=True)
 
-    def get_prompt_version(self, prompt_version_id: str) -> Optional[Dict[str, Any]]:
+    def get_prompt_version(self, prompt_version_id: str) -> dict[str, Any] | None:
         """
         Fetch a prompt version from Arize Phoenix.
 

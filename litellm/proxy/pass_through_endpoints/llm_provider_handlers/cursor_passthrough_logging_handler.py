@@ -6,7 +6,6 @@ so they appear cleanly in the LiteLLM Logs page.
 """
 
 from datetime import datetime
-from typing import Dict
 
 import httpx
 
@@ -18,7 +17,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import StandardPassThroughResponseObject
 
-CURSOR_AGENT_ENDPOINTS: Dict[str, str] = {
+CURSOR_AGENT_ENDPOINTS: dict[str, str] = {
     "POST /v0/agents": "cursor:agent:create",
     "GET /v0/agents": "cursor:agent:list",
     "POST /v0/agents/{id}/followup": "cursor:agent:followup",

@@ -10,7 +10,8 @@ the router silently dropping the deployment at load time under
 ``ignore_invalid_deployments``.
 """
 
-from typing import Literal, Mapping
+from collections.abc import Mapping
+from typing import Literal
 
 AUTO_ROUTER_MODEL_PREFIX = "auto_router/"
 

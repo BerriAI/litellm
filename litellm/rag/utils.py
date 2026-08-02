@@ -4,13 +4,13 @@ RAG utility functions.
 Provides provider configuration utilities similar to ProviderConfigManager.
 """
 
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 
 
-def get_rag_ingestion_class(custom_llm_provider: str) -> Type["BaseRAGIngestion"]:
+def get_rag_ingestion_class(custom_llm_provider: str) -> type["BaseRAGIngestion"]:
     """
     Get the appropriate RAG ingestion class for a provider.
 

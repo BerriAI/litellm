@@ -1,5 +1,4 @@
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from typing import List, Optional
 
 import litellm
 from litellm._logging import print_verbose
@@ -11,23 +10,23 @@ from ..llms.vllm.completion import handler as vllm_handler
 def batch_completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
-    stream: Optional[bool] = None,
+    messages: list = [],
+    functions: list | None = None,
+    function_call: str | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    n: int | None = None,
+    stream: bool | None = None,
     stop=None,
-    max_tokens: Optional[int] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
+    max_tokens: int | None = None,
+    presence_penalty: float | None = None,
+    frequency_penalty: float | None = None,
+    logit_bias: dict | None = None,
+    user: str | None = None,
     deployment_id=None,
-    request_timeout: Optional[int] = None,
-    timeout: Optional[int] = 600,
-    max_workers: Optional[int] = 100,
+    request_timeout: int | None = None,
+    timeout: int | None = 600,
+    max_workers: int | None = 100,
     # Optional liteLLM function params
     **kwargs,
 ):
@@ -164,7 +163,7 @@ def batch_completion_models(*args, **kwargs):
         futures = {}
         with ThreadPoolExecutor(max_workers=len(deployments)) as executor:
             for deployment in deployments:
-                for key in kwargs.keys():
+                for key in kwargs:
                     if key not in deployment:  # don't override deployment values e.g. model name, api base, etc.
                         deployment[key] = kwargs[key]
                 kwargs = {**deployment, **nested_kwargs}
@@ -250,7 +249,7 @@ def batch_completion_models_all_responses(*args, **kwargs):
                 if result is not None:
                     responses.append(result)
             except Exception as e:
-                print_verbose(f"batch_completion_models_all_responses: model request failed: {str(e)}")
+                print_verbose(f"batch_completion_models_all_responses: model request failed: {e!s}")
                 continue
 
     return responses

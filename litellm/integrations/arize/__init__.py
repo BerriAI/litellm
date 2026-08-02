@@ -1,16 +1,16 @@
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
 
 from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 
 from .arize_phoenix_prompt_manager import ArizePhoenixPromptManager
 
 # Global instances
-global_arize_config: Optional[dict] = None
+global_arize_config: dict | None = None
 
 
 def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
