@@ -553,6 +553,7 @@ class RejectedRequestError(BadRequestError):  # type: ignore
         litellm_debug_info: str | None = None,
     ):
         self.status_code = 400
+        self.raw_message = message
         self.message = f"litellm.RejectedRequestError: {message}"
         self.model = model
         self.llm_provider = llm_provider
