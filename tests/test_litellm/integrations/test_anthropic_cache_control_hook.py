@@ -1947,9 +1947,18 @@ def test_gemini_cache_control_non_contiguous_breakpoints_last_wins():
 
     cached, non_cached = separate_cached_messages(messages)
 
-    # The last-marked message must be part of the cached prefix, since
-    # Gemini's cache boundary should extend to the last cache_control tag.
-    assert messages[3] in cached, (
-        "Second cache_control breakpoint was dropped -- only the first "
-        "contiguous block was cached, reproducing issue #17201"
+    # Assert the exact partition, not just membership -- this protects
+    # against implementations that duplicate, reorder, or over-cache
+    # messages while still happening to include messages[3] somewhere.
+    # The boundary should span from the first breakpoint (system, idx 0)
+    # through the last one (idx 3), so all four messages are cached and
+    # none are left over.
+    assert cached == messages, (
+        "Expected the full first-to-last breakpoint range to be cached, "
+        "reproducing issue #17201 if this fails. "
+        f"Got cached={cached!r}"
+    )
+    assert non_cached == [], (
+        f"Expected no non-cached messages once the boundary spans the "
+        f"full breakpoint range. Got non_cached={non_cached!r}"
     )
