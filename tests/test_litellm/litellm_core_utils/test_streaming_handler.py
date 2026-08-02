@@ -1511,6 +1511,37 @@ def test_raise_on_model_repetition(
             wrapper.raise_on_model_repetition()
 
 
+def test_raise_on_model_repetition_empty_choices_no_crash(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test: Vertex Gemini Flash with web_search_options emits
+    metadata-only chunks with choices=[]. raise_on_model_repetition must
+    not raise IndexError on those chunks, and must reset the repetition
+    counter to 1 so subsequent real chunks are compared correctly.
+    """
+    wrapper = initialized_custom_stream_wrapper
+
+    empty_chunk = ModelResponseStream(
+        id="test",
+        created=1741037890,
+        model="test-model",
+        choices=[],  # metadata-only chunk — no choices
+    )
+
+    # Two empty-choices chunks: should not crash and counter should stay at 1
+    wrapper.chunks.append(empty_chunk)
+    wrapper.chunks.append(empty_chunk)
+    wrapper.raise_on_model_repetition()  # must not raise IndexError
+    assert wrapper._repeated_messages_count == 1
+
+    # Real content chunk after metadata chunks should still be compared correctly
+    real_chunk = _make_chunk("hello world content")
+    wrapper.chunks.append(real_chunk)
+    wrapper.raise_on_model_repetition()  # still must not raise
+    assert wrapper._repeated_messages_count == 1
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
