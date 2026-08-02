@@ -115,6 +115,44 @@ class TestLangfuseOtelIntegration:
                 mock_span, mock_kwargs, mock_response, LangfuseLLMObsOTELAttributes
             )
 
+    def test_set_langfuse_otel_attributes_sets_cost(self):
+        """response_cost should be emitted as a numeric gen_ai.usage.cost span attribute."""
+        mock_span = MagicMock()
+        kwargs = {"standard_logging_object": {"response_cost": 0.001234}}
+
+        with patch("litellm.integrations.arize._utils.set_attributes"):
+            LangfuseOtelLogger.set_langfuse_otel_attributes(mock_span, kwargs, {})
+
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.cost", 0.001234)
+        cost_calls = [
+            c for c in mock_span.set_attribute.call_args_list
+            if c.args[0] == "gen_ai.usage.cost"
+        ]
+        assert len(cost_calls) == 1
+        assert isinstance(cost_calls[0].args[1], float)
+
+    def test_set_langfuse_otel_attributes_allows_zero_cost(self):
+        """An explicit zero cost is valid and should be emitted; only None is skipped."""
+        mock_span = MagicMock()
+        kwargs = {"standard_logging_object": {"response_cost": 0}}
+
+        with patch("litellm.integrations.arize._utils.set_attributes"):
+            LangfuseOtelLogger.set_langfuse_otel_attributes(mock_span, kwargs, {})
+
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.cost", 0.0)
+
+    def test_set_langfuse_otel_attributes_skips_missing_cost(self):
+        """No cost attribute is set when response_cost is absent."""
+        for kwargs in ({"standard_logging_object": {}}, {}):
+            mock_span = MagicMock()
+            with patch("litellm.integrations.arize._utils.set_attributes"):
+                LangfuseOtelLogger.set_langfuse_otel_attributes(mock_span, kwargs, {})
+            cost_calls = [
+                c for c in mock_span.set_attribute.call_args_list
+                if c.args[0] == "gen_ai.usage.cost"
+            ]
+            assert cost_calls == []
+
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""
         mock_span = MagicMock()
