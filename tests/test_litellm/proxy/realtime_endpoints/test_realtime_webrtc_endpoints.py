@@ -123,9 +123,7 @@ def mock_route_request_client_secrets():
     future_expires_at = int(time.time()) + 3600
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 200
-    mock_resp.text = (
-        f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
-    )
+    mock_resp.text = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
     mock_resp.content = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'.encode()
     mock_resp.headers = {}
     mock_resp.json.return_value = {
@@ -202,9 +200,7 @@ async def test_client_secrets_success_with_mock(
     mock_pre_call_hook,
 ):
     """POST /v1/realtime/client_secrets returns 200 with valid auth and mocked upstream."""
-    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user", team_id="test-team"
-    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user", team_id="test-team")
     try:
         client = TestClient(proxy_app)
         with (
@@ -262,13 +258,7 @@ async def test_client_secrets_transcription_rejects_disallowed_nested_model(
                     "session": {
                         "type": "transcription",
                         "model": "gpt-4o-realtime-preview",
-                        "audio": {
-                            "input": {
-                                "transcription": {
-                                    "model": "gpt-realtime-whisper"
-                                }
-                            }
-                        },
+                        "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
                     },
                 },
             )
@@ -299,12 +289,8 @@ async def test_client_secrets_transcription_routes_on_nested_model(
         async def _inner():
             resp = MagicMock(spec=httpx.Response)
             resp.status_code = 200
-            resp.text = (
-                f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
-            )
-            resp.content = (
-                f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
-            ).encode()
+            resp.text = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
+            resp.content = (f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}').encode()
             resp.headers = {}
             resp.json.return_value = {
                 "value": "upstream_ephemeral_key",
@@ -338,13 +324,7 @@ async def test_client_secrets_transcription_routes_on_nested_model(
                     "session": {
                         "type": "transcription",
                         "model": "gpt-4o-realtime-preview",
-                        "audio": {
-                            "input": {
-                                "transcription": {
-                                    "model": "gpt-realtime-whisper"
-                                }
-                            }
-                        },
+                        "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
                     },
                 },
             )
@@ -354,10 +334,7 @@ async def test_client_secrets_transcription_routes_on_nested_model(
         session = captured["data"]["session"]
         assert session["type"] == "transcription"
         assert "model" not in session
-        assert (
-            session["audio"]["input"]["transcription"]["model"]
-            == "gpt-realtime-whisper"
-        )
+        assert session["audio"]["input"]["transcription"]["model"] == "gpt-realtime-whisper"
         encrypted_value = response.json()["value"]
         decoded = _decode_realtime_token_payload(
             decrypt_value_helper(
@@ -517,10 +494,7 @@ async def test_realtime_calls_replays_transcription_session_type(
         )
 
     assert captured["session"]["type"] == "transcription"
-    assert (
-        captured["session"]["audio"]["input"]["transcription"]["model"]
-        == "gpt-realtime-whisper"
-    )
+    assert captured["session"]["audio"]["input"]["transcription"]["model"] == "gpt-realtime-whisper"
 
 
 # --- transcription_sessions endpoint ---
@@ -592,9 +566,7 @@ async def test_transcription_sessions_rejects_disallowed_resolved_model(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -638,9 +610,7 @@ async def test_transcription_sessions_rejects_disallowed_team_model_scope(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -683,9 +653,7 @@ async def test_transcription_sessions_rejects_disallowed_project_model_scope(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -738,9 +706,7 @@ async def test_transcription_sessions_rejects_disallowed_team_member_model_scope
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={
-                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
-                },
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
             )
 
         assert response.status_code == 403
@@ -934,9 +900,7 @@ async def test_transcription_sessions_encrypts_client_secret(
     POST /v1/realtime/transcription_sessions returns 200 and the ephemeral key
     under client_secret.value must be encrypted (never the raw upstream key).
     """
-    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user", team_id="test-team"
-    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user", team_id="test-team")
     captured_route_type = {}
 
     async def _capturing_route(*args, **kwargs):
@@ -980,10 +944,7 @@ async def test_transcription_sessions_encrypts_client_secret(
         assert decrypted is not None
         assert "upstream_ephemeral_key" in decrypted
         # Routed through the dedicated transcription_sessions route type.
-        assert (
-            captured_route_type["route_type"]
-            == "acreate_realtime_transcription_session"
-        )
+        assert captured_route_type["route_type"] == "acreate_realtime_transcription_session"
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 
@@ -1003,7 +964,153 @@ def test_session_type_coerced_for_unknown_value():
     session_type = decoded.get("session_type") or "realtime"
     if session_type not in ("realtime", "transcription"):
         session_type = "realtime"
-    assert session_type == "realtime"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/realtime/translations/client_secrets",
+        "/realtime/translations/client_secrets",
+        "/openai/v1/realtime/translations/client_secrets",
+    ],
+)
+def test_translation_client_secret_aliases_bind_token_family(
+    proxy_app,
+    mock_route_request_client_secrets,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+    path,
+):
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        models=["gpt-realtime-translate"],
+    )
+    captured = {}
+
+    async def capture_route(*args, **kwargs):
+        captured["route_type"] = kwargs["route_type"]
+        captured["data"] = kwargs["data"]
+        return await mock_route_request_client_secrets(*args, **kwargs)
+
+    try:
+        client = TestClient(proxy_app)
+        with (
+            patch("litellm.proxy.proxy_server.route_request", side_effect=capture_route),
+            patch(
+                "litellm.proxy.proxy_server.add_litellm_data_to_request",
+                side_effect=mock_add_litellm_data,
+            ),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as logging,
+        ):
+            logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+            logging.post_call_failure_hook = AsyncMock()
+            response = client.post(
+                path,
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={"model": "gpt-realtime-translate"},
+            )
+
+        assert response.status_code == 200
+        assert captured["route_type"] == "acreate_realtime_translation_client_secret"
+        assert captured["data"]["session"] == {
+            "type": "translation",
+            "model": "gpt-realtime-translate",
+        }
+        decrypted = decrypt_value_helper(
+            response.json()["value"],
+            key="client_secret.value",
+            exception_type="debug",
+        )
+        decoded = _decode_realtime_token_payload(decrypted or "")
+        assert decoded is not None
+        assert decoded["session_type"] == "translation"
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/realtime/translations/calls",
+        "/realtime/translations/calls",
+        "/openai/v1/realtime/translations/calls",
+    ],
+)
+def test_translation_calls_aliases_route_translation_session(
+    proxy_app,
+    mock_route_request_realtime_calls,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+    path,
+):
+    token = encrypt_value_helper(
+        _encode_realtime_token_payload(
+            ephemeral_key="ek_test",
+            model_id="gpt-realtime-translate",
+            user_id="test-user",
+            team_id=None,
+            expires_at=int(time.time()) + 3600,
+            session_type="translation",
+        )
+    )
+    captured = {}
+
+    async def capture_route(*args, **kwargs):
+        captured["route_type"] = kwargs["route_type"]
+        captured["data"] = kwargs["data"]
+        return await mock_route_request_realtime_calls(*args, **kwargs)
+
+    client = TestClient(proxy_app)
+    with (
+        patch("litellm.proxy.proxy_server.route_request", side_effect=capture_route),
+        patch(
+            "litellm.proxy.proxy_server.add_litellm_data_to_request",
+            side_effect=mock_add_litellm_data,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as logging,
+    ):
+        logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        logging.post_call_failure_hook = AsyncMock()
+        response = client.post(
+            path,
+            headers={"Authorization": f"Bearer {token}"},
+            content=b"v=0\r\n",
+        )
+
+    assert response.status_code == 201
+    assert captured["route_type"] == "arealtime_translation_calls"
+    assert captured["data"]["session"] == {
+        "type": "translation",
+        "model": "gpt-realtime-translate",
+    }
+
+
+@pytest.mark.parametrize(
+    "session_type,path",
+    [
+        ("realtime", "/v1/realtime/translations/calls"),
+        ("translation", "/v1/realtime/calls"),
+    ],
+)
+def test_realtime_calls_reject_cross_family_token(proxy_app, session_type, path):
+    model = "gpt-realtime-translate" if session_type == "translation" else "gpt-realtime-2"
+    token = encrypt_value_helper(
+        _encode_realtime_token_payload(
+            ephemeral_key="ek_test",
+            model_id=model,
+            user_id=None,
+            team_id=None,
+            expires_at=int(time.time()) + 3600,
+            session_type=session_type,
+        )
+    )
+    response = TestClient(proxy_app).post(
+        path,
+        headers={"Authorization": f"Bearer {token}"},
+        content=b"v=0\r\n",
+    )
+    assert response.status_code == 401
+    assert response.json()["error"] == "Token is not valid for this Realtime endpoint"
 
 
 @pytest.mark.asyncio
@@ -1129,9 +1236,7 @@ async def test_transcription_sessions_returns_upstream_error_verbatim(
 
         return _inner()
 
-    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user", team_id="test-team"
-    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user", team_id="test-team")
     try:
         client = TestClient(proxy_app)
         with (
@@ -1171,9 +1276,7 @@ async def test_transcription_sessions_wraps_route_exception(
     async def _raise_http(*args, **kwargs):
         raise HTTPException(status_code=403, detail="Model not allowed")
 
-    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user"
-    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user")
     try:
         client = TestClient(proxy_app, raise_server_exceptions=False)
         with (

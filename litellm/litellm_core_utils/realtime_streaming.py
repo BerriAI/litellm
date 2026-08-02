@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
@@ -15,6 +16,8 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeResponseDelta,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
+    OpenAIRealtimeTranslationClosedEvent,
+    OpenAIRealtimeTranslationDurationUsage,
 )
 from litellm.types.realtime import ALL_DELTA_TYPES
 
@@ -108,6 +111,7 @@ class RealTimeStreaming:
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
+        translation_session: bool = False,
     ):
         self.websocket: _ClientWebSocket = websocket
         self.backend_ws = backend_ws
@@ -117,6 +121,10 @@ class RealTimeStreaming:
         self.input_messages: list[dict[str, str]] = []
         self.session_tools: list[dict] = []
         self.tool_calls: list[dict] = []
+        self._is_translation_session = translation_session
+        self._translation_output_audio_bytes = 0
+        self._translation_output_bytes_per_second = 48000.0
+        self._translation_usage_finalized = False
 
         # Detect whether the client is explicitly opting into the beta protocol.
         self._client_wants_beta = self._detect_beta_header(websocket)
@@ -379,6 +387,7 @@ class RealTimeStreaming:
 
     async def log_messages(self):
         """Log messages in list"""
+        self._finalize_translation_usage()
         if self.logging_obj:
             if self.input_messages:
                 self.logging_obj.model_call_details["messages"] = self.input_messages
@@ -391,6 +400,60 @@ class RealTimeStreaming:
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True)
             )
+
+    def _capture_translation_output_audio(self, event_obj: Mapping[str, object]) -> None:
+        if not self._is_translation_session:
+            return
+        self._capture_translation_output_format(event_obj)
+        if event_obj.get("type") != "session.output_audio.delta":
+            return
+        delta = event_obj.get("delta")
+        if not isinstance(delta, str):
+            return
+        try:
+            decoded = base64.b64decode(delta, validate=True)
+        except (ValueError, TypeError):
+            return
+        self._translation_output_audio_bytes += len(decoded)
+
+    def _capture_translation_output_format(self, event_obj: Mapping[str, object]) -> None:
+        session = event_obj.get("session")
+        if not isinstance(session, dict):
+            return
+        audio = session.get("audio")
+        output = audio.get("output") if isinstance(audio, dict) else None
+        audio_format = output.get("format") if isinstance(output, dict) else None
+        if isinstance(audio_format, str):
+            if audio_format in ("g711_ulaw", "g711_alaw"):
+                self._translation_output_bytes_per_second = 8000.0
+            return
+        if not isinstance(audio_format, dict):
+            return
+        format_type = audio_format.get("type")
+        rate = audio_format.get("rate")
+        if not isinstance(rate, (int, float)) or rate <= 0:
+            return
+        if format_type == "audio/pcm":
+            self._translation_output_bytes_per_second = float(rate) * 2
+        elif format_type in ("audio/pcmu", "audio/pcma"):
+            self._translation_output_bytes_per_second = float(rate)
+
+    def _finalize_translation_usage(self) -> None:
+        if self._translation_usage_finalized:
+            return
+        for event in self.messages:
+            if event.get("type") != "session.closed":
+                continue
+            usage = event.get("usage")
+            if isinstance(usage, dict) and isinstance(usage.get("output_seconds"), (int, float)):
+                self._translation_usage_finalized = True
+                return
+        if self._translation_output_audio_bytes == 0:
+            return
+        output_seconds = self._translation_output_audio_bytes / self._translation_output_bytes_per_second
+        usage = OpenAIRealtimeTranslationDurationUsage(type="duration", output_seconds=output_seconds)
+        self.messages.append(OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=usage))
+        self._translation_usage_finalized = True
 
     async def _send_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
@@ -1067,6 +1130,7 @@ class RealTimeStreaming:
                     if self._should_drop_event_from_client(event):
                         continue
 
+                    self._capture_translation_output_audio(event)
                     if await self._handle_raw_backend_message(event, raw_response):
                         continue
 

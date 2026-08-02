@@ -29,7 +29,7 @@ router: Final = APIRouter()
 _REALTIME_TOKEN_VERSION: Final = "realtime_v1"
 _DEFAULT_REALTIME_MODEL: Final = "gpt-4o-realtime-preview"
 _DEFAULT_TRANSCRIPTION_MODEL: Final = "gpt-realtime-whisper"
-_ALLOWED_SESSION_TYPES: Final = ("realtime", "transcription")
+_ALLOWED_SESSION_TYPES: Final = ("realtime", "transcription", "translation")
 
 
 def _coerce_realtime_session_type(session_type: str | None) -> str:
@@ -117,14 +117,21 @@ async def _prepare_client_secret_session(
     user_api_key_dict: UserAPIKeyAuth,
     llm_model_list: list | None,
     llm_router: Any,
+    forced_session_type: str | None = None,
 ) -> tuple[str, dict | None, str]:
-    session_type: Final = _coerce_realtime_session_type(req.session.type if req.session else None)
+    requested_session_type: Final = req.session.type if req.session else None
+    if forced_session_type is None and requested_session_type == "translation":
+        raise HTTPException(status_code=400, detail="Translation sessions require the translations endpoint")
+    session_type: Final = forced_session_type or _coerce_realtime_session_type(requested_session_type)
     session_data: Final[dict | None] = req.session.model_dump(exclude_none=True) if req.session else None
+    if session_data is None and session_type == "translation":
+        session_data = {}  # mutable-ok: endpoint injects the resolved translation session type
     if session_data is not None:
         session_data["type"] = session_type
 
     session_model: Final = req.session.model if req.session else None
-    model: str = session_model or req.model or _DEFAULT_REALTIME_MODEL
+    default_model: Final = "gpt-realtime-translate" if session_type == "translation" else _DEFAULT_REALTIME_MODEL
+    model: str = session_model or req.model or default_model
     if session_type != "transcription":
         await can_key_call_resolved_model(
             model=model,
@@ -132,6 +139,8 @@ async def _prepare_client_secret_session(
             llm_model_list=llm_model_list,
             llm_router=llm_router,
         )
+        if session_data is not None:
+            session_data["model"] = model
         return model, session_data, session_type
 
     transcription_model_candidates: Final = _transcription_model_candidates_from_session(session_data or {})
@@ -220,6 +229,21 @@ def _decode_realtime_token_payload(
     dependencies=[Depends(user_api_key_auth)],
     tags=["realtime"],
 )
+@router.post(
+    "/v1/realtime/translations/client_secrets",
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI decorator requires dependency lists
+    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+)
+@router.post(
+    "/realtime/translations/client_secrets",
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI decorator requires dependency lists
+    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+)
+@router.post(
+    "/openai/v1/realtime/translations/client_secrets",
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI decorator requires dependency lists
+    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+)
 async def create_realtime_client_secret(
     request: Request,
     fastapi_response: Response,
@@ -241,12 +265,14 @@ async def create_realtime_client_secret(
     try:
         body: Final = await _read_request_body(request=request)
         req: Final = RealtimeClientSecretRequest(**body)
+        is_translation_request: Final = "/realtime/translations/client_secrets" in request.url.path
 
         model, session_data, session_type = await _prepare_client_secret_session(
             req=req,
             user_api_key_dict=user_api_key_dict,
             llm_model_list=llm_model_list,
             llm_router=llm_router,
+            forced_session_type="translation" if is_translation_request else None,
         )
 
         data = {"model": model}
@@ -270,17 +296,20 @@ async def create_realtime_client_secret(
             proxy_config=proxy_config,
         )
 
+        call_type = (
+            "acreate_realtime_translation_client_secret" if is_translation_request else "acreate_realtime_client_secret"
+        )
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=data,
-            call_type="acreate_realtime_client_secret",
+            call_type=call_type,
         )
 
         verbose_proxy_logger.debug("WebRTC: /v1/realtime/client_secrets (model=%s)", model)
 
         llm_call: Final = await route_request(
             data=data,
-            route_type="acreate_realtime_client_secret",
+            route_type=call_type,
             llm_router=llm_router,
             user_model=user_model,
         )
@@ -363,6 +392,18 @@ async def create_realtime_client_secret(
     "/openai/v1/realtime/calls",
     tags=["realtime"],
 )
+@router.post(
+    "/v1/realtime/translations/calls",
+    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+)
+@router.post(
+    "/realtime/translations/calls",
+    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+)
+@router.post(
+    "/openai/v1/realtime/translations/calls",
+    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+)
 async def proxy_realtime_calls(
     request: Request,
     fastapi_response: Response,
@@ -388,6 +429,7 @@ async def proxy_realtime_calls(
             media_type="application/json",
         )
 
+    is_translation_request: Final = "/realtime/translations/calls" in request.url.path
     encrypted_token: Final = auth_header.removeprefix("Bearer ").strip()
     decrypted_token_value: Final = decrypt_value_helper(
         value=encrypted_token,
@@ -405,21 +447,36 @@ async def proxy_realtime_calls(
     if decoded_payload is not None:
         # Check token expiry
         expires_at: Final = decoded_payload.get("expires_at")
-        if expires_at is not None and isinstance(expires_at, int):
-            if time.time() > expires_at:
-                return Response(
-                    content=json.dumps({"error": "Token has expired"}),
-                    status_code=http_status.HTTP_401_UNAUTHORIZED,
-                    media_type="application/json",
-                )
+        if isinstance(expires_at, int) and time.time() > expires_at:
+            return Response(
+                content=json.dumps({"error": "Token has expired"}),
+                status_code=http_status.HTTP_401_UNAUTHORIZED,
+                media_type="application/json",
+            )
 
         openai_ephemeral_key = decoded_payload.get("ephemeral_key", "")
         model = decoded_payload.get("model_id") or request.query_params.get("model") or _DEFAULT_REALTIME_MODEL
         user_id = decoded_payload.get("user_id") or None
         team_id = decoded_payload.get("team_id") or None
-        session_type = _coerce_realtime_session_type(decoded_payload.get("session_type"))
+        raw_session_type = decoded_payload.get("session_type")
+        session_type = _coerce_realtime_session_type(raw_session_type)
+        if is_translation_request != (raw_session_type == "translation"):
+            return Response(
+                content=json.dumps(  # mutable-ok: JSON encoder requires the endpoint error payload mapping
+                    {"error": "Token is not valid for this Realtime endpoint"}
+                ),
+                status_code=http_status.HTTP_401_UNAUTHORIZED,
+                media_type="application/json",
+            )
     else:
-        # Backward compatibility: older tokens contained only encrypted upstream key.
+        if is_translation_request:
+            return Response(
+                content=json.dumps(  # mutable-ok: JSON encoder requires the endpoint error payload mapping
+                    {"error": "Token is not valid for this Realtime endpoint"}
+                ),
+                status_code=http_status.HTTP_401_UNAUTHORIZED,
+                media_type="application/json",
+            )
         openai_ephemeral_key = decrypted_token_value
         model = request.query_params.get("model", _DEFAULT_REALTIME_MODEL)
         user_id = None
@@ -463,17 +520,18 @@ async def proxy_realtime_calls(
             proxy_config=proxy_config,
         )
 
+        call_type = "arealtime_translation_calls" if is_translation_request else "arealtime_calls"
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=minimal_auth,
             data=data,
-            call_type="arealtime_calls",
+            call_type=call_type,
         )
 
         verbose_proxy_logger.debug("WebRTC: /v1/realtime/calls (model=%s)", model)
 
         llm_call: Final = await route_request(
             data=data,
-            route_type="arealtime_calls",
+            route_type=call_type,
             llm_router=llm_router,
             user_model=user_model,
         )

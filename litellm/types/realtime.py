@@ -1,6 +1,6 @@
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import ReadOnly, TypedDict
 
 from .llms.openai import (
@@ -10,6 +10,7 @@ from .llms.openai import (
 )
 
 ALL_DELTA_TYPES = Literal["text", "audio"]
+RealtimeSessionType = Literal["realtime", "transcription", "translation"]
 
 
 class RealtimeResponseTransformInput(TypedDict):
@@ -64,6 +65,41 @@ class RealtimeExpiresAfter(BaseModel):
     seconds: int | None = None
 
 
+class RealtimeAudioTranscriptionConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: Optional[str] = None
+    delay: Optional[Literal["minimal", "low", "medium", "high", "xhigh"]] = None
+    keywords: Optional[Sequence[str]] = None
+    language: Optional[str] = None
+    languages: Optional[Sequence[str]] = None
+    prompt: Optional[str] = None
+
+
+class RealtimeAudioInputConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    format: Optional[Union[str, Mapping[str, object]]] = None
+    noise_reduction: Optional[Mapping[str, object]] = None
+    transcription: Optional[RealtimeAudioTranscriptionConfig] = None
+    turn_detection: Optional[Mapping[str, object]] = None
+
+
+class RealtimeAudioOutputConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    format: Optional[Union[str, Mapping[str, object]]] = None
+    language: Optional[str] = None
+    voice: Optional[Union[str, Mapping[str, object]]] = None
+
+
+class RealtimeSessionAudioConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    input: Optional[RealtimeAudioInputConfig] = None
+    output: Optional[RealtimeAudioOutputConfig] = None
+
+
 class RealtimeSessionConfig(BaseModel):
     """
     Session configuration nested inside the client_secrets request body.
@@ -75,18 +111,18 @@ class RealtimeSessionConfig(BaseModel):
 
     model_config = {"extra": "allow"}
 
-    type: str | None = None
-    model: str | None = None
-    instructions: str | None = None
-    audio: dict[str, Any] | None = None
-    include: list[str] | None = None
-    max_output_tokens: int | str | None = None
-    output_modalities: list[str] | None = None
-    tool_choice: Any | None = None
-    tools: list[dict[str, Any]] | None = None
-    tracing: Any | None = None
-    truncation: Any | None = None
-    prompt: dict[str, Any] | None = None
+    type: Optional[RealtimeSessionType] = None
+    model: Optional[str] = None
+    instructions: Optional[str] = None
+    audio: Optional[RealtimeSessionAudioConfig] = None
+    include: Optional[List[str]] = None
+    max_output_tokens: Optional[Union[int, str]] = None
+    output_modalities: Optional[List[str]] = None
+    tool_choice: Optional[Any] = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    tracing: Optional[Any] = None
+    truncation: Optional[Any] = None
+    prompt: Optional[Dict[str, Any]] = None
 
 
 class RealtimeClientSecretRequest(BaseModel):
@@ -130,14 +166,17 @@ class RealtimeTranscriptionSessionRequest(BaseModel):
     model_config = {"extra": "allow"}
 
     # LiteLLM-only routing hint — stripped before forwarding upstream.
-    model: str | None = None
-    input_audio_transcription: dict[str, Any] | None = None
+    model: Optional[str] = None
+    input_audio_transcription: Optional[Dict[str, Any]] = None
+    audio: Optional[RealtimeSessionAudioConfig] = None
 
     def resolved_model(self) -> str | None:
         if self.model:
             return self.model
         if self.input_audio_transcription:
             return self.input_audio_transcription.get("model")
+        if self.audio and self.audio.input and self.audio.input.transcription:
+            return self.audio.input.transcription.model
         return None
 
 

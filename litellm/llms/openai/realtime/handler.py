@@ -4,7 +4,16 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
+from types import TracebackType
 from typing import Any, Final, cast
+
+from openai import AsyncOpenAI
+from openai.resources.realtime.realtime import (
+    AsyncRealtimeConnection,
+    AsyncRealtimeConnectionManager,
+)
 
 from litellm._logging import _redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -18,6 +27,49 @@ from ....litellm_core_utils.realtime_streaming import (
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..openai import OpenAIChatCompletion
+
+
+class OpenAIRealtimeConnectionAdapter:
+    def __init__(self, connection: AsyncRealtimeConnection) -> None:
+        self._connection = connection
+
+    async def send(self, message: str) -> None:
+        await self._connection.send_raw(message)
+
+    async def recv(self, decode: bool = True) -> str | bytes:
+        message = await self._connection.recv_bytes()
+        if decode and isinstance(message, bytes):
+            return message.decode("utf-8")
+        return message
+
+    async def close(self) -> None:
+        await self._connection.close()
+
+
+class OpenAIRealtimeSDKConnectionManager:
+    def __init__(
+        self,
+        manager: AsyncRealtimeConnectionManager,
+        owned_client: AsyncOpenAI | None = None,
+    ) -> None:
+        self._manager = manager
+        self._owned_client = owned_client
+
+    async def __aenter__(self) -> OpenAIRealtimeConnectionAdapter:
+        connection = await self._manager.__aenter__()
+        return OpenAIRealtimeConnectionAdapter(connection)
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        try:
+            await self._manager.__aexit__(exc_type, exc, traceback)
+        finally:
+            if self._owned_client is not None:
+                await self._owned_client.close()
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
@@ -80,7 +132,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
 
         return ssl_config
 
-    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
+    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams, realtime_mode: str = "realtime") -> str:
         """
         Construct the backend websocket URL with all query parameters (including 'model').
         """
@@ -90,7 +142,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_base = api_base.replace("http://", "ws://")
         url = URL(api_base)
         # Set the correct path
-        url = url.copy_with(path="/v1/realtime")
+        path = "/v1/realtime/translations" if realtime_mode == "translation" else "/v1/realtime"
+        url = url.copy_with(path=path)
         # Include all query parameters including 'model'
         if query_params:
             url = url.copy_with(params=query_params)
@@ -104,6 +157,66 @@ class OpenAIRealtime(OpenAIChatCompletion):
         """
         return None
 
+    def _create_connection_manager(
+        self,
+        api_base: str,
+        api_key: str,
+        model: str,
+        query_params: RealtimeQueryParams,
+        headers: Mapping[str, str],
+        timeout: float | None,
+        realtime_mode: str,
+        ssl_config: object,
+        client: object | None,
+        url: str,
+    ) -> AbstractAsyncContextManager[object]:
+        import websockets
+
+        if realtime_mode == "translation":
+            return websockets.connect(
+                url,
+                additional_headers=headers,
+                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=ssl_config,
+            )
+        normalized_api_base = api_base.rstrip("/")
+        if not normalized_api_base.endswith("/v1"):
+            normalized_api_base = f"{normalized_api_base}/v1"
+        owns_client = client is None
+        if client is not None and not isinstance(client, AsyncOpenAI):
+            raise TypeError("client must be an AsyncOpenAI instance")
+        if client is None:
+            resolved_client = self._get_openai_client(
+                is_async=True,
+                api_key=api_key,
+                api_base=normalized_api_base,
+                timeout=timeout or 600,
+                max_retries=0,
+            )
+            if not isinstance(resolved_client, AsyncOpenAI):
+                raise TypeError("OpenAI Realtime requires an AsyncOpenAI client")
+            openai_client = resolved_client
+        else:
+            openai_client = client
+        model_query = query_params.get("model")
+        extra_query = {  # mutable-ok: OpenAI SDK accepts a mutable query-parameter mapping
+            key: value for key, value in query_params.items() if key != "model"
+        }
+        sdk_connection_manager = openai_client.realtime.connect(
+            model=model_query or model,
+            extra_query=extra_query,
+            extra_headers=headers,
+            websocket_connection_options={  # mutable-ok: OpenAI SDK forwards a mutable options mapping
+                "max_size": REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                "ssl": ssl_config,
+            },
+            max_retries=0,
+        )
+        return OpenAIRealtimeSDKConnectionManager(
+            sdk_connection_manager,
+            owned_client=openai_client if owns_client else None,
+        )
+
     async def async_realtime(
         self,
         model: str,
@@ -116,6 +229,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: Any | None = None,
         litellm_metadata: dict | None = None,
+        realtime_mode: str = "realtime",
         **kwargs: Any,
     ):
         import websockets
@@ -129,7 +243,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         # Use all query params if provided, else fallback to just model
         if query_params is None:
             query_params = {"model": model}
-        url: Final = self._construct_url(api_base, query_params)
+        url: Final = self._construct_url(api_base, query_params, realtime_mode=realtime_mode)
 
         try:
             # Get provider-specific SSL configuration
@@ -154,15 +268,25 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "complete_input_dict": {"query_params": query_params},
                 },
             )
-            async with websockets.connect(
-                url,
-                additional_headers=headers,
-                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-                ssl=ssl_config,
-            ) as backend_ws:
+            connection_manager: Final = self._create_connection_manager(
+                api_base=api_base,
+                api_key=api_key,
+                model=model,
+                query_params=query_params,
+                headers=headers,
+                timeout=timeout,
+                realtime_mode=realtime_mode,
+                ssl_config=ssl_config,
+                client=client,
+                url=url,
+            )
+
+            async with connection_manager as backend_ws:
                 realtime_streaming: Final = RealTimeStreaming(
                     websocket,
-                    cast(ClientConnection, backend_ws),
+                    cast(  # cast-ok: both SDK and websockets adapters implement the streaming connection interface
+                        ClientConnection, backend_ws
+                    ),
                     logging_obj,
                     model=model,
                     user_api_key_dict=user_api_key_dict,
@@ -171,6 +295,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
                     event_normalizer=self._make_event_normalizer(),
+                    translation_session=realtime_mode == "translation",
                 )
                 await realtime_streaming.bidirectional_forward()
 

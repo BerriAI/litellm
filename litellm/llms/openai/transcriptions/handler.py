@@ -37,9 +37,12 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         - call openai_aclient.audio.transcriptions.create by default
         """
         try:
-            raw_response = await openai_aclient.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)
+            if data.get("stream") is True:
+                response: Final = await openai_aclient.audio.transcriptions.create(**data, timeout=timeout)
+                return {}, response  # mutable-ok: response headers use the existing mutable mapping contract
+            raw_response = await openai_aclient.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)  # type: ignore
             headers: Final = dict(raw_response.headers)
-            response: Final = raw_response.parse()
+            response = raw_response.parse()
 
             return headers, response
         except Exception as e:
@@ -57,6 +60,9 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         - call openai_aclient.audio.transcriptions.create by default
         """
         try:
+            if data.get("stream") is True:
+                response = openai_client.audio.transcriptions.create(**data, timeout=timeout)
+                return None, response
             if litellm.return_response_headers is True:
                 raw_response = openai_client.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)
                 headers: Final = dict(raw_response.headers)
@@ -139,6 +145,9 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             timeout=timeout,
         )
 
+        if data.get("stream") is True:
+            return response
+
         if isinstance(response, BaseModel):
             stringified_response = response.model_dump()
         else:
@@ -200,6 +209,8 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 timeout=timeout,
             )
             logging_obj.model_call_details["response_headers"] = headers
+            if data.get("stream") is True:
+                return response
             if isinstance(response, BaseModel):
                 stringified_response = response.model_dump()
             else:

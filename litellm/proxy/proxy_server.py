@@ -39,6 +39,8 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
+from openai import AsyncStream
+from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, assert_never
 
@@ -11233,6 +11235,8 @@ async def audio_transcriptions(
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
         data = {key: value for key, value in form_data.items() if key != "file"}
+        if "stream" in data:
+            data["stream"] = data["stream"] is True or str(data["stream"]).lower() in ("1", "true")
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -11297,6 +11301,22 @@ async def audio_transcriptions(
             raise e
         finally:
             file_object.close()  # close the file read in by io library
+
+        if isinstance(response, AsyncStream):
+
+            async def transcription_event_stream(
+                stream: AsyncStream[TranscriptionStreamEvent],
+            ) -> AsyncGenerator[str, None]:
+                try:
+                    async for event in stream:
+                        yield f"data: {event.model_dump_json()}\n\n"
+                finally:
+                    await stream.close()
+
+            return StreamingResponse(
+                transcription_event_stream(response),
+                media_type="text/event-stream",
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -11421,9 +11441,26 @@ def _realtime_query_params_template(model: str | None, intent: str | None) -> tu
     return tuple(params)
 
 
+def _resolve_realtime_route_model(
+    model: str | None,
+    intent: str | None,
+    is_translation: bool,
+) -> str | None:
+    if model is not None:
+        return model
+    if is_translation:
+        return "gpt-realtime-translate"
+    if intent == "transcription":
+        return "gpt-realtime-whisper"
+    return None
+
+
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
+@app.websocket("/openai/v1/realtime/translations")
+@app.websocket("/v1/realtime/translations")
+@app.websocket("/realtime/translations")
 async def realtime_websocket_endpoint(
     websocket: WebSocket,
     model: str | None = fastapi.Query(None, description="The model to use for the websocket connection."),
@@ -11441,13 +11478,11 @@ async def realtime_websocket_endpoint(
     if requested_protocols:
         accept_kwargs["subprotocol"] = requested_protocols[0]
 
-    route_model = model
+    is_translation = websocket.url.path.endswith("/realtime/translations")
+    route_model = _resolve_realtime_route_model(model, intent, is_translation)
     if route_model is None:
-        if intent == "transcription":
-            route_model = "gpt-realtime-whisper"
-        else:
-            await websocket.close(code=1008, reason="model query parameter is required")
-            return
+        await websocket.close(code=1008, reason="model query parameter is required")
+        return
     assert route_model is not None
     try:
         await can_key_call_resolved_model(
@@ -11462,12 +11497,19 @@ async def realtime_websocket_endpoint(
     await websocket.accept(**accept_kwargs)
 
     # Only use explicit parameters, not all query params
-    query_params: Final = cast(RealtimeQueryParams, dict(_realtime_query_params_template(model, intent)))
+    query_model: Final = route_model if is_translation else model
+    query_params: Final = cast(  # cast-ok: cached tuples contain only the declared realtime query keys
+        RealtimeQueryParams,
+        dict(  # mutable-ok: downstream realtime routing normalizes this request-scoped query mapping
+            _realtime_query_params_template(query_model, intent)
+        ),
+    )
 
     data: dict[str, object] = {
         "model": route_model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
+        "realtime_mode": "translation" if is_translation else "realtime",
     }
 
     # Pass guardrails into data so pre-call guardrail processing picks them up
