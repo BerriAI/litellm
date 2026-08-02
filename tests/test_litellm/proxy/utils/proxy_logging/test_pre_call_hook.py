@@ -37,13 +37,15 @@ async def test_process_pre_call_hook_response_dict_returns_response(proxy_loggin
 
 
 @pytest.mark.asyncio
-async def test_process_pre_call_hook_response_string_completion_raises_rejected(proxy_logging):
-    with pytest.raises(RejectedRequestError):
+@pytest.mark.parametrize("call_type", ["completion", "text_completion", "acompletion", "atext_completion"])
+async def test_process_pre_call_hook_response_string_completion_raises_rejected(proxy_logging, call_type):
+    with pytest.raises(RejectedRequestError) as exc_info:
         await proxy_logging.process_pre_call_hook_response(
-            response="rejected",
+            response="rejected message",
             data={"model": "m"},
-            call_type="completion",
+            call_type=call_type,
         )
+    assert exc_info.value.raw_message == "rejected message"
 
 
 @pytest.mark.asyncio

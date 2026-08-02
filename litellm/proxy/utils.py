@@ -920,7 +920,12 @@ class ProxyLogging:
         if isinstance(response, dict):
             return response
         if isinstance(response, str):
-            if call_type in ["completion", "text_completion"]:
+            if call_type in [
+                "completion",
+                "text_completion",
+                "acompletion",
+                "atext_completion",
+            ]:
                 raise RejectedRequestError(
                     message=response,
                     model=data.get("model", ""),

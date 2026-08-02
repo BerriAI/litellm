@@ -9132,7 +9132,7 @@ async def chat_completion(
             request_data=_data,
         )
         _chat_response = litellm.ModelResponse()
-        _chat_response.choices[0].message.content = e.message  # type: ignore
+        _chat_response.choices[0].message.content = getattr(e, "raw_message", e.message)  # type: ignore
 
         if data.get("stream", None) is not None and data["stream"] is True:
             _iterator = litellm.utils.ModelResponseIterator(model_response=_chat_response, convert_to_delta=True)
@@ -9294,7 +9294,7 @@ async def completion(
                 total_tokens=0,
             )
             _chat_response.usage = _usage  # type: ignore
-            _chat_response.choices[0].message.content = e.message  # type: ignore
+            _chat_response.choices[0].message.content = getattr(e, "raw_message", e.message)  # type: ignore
             _iterator = litellm.utils.ModelResponseIterator(model_response=_chat_response, convert_to_delta=True)
             _streaming_response = litellm.TextCompletionStreamWrapper(
                 completion_stream=_iterator,
@@ -9316,7 +9316,7 @@ async def completion(
             )
         else:
             _response = litellm.TextCompletionResponse()
-            _response.choices[0].text = e.message
+            _response.choices[0].text = getattr(e, "raw_message", e.message)  # type: ignore
             return _response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
