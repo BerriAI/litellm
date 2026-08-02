@@ -121,16 +121,18 @@ class SkillsInjectionHook(CustomLogger):
                 # Native Anthropic skill - pass through
                 anthropic_skills.append(skill)
 
-        # Check if using messages API spec (anthropic_messages call type)
-        # Messages API always uses Anthropic-style tool format
-        use_anthropic_format = call_type == "anthropic_messages"
-
         if len(litellm_skills) > 0:
-            data = self._process_for_messages_api(
-                data=data,
-                litellm_skills=litellm_skills,
-                use_anthropic_format=use_anthropic_format,
-            )
+            if call_type == "anthropic_messages":
+                data = self._process_for_messages_api(
+                    data=data,
+                    litellm_skills=litellm_skills,
+                    use_anthropic_format=True,
+                )
+            else:
+                data = self._process_non_anthropic_model(
+                    data=data,
+                    litellm_skills=litellm_skills,
+                )
 
         return data
 
