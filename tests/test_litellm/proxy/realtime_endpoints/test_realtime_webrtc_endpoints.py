@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ConfigGeneralSettings, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -114,7 +114,94 @@ def proxy_app(monkeypatch):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-test-master-key")
+    monkeypatch.setitem(proxy_server.general_settings, "allow_non_billable_realtime_protocols", True)
     return proxy_server.app
+
+
+def test_non_billable_realtime_protocols_default_to_disabled():
+    assert ConfigGeneralSettings().allow_non_billable_realtime_protocols is False
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    (
+        (
+            "/v1/realtime/client_secrets",
+            {"model": "gpt-realtime-2"},
+        ),
+        (
+            "/v1/realtime/translations/client_secrets",
+            {
+                "model": "gpt-realtime-translate",
+                "session": {"type": "translation", "model": "gpt-realtime-translate"},
+            },
+        ),
+        (
+            "/v1/realtime/transcription_sessions",
+            {"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+        ),
+    ),
+)
+def test_non_billable_realtime_credential_endpoints_require_opt_in(
+    proxy_app,
+    monkeypatch,
+    path,
+    body,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "allow_non_billable_realtime_protocols", False)
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user")
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        with patch("litellm.proxy.proxy_server.route_request") as mock_route_request:
+            response = client.post(
+                path,
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json=body,
+            )
+
+        assert response.status_code == 403
+        assert "bypasses LiteLLM billing" in response.json()["detail"]
+        mock_route_request.assert_not_called()
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/v1/realtime/calls",
+        "/v1/realtime/translations/calls",
+    ),
+)
+def test_non_billable_realtime_sdp_endpoints_require_opt_in(
+    proxy_app,
+    monkeypatch,
+    path,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "allow_non_billable_realtime_protocols", False)
+    token_payload = _encode_realtime_token_payload(
+        ephemeral_key="epk",
+        model_id="gpt-realtime-2",
+        user_id=None,
+        team_id=None,
+        expires_at=int(time.time()) + 3600,
+    )
+    encrypted_token = encrypt_value_helper(token_payload)
+    client = TestClient(proxy_app, raise_server_exceptions=False)
+    with patch("litellm.proxy.proxy_server.route_request") as mock_route_request:
+        response = client.post(
+            path,
+            headers={"Authorization": f"Bearer {encrypted_token}"},
+            content=b"v=0\r\n",
+        )
+
+    assert response.status_code == 403
+    assert "bypasses LiteLLM billing" in response.json()["detail"]
+    mock_route_request.assert_not_called()
 
 
 @pytest.fixture

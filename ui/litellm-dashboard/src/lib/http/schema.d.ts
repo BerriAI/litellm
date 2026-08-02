@@ -25461,6 +25461,12 @@ export interface components {
              */
             allow_cli_sso_verification_uri_complete?: boolean | null;
             /**
+             * Allow Non Billable Realtime Protocols
+             * @description Allow Realtime WebRTC setup endpoints whose inference usage bypasses LiteLLM spend tracking and budget enforcement
+             * @default false
+             */
+            allow_non_billable_realtime_protocols: boolean;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */

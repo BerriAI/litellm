@@ -2,6 +2,7 @@
 
 import json
 import time
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
@@ -30,6 +31,20 @@ _REALTIME_TOKEN_VERSION: Final = "realtime_v1"
 _DEFAULT_REALTIME_MODEL: Final = "gpt-4o-realtime-preview"
 _DEFAULT_TRANSCRIPTION_MODEL: Final = "gpt-realtime-whisper"
 _ALLOWED_SESSION_TYPES: Final = ("realtime", "transcription", "translation")
+_NON_BILLABLE_REALTIME_PROTOCOL_SETTING: Final = "allow_non_billable_realtime_protocols"
+_NON_BILLABLE_REALTIME_PROTOCOL_MESSAGE: Final = (
+    "Realtime WebRTC endpoints are disabled because provider usage bypasses LiteLLM billing. "
+    "Set general_settings.allow_non_billable_realtime_protocols to true to opt in"
+)
+
+
+def _enforce_non_billable_realtime_protocol_gate(general_settings: Mapping[str, object]) -> None:
+    if general_settings.get(_NON_BILLABLE_REALTIME_PROTOCOL_SETTING) is True:
+        return
+    raise HTTPException(
+        status_code=http_status.HTTP_403_FORBIDDEN,
+        detail=_NON_BILLABLE_REALTIME_PROTOCOL_MESSAGE,
+    )
 
 
 def _coerce_realtime_session_type(session_type: str | None) -> str:
@@ -261,6 +276,7 @@ async def create_realtime_client_secret(
         version,
     )
 
+    _enforce_non_billable_realtime_protocol_gate(general_settings)
     data: dict = {}
     try:
         body: Final = await _read_request_body(request=request)
@@ -442,6 +458,7 @@ async def proxy_realtime_calls(
             media_type="application/json",
         )
 
+    _enforce_non_billable_realtime_protocol_gate(general_settings)
     sdp_body: Final[bytes] = await request.body()
     decoded_payload: Final = _decode_realtime_token_payload(decrypted_token_value)
     if decoded_payload is not None:
@@ -607,6 +624,7 @@ async def create_realtime_transcription_session(
         version,
     )
 
+    _enforce_non_billable_realtime_protocol_gate(general_settings)
     data: dict = {}
     try:
         body: Final = await _read_request_body(request=request)
