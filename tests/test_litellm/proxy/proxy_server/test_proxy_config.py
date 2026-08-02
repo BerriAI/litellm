@@ -2025,10 +2025,11 @@ def test_ProxyConfig__add_callbacks_from_db_config_uninstalls_logger_when_callba
     [
         {},
         {"litellm_settings": {}},
+        {"litellm_settings": {"callbacks": []}},
         {"litellm_settings": {"success_callback": ["langfuse"]}},
     ],
 )
-def test_ProxyConfig__add_callbacks_from_db_config_keeps_logger_when_config_omits_callbacks(
+def test_ProxyConfig__add_callbacks_from_db_config_uninstalls_logger_when_config_omits_callbacks(
     monkeypatch, config_without_callbacks
 ):
     from litellm.integrations.websearch_interception.handler import (
@@ -2039,10 +2040,37 @@ def test_ProxyConfig__add_callbacks_from_db_config_keeps_logger_when_config_omit
     pc = ProxyConfig()
 
     pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    installed_before = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+
     pc._add_callbacks_from_db_config(config_without_callbacks)
 
-    installed = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
-    assert len(installed) == 1
+    remaining = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    snapshot = {"installed_before": len(installed_before), "remaining": len(remaining)}
+    assert snapshot == {"installed_before": 1, "remaining": 0}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_llm_router_keeps_logger_when_config_load_fails(monkeypatch):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    installed_before = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+
+    class _FailingProxyConfig:
+        async def get_config(self) -> dict:
+            raise TimeoutError("transient DB timeout")
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", _FailingProxyConfig())
+
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+
+    remaining = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    snapshot = {"installed_before": len(installed_before), "remaining": len(remaining)}
+    assert snapshot == {"installed_before": 1, "remaining": 1}
 
 
 def test_ProxyConfig__add_callbacks_from_db_config_bad_config_raises():
