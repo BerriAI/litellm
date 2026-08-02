@@ -29,6 +29,8 @@ def _read_renamed(model: object, snake_case: str, camel_case: str) -> object:
 def mcp_tool_input_schema(tool: object) -> dict[str, object]:
     """The JSON Schema for an ``mcp.types.Tool``'s arguments."""
     schema = _read_renamed(tool, "input_schema", "inputSchema")
+    if schema is None:
+        return {}  # mutable-ok: fresh empty schema per caller; callers require a concrete dict
     try:
         return _INPUT_SCHEMA_ADAPTER.validate_python(schema)
     except ValidationError as exc:

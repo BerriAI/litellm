@@ -53,6 +53,15 @@ def test_input_schema_on_unsupported_sdk_shape_raises():
         mcp_tool_input_schema(ToolUnknown(name="t"))
 
 
+def test_unset_input_schema_reads_as_empty_schema():
+    """Callers default an empty schema with ``or``; an unset field must stay falsy, not raise."""
+
+    class ToolUnset(BaseModel):
+        inputSchema: dict | None = None
+
+    assert mcp_tool_input_schema(ToolUnset()) == {}
+
+
 def test_input_schema_rejects_non_dict():
     class ToolBad(BaseModel):
         input_schema: str
