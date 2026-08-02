@@ -34,7 +34,6 @@ class CZRNGenerator:
 
     def __init__(self):
         """Initialize CZRN generator."""
-        pass
 
     def create_from_litellm_data(self, row: dict[str, Any]) -> str:
         """Create a CZRN from LiteLLM daily spend data.

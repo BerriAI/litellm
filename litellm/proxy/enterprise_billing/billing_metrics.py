@@ -61,10 +61,10 @@ class BillingMetricsConfig:
     endpoint: str
     client_cert_path: str
     client_key_path: str
-    ca_cert_path: Optional[str]
+    ca_cert_path: str | None
     export_interval_ms: int
     litellm_version: str
-    license_id: Optional[str]
+    license_id: str | None
 
 
 def _metrics_endpoint(endpoint: str) -> str:
@@ -83,7 +83,7 @@ def _resource_attributes(config: BillingMetricsConfig) -> dict[str, AttributeVal
 
 
 def _billable_attributes(
-    category: BillableCategory, route: str, status_code: int, model_id: Optional[str]
+    category: BillableCategory, route: str, status_code: int, model_id: str | None
 ) -> dict[str, AttributeValue]:
     base: dict[str, AttributeValue] = {
         "litellm.endpoint.category": category.value,
@@ -124,7 +124,7 @@ class BillingMetricsRecorder:
             description="Count of 2xx HTTP requests to billable LLM/MCP/A2A endpoints",
         )
 
-    def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: Optional[str]) -> None:
+    def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: str | None) -> None:
         self._counter.add(1, _billable_attributes(category, route, status_code, model_id))
 
     def shutdown(self) -> None:
@@ -150,7 +150,7 @@ def _export_interval_ms() -> int:
 class _CredentialPaths:
     client_cert_path: str
     client_key_path: str
-    ca_cert_path: Optional[str]
+    ca_cert_path: str | None
 
 
 def _is_pem_content(value: str) -> bool:
@@ -165,7 +165,7 @@ def _write_pem(directory: str, filename: str, pem: str) -> str:
     return path
 
 
-def _resolve_credential_paths(*, client_cert: str, client_key: str, ca_cert: Optional[str]) -> _CredentialPaths:
+def _resolve_credential_paths(*, client_cert: str, client_key: str, ca_cert: str | None) -> _CredentialPaths:
     """
     Accept either a filesystem path or inline PEM content for each credential.
 
@@ -197,7 +197,7 @@ def _resolve_credential_paths(*, client_cert: str, client_key: str, ca_cert: Opt
 
 def load_billing_metrics_config(
     *, license_data: Optional["EnterpriseLicenseData"], litellm_version: str
-) -> Optional[BillingMetricsConfig]:
+) -> BillingMetricsConfig | None:
     endpoint = os.getenv(ENDPOINT_ENV)
     client_cert = os.getenv(CLIENT_CERT_ENV)
     client_key = os.getenv(CLIENT_KEY_ENV)
@@ -267,12 +267,12 @@ class _ActiveRecorderRegistry:
     proxy_shutdown_event."""
 
     def __init__(self) -> None:
-        self._recorder: Optional[BillingMetricsRecorder] = None
+        self._recorder: BillingMetricsRecorder | None = None
 
     def set(self, recorder: BillingMetricsRecorder) -> None:
         self._recorder = recorder
 
-    def pop(self) -> Optional[BillingMetricsRecorder]:
+    def pop(self) -> BillingMetricsRecorder | None:
         recorder = self._recorder
         self._recorder = None
         return recorder
@@ -283,7 +283,7 @@ _ACTIVE_RECORDER = _ActiveRecorderRegistry()
 
 def build_billing_metrics_recorder(
     *, premium: bool, license_data: Optional["EnterpriseLicenseData"], litellm_version: str
-) -> Optional[BillingMetricsRecorder]:
+) -> BillingMetricsRecorder | None:
     """Build the recorder, or None when the deployment is not licensed or metering is unconfigured."""
     if not premium:
         # Debug, not warning: unlicensed is the common case and a warning here

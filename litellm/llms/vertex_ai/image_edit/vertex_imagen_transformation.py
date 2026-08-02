@@ -3,7 +3,7 @@ import json
 import os
 from io import BufferedRandom, BufferedReader, BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -33,13 +33,13 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     Uses predict API for Imagen models on Vertex AI
     """
 
-    SUPPORTED_PARAMS: List[str] = ["n", "size", "mask"]
+    SUPPORTED_PARAMS: list[str] = ["n", "size", "mask"]
 
     def __init__(self) -> None:
         BaseImageEditConfig.__init__(self)
         VertexLLM.__init__(self)
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return list(self.SUPPORTED_PARAMS)
 
     def map_openai_params(
@@ -47,11 +47,11 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         supported_params = self.get_supported_openai_params(model)
         filtered_params = {key: value for key, value in image_edit_optional_params.items() if key in supported_params}
 
-        mapped_params: Dict[str, Any] = {}
+        mapped_params: dict[str, Any] = {}
 
         # Map OpenAI parameters to Imagen format
         if "n" in filtered_params:
@@ -67,7 +67,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         return mapped_params
 
-    def _resolve_vertex_project(self) -> Optional[str]:
+    def _resolve_vertex_project(self) -> str | None:
         return (
             getattr(self, "_vertex_project", None)
             or os.environ.get("VERTEXAI_PROJECT")
@@ -75,7 +75,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             or get_secret_str("VERTEXAI_PROJECT")
         )
 
-    def _resolve_vertex_location(self) -> Optional[str]:
+    def _resolve_vertex_location(self) -> str | None:
         return (
             getattr(self, "_vertex_location", None)
             or os.environ.get("VERTEXAI_LOCATION")
@@ -85,7 +85,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             or get_secret_str("VERTEX_LOCATION")
         )
 
-    def _resolve_vertex_credentials(self) -> Optional[str]:
+    def _resolve_vertex_credentials(self) -> str | None:
         return (
             getattr(self, "_vertex_credentials", None)
             or os.environ.get("VERTEXAI_CREDENTIALS")
@@ -98,9 +98,9 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = headers or {}
         litellm_params = litellm_params or {}
@@ -121,7 +121,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -148,12 +148,12 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     def transform_image_edit_request(  # type: ignore[override]
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict[str, Any],
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict[str, Any], Optional[RequestFiles]]:
+    ) -> tuple[dict[str, Any], RequestFiles | None]:
         # Prepare reference images in the correct Imagen format
         if image is None:
             raise ValueError("Vertex AI Imagen image edit requires at least one reference image.")
@@ -184,14 +184,14 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         parameters["guidanceScale"] = 7.5  # Default guidance scale
         parameters["seed"] = None  # Let Vertex AI choose random seed
 
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "instances": instances,
             "parameters": parameters,
         }
 
         payload: Any = json.dumps(request_body)
         empty_files = cast(RequestFiles, [])
-        return cast(Tuple[Dict[str, Any], Optional[RequestFiles]], (payload, empty_files))
+        return cast(tuple[dict[str, Any], RequestFiles | None], (payload, empty_files))
 
     def transform_image_edit_response(
         self,
@@ -210,7 +210,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             )
 
         predictions = response_json.get("predictions", [])
-        data_list: List[ImageObject] = []
+        data_list: list[ImageObject] = []
 
         for prediction in predictions:
             # Imagen returns images as bytesBase64Encoded
@@ -222,7 +222,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
                     )
                 )
 
-        model_response.data = cast(List[OpenAIImage], data_list)
+        model_response.data = cast(list[OpenAIImage], data_list)
         return model_response
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:
@@ -238,19 +238,19 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
 
     def _prepare_reference_images(
         self,
-        image: Union[FileTypes, List[FileTypes]],
-        image_edit_optional_request_params: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
+        image: FileTypes | list[FileTypes],
+        image_edit_optional_request_params: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         """
         Prepare reference images in the correct Imagen API format
         """
-        images: List[FileTypes]
+        images: list[FileTypes]
         if isinstance(image, list):
             images = image
         else:
             images = [image]
 
-        reference_images: List[Dict[str, Any]] = []
+        reference_images: list[dict[str, Any]] = []
 
         for idx, img in enumerate(images):
             if img is None:
@@ -323,7 +323,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             image.seek(current_pos)
             return data
         if isinstance(image, (BufferedReader, BufferedRandom)):
-            stream_pos: Optional[int] = None
+            stream_pos: int | None = None
             try:
                 stream_pos = image.tell()
             except Exception:

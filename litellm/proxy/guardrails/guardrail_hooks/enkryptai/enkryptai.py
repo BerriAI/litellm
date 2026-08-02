@@ -6,16 +6,13 @@
 # +-------------------------------------------------------------+
 
 import os
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Dict,
-    List,
     Literal,
     Optional,
-    Union,
 )
 
 import httpx
@@ -54,9 +51,9 @@ class EnkryptAIGuardrails(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str = "litellm_test",
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        policy_name: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        policy_name: str | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -93,7 +90,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
     async def _call_enkryptai_guardrails(
         self,
         prompt: str,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ) -> EnkryptAIResponse:
         """
         Call Enkrypt AI Guardrails API to detect potential issues in the given prompt.
@@ -192,8 +189,8 @@ class EnkryptAIGuardrails(CustomGuardrail):
         summary = response.get("summary", {})
         details = response.get("details", {})
 
-        detected_attacks: List[str] = []
-        attack_details: Dict[str, Any] = {}
+        detected_attacks: list[str] = []
+        attack_details: dict[str, Any] = {}
 
         for key, value in summary.items():
             # Check if attack is detected
@@ -280,7 +277,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -497,7 +494,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         return EnkryptAIGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,

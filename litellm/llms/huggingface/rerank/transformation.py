@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from typing_extensions import TypedDict
@@ -42,11 +42,10 @@ class HuggingFaceRerankResponse(TypedDict):
     """Type definition for HuggingFace rerank API complete response."""
 
     # The response is a list of HuggingFaceRerankResponseItem
-    pass
 
 
 # Type alias for the actual response structure
-HuggingFaceRerankResponseList = List[HuggingFaceRerankResponseItem]
+HuggingFaceRerankResponseList = list[HuggingFaceRerankResponseItem]
 
 
 class HuggingFaceRerankConfig(BaseRerankConfig):
@@ -93,15 +92,15 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         optional_rerank_params = {}
         if non_default_params is not None:
             for k, v in non_default_params.items():
@@ -145,7 +144,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Union[OptionalRerankParams, dict],
+        optional_rerank_params: OptionalRerankParams | dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -255,16 +254,14 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             meta=rerank_meta,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HuggingFaceError(message=error_message, status_code=status_code)
 
     def get_api_credentials(
         self,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> Tuple[str | None, str | None]:
+    ) -> tuple[str | None, str | None]:
         """
         Get API key and base URL from multiple sources.
         Returns tuple of (api_key, api_base).

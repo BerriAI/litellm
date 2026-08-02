@@ -4,7 +4,7 @@ Anthropic CountTokens API handler.
 Uses httpx for HTTP requests instead of the Anthropic SDK.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -27,13 +27,13 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
     async def handle_count_tokens_request(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         api_key: str,
-        api_base: Optional[str] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        system: Any | None = None,
+    ) -> dict[str, Any]:
         """
         Handle a CountTokens request using httpx.
 
@@ -109,14 +109,14 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error(f"HTTP error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"HTTP error in CountTokens handler: {e!s}")
             raise AnthropicError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except Exception as e:
-            verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"Error in CountTokens handler: {e!s}")
             raise AnthropicError(
                 status_code=500,
-                message=f"CountTokens processing error: {str(e)}",
+                message=f"CountTokens processing error: {e!s}",
             )

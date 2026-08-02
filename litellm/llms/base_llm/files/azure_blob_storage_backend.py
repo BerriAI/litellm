@@ -7,14 +7,13 @@ to reuse all authentication and Azure Storage operations.
 """
 
 import time
-from typing import Optional
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 
 from .storage_backend import BaseFileStorageBackend
-from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 
 
 class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
@@ -69,14 +68,12 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         Override to do nothing - we're not using this as a logger.
         """
         # Do nothing - this class is used for file storage, not logging
-        pass
 
     async def async_log_failure_event(self, *args, **kwargs):
         """
         Override to do nothing - we're not using this as a logger.
         """
         # Do nothing - this class is used for file storage, not logging
-        pass
 
     def _generate_file_name(self, original_filename: str, file_naming_strategy: str) -> str:
         """Generate file name based on naming strategy."""
@@ -99,7 +96,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         file_content: bytes,
         filename: str,
         content_type: str,
-        path_prefix: Optional[str] = None,
+        path_prefix: str | None = None,
         file_naming_strategy: str = "uuid",
     ) -> str:
         """
@@ -136,7 +133,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
             return storage_url
 
         except Exception as e:
-            verbose_logger.exception(f"Error uploading file to Azure Blob Storage: {str(e)}")
+            verbose_logger.exception(f"Error uploading file to Azure Blob Storage: {e!s}")
             raise
 
     async def _upload_file_with_account_key(self, file_content: bytes, full_path: str) -> str:
@@ -250,7 +247,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
                 return await self._download_file_with_azure_ad(file_path)
 
         except Exception as e:
-            verbose_logger.exception(f"Error downloading file from Azure Blob Storage: {str(e)}")
+            verbose_logger.exception(f"Error downloading file from Azure Blob Storage: {e!s}")
             raise
 
     async def _download_file_with_account_key(self, file_path: str) -> bytes:
@@ -272,11 +269,11 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         # Reuse the logger's token management
         await self.set_valid_azure_ad_token()
 
+        from litellm.constants import AZURE_STORAGE_MSFT_VERSION
         from litellm.llms.custom_httpx.http_handler import (
             get_async_httpx_client,
             httpxSpecialProvider,
         )
-        from litellm.constants import AZURE_STORAGE_MSFT_VERSION
 
         async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 

@@ -1,5 +1,3 @@
-from typing import List, Optional, Union
-
 from httpx import Headers
 
 from litellm.secret_managers.main import get_secret_str
@@ -34,14 +32,14 @@ class FireworksAIMixin:
     Common Base Config functions across Fireworks AI Endpoints
     """
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return FireworksAIException(
             status_code=status_code,
             message=error_message,
             headers=headers,
         )
 
-    def _get_api_key(self, api_key: Optional[str]) -> Optional[str]:
+    def _get_api_key(self, api_key: str | None) -> str | None:
         dynamic_api_key = api_key or (
             get_secret_str("FIREWORKS_API_KEY")
             or get_secret_str("FIREWORKS_AI_API_KEY")
@@ -54,17 +52,17 @@ class FireworksAIMixin:
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = self._get_api_key(api_key)
         if api_key is None:
             raise ValueError("FIREWORKS_API_KEY is not set")
 
-        auth_headers = {"Authorization": "Bearer {}".format(api_key), **headers}
+        auth_headers = {"Authorization": f"Bearer {api_key}", **headers}
         content_type_header = (
             {} if any(key.lower() == "content-type" for key in auth_headers) else {"Content-Type": "application/json"}
         )

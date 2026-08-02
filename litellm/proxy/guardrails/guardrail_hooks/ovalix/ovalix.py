@@ -7,7 +7,7 @@ post_call (model output) checkpoints with optional correction/blocking.
 import datetime
 import hashlib
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
@@ -35,8 +35,6 @@ BLOCKED_ACTION_TYPE = "block"
 class OvalixGuardrailMissingSecrets(Exception):
     """Raised when required Ovalix config (API base, key, application/checkpoint IDs) is missing."""
 
-    pass
-
 
 class OvalixGuardrailBlockedException(GuardrailRaisedException):
     """
@@ -48,7 +46,7 @@ class OvalixGuardrailBlockedException(GuardrailRaisedException):
 
     def __init__(
         self,
-        guardrail_name: Optional[str] = None,
+        guardrail_name: str | None = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
     ):
@@ -67,7 +65,7 @@ class OvalixGuardrail(CustomGuardrail):
     """
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -75,11 +73,11 @@ class OvalixGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        tracker_api_base: Optional[str] = None,
-        tracker_api_key: Optional[str] = None,
-        application_id: Optional[str] = None,
-        pre_checkpoint_id: Optional[str] = None,
-        post_checkpoint_id: Optional[str] = None,
+        tracker_api_base: str | None = None,
+        tracker_api_key: str | None = None,
+        application_id: str | None = None,
+        pre_checkpoint_id: str | None = None,
+        post_checkpoint_id: str | None = None,
         **kwargs: Any,
     ):
         self._tracker_api_base = tracker_api_base or os.environ.get("OVALIX_TRACKER_API_BASE")
@@ -112,9 +110,9 @@ class OvalixGuardrail(CustomGuardrail):
             self._post_checkpoint_id,
         )
 
-    def _validate_config(self, supported_event_hooks: List[GuardrailEventHooks]) -> None:
+    def _validate_config(self, supported_event_hooks: list[GuardrailEventHooks]) -> None:
         """Ensure required secrets and checkpoint IDs are set; auto-add hooks when IDs are present."""
-        errors: List[str] = []
+        errors: list[str] = []
 
         if not self._tracker_api_base:
             errors.append("Tracker API base, set OVALIX_TRACKER_API_BASE or pass tracker_api_base")
@@ -171,7 +169,7 @@ class OvalixGuardrail(CustomGuardrail):
         checkpoint_id: str,
         actor: str,
         session_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Call the Ovalix Tracker checkpoint API and return the JSON response."""
         application_id = self._application_id
         if not application_id or not checkpoint_id:
@@ -197,7 +195,7 @@ class OvalixGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: Any | None = None,
     ) -> GenericGuardrailAPIInputs:
         """
         Apply Ovalix guardrail to the given inputs (request or response text).
@@ -239,10 +237,10 @@ class OvalixGuardrail(CustomGuardrail):
         return inputs
 
     async def _generate_post_guardrail_llm_texts(
-        self, texts: List[str], actor: str, session_id: str, checkpoint_id: str
-    ) -> List[str]:
+        self, texts: list[str], actor: str, session_id: str, checkpoint_id: str
+    ) -> list[str]:
         """Generate post-guardrail LLM responses for the given LLM responses."""
-        post_guardrail_texts: List[str] = []
+        post_guardrail_texts: list[str] = []
 
         is_first_response = True
         for llm_response in reversed(texts):
@@ -276,7 +274,7 @@ class OvalixGuardrail(CustomGuardrail):
             should_wrap_with_default_message=False,
         )
 
-    def _get_trackers_corrected_message(self, resp: dict) -> Optional[str]:
+    def _get_trackers_corrected_message(self, resp: dict) -> str | None:
         """Extract corrected/blocking message content from Tracker checkpoint response."""
         modified = resp.get("modified_data")
         if isinstance(modified, dict) and "content" in modified:
@@ -284,7 +282,7 @@ class OvalixGuardrail(CustomGuardrail):
         return None
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
             OvalixGuardrailConfigModel,
         )

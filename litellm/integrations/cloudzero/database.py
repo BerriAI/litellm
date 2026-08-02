@@ -19,7 +19,7 @@
 """Database connection and data extraction for LiteLLM."""
 
 from datetime import datetime
-from typing import Any, Optional, List
+from typing import Any
 
 import polars as pl
 
@@ -39,9 +39,9 @@ class LiteLLMDatabase:
 
     async def get_usage_data(
         self,
-        limit: Optional[int] = None,
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
+        limit: int | None = None,
+        start_time_utc: datetime | None = None,
+        end_time_utc: datetime | None = None,
     ) -> pl.DataFrame:
         """Retrieve usage data from LiteLLM daily user spend table."""
         client = self._ensure_prisma_client()
@@ -80,7 +80,7 @@ class LiteLLMDatabase:
         ORDER BY dus.date DESC, dus.created_at DESC
         """
 
-        params: List[Any] = [
+        params: list[Any] = [
             start_time_utc,
             end_time_utc,
         ]
@@ -98,4 +98,4 @@ class LiteLLMDatabase:
             # This prevents schema mismatch errors when data types vary across rows
             return pl.DataFrame(db_response, infer_schema_length=None)
         except Exception as e:
-            raise Exception(f"Error retrieving usage data: {str(e)}")
+            raise Exception(f"Error retrieving usage data: {e!s}")

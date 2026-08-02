@@ -14,13 +14,13 @@ Anthropic Files API endpoints:
 
 import calendar
 import time
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, cast
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -62,12 +62,12 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = AnthropicModelInfo.get_api_base(api_base) or ANTHROPIC_FILES_API_BASE
         return f"{api_base.rstrip('/')}/v1/files"
@@ -76,7 +76,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,
@@ -91,8 +91,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_base is None and isinstance(litellm_params, dict):
             api_base = litellm_params.get("api_base")
@@ -110,7 +110,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         )
         return headers
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return ["purpose"]
 
     def map_openai_params(
@@ -154,7 +154,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
     def transform_create_file_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
@@ -220,13 +220,13 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
     def transform_list_files_request(
         self,
-        purpose: Optional[str],
+        purpose: str | None,
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
         api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         url = f"{api_base.rstrip('/')}/v1/files"
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if purpose:
             params["purpose"] = purpose
         return url, params
@@ -236,7 +236,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-    ) -> List[OpenAIFileObject]:
+    ) -> list[OpenAIFileObject]:
         """
         Anthropic list response:
         {

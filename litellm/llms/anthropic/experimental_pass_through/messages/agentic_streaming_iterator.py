@@ -9,7 +9,8 @@ follow-up response is chained as Phase 2 of the same iterator.
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, List, Optional, cast
+from collections.abc import AsyncIterator
+from typing import Any, cast
 
 from litellm._logging import verbose_logger
 
@@ -18,12 +19,12 @@ from litellm._logging import verbose_logger
 # ---------------------------------------------------------------------------
 
 
-def _parse_sse_events(raw: bytes) -> List[tuple]:
+def _parse_sse_events(raw: bytes) -> list[tuple]:
     """Return a list of (event_type, parsed_data_dict) from raw SSE bytes."""
     text = raw.decode("utf-8", errors="replace")
     lines = text.split("\n")
-    events: List[tuple] = []
-    current_event_type: Optional[str] = None
+    events: list[tuple] = []
+    current_event_type: str | None = None
 
     for line in lines:
         stripped = line.strip()
@@ -43,7 +44,7 @@ def _parse_sse_events(raw: bytes) -> List[tuple]:
     return events
 
 
-def _handle_message_start(data: Dict, response: Dict) -> None:
+def _handle_message_start(data: dict, response: dict) -> None:
     msg = data.get("message", {})
     response["id"] = msg.get("id", response["id"])
     response["model"] = msg.get("model", response["model"])
@@ -56,12 +57,12 @@ def _handle_message_start(data: Dict, response: Dict) -> None:
                 response["usage"][key] = usage[key]
 
 
-def _handle_content_block_start(data: Dict, content_blocks: Dict[int, Dict]) -> None:
+def _handle_content_block_start(data: dict, content_blocks: dict[int, dict]) -> None:
     idx = data.get("index", len(content_blocks))
     block = data.get("content_block", {})
     block_type = block.get("type", "text")
 
-    _BLOCK_TEMPLATES: Dict[str, Dict] = {
+    _BLOCK_TEMPLATES: dict[str, dict] = {
         "text": {"type": "text", "text": ""},
         "thinking": {"type": "thinking", "thinking": "", "signature": ""},
         "redacted_thinking": {
@@ -83,7 +84,7 @@ def _handle_content_block_start(data: Dict, content_blocks: Dict[int, Dict]) -> 
         content_blocks[idx] = dict(block)
 
 
-def _handle_content_block_delta(data: Dict, content_blocks: Dict[int, Dict]) -> None:
+def _handle_content_block_delta(data: dict, content_blocks: dict[int, dict]) -> None:
     idx = data.get("index", 0)
     delta = data.get("delta", {})
     delta_type = delta.get("type", "")
@@ -101,7 +102,7 @@ def _handle_content_block_delta(data: Dict, content_blocks: Dict[int, Dict]) -> 
         block["signature"] = delta.get("signature", block.get("signature", ""))
 
 
-def _handle_content_block_stop(data: Dict, content_blocks: Dict[int, Dict]) -> None:
+def _handle_content_block_stop(data: dict, content_blocks: dict[int, dict]) -> None:
     idx = data.get("index", 0)
     block = content_blocks.get(idx)
     if block and block.get("type") == "tool_use":
@@ -113,7 +114,7 @@ def _handle_content_block_stop(data: Dict, content_blocks: Dict[int, Dict]) -> N
                 block["input"] = {"_raw": partial}
 
 
-def _handle_message_delta(data: Dict, response: Dict) -> None:
+def _handle_message_delta(data: dict, response: dict) -> None:
     delta = data.get("delta", {})
     if "stop_reason" in delta:
         response["stop_reason"] = delta["stop_reason"]
@@ -149,12 +150,12 @@ class AgenticAnthropicStreamingIterator:
         completion_stream: AsyncIterator,
         http_handler: Any,
         model: str,
-        messages: List[Dict],
+        messages: list[dict],
         anthropic_messages_provider_config: Any,
-        anthropic_messages_optional_request_params: Dict,
+        anthropic_messages_optional_request_params: dict,
         logging_obj: Any,
         custom_llm_provider: str,
-        kwargs: Dict,
+        kwargs: dict,
     ):
         self._inner = completion_stream.__aiter__()
         self._http_handler = http_handler
@@ -166,10 +167,10 @@ class AgenticAnthropicStreamingIterator:
         self._custom_llm_provider = custom_llm_provider
         self._kwargs = kwargs
 
-        self._collected_bytes: List[bytes] = []
+        self._collected_bytes: list[bytes] = []
         self._stream_exhausted = False
         self._hook_processing_done = False
-        self._follow_up_iterator: Optional[AsyncIterator] = None
+        self._follow_up_iterator: AsyncIterator | None = None
 
     def __aiter__(self):
         return self
@@ -264,8 +265,8 @@ class AgenticAnthropicStreamingIterator:
 
     @staticmethod
     def _rebuild_anthropic_response_from_sse(
-        raw_bytes: List[bytes],
-    ) -> Optional[Dict[str, Any]]:
+        raw_bytes: list[bytes],
+    ) -> dict[str, Any] | None:
         """
         Parse collected SSE bytes into an Anthropic Messages response dict.
 
@@ -279,7 +280,7 @@ class AgenticAnthropicStreamingIterator:
         """
         events = _parse_sse_events(b"".join(raw_bytes))
 
-        response: Dict[str, Any] = {
+        response: dict[str, Any] = {
             "id": "",
             "type": "message",
             "role": "assistant",
@@ -289,7 +290,7 @@ class AgenticAnthropicStreamingIterator:
             "stop_sequence": None,
             "usage": {"input_tokens": 0, "output_tokens": 0},
         }
-        content_blocks: Dict[int, Dict[str, Any]] = {}
+        content_blocks: dict[int, dict[str, Any]] = {}
         saw_message_start = False
 
         for event_type, data in events:

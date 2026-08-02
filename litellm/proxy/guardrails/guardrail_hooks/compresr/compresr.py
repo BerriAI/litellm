@@ -22,13 +22,12 @@ import json
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
 from httpx import Response as HttpxResponse
-from typing_extensions import TypeGuard
 
 import litellm
 from litellm._logging import verbose_proxy_logger

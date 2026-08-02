@@ -10,7 +10,7 @@ import asyncio
 import copy
 import json
 import os
-from typing import Any, Dict, List, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -47,7 +47,7 @@ class ConfigRepository:
     def table(self) -> Any:
         return self.prisma_client.db.litellm_config
 
-    async def get_param(self, param_name: str) -> Optional[ConfigParam]:
+    async def get_param(self, param_name: str) -> ConfigParam | None:
         """Get a config parameter from the database."""
         record = await self.table.find_unique(where={"param_name": param_name})
         if record is None:
@@ -77,7 +77,7 @@ class ConfigRepository:
         except Exception:
             return False
 
-    async def get_all_params(self) -> Dict[str, Any]:
+    async def get_all_params(self) -> dict[str, Any]:
         """Get all config parameters from the database."""
         records = await self.table.find_many()
         result = {}
@@ -107,9 +107,9 @@ class ConfigRepository:
                 else:
                     d[k] = v
 
-    def _decrypt_env_variables(self, env_vars: Dict[str, Any], return_original_value: bool = True) -> Dict[str, str]:
+    def _decrypt_env_variables(self, env_vars: dict[str, Any], return_original_value: bool = True) -> dict[str, str]:
         """Decrypt environment variables from database."""
-        decrypted: Dict[str, str] = {}
+        decrypted: dict[str, str] = {}
         for key, value in env_vars.items():
             if isinstance(value, str):
                 decrypted_value = decrypt_value_helper(
@@ -124,9 +124,9 @@ class ConfigRepository:
                 decrypted[key] = str(value)
         return decrypted
 
-    def _normalize_env_variable_keys(self, env_vars: Dict[str, str]) -> Dict[str, str]:
+    def _normalize_env_variable_keys(self, env_vars: dict[str, str]) -> dict[str, str]:
         """Normalize env variable keys to include both original and uppercase versions."""
-        normalized: Dict[str, str] = {}
+        normalized: dict[str, str] = {}
         for key, value in env_vars.items():
             normalized[key] = value
             upper_key = key.upper()
@@ -168,7 +168,7 @@ class ConfigRepository:
     async def reconcile_config(
         self,
         yaml_config: dict,
-        store_model_in_db: Optional[bool] = None,
+        store_model_in_db: bool | None = None,
     ) -> dict:
         """Reconcile config from YAML with database overrides.
 
@@ -216,7 +216,7 @@ class ConfigRepository:
 
         return config
 
-    async def prefetch_params(self, param_names: List[str]) -> None:
+    async def prefetch_params(self, param_names: list[str]) -> None:
         """Prefetch config params to warm the cache.
 
         This can be called before reconcile_config to ensure all needed
