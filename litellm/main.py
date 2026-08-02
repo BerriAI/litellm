@@ -7651,6 +7651,10 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse | AsyncStream
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
         if kwargs.get("stream") is True and isinstance(response, AsyncStream):
+            if file is not None:
+                calculated_duration = calculate_request_duration(file)
+                if calculated_duration is not None:
+                    response.__dict__["_litellm_audio_duration"] = calculated_duration
             return response
         if not isinstance(response, TranscriptionResponse):
             raise ValueError(
