@@ -342,6 +342,27 @@ def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
+def test_is_model_gpt_5_4_plus_model_prefixed_deployment_names(
+    gpt5_config: OpenAIGPT5Config,
+):
+    """Custom deployment names with prefixes (e.g. Azure) are recognized as gpt-5.4+."""
+    assert gpt5_config.is_model_gpt_5_4_plus_model("my-prefix-gpt-5.5")
+    assert gpt5_config.is_model_gpt_5_4_plus_model("azure/something-something-gpt-5.5")
+    assert gpt5_config.is_model_gpt_5_4_plus_model("my-prefix-gpt-5.4-pro")
+    assert gpt5_config.is_model_gpt_5_4_plus_model("gpt-5.4")
+    assert gpt5_config.is_model_gpt_5_4_plus_model("openai/gpt-5.6")
+
+
+def test_is_model_gpt_5_4_plus_model_rejects_non_5_4_plus_names(
+    gpt5_config: OpenAIGPT5Config,
+):
+    """Names below 5.4 or merely containing gpt-5 without a version must not match."""
+    assert not gpt5_config.is_model_gpt_5_4_plus_model("my-prefix-gpt-5.2")
+    assert not gpt5_config.is_model_gpt_5_4_plus_model("my-gpt-5-deployment")
+    assert not gpt5_config.is_model_gpt_5_4_plus_model("gpt-5")
+    assert not gpt5_config.is_model_gpt_5_4_plus_model("azure/prefix-gpt-5.x")
+
+
 def test_gpt5_4_mini_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     """gpt-5.4-mini supports reasoning_effort='xhigh'."""
     params = config.map_openai_params(
