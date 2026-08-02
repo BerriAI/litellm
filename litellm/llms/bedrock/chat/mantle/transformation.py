@@ -57,11 +57,11 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
         """Sign request with bedrock-mantle service name instead of bedrock."""
         return self._sign_request(
             service_name="bedrock-mantle",
