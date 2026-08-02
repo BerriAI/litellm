@@ -26,7 +26,7 @@ def _read_renamed(model: object, snake_case: str, camel_case: str) -> object:
     )
 
 
-def mcp_tool_input_schema(tool: object) -> dict[str, object]:
+def mcp_tool_input_schema(tool: object) -> dict[str, object]:  # mutable-ok: callers take a bare dict
     """The JSON Schema for an ``mcp.types.Tool``'s arguments."""
     schema = _read_renamed(tool, "input_schema", "inputSchema")
     if schema is None:
