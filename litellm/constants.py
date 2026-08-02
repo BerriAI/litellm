@@ -775,6 +775,25 @@ OPENAI_REALTIME_AND_TRANSCRIPTION_MODELS: Final = frozenset(
     }
 )
 
+AZURE_GA_REALTIME_MODELS: Final = frozenset(
+    {
+        "gpt-realtime-2",
+        "gpt-realtime-2-2026-05-06",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2.1-2026-07-07",
+        "gpt-realtime-2.1-mini",
+        "gpt-realtime-2.1-mini-2026-07-07",
+        "gpt-realtime-translate",
+        "gpt-realtime-translate-2026-05-06",
+        "gpt-realtime-translate-2026-05-07",
+        "gpt-realtime-whisper",
+        "gpt-realtime-whisper-2026-05-06",
+        "gpt-realtime-whisper-2026-05-07",
+        "gpt-transcribe",
+        "gpt-live-transcribe",
+    }
+)
+
 OPENAI_EMBEDDING_PARAMS: Final = ["dimensions", "encoding_format", "user"]
 
 DEFAULT_EMBEDDING_PARAM_VALUES: Final = {
