@@ -508,6 +508,28 @@ async def _arealtime(
         raise ValueError(f"Unsupported model: {model}")
 
 
+def _get_realtime_ssl_context(url: Optional[str]):
+    """
+    Return the SSL context to use for a realtime websocket connection.
+
+    Mirrors ``OpenAIRealtime._get_ssl_config`` so the health-check path stays
+    consistent with the forwarding path:
+
+    - ``ws://`` URLs must not receive an ``ssl=`` argument (``websockets`` raises
+      "ssl argument is incompatible with a ws:// URI"), so return ``None``.
+    - For ``wss://``, use the shared realtime SSL context. When ``ssl_verify`` is
+      disabled that context is ``False``, which ``websockets`` rejects, so
+      normalize it to ``True`` (connect without verification) — exactly as the
+      forwarding path does.
+    """
+    if url and url.startswith("ws://"):
+        return None
+    ssl_config = get_shared_realtime_ssl_context()
+    if ssl_config is False:
+        return True
+    return ssl_config
+
+
 async def _realtime_health_check(
     model: str,
     custom_llm_provider: str,
@@ -570,7 +592,7 @@ async def _realtime_health_check(
             location=resolved_location,
         )
         url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
-        ssl_context = get_shared_realtime_ssl_context()
+        ssl_context = _get_realtime_ssl_context(url)
         headers = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
         async with websockets.connect(  # type: ignore
             url,
@@ -581,7 +603,7 @@ async def _realtime_health_check(
             return True
     else:
         raise ValueError(f"Unsupported model: {model}")
-    ssl_context = get_shared_realtime_ssl_context()
+    ssl_context = _get_realtime_ssl_context(url)
     async with websockets.connect(  # type: ignore
         url,
         additional_headers={
