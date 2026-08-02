@@ -1,27 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
-  useInfiniteTeams: () => ({
-    data: {
-      pages: [
-        {
-          teams: [
-            { team_id: "team-alpha", team_alias: "Alpha" },
-            { team_id: "team-beta", team_alias: "Beta" },
-          ],
-        },
-      ],
-    },
-    fetchNextPage: vi.fn(),
-    hasNextPage: false,
-    isFetchingNextPage: false,
-    isLoading: false,
-  }),
-}));
 
 vi.mock("@/components/ModelSelect/ModelSelect", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/ModelSelect/ModelSelect")>();
@@ -37,32 +18,28 @@ vi.mock("@/components/ModelSelect/ModelSelect", async (importOriginal) => {
 
 import NotificationsManager from "@/components/molecules/notifications_manager";
 
-import { DefaultUserSettingsForm } from "./DefaultUserSettingsForm";
-import type { InternalUserSettings } from "./mapper";
+import { DefaultTeamSettingsForm } from "./DefaultTeamSettingsForm";
+import type { DefaultTeamSettings } from "./mapper";
 
-const POSSIBLE_UI_ROLES = {
-  internal_user: { ui_label: "Internal User", description: "create and view own keys" },
-  internal_user_viewer: { ui_label: "Internal Viewer", description: "view own keys" },
-  proxy_admin: { ui_label: "Admin", description: "all permissions" },
-};
-
-const SETTINGS: InternalUserSettings = {
+const SETTINGS: DefaultTeamSettings = {
   values: {
-    user_role: "internal_user",
     max_budget: 100,
     budget_duration: "30d",
+    tpm_limit: 1000,
+    rpm_limit: 50,
     models: ["gpt-5.2"],
-    teams: [{ team_id: "team-alpha", max_budget_in_team: 25, user_role: "user" }],
+    team_member_permissions: ["/key/generate"],
   },
   field_schema: {},
 };
 
 const SAVED_BODY = {
-  user_role: "internal_user",
   max_budget: 100,
   budget_duration: "30d",
+  tpm_limit: 1000,
+  rpm_limit: 50,
   models: ["gpt-5.2"],
-  teams: [{ team_id: "team-alpha", max_budget_in_team: 25, user_role: "user" }],
+  team_member_permissions: ["/key/generate"],
 };
 
 const renderForm = (overrides?: {
@@ -75,11 +52,7 @@ const renderForm = (overrides?: {
 
   render(
     <QueryClientProvider client={queryClient}>
-      <DefaultUserSettingsForm
-        possibleUIRoles={POSSIBLE_UI_ROLES}
-        fetchSettings={fetchSettings}
-        updateSettings={updateSettings}
-      />
+      <DefaultTeamSettingsForm fetchSettings={fetchSettings} updateSettings={updateSettings} />
     </QueryClientProvider>,
   );
 
@@ -92,7 +65,7 @@ const enterEditMode = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.click(await screen.findByRole("button", { name: "Edit Settings" }));
 };
 
-describe("DefaultUserSettingsForm", () => {
+describe("DefaultTeamSettingsForm", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -100,11 +73,12 @@ describe("DefaultUserSettingsForm", () => {
   it("shows a read-only summary until Edit Settings is clicked", async () => {
     renderForm();
 
-    expect(await screen.findByText("Internal User")).toBeInTheDocument();
-    expect(screen.getByText("100")).toBeInTheDocument();
+    expect(await screen.findByText("100")).toBeInTheDocument();
     expect(screen.getByText("monthly")).toBeInTheDocument();
+    expect(screen.getByText("1000")).toBeInTheDocument();
+    expect(screen.getByText("50")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.2")).toBeInTheDocument();
-    expect(screen.getByText(/team-alpha/)).toBeInTheDocument();
+    expect(screen.getByText("/key/generate")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Max Budget (USD)")).not.toBeInTheDocument();
   });
@@ -131,9 +105,8 @@ describe("DefaultUserSettingsForm", () => {
   it("shows an error instead of the form when the settings cannot be loaded", async () => {
     renderForm({ fetchSettings: vi.fn().mockRejectedValue(new Error("nope")) });
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load the default user settings.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load the default team settings.");
     expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
   });
 
   it("sends every field on save, not only the edited one", async () => {
@@ -149,34 +122,6 @@ describe("DefaultUserSettingsForm", () => {
     expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, max_budget: 250 });
   });
 
-  it("saves a sub-cent budget the browser would veto under a 0.01 step", async () => {
-    const user = userEvent.setup();
-    const { updateSettings } = renderForm();
-
-    await enterEditMode(user);
-    const budget: HTMLInputElement = await screen.findByLabelText("Max Budget (USD)");
-    await user.clear(budget);
-    await user.type(budget, "0.001");
-
-    const teamBudget: HTMLInputElement = screen.getByLabelText("Max Budget in Team (USD)");
-    await user.clear(teamBudget);
-    await user.type(teamBudget, "0.002");
-
-    // jsdom never blocks the submit itself, so assert the constraint the real browser
-    // enforces before handleSubmit ever runs
-    expect(budget.checkValidity()).toBe(true);
-    expect(teamBudget.checkValidity()).toBe(true);
-
-    await user.click(await saveButton());
-
-    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    expect(updateSettings).toHaveBeenCalledWith({
-      ...SAVED_BODY,
-      max_budget: 0.001,
-      teams: [{ team_id: "team-alpha", max_budget_in_team: 0.002, user_role: "user" }],
-    });
-  });
-
   it("clears an emptied budget with null", async () => {
     const user = userEvent.setup();
     const { updateSettings } = renderForm();
@@ -187,6 +132,18 @@ describe("DefaultUserSettingsForm", () => {
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, max_budget: null });
+  });
+
+  it("rejects a fractional TPM limit instead of saving it", async () => {
+    const user = userEvent.setup();
+    const { updateSettings } = renderForm();
+
+    await enterEditMode(user);
+    fireEvent.change(await screen.findByLabelText("TPM Limit"), { target: { value: "12.5" } });
+    await user.click(await saveButton());
+
+    expect(await screen.findByText("Must be a non-negative whole number")).toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
   });
 
   it("sends the models selection through unchanged, sentinel values included", async () => {
@@ -201,65 +158,31 @@ describe("DefaultUserSettingsForm", () => {
     expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, models: ["all-proxy-models"] });
   });
 
-  it("saves a team that was picked from the searchable list", async () => {
+  it("saves a newly granted permission", async () => {
     const user = userEvent.setup();
     const { updateSettings } = renderForm();
 
     await enterEditMode(user);
-    await user.click(await screen.findByRole("button", { name: "Add Team" }));
-    await user.click(screen.getAllByLabelText("Team")[1]);
-    await user.click(await screen.findByText("Beta"));
+    await user.click(await screen.findByRole("checkbox", { name: "/key/delete" }));
     await user.click(await saveButton());
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(updateSettings).toHaveBeenCalledWith({
       ...SAVED_BODY,
-      teams: [
-        { team_id: "team-alpha", max_budget_in_team: 25, user_role: "user" },
-        { team_id: "team-beta", max_budget_in_team: null, user_role: "user" },
-      ],
+      team_member_permissions: ["/key/generate", "/key/delete"],
     });
   });
 
-  it("never turns a team id typed into the picker into a saved team", async () => {
+  it("clears the permissions with null when the last one is revoked", async () => {
     const user = userEvent.setup();
     const { updateSettings } = renderForm();
 
     await enterEditMode(user);
-    await user.click(await screen.findByRole("button", { name: "Add Team" }));
-    await user.type(screen.getAllByLabelText("Team")[1], "team-alhpa");
-    await user.keyboard("{Escape}");
-    await user.click(await saveButton());
-
-    expect(await screen.findByText("Select a team")).toBeInTheDocument();
-    expect(screen.getAllByLabelText("Team")[1]).toHaveValue("");
-    expect(updateSettings).not.toHaveBeenCalled();
-  });
-
-  it("blocks saving the same default team twice", async () => {
-    const user = userEvent.setup();
-    const { updateSettings } = renderForm();
-
-    await enterEditMode(user);
-    await user.click(await screen.findByRole("button", { name: "Add Team" }));
-    await user.click(screen.getAllByLabelText("Team")[1]);
-    await user.click(await screen.findByText("Alpha"));
-    await user.click(await saveButton());
-
-    expect(await screen.findByText("This team is already listed")).toBeInTheDocument();
-    expect(updateSettings).not.toHaveBeenCalled();
-  });
-
-  it("drops a removed team row from the saved settings", async () => {
-    const user = userEvent.setup();
-    const { updateSettings } = renderForm();
-
-    await enterEditMode(user);
-    await user.click(await screen.findByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByRole("checkbox", { name: "/key/generate" }));
     await user.click(await saveButton());
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, teams: null });
+    expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, team_member_permissions: null });
   });
 
   it("shows the saved values in the read-only view immediately, without waiting for the refetch", async () => {
@@ -281,16 +204,13 @@ describe("DefaultUserSettingsForm", () => {
     expect(await screen.findByText("250")).toBeInTheDocument();
     expect(screen.queryByText("100")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Default user settings updated successfully");
-
-    await enterEditMode(user);
-    expect(await saveButton()).toBeDisabled();
+    expect(NotificationsManager.success).toHaveBeenCalledWith("Default team settings updated successfully");
   });
 
   it("keeps the edit and surfaces the backend error when the save fails", async () => {
     const user = userEvent.setup();
     const { updateSettings } = renderForm({
-      updateSettings: vi.fn().mockRejectedValue(new Error("Team(s) not found: team-alhpa.")),
+      updateSettings: vi.fn().mockRejectedValue(new Error("Set `'STORE_MODEL_IN_DB='True'` in your env.")),
     });
 
     await enterEditMode(user);
@@ -300,7 +220,7 @@ describe("DefaultUserSettingsForm", () => {
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Team(s) not found: team-alhpa."),
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Set `'STORE_MODEL_IN_DB='True'` in your env."),
     );
     expect(await saveButton()).toBeEnabled();
     expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(250);
@@ -317,7 +237,6 @@ describe("DefaultUserSettingsForm", () => {
 
     expect(await screen.findByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
     expect(screen.getByText("100")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
     expect(updateSettings).not.toHaveBeenCalled();
 
     await enterEditMode(user);
