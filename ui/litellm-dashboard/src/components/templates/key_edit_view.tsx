@@ -307,6 +307,9 @@ export function KeyEditView({
         const exactKeyTypePreset = getExactKeyTypePreset(values.allowed_routes);
         if (exactKeyTypePreset) {
           values.key_type = exactKeyTypePreset;
+          // The backend derives allowed_routes from key_type. Omitting the
+          // derived routes also lets authorized non-admins use safe presets.
+          delete values.allowed_routes;
         } else {
           delete values.key_type;
         }
