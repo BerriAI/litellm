@@ -14,6 +14,7 @@ from typing import NamedTuple
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.router_strategy.savings_baseline import cost_key
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 
@@ -226,6 +227,7 @@ def compute_savings_spend(
     routing_decision: Mapping[str, object] | None = None,
     usage_object: Mapping[str, object] | None = None,
     model_map_information: Mapping[str, object] | None = None,
+    model_id: str | None = None,
 ) -> SavingsSpend:
     """
     Dollar savings for one request, split by optimization driver.
@@ -249,8 +251,15 @@ def compute_savings_spend(
     decision = routing_decision if isinstance(routing_decision, Mapping) else {}
     baseline_model = decision.get("savings_baseline_model")
     baseline_key = decision.get("savings_baseline_pricing_key")
+    # Two inputs, because they fix different halves of the same problem and the
+    # resolver needs both. `model_map_key` is the served model already resolved through
+    # `base_model`, which is the only way an Azure deployment name reaches the cost map
+    # at all; it is built without `router_model_id`, so it never carries a deployment's
+    # own price overrides. `model_id` is the key those overrides are registered under.
     model_map = model_map_information if isinstance(model_map_information, Mapping) else {}
-    selected_key = model_map.get("model_map_key")
+    mapped = model_map.get("model_map_key")
+    resolved_model = mapped if isinstance(mapped, str) and mapped else model
+    selected_key = cost_key(resolved_model, custom_llm_provider, model_id) or resolved_model
     autorouter = compute_autorouter_savings(
         baseline_model=baseline_model if isinstance(baseline_model, str) else None,
         selected_model=model,
@@ -260,11 +269,6 @@ def compute_savings_spend(
         # reading: charge the cache write rather than claim a first turn's saving.
         conversation_continuing=decision.get("conversation_continuing") is not False,
         baseline_pricing_key=baseline_key if isinstance(baseline_key, str) else None,
-        # The key litellm actually billed this request under, recorded at request time by
-        # `_select_model_name_for_cost_calc`. Re-deriving it from the spend log's `model`
-        # would lose whatever that resolver already applied: an Azure deployment name is
-        # absent from the cost map and prices to nothing, and a deployment's own price
-        # overrides live under a key the model name never reaches.
-        selected_pricing_key=selected_key if isinstance(selected_key, str) and selected_key else None,
+        selected_pricing_key=selected_key,
     )
     return SavingsSpend(compression=compression, prompt_caching=prompt_caching, autorouter=autorouter)

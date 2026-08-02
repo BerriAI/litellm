@@ -1859,6 +1859,7 @@ class DBSpendUpdateWriter:
                 cache_read_input_tokens=cache_read_input_tokens,
                 routing_decision=_metadata.get("routing_decision"),
                 model_map_information=_metadata.get("model_map_information"),
+                model_id=payload.get("model_id"),
                 usage_object=usage_obj,
             )
 
