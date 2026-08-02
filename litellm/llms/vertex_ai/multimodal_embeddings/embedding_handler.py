@@ -1,5 +1,5 @@
 import json
-from typing import Literal, Optional, Union
+from typing import Literal
 
 import httpx
 
@@ -32,21 +32,21 @@ class VertexMultimodalEmbedding(VertexLLM):
     def multimodal_embedding(
         self,
         model: str,
-        input: Union[list, str],
+        input: list | str,
         print_verbose,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         headers: dict = {},
         encoding=None,
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        aembedding: Optional[bool] = False,
+        aembedding: bool | None = False,
         timeout=300,
         client=None,
     ) -> EmbeddingResponse:
@@ -148,11 +148,11 @@ class VertexMultimodalEmbedding(VertexLLM):
         litellm_params: dict,
         data: dict,
         model_response: EmbeddingResponse,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
         logging_obj: LiteLLMLoggingObj,
         headers={},
-        client: Optional[AsyncHTTPHandler] = None,
-        api_key: Optional[str] = None,
+        client: AsyncHTTPHandler | None = None,
+        api_key: str | None = None,
     ) -> EmbeddingResponse:
         if client is None:
             _params = {}

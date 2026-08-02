@@ -1,6 +1,7 @@
 import json
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Callable, List, Optional, Union, cast
+from typing import Any, cast
 
 import httpx
 
@@ -21,8 +22,8 @@ from litellm.utils import (
 )
 
 from ..common_utils import AWSEventStreamDecoder, SagemakerError
-from .transformation import SagemakerConfig
 from ..embedding.transformation import SagemakerEmbeddingConfig
+from .transformation import SagemakerConfig
 
 sagemaker_config = SagemakerConfig()
 
@@ -89,11 +90,11 @@ class SagemakerLLM(BaseAWSLLM):
         credentials,
         model: str,
         data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         litellm_params: dict,
         optional_params: dict,
         aws_region_name: str,
-        extra_headers: Optional[dict] = None,
+        extra_headers: dict | None = None,
     ):
         try:
             from botocore.auth import SigV4Auth
@@ -140,7 +141,7 @@ class SagemakerLLM(BaseAWSLLM):
         logging_obj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict={},
         hf_model_name=None,
         logger_fn=None,
@@ -392,16 +393,16 @@ class SagemakerLLM(BaseAWSLLM):
 
     async def async_streaming(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         custom_prompt_dict: dict,
-        hf_model_name: Optional[str],
+        hf_model_name: str | None,
         credentials,
         aws_region_name: str,
         optional_params,
         encoding,
         model_response: ModelResponse,
-        model_id: Optional[str],
+        model_id: str | None,
         logging_obj: Any,
         litellm_params: dict,
         headers: dict,
@@ -455,17 +456,17 @@ class SagemakerLLM(BaseAWSLLM):
 
     async def async_completion(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         custom_prompt_dict: dict,
-        hf_model_name: Optional[str],
+        hf_model_name: str | None,
         credentials,
         aws_region_name: str,
         encoding,
         model_response: ModelResponse,
         optional_params: dict,
         logging_obj: Any,
-        model_id: Optional[str],
+        model_id: str | None,
         headers: dict,
         litellm_params: dict,
     ):
@@ -528,7 +529,7 @@ class SagemakerLLM(BaseAWSLLM):
                 )
                 raise e
         except Exception as e:
-            error_message = f"{str(e)}"
+            error_message = f"{e!s}"
             if "Inference Component Name header is required" in error_message:
                 error_message += "\n pass in via `litellm.completion(..., model_id={InferenceComponentName})`"
             raise SagemakerError(status_code=500, message=error_message)

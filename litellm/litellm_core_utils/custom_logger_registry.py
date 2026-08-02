@@ -8,8 +8,6 @@ Example:
     "prometheus" -> PrometheusLogger
 """
 
-from typing import Union
-
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -25,8 +23,6 @@ from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
 from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.focus.focus_logger import FocusLogger
-from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import MavvrikFocusLogger
-from litellm.integrations.vantage.vantage_logger import VantageLogger
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
@@ -39,6 +35,7 @@ from litellm.integrations.langfuse.langfuse_prompt_management import (
 from litellm.integrations.langsmith import LangsmithLogger
 from litellm.integrations.litellm_agent import LiteLLMAgentModelResolver
 from litellm.integrations.literal_ai import LiteralAILogger
+from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import MavvrikFocusLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.newrelic import NewRelicLogger
 from litellm.integrations.openmeter import OpenMeterLogger
@@ -48,6 +45,7 @@ from litellm.integrations.posthog import PostHogLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
+from litellm.integrations.vantage.vantage_logger import VantageLogger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     VectorStorePreCallHook,
 )
@@ -140,7 +138,7 @@ class CustomLoggerRegistry:
         pass  # enterprise not installed
 
     @classmethod
-    def get_callback_str_from_class_type(cls, class_type: type) -> Union[str, None]:
+    def get_callback_str_from_class_type(cls, class_type: type) -> str | None:
         """
         Get the callback string from the class type.
 

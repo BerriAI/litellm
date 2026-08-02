@@ -2,7 +2,7 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -20,7 +20,7 @@ class A2AError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Dict[str, Any] = {},
+        headers: dict[str, Any] = {},
     ):
         super().__init__(
             status_code=status_code,
@@ -29,7 +29,7 @@ class A2AError(BaseLLMException):
         )
 
 
-def convert_messages_to_prompt(messages: List[AllMessageValues]) -> str:
+def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     """
     Convert OpenAI messages to a single prompt string for A2A agent.
 
@@ -61,7 +61,7 @@ def convert_messages_to_prompt(messages: List[AllMessageValues]) -> str:
     return "\n".join(conversation_parts)
 
 
-def extract_text_from_a2a_message(message: Dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
+def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
     """
     Extract text content from A2A message parts.
 
@@ -77,7 +77,7 @@ def extract_text_from_a2a_message(message: Dict[str, Any], depth: int = 0, max_d
         return ""
 
     parts = message.get("parts", [])
-    text_parts: List[str] = []
+    text_parts: list[str] = []
 
     for part in parts:
         if part.get("kind") == "text":
@@ -91,7 +91,7 @@ def extract_text_from_a2a_message(message: Dict[str, Any], depth: int = 0, max_d
     return " ".join(text_parts)
 
 
-def extract_text_from_a2a_response(response_dict: Dict[str, Any], max_depth: int = 10) -> str:
+def extract_text_from_a2a_response(response_dict: dict[str, Any], max_depth: int = 10) -> str:
     """
     Extract text content from A2A response result.
 

@@ -399,7 +399,7 @@ if MCP_AVAILABLE:
         try:
             encrypted_payload = encrypt_value_helper(payload_json)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to encrypt temporary MCP server payload for Redis cache: {str(e)}")
+            verbose_proxy_logger.debug(f"Failed to encrypt temporary MCP server payload for Redis cache: {e!s}")
             return
 
         if not isinstance(encrypted_payload, str):
@@ -413,7 +413,7 @@ if MCP_AVAILABLE:
                 ttl=max(1, ttl_seconds),
             )
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to write temporary MCP server to Redis cache: {str(e)}")
+            verbose_proxy_logger.debug(f"Failed to write temporary MCP server to Redis cache: {e!s}")
 
     async def _get_temporary_mcp_server_from_redis(
         server_id: str,
@@ -435,7 +435,7 @@ if MCP_AVAILABLE:
                 key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
             )
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed reading temporary MCP server from Redis cache: {str(e)}")
+            verbose_proxy_logger.debug(f"Failed reading temporary MCP server from Redis cache: {e!s}")
             return None
 
         if not isinstance(cached_server, str):
@@ -454,7 +454,7 @@ if MCP_AVAILABLE:
         try:
             loaded = json.loads(decrypted_json)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Invalid decrypted temporary MCP payload in Redis cache: {str(e)}")
+            verbose_proxy_logger.debug(f"Invalid decrypted temporary MCP payload in Redis cache: {e!s}")
             return None
         if not isinstance(loaded, dict):
             return None
@@ -463,7 +463,7 @@ if MCP_AVAILABLE:
         try:
             return MCPServer.model_validate(payload_dict)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Invalid temporary MCP server payload in Redis cache: {str(e)}")
+            verbose_proxy_logger.debug(f"Invalid temporary MCP server payload in Redis cache: {e!s}")
             return None
 
     async def get_cached_temporary_mcp_server(
@@ -1183,10 +1183,10 @@ if MCP_AVAILABLE:
                 touched_by=user_api_key_dict.user_id or user_api_key_dict.team_id,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error registering mcp server: {str(e)}")
+            verbose_proxy_logger.exception(f"Error registering mcp server: {e!s}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error registering mcp server: {str(e)}"},
+                detail={"error": f"Error registering mcp server: {e!s}"},
             )
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
@@ -1483,10 +1483,10 @@ if MCP_AVAILABLE:
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
+            verbose_proxy_logger.exception(f"Error creating mcp server: {e!s}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error creating mcp server: {str(e)}"},
+                detail={"error": f"Error creating mcp server: {e!s}"},
             )
 
         # Registry refresh is best-effort: the row is already committed, so a
@@ -1498,7 +1498,7 @@ if MCP_AVAILABLE:
             await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"MCP server {new_mcp_server.server_id} created but in-memory registry refresh failed: {str(e)}"
+                f"MCP server {new_mcp_server.server_id} created but in-memory registry refresh failed: {e!s}"
             )
 
         return _redact_mcp_credentials(new_mcp_server)
@@ -1559,10 +1559,10 @@ if MCP_AVAILABLE:
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error caching temporary mcp server: {str(e)}")
+            verbose_proxy_logger.exception(f"Error caching temporary mcp server: {e!s}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error caching temporary mcp server: {str(e)}"},
+                detail={"error": f"Error caching temporary mcp server: {e!s}"},
             )
 
         return _redact_mcp_credentials(temp_record)
@@ -2539,9 +2539,7 @@ if MCP_AVAILABLE:
                 raise HTTPException(
                     status_code=403,
                     detail={
-                        "error": "Only proxy admins can update public mcp servers. Your role={}".format(
-                            user_api_key_dict.user_role
-                        )
+                        "error": f"Only proxy admins can update public mcp servers. Your role={user_api_key_dict.user_role}"
                     },
                 )
 
@@ -2625,9 +2623,7 @@ if MCP_AVAILABLE:
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can access MCP discovery. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can access MCP discovery. Your role={user_api_key_dict.user_role}"
                 },
             )
 
@@ -2683,9 +2679,7 @@ if MCP_AVAILABLE:
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can access the OpenAPI registry. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can access the OpenAPI registry. Your role={user_api_key_dict.user_role}"
                 },
             )
         try:

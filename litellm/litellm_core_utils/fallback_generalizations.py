@@ -48,7 +48,7 @@ O(number of rules); callers must only invoke them on a cache miss.
 
 import re
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Union
 
 from litellm._logging import verbose_logger
 
@@ -152,14 +152,14 @@ class _FallbackGeneralizations:
         self.routing_rules: tuple = ()
         self.capability_rules: tuple = ()
 
-    def set_rules(self, rules: Optional[list]) -> None:
+    def set_rules(self, rules: list | None) -> None:
         installed = rules if isinstance(rules, list) else []
         compiled = tuple(kind for rule in _resolve_legacy_extends(installed) for kind in _compile_rule(rule))
         self.rules = installed
         self.routing_rules = tuple(rule for rule in compiled if isinstance(rule, _RoutingRule))
         self.capability_rules = tuple(rule for rule in compiled if isinstance(rule, _CapabilityRule))
 
-    def match_routing(self, model: str) -> Optional[str]:
+    def match_routing(self, model: str) -> str | None:
         if not model:
             return None
         return next(
@@ -167,7 +167,7 @@ class _FallbackGeneralizations:
             None,
         )
 
-    def match_capabilities(self, model: str) -> Optional[dict]:
+    def match_capabilities(self, model: str) -> dict | None:
         if not model:
             return None
         matched = tuple(rule.model_info for rule in self.capability_rules if rule.pattern.search(model) is not None)
@@ -179,7 +179,7 @@ class _FallbackGeneralizations:
 _registry = _FallbackGeneralizations()
 
 
-def set_fallback_generalizations(rules: Optional[list]) -> None:
+def set_fallback_generalizations(rules: list | None) -> None:
     """Install the active rule list, compiling and classifying each rule.
 
     Legacy ``extends`` inheritance is resolved here, once, before classification;
@@ -195,7 +195,7 @@ def get_fallback_generalization_rules() -> list:
     return _registry.rules
 
 
-def match_routing_generalization(model: str) -> Optional[str]:
+def match_routing_generalization(model: str) -> str | None:
     """Return the provider of the first routing rule whose regex matches ``model``.
 
     O(number of rules). Only call this once exact lookups have missed.
@@ -203,7 +203,7 @@ def match_routing_generalization(model: str) -> Optional[str]:
     return _registry.match_routing(model)
 
 
-def match_capability_generalizations(model: str) -> Optional[dict]:
+def match_capability_generalizations(model: str) -> dict | None:
     """Return the union of the ``model_info`` of every capability rule matching ``model``.
 
     Later rules override earlier ones on key conflicts. Returns ``None`` when no

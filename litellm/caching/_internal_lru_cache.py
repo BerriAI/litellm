@@ -1,11 +1,12 @@
+from collections.abc import Callable
 from functools import lru_cache
-from typing import Callable, Optional, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 
 
 def lru_cache_wrapper(
-    maxsize: Optional[int] = None,
+    maxsize: int | None = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Wrapper for lru_cache that caches success and exceptions

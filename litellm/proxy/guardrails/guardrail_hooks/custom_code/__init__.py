@@ -63,8 +63,8 @@ guardrail_class_registry = {
 }
 
 __all__ = [
-    "CustomCodeGuardrail",
     "DEFAULT_REJECTION_PHRASES",
     "RESPONSE_REJECTION_GUARDRAIL_CODE",
+    "CustomCodeGuardrail",
     "initialize_guardrail",
 ]

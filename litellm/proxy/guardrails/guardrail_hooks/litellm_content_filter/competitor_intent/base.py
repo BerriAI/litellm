@@ -4,7 +4,8 @@ Generic competitor intent checker: two entity sets and overridable disambiguatio
 
 import re
 import unicodedata
-from typing import Any, Dict, List, Optional, Pattern, Set, Tuple, cast
+from re import Pattern
+from typing import Any, cast
 
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     CompetitorActionHint,
@@ -35,12 +36,12 @@ def _word_boundary_match(text: str, token: str) -> bool:
     return bool(re.search(r"\b" + re.escape(token) + r"\b", text))
 
 
-def _count_signals(text: str, patterns: List[str]) -> int:
+def _count_signals(text: str, patterns: list[str]) -> int:
     """Count how many of the patterns appear in text."""
     return sum(1 for p in patterns if re.search(p, text, re.IGNORECASE))
 
 
-def _compile_marker(pattern: Optional[str]) -> Optional[Pattern[str]]:
+def _compile_marker(pattern: str | None) -> Pattern[str] | None:
     """Compile optional regex string to a pattern."""
     if not pattern or not pattern.strip():
         return None
@@ -63,12 +64,12 @@ class BaseCompetitorIntentChecker:
     _classify_ambiguous(). Base implementation: treat as non-competitor.
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        self.brand_self: List[str] = [s.lower().strip() for s in (config.get("brand_self") or []) if s]
-        competitors: List[str] = [s.lower().strip() for s in (config.get("competitors") or []) if s]
-        aliases_map: Dict[str, List[str]] = config.get("competitor_aliases") or {}
-        self.competitor_canonical: Dict[str, str] = {}
-        self._competitor_tokens: Set[str] = set()
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.brand_self: list[str] = [s.lower().strip() for s in (config.get("brand_self") or []) if s]
+        competitors: list[str] = [s.lower().strip() for s in (config.get("competitors") or []) if s]
+        aliases_map: dict[str, list[str]] = config.get("competitor_aliases") or {}
+        self.competitor_canonical: dict[str, str] = {}
+        self._competitor_tokens: set[str] = set()
         for c in competitors:
             self._competitor_tokens.add(c)
             self.competitor_canonical[c] = c
@@ -78,17 +79,17 @@ class BaseCompetitorIntentChecker:
                     self._competitor_tokens.add(a)
                     self.competitor_canonical[a] = c
 
-        other: List[str] = [s.lower().strip() for s in (config.get("locations") or []) if s]
-        self._other_meaning_tokens: Set[str] = set(other)
-        self._ambiguous: Set[str] = self._competitor_tokens & self._other_meaning_tokens
+        other: list[str] = [s.lower().strip() for s in (config.get("locations") or []) if s]
+        self._other_meaning_tokens: set[str] = set(other)
+        self._ambiguous: set[str] = self._competitor_tokens & self._other_meaning_tokens
 
-        self.policy: Dict[str, str] = config.get("policy") or {}
+        self.policy: dict[str, str] = config.get("policy") or {}
         self.threshold_high = float(config.get("threshold_high", 0.70))
         self.threshold_medium = float(config.get("threshold_medium", 0.45))
         self.threshold_low = float(config.get("threshold_low", 0.30))
-        self.reframe_message_template: Optional[str] = config.get("reframe_message_template")
-        self.refuse_message_template: Optional[str] = config.get("refuse_message_template")
-        self._comparison_words: List[str] = list(
+        self.reframe_message_template: str | None = config.get("reframe_message_template")
+        self.refuse_message_template: str | None = config.get("refuse_message_template")
+        self._comparison_words: list[str] = list(
             config.get("comparison_words")
             or [
                 "better",
@@ -102,19 +103,19 @@ class BaseCompetitorIntentChecker:
                 "ranked",
             ]
         )
-        self._domain_words: List[str] = [s.lower().strip() for s in (config.get("domain_words") or []) if s]
+        self._domain_words: list[str] = [s.lower().strip() for s in (config.get("domain_words") or []) if s]
 
-    def _classify_ambiguous(self, text: str, token: str) -> Tuple[str, float]:
+    def _classify_ambiguous(self, text: str, token: str) -> tuple[str, float]:
         """
         Override in subclasses for industry-specific logic. Base: treat as non-competitor.
         """
         return "OTHER_MEANING", 0.5
 
-    def _find_matches(self, text: str) -> List[Tuple[str, str, bool]]:
+    def _find_matches(self, text: str) -> list[tuple[str, str, bool]]:
         """Find competitor matches; mark ambiguous (also in other-meaning set)."""
         normalized = normalize(text)
-        found: List[Tuple[str, str, bool]] = []
-        seen: Set[Tuple[str, str]] = set()
+        found: list[tuple[str, str, bool]] = []
+        seen: set[tuple[str, str]] = set()
         for token in self._competitor_tokens:
             if not _word_boundary_match(normalized, token):
                 continue
@@ -130,8 +131,8 @@ class BaseCompetitorIntentChecker:
     def run(self, text: str) -> CompetitorIntentResult:
         """Classify competitor intent; non-competitor when ambiguous or low confidence."""
         normalized = normalize(text)
-        evidence: List[CompetitorIntentEvidenceEntry] = []
-        entities: Dict[str, List[str]] = {
+        evidence: list[CompetitorIntentEvidenceEntry] = []
+        entities: dict[str, list[str]] = {
             "brand_self": [],
             "competitors": [],
             "category": [],
@@ -177,7 +178,7 @@ class BaseCompetitorIntentChecker:
                 "evidence": evidence,
             }
 
-        competitor_resolved: List[str] = []
+        competitor_resolved: list[str] = []
         for token, canonical, _ in matches:
             label, conf = self._classify_ambiguous(normalized, token)
             if label == "OTHER_MEANING":

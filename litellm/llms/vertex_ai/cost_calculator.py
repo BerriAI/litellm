@@ -1,6 +1,6 @@
 # What is this?
 ## Cost calculation for Google AI Studio / Vertex AI models
-from typing import Literal, Optional, Tuple, Union
+from typing import Literal
 
 import litellm
 from litellm import verbose_logger
@@ -30,7 +30,7 @@ models_without_dynamic_pricing = ["gemini-1.0-pro", "gemini-pro", "gemini-2"]
 def cost_router(
     model: str,
     custom_llm_provider: str,
-    call_type: Union[Literal["embedding", "aembedding"], str],
+    call_type: Literal["embedding", "aembedding"] | str,
 ) -> Literal["cost_per_character", "cost_per_token"]:
     """
     Route the cost calc to the right place, based on model/call_type/etc.
@@ -38,18 +38,21 @@ def cost_router(
     Returns
         - str, the specific google cost calc function it should route to.
     """
-    if custom_llm_provider == "vertex_ai" and (
-        "claude" in model
-        or "llama" in model
-        or "mistral" in model
-        or "jamba" in model
-        or "codestral" in model
-        or "gemma" in model
+    if (
+        custom_llm_provider == "vertex_ai"
+        and (
+            "claude" in model
+            or "llama" in model
+            or "mistral" in model
+            or "jamba" in model
+            or "codestral" in model
+            or "gemma" in model
+        )
+        or custom_llm_provider == "vertex_ai"
+        and (call_type == "embedding" or call_type == "aembedding")
+        or custom_llm_provider == "vertex_ai"
+        and ("gemini-2" in model)
     ):
-        return "cost_per_token"
-    elif custom_llm_provider == "vertex_ai" and (call_type == "embedding" or call_type == "aembedding"):
-        return "cost_per_token"
-    elif custom_llm_provider == "vertex_ai" and ("gemini-2" in model):
         return "cost_per_token"
     return "cost_per_character"
 
@@ -58,9 +61,9 @@ def cost_per_character(
     model: str,
     custom_llm_provider: str,
     usage: Usage,
-    prompt_characters: Optional[float] = None,
-    completion_characters: Optional[float] = None,
-) -> Tuple[float, float]:
+    prompt_characters: float | None = None,
+    completion_characters: float | None = None,
+) -> tuple[float, float]:
     """
     Calculates the cost per character for a given VertexAI model, input messages, and response object.
 
@@ -99,23 +102,19 @@ def cost_per_character(
                     "input_cost_per_character_above_128k_tokens" in model_info
                     and model_info["input_cost_per_character_above_128k_tokens"] is not None
                 ), (
-                    "model info for model={} does not have 'input_cost_per_character_above_128k_tokens'-pricing for > 128k tokens\nmodel_info={}".format(
-                        model, model_info
-                    )
+                    f"model info for model={model} does not have 'input_cost_per_character_above_128k_tokens'-pricing for > 128k tokens\nmodel_info={model_info}"
                 )
                 prompt_cost = prompt_characters * model_info["input_cost_per_character_above_128k_tokens"]
             else:
                 assert (
                     "input_cost_per_character" in model_info and model_info["input_cost_per_character"] is not None
-                ), "model info for model={} does not have 'input_cost_per_character'-pricing\nmodel_info={}".format(
-                    model, model_info
+                ), (
+                    f"model info for model={model} does not have 'input_cost_per_character'-pricing\nmodel_info={model_info}"
                 )
                 prompt_cost = prompt_characters * model_info["input_cost_per_character"]
         except Exception as e:
             verbose_logger.debug(
-                "litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
-                    str(e)
-                )
+                f"litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {e!s}\nDefaulting to None"
             )
             prompt_cost, _ = cost_per_token(
                 model=model,
@@ -141,23 +140,19 @@ def cost_per_character(
                     "output_cost_per_character_above_128k_tokens" in model_info
                     and model_info["output_cost_per_character_above_128k_tokens"] is not None
                 ), (
-                    "model info for model={} does not have 'output_cost_per_character_above_128k_tokens' pricing\nmodel_info={}".format(
-                        model, model_info
-                    )
+                    f"model info for model={model} does not have 'output_cost_per_character_above_128k_tokens' pricing\nmodel_info={model_info}"
                 )
                 completion_cost = completion_tokens * model_info["output_cost_per_character_above_128k_tokens"]
             else:
                 assert (
                     "output_cost_per_character" in model_info and model_info["output_cost_per_character"] is not None
-                ), "model info for model={} does not have 'output_cost_per_character'-pricing\nmodel_info={}".format(
-                    model, model_info
+                ), (
+                    f"model info for model={model} does not have 'output_cost_per_character'-pricing\nmodel_info={model_info}"
                 )
                 completion_cost = completion_characters * model_info["output_cost_per_character"]
         except Exception as e:
             verbose_logger.debug(
-                "litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
-                    str(e)
-                )
+                f"litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {e!s}\nDefaulting to None"
             )
             _, completion_cost = cost_per_token(
                 model=model,
@@ -171,7 +166,7 @@ def cost_per_character(
 def _handle_128k_pricing(
     model_info: ModelInfo,
     usage: Usage,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     ## CALCULATE INPUT COST
     input_cost_per_token_above_128k_tokens = model_info.get("input_cost_per_token_above_128k_tokens")
     output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
@@ -198,8 +193,8 @@ def cost_per_token(
     model: str,
     custom_llm_provider: str,
     usage: Usage,
-    service_tier: Optional[str] = None,
-) -> Tuple[float, float]:
+    service_tier: str | None = None,
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 

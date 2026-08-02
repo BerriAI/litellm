@@ -7,10 +7,9 @@ No external dependencies — uses only stdlib.
 import math
 import re
 from collections import Counter
-from typing import Dict, List
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     """Split text into lowercase tokens on word boundaries."""
     return re.findall(r"[a-z0-9_]+", text.lower())
 
@@ -33,10 +32,10 @@ def _extract_content(message: dict) -> str:
 
 def bm25_score_messages(
     query: str,
-    messages: List[dict],
+    messages: list[dict],
     k1: float = 1.5,
     b: float = 0.75,
-) -> List[float]:
+) -> list[float]:
     """
     Score each message's relevance to the query using BM25 (Okapi BM25).
 
@@ -54,7 +53,7 @@ def bm25_score_messages(
         return [0.0] * len(messages)
 
     # Tokenize all documents
-    doc_tokens: List[List[str]] = []
+    doc_tokens: list[list[str]] = []
     for msg in messages:
         doc_tokens.append(_tokenize(_extract_content(msg)))
 
@@ -67,14 +66,14 @@ def bm25_score_messages(
     avgdl = sum(doc_lengths) / n if n > 0 else 1.0
 
     # Document frequency for each term
-    df: Dict[str, int] = {}
+    df: dict[str, int] = {}
     for dt in doc_tokens:
         seen = set(dt)
         for term in seen:
             df[term] = df.get(term, 0) + 1
 
     # IDF for query terms
-    idf: Dict[str, float] = {}
+    idf: dict[str, float] = {}
     for term in set(query_terms):
         term_df = df.get(term, 0)
         # Standard BM25 IDF: log((N - df + 0.5) / (df + 0.5) + 1)
@@ -94,7 +93,7 @@ def bm25_score_messages(
         return sum(count for token, count in tf_counts.items() if token != query_term and token.startswith(query_term))
 
     # Score each document
-    scores: List[float] = []
+    scores: list[float] = []
     for i, dt in enumerate(doc_tokens):
         if not dt:
             scores.append(0.0)

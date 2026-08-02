@@ -14,7 +14,7 @@ import asyncio
 import datetime
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,6 +38,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.config_sync_pubsub import (
+    coordination_redis_cache,
+    publish_config_change,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
@@ -86,14 +90,14 @@ async def update_team(*args, **kwargs):
 class UpdatePublicModelGroupsRequest(BaseModel):
     """Request model for updating public model groups"""
 
-    model_groups: List[str] = Field(description="List of model group names to make public")
+    model_groups: list[str] = Field(description="List of model group names to make public")
 
     model_config = ConfigDict(extra="forbid")
 
 
-async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Optional[Deployment]:
+async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment | None:
     db_model = cast(
-        Optional[BaseModel],
+        BaseModel | None,
         await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_id}),
     )
 
@@ -351,13 +355,13 @@ async def patch_model(
         return updated_model
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error in patch_model: {str(e)}")
+        verbose_proxy_logger.exception(f"Error in patch_model: {e!s}")
 
         if isinstance(e, (HTTPException, ProxyException)):
             raise e
 
         raise ProxyException(
-            message=f"Error updating model: {str(e)}",
+            message=f"Error updating model: {e!s}",
             type=ProxyErrorTypes.internal_server_error,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
@@ -369,8 +373,8 @@ async def _set_model_blocked_status(
     user_api_key_dict: UserAPIKeyAuth,
     blocked: bool,
     action: Literal["blocked", "unblocked"],
-    litellm_changed_by: Optional[str],
-) -> Optional[LiteLLM_ProxyModelTable]:
+    litellm_changed_by: str | None,
+) -> LiteLLM_ProxyModelTable | None:
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         llm_router,
@@ -458,13 +462,13 @@ async def _set_model_blocked_status(
         return updated_model
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error in model {action}: {str(e)}")
+        verbose_proxy_logger.exception(f"Error in model {action}: {e!s}")
 
         if isinstance(e, (HTTPException, ProxyException)):
             raise e
 
         raise ProxyException(
-            message=f"Error updating model blocked status: {str(e)}",
+            message=f"Error updating model blocked status: {e!s}",
             type=ProxyErrorTypes.internal_server_error,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
@@ -480,11 +484,11 @@ async def block_model(
     data: BlockModelRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-) -> Optional[LiteLLM_ProxyModelTable]:
+) -> LiteLLM_ProxyModelTable | None:
     """
     Block a DB-stored model deployment from serving requests.
 
@@ -509,11 +513,11 @@ async def unblock_model(
     data: BlockModelRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-) -> Optional[LiteLLM_ProxyModelTable]:
+) -> LiteLLM_ProxyModelTable | None:
     """
     Unblock a DB-stored model deployment so it can serve requests again.
 
@@ -539,9 +543,9 @@ async def _add_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-    new_encryption_key: Optional[str] = None,
+    new_encryption_key: str | None = None,
     should_create_model_in_db: bool = True,
-) -> Optional[LiteLLM_ProxyModelTable]:
+) -> LiteLLM_ProxyModelTable | None:
     # encrypt litellm params #
     _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
     _original_litellm_model_name = model_params.litellm_params.model
@@ -573,7 +577,7 @@ async def _add_team_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-) -> Optional[LiteLLM_ProxyModelTable]:
+) -> LiteLLM_ProxyModelTable | None:
     """
     If 'team_id' is provided,
 
@@ -717,7 +721,7 @@ def _get_public_model_name(
         db_model.model_info.team_id if db_model.model_info else None
     )
 
-    def _is_internal_shape(name: Optional[str]) -> bool:
+    def _is_internal_shape(name: str | None) -> bool:
         if team_id is None or not name:
             return False
         return name.startswith(f"model_name_{team_id}_")
@@ -753,8 +757,8 @@ async def _setup_new_team_model_assignment(
 
 
 async def _get_team_deployments(
-    team_id: str, prisma_client: PrismaClient, table: Optional[Any] = None
-) -> List[LiteLLM_ProxyModelTable]:
+    team_id: str, prisma_client: PrismaClient, table: Any | None = None
+) -> list[LiteLLM_ProxyModelTable]:
     """
     Fetch all deployments for a given team_id from the database.
 
@@ -788,10 +792,10 @@ async def _get_team_deployments(
 
 
 async def delete_team_models(
-    team_ids: List[str],
+    team_ids: list[str],
     prisma_client: PrismaClient,
-    llm_router: Optional[Any],
-) -> List[str]:
+    llm_router: Any | None,
+) -> list[str]:
     """
     Delete every BYOK model owned by the given teams, from the DB and the router.
 
@@ -803,7 +807,7 @@ async def delete_team_models(
 
     Returns the model_ids that were deleted.
     """
-    deleted_model_ids: List[str] = []
+    deleted_model_ids: list[str] = []
     async with prisma_client.db.tx() as tx:
         for team_id in team_ids:
             rows = await _get_team_deployments(team_id, prisma_client, table=tx.litellm_proxymodeltable)
@@ -811,6 +815,9 @@ async def delete_team_models(
             if model_ids:
                 await tx.litellm_proxymodeltable.delete_many(where={"model_id": {"in": model_ids}})
                 deleted_model_ids.extend(model_ids)
+
+    if deleted_model_ids:
+        await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
 
     if llm_router is not None:
         for model_id in deleted_model_ids:
@@ -822,7 +829,7 @@ async def delete_team_models(
 async def _get_team_public_model_names(
     team_id: str,
     prisma_client: PrismaClient,
-) -> Set[str]:
+) -> set[str]:
     """
     Public model names currently backed by a deployment in the team.
 
@@ -831,7 +838,7 @@ async def _get_team_public_model_names(
     still serves it.
     """
     deployments = await _get_team_deployments(team_id, prisma_client)
-    public_names: Set[str] = set()
+    public_names: set[str] = set()
     for row in deployments:
         model_info = model_info_as_mapping(row.model_info)
         if model_info is not None:
@@ -874,7 +881,7 @@ async def _remove_unbacked_team_models(
     deleted_name_still_served = (
         llm_router is not None and model_params.model_name in llm_router.model_name_to_deployment_indices
     )
-    removed_model_aliases: List[Tuple[str, str]] = (
+    removed_model_aliases: list[tuple[str, str]] = (
         []
         if deleted_name_still_served
         else await delete_team_model_alias(
@@ -923,7 +930,7 @@ async def _update_existing_team_model_assignment(
     db_model: Deployment,
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Optional[PrismaClient],
+    prisma_client: PrismaClient | None,
 ) -> None:
     """Update an existing team model if the public name changed.
 
@@ -934,8 +941,8 @@ async def _update_existing_team_model_assignment(
     """
 
     def _get_team_public_model_name(
-        model_info: Optional[Union[dict, str]],
-    ) -> Optional[str]:
+        model_info: dict | str | None,
+    ) -> str | None:
         parsed = model_info_as_mapping(model_info)
         if parsed is None:
             return None
@@ -1009,7 +1016,7 @@ class ModelManagementAuthChecks:
     def can_user_make_team_model_call(
         team_id: str,
         user_api_key_dict: UserAPIKeyAuth,
-        team_obj: Optional[LiteLLM_TeamTable] = None,
+        team_obj: LiteLLM_TeamTable | None = None,
         premium_user: bool = False,
     ) -> Literal[True]:
         if premium_user is False:
@@ -1023,16 +1030,14 @@ class ModelManagementAuthChecks:
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Team ID={} does not match the API key's team ID={}, OR you are not the admin for this team. Check `/user/info` to verify your team admin status.".format(
-                        team_id, user_api_key_dict.team_id
-                    )
+                    "error": f"Team ID={team_id} does not match the API key's team ID={user_api_key_dict.team_id}, OR you are not the admin for this team. Check `/user/info` to verify your team admin status."
                 },
             )
         return True
 
     @staticmethod
     async def allow_team_model_action(
-        model_params: Union[Deployment, updateDeployment],
+        model_params: Deployment | updateDeployment,
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
         premium_user: bool,
@@ -1052,7 +1057,7 @@ class ModelManagementAuthChecks:
         if _existing_team_row is None:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "Team id={} does not exist in db".format(model_params.model_info.team_id)},
+                detail={"error": f"Team id={model_params.model_info.team_id} does not exist in db"},
             )
         existing_team_row = LiteLLM_TeamTable.model_validate(_existing_team_row.model_dump())
 
@@ -1090,7 +1095,7 @@ class ModelManagementAuthChecks:
                     )
                 raise HTTPException(
                     status_code=400,
-                    detail={"error": "Team id={} does not exist in db".format(model_params.model_info.team_id)},
+                    detail={"error": f"Team id={model_params.model_info.team_id} does not exist in db"},
                 )
             team_obj = LiteLLM_TeamTable.model_validate(team_obj_row.model_dump())
 
@@ -1105,9 +1110,7 @@ class ModelManagementAuthChecks:
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "User does not have permission to make this model call. Your role={}. You can only make model calls if you are a PROXY_ADMIN or if you are a team admin, by specifying a team_id in the model_info.".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"User does not have permission to make this model call. Your role={user_api_key_dict.user_role}. You can only make model calls if you are a PROXY_ADMIN or if you are a team admin, by specifying a team_id in the model_info."
                 },
             )
         else:
@@ -1220,10 +1223,10 @@ async def delete_model(
             )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to delete model. Due to error - {str(e)}")
+        verbose_proxy_logger.exception(f"Failed to delete model. Due to error - {e!s}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                message=getattr(e, "detail", f"Authentication Error({e!s})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -1241,7 +1244,7 @@ async def delete_model(
 async def delete_team_model_alias(
     public_model_name: str,
     prisma_client: PrismaClient,
-) -> List[Tuple[str, str]]:
+) -> list[tuple[str, str]]:
     """
     Delete a team model alias
 
@@ -1349,7 +1352,7 @@ async def add_new_model(
             existing_params=None,
         )
 
-        model_response: Optional[LiteLLM_ProxyModelTable] = None
+        model_response: LiteLLM_ProxyModelTable | None = None
         # update DB
         if store_model_in_db is True:
             """
@@ -1426,12 +1429,10 @@ async def add_new_model(
         return model_response
 
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.add_new_model(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.add_new_model(): Exception occured - {e!s}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                message=getattr(e, "detail", f"Authentication Error({e!s})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -1581,12 +1582,10 @@ async def update_model(
 
             return model_response
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.update_model(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.update_model(): Exception occured - {e!s}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                message=getattr(e, "detail", f"Authentication Error({e!s})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -1637,9 +1636,7 @@ async def update_public_model_groups(
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can update public model groups. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
 
@@ -1678,13 +1675,13 @@ async def update_public_model_groups(
         }
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating public model groups: {str(e)}")
+        verbose_proxy_logger.exception(f"Error updating public model groups: {e!s}")
 
         if isinstance(e, HTTPException):
             raise e
 
         raise ProxyException(
-            message=f"Error updating public model groups: {str(e)}",
+            message=f"Error updating public model groups: {e!s}",
             type=ProxyErrorTypes.internal_server_error,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
@@ -1714,9 +1711,7 @@ async def update_useful_links(
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can update public model groups. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
 
@@ -1748,20 +1743,20 @@ async def update_useful_links(
         }
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating public model groups: {str(e)}")
+        verbose_proxy_logger.exception(f"Error updating public model groups: {e!s}")
 
         if isinstance(e, HTTPException):
             raise e
 
         raise ProxyException(
-            message=f"Error updating public model groups: {str(e)}",
+            message=f"Error updating public model groups: {e!s}",
             type=ProxyErrorTypes.internal_server_error,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
         )
 
 
-def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
+def _deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:
     """
     Deduplicate models based on their model_info.id field.
     Returns a list of unique models keeping only the first occurrence of each model ID.
@@ -1975,5 +1970,5 @@ async def clear_cache() -> frozenset[str] | None:
         )
         return still_desired_ids
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to clear cache and reload models. Due to error - {str(e)}")
+        verbose_proxy_logger.exception(f"Failed to clear cache and reload models. Due to error - {e!s}")
         return None

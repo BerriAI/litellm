@@ -1,13 +1,8 @@
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    List,
     Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Type,
     Union,
 )
 
@@ -22,17 +17,18 @@ import json
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
+)
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
@@ -40,7 +36,6 @@ from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
     MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
     plan_file_scans,
 )
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -93,7 +88,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     """
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
@@ -104,11 +99,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def __init__(
         self,
-        template_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-        location: Optional[str] = None,
-        credentials: Optional[Any] = None,
-        api_endpoint: Optional[str] = None,
+        template_id: str | None = None,
+        project_id: str | None = None,
+        location: str | None = None,
+        credentials: Any | None = None,
+        api_endpoint: str | None = None,
         sanitize_error_detail: "bool | None" = True,
         **kwargs,
     ):
@@ -157,7 +152,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"text": content}}
 
-    def _extract_content_from_response(self, response: Union[Any, ModelResponse]) -> str:
+    def _extract_content_from_response(self, response: Any | ModelResponse) -> str:
         """
         Extract text content from model response.
 
@@ -239,11 +234,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     async def make_model_armor_request(
         self,
-        content: Optional[str] = None,
+        content: str | None = None,
         source: Literal["user_prompt", "model_response"] = "user_prompt",
-        request_data: Optional[dict] = None,
-        file_bytes: Optional[bytes] = None,
-        file_type: Optional[str] = None,
+        request_data: dict | None = None,
+        file_bytes: bytes | None = None,
+        file_type: str | None = None,
     ) -> dict:
         """
         Make request to Model Armor API. Supports both text and file prompt sanitization.
@@ -368,7 +363,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Fallback dict code removed; all cases handled above
         return False
 
-    def _get_sanitized_content(self, armor_response: dict) -> Optional[str]:
+    def _get_sanitized_content(self, armor_response: dict) -> str | None:
         """
         Get the sanitized content from a Model Armor response, if available.
         Looks for sanitized text in deidentifyResult, and falls back to root-level fields if not found.
@@ -424,13 +419,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _process_response(
         self,
-        response: Optional[dict],
+        response: dict | None,
         request_data: dict,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
-        duration: Optional[float] = None,
-        event_type: Optional[GuardrailEventHooks] = None,
-        original_inputs: Optional[dict] = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
+        duration: float | None = None,
+        event_type: GuardrailEventHooks | None = None,
+        original_inputs: dict | None = None,
     ):
         """
         Override to store only the Model Armor API response, not the entire data dict.
@@ -569,7 +564,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         """Pre-call hook to sanitize user prompts."""
         verbose_proxy_logger.debug("Inside Model Armor Pre-Call Hook")
 
@@ -668,7 +663,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         """During-call hook to sanitize user prompts in parallel with LLM call."""
         verbose_proxy_logger.debug("Inside Model Armor Moderation Hook")
 
@@ -853,7 +848,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         from litellm.main import stream_chunk_builder
 
         # Collect all chunks
-        all_chunks: List[ModelResponseStream] = []
+        all_chunks: list[ModelResponseStream] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
@@ -947,7 +942,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             yield chunk
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         """
         Get the config model for the Model Armor guardrail.
         """

@@ -6,7 +6,8 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 """
 
 import base64
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Union
 
 import httpx
 
@@ -75,8 +76,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
     def _map_voice_to_vertex_format(
         self,
-        voice: Optional[Union[str, Dict]],
-    ) -> Tuple[Optional[str], Optional[Dict]]:
+        voice: str | dict | None,
+    ) -> tuple[str | None, dict | None]:
         """
         Map voice to Vertex AI format.
 
@@ -125,16 +126,16 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         model: str,
         input: str,
-        voice: Optional[Union[str, Dict]],
-        optional_params: Dict,
-        litellm_params_dict: Dict,
+        voice: str | dict | None,
+        optional_params: dict,
+        litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]],
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, Any] | None,
         base_llm_http_handler: Any,
         aspeech: bool,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         **kwargs: Any,
     ) -> Union[
         "HttpxBinaryResponseContent",
@@ -156,7 +157,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
         # Convert voice to string if it's a dict (extract name)
         # Actual voice mapping happens in map_openai_params
-        voice_str: Optional[str] = None
+        voice_str: str | None = None
         if isinstance(voice, str):
             voice_str = voice
         elif isinstance(voice, dict):
@@ -203,11 +204,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def map_openai_params(
         self,
         model: str,
-        optional_params: Dict,
-        voice: Optional[Union[str, Dict]] = None,
+        optional_params: dict,
+        voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: Dict = {},
-    ) -> Tuple[Optional[str], Dict]:
+        kwargs: dict = {},
+    ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to Vertex AI TTS parameters
 
@@ -222,7 +223,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Returns:
             Tuple of (mapped_voice_str, mapped_params)
         """
-        mapped_params: Dict[str, Any] = {}
+        mapped_params: dict[str, Any] = {}
 
         ##########################################################
         # Map voice using helper
@@ -262,8 +263,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Vertex AI environment and set up authentication headers
@@ -282,7 +283,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -298,7 +299,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _validate_vertex_input(
         self,
         input_data: VertexTextToSpeechInput,
-        optional_params: Dict,
+        optional_params: dict,
     ) -> VertexTextToSpeechInput:
         """
         Validate and transform input for Vertex AI TTS
@@ -338,9 +339,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         model: str,
         input: str,
-        voice: Optional[str],
-        optional_params: Dict,
-        litellm_params: Dict,
+        voice: str | None,
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:
         """
@@ -355,8 +356,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             TextToSpeechRequestData: Contains dict_body and headers
         """
         # Get Vertex AI credentials from litellm_params
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = litellm_params.get("vertex_credentials")
-        vertex_project: Optional[str] = litellm_params.get("vertex_project")
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = litellm_params.get("vertex_credentials")
+        vertex_project: str | None = litellm_params.get("vertex_project")
 
         ####### Authenticate with Vertex AI ########
         _auth_header, vertex_project = self._ensure_access_token(
@@ -423,7 +424,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 speakingRate=speaking_rate,
             )
 
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "input": dict(vertex_input),
             "voice": dict(vertex_voice),
             "audioConfig": dict(vertex_audio_config),

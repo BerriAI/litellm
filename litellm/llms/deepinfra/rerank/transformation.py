@@ -2,7 +2,7 @@
 Translate between Cohere's `/rerank` format and Deepinfra's `/rerank` format.
 """
 
-from typing import Any, Dict, List, Union
+from typing import Any
 
 import httpx
 
@@ -93,15 +93,15 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         # Start with the basic parameters
         optional_rerank_params = {}
         if query:
@@ -127,7 +127,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -210,9 +210,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return ["query", "documents"]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         # Deepinfra errors may come as JSON: {"detail": {"error": "..."}}
         import json
 

@@ -1,7 +1,7 @@
 #### OCR Endpoints #####
 
 import json
-from typing import Any, Dict, Optional, cast
+from typing import Any, cast
 
 import orjson
 from fastapi import APIRouter, Depends, Request, Response, UploadFile
@@ -18,9 +18,9 @@ router = APIRouter()
 
 def _build_document_from_upload(
     file_content: bytes,
-    filename: Optional[str],
-    content_type: Optional[str],
-) -> Dict[str, str]:
+    filename: str | None,
+    content_type: str | None,
+) -> dict[str, str]:
     """
     Convert uploaded file bytes into a Mistral-format document dict with base64 data URI.
 
@@ -41,7 +41,7 @@ def _build_document_from_upload(
     )
 
 
-async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
+async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     """
     Extract OCR data from a multipart form request.
 
@@ -55,7 +55,7 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
         form = await request.form()
     except Exception as e:
         raise ValueError(
-            f"Failed to parse multipart form data: {str(e)}. "
+            f"Failed to parse multipart form data: {e!s}. "
             "When using curl with --form/-F, do NOT set the Content-Type header "
             "manually — curl will set it automatically with the required boundary."
         )
@@ -81,7 +81,7 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
         content_type=uploaded_file.content_type,
     )
 
-    data: Dict[str, Any] = {"document": document}
+    data: dict[str, Any] = {"document": document}
 
     for field_name, field_value in form.items():
         if field_name in ("file", "document"):
@@ -104,7 +104,7 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
     return data
 
 
-async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
+async def _parse_ocr_request(request: Request) -> dict[str, Any]:
     """
     Parse an OCR request, supporting both JSON and multipart form data.
 

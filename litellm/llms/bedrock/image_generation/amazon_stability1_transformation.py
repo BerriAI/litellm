@@ -1,7 +1,6 @@
 import copy
 import os
 import types
-from typing import List, Optional
 
 from openai.types.image import Image
 
@@ -38,19 +37,19 @@ class AmazonStabilityConfig:
         - SD v1.6: must be between 320x320 and 1536x1536
     """
 
-    cfg_scale: Optional[int] = None
-    seed: Optional[float] = None
-    steps: Optional[List[str]] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
+    cfg_scale: int | None = None
+    seed: float | None = None
+    steps: list[str] | None = None
+    width: int | None = None
+    height: int | None = None
 
     def __init__(
         self,
-        cfg_scale: Optional[int] = None,
-        seed: Optional[float] = None,
-        steps: Optional[List[str]] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
+        cfg_scale: int | None = None,
+        seed: float | None = None,
+        steps: list[str] | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -76,7 +75,7 @@ class AmazonStabilityConfig:
         }
 
     @classmethod
-    def get_supported_openai_params(cls, model: Optional[str] = None) -> List:
+    def get_supported_openai_params(cls, model: str | None = None) -> list:
         return ["size"]
 
     @classmethod
@@ -120,7 +119,7 @@ class AmazonStabilityConfig:
     def transform_response_dict_to_openai_response(
         cls, model_response: ImageResponse, response_dict: dict
     ) -> ImageResponse:
-        image_list: List[Image] = []
+        image_list: list[Image] = []
         for artifact in response_dict["artifacts"]:
             _image = Image(b64_json=artifact["base64"])
             image_list.append(_image)
@@ -134,8 +133,8 @@ class AmazonStabilityConfig:
         cls,
         model: str,
         image_response: ImageResponse,
-        size: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        size: str | None = None,
+        optional_params: dict | None = None,
     ) -> float:
         optional_params = optional_params or {}
 

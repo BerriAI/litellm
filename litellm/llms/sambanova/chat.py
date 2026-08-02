@@ -4,7 +4,8 @@ Sambanova Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Union, overload
+from collections.abc import Coroutine
+from typing import Any, Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -20,29 +21,29 @@ class SambanovaConfig(OpenAIGPTConfig):
     Below are the parameters:
     """
 
-    max_tokens: Optional[int] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    top_k: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    stream: Optional[bool] = None
-    stream_options: Optional[dict] = None
-    tool_choice: Optional[str] = None
-    response_format: Optional[dict] = None
-    tools: Optional[list] = None
+    max_tokens: int | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    top_k: int | None = None
+    stop: str | list | None = None
+    stream: bool | None = None
+    stream_options: dict | None = None
+    tool_choice: str | None = None
+    response_format: dict | None = None
+    tools: list | None = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        stop: Optional[str] = None,
-        stream: Optional[bool] = None,
-        stream_options: Optional[dict] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        tool_choice: Optional[str] = None,
-        tools: Optional[list] = None,
+        max_tokens: int | None = None,
+        response_format: dict | None = None,
+        stop: str | None = None,
+        stream: bool | None = None,
+        stream_options: dict | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        tool_choice: str | None = None,
+        tools: list | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -99,20 +100,20 @@ class SambanovaConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """
         Transform messages to handle content list conversion.
 

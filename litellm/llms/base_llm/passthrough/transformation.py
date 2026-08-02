@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import TYPE_CHECKING, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from ..base_utils import BaseLLMModelInfo
 
@@ -18,13 +18,12 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         """
         Check if the request is a streaming request
         """
-        pass
 
     def format_url(
         self,
         endpoint: str,
         base_target_url: str,
-        request_query_params: Optional[dict],
+        request_query_params: dict | None,
     ) -> "URL":
         """
         Helper function to add query params to the url
@@ -53,29 +52,28 @@ class BasePassthroughConfig(BaseLLMModelInfo):
     @abstractmethod
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: Optional[dict],
+        request_query_params: dict | None,
         litellm_params: dict,
-    ) -> Tuple["URL", str]:
+    ) -> tuple["URL", str]:
         """
         Get the complete url for the request
         Returns:
             - complete_url: URL - the complete url for the request
             - base_target_url: str - the base url to add the endpoint to. Useful for auth headers.
         """
-        pass
 
     def sign_request(
         self,
         headers: dict,
         litellm_params: dict,
-        request_data: Optional[dict],
+        request_data: dict | None,
         api_base: str,
-        model: Optional[str] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        model: str | None = None,
+    ) -> tuple[dict, bytes | None]:
         """
         Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
         Args:
@@ -110,7 +108,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
 
     def handle_logging_collected_chunks(
         self,
-        all_chunks: List[str],
+        all_chunks: list[str],
         litellm_logging_obj: "LiteLLMLoggingObj",
         model: str,
         custom_llm_provider: str,
@@ -118,7 +116,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
     ) -> Optional["CostResponseTypes"]:
         return None
 
-    def _convert_raw_bytes_to_str_lines(self, raw_bytes: List[bytes]) -> List[str]:
+    def _convert_raw_bytes_to_str_lines(self, raw_bytes: list[bytes]) -> list[str]:
         """
         Converts a list of raw bytes into a list of string lines, similar to aiter_lines()
 

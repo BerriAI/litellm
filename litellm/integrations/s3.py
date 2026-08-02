@@ -2,7 +2,7 @@
 #    On success + failure, log events to Supabase
 
 from datetime import datetime
-from typing import Optional, cast
+from typing import cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -78,7 +78,7 @@ class S3Logger:
                 **kwargs,
             )
         except Exception as e:
-            print_verbose(f"Got exception on init s3 client {str(e)}")
+            print_verbose(f"Got exception on init s3 client {e!s}")
             raise e
 
     async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
@@ -111,8 +111,8 @@ class S3Logger:
                         clean_metadata[key] = value
 
             # Ensure everything in the payload is converted to str
-            payload: Optional[StandardLoggingPayload] = cast(
-                Optional[StandardLoggingPayload],
+            payload: StandardLoggingPayload | None = cast(
+                StandardLoggingPayload | None,
                 kwargs.get("standard_logging_object", None),
             )
 
@@ -127,7 +127,7 @@ class S3Logger:
 
             s3_file_name = litellm.utils.get_logging_id(start_time, payload) or ""
             s3_object_key = get_s3_object_key(
-                cast(Optional[str], self.s3_path) or "",
+                cast(str | None, self.s3_path) or "",
                 team_alias_prefix,
                 start_time,
                 s3_file_name,
@@ -163,13 +163,12 @@ class S3Logger:
                 **sse_params,
             )
 
-            print_verbose(f"Response from s3:{str(response)}")
+            print_verbose(f"Response from s3:{response!s}")
 
             print_verbose(f"s3 Layer Logging - final response object: {response_obj}")
             return response
         except Exception as e:
-            verbose_logger.exception(f"s3 Layer Error - {str(e)}")
-            pass
+            verbose_logger.exception(f"s3 Layer Error - {e!s}")
 
 
 def _validated_sse_value(name: str, value: str | None) -> str | None:

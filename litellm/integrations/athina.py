@@ -82,4 +82,3 @@ class AthinaLogger:
                 print_verbose(f"Athina Logger Succeeded - {response.text}")
         except Exception as e:
             print_verbose(f"Athina Logger Error - {e}, Stack trace: {traceback.format_exc()}")
-            pass

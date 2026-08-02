@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Type
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 
@@ -26,7 +26,7 @@ class CustomOpenAPISpec:
     RESPONSES_API_PATHS = ["/v1/responses", "/responses"]
 
     @staticmethod
-    def get_pydantic_schema(model_class) -> Optional[Dict[str, Any]]:
+    def get_pydantic_schema(model_class) -> dict[str, Any] | None:
         """
         Get JSON schema from a Pydantic model, handling both v1 and v2 APIs.
 
@@ -53,7 +53,7 @@ class CustomOpenAPISpec:
             return None
 
     @staticmethod
-    def add_schema_to_components(openapi_schema: Dict[str, Any], schema_name: str, schema_def: Dict[str, Any]) -> None:
+    def add_schema_to_components(openapi_schema: dict[str, Any], schema_name: str, schema_def: dict[str, Any]) -> None:
         """
         Add a schema definition to the OpenAPI components/schemas section.
 
@@ -72,7 +72,7 @@ class CustomOpenAPISpec:
         CustomOpenAPISpec._move_defs_to_components(openapi_schema, {schema_name: schema_def})
 
     @staticmethod
-    def add_request_body_to_paths(openapi_schema: Dict[str, Any], paths: List[str], schema_ref: str) -> None:
+    def add_request_body_to_paths(openapi_schema: dict[str, Any], paths: list[str], schema_ref: str) -> None:
         """
         Add request body with expanded form fields for better Swagger UI display.
         This keeps the request body but expands it to show individual fields in the UI.
@@ -130,7 +130,7 @@ class CustomOpenAPISpec:
                     openapi_schema["paths"][path]["post"]["parameters"] = filtered_params
 
     @staticmethod
-    def _move_defs_to_components(openapi_schema: Dict[str, Any], defs: Dict[str, Any]) -> None:
+    def _move_defs_to_components(openapi_schema: dict[str, Any], defs: dict[str, Any]) -> None:
         """
         Move $defs from Pydantic v2 schema to OpenAPI components/schemas.
         This makes the definitions resolvable in Swagger/OpenAPI viewers.
@@ -190,7 +190,7 @@ class CustomOpenAPISpec:
             return schema
 
     @staticmethod
-    def _extract_field_schema(field_def: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_field_schema(field_def: dict[str, Any]) -> dict[str, Any]:
         """
         Extract a simple schema from a Pydantic field definition for parameter display.
 
@@ -218,7 +218,7 @@ class CustomOpenAPISpec:
         return {"type": "string"}
 
     @staticmethod
-    def _expand_field_definition(field_def: Dict[str, Any]) -> Dict[str, Any]:
+    def _expand_field_definition(field_def: dict[str, Any]) -> dict[str, Any]:
         """
         Expand a Pydantic field definition for inline use in OpenAPI schema.
         This creates a full field definition that Swagger UI can render as individual form fields.
@@ -234,12 +234,12 @@ class CustomOpenAPISpec:
 
     @staticmethod
     def add_request_schema(
-        openapi_schema: Dict[str, Any],
-        model_class: Type,
+        openapi_schema: dict[str, Any],
+        model_class: type,
         schema_name: str,
-        paths: List[str],
+        paths: list[str],
         operation_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generic method to add a request schema to OpenAPI specification.
 
@@ -273,14 +273,14 @@ class CustomOpenAPISpec:
 
         except Exception as e:
             # If schema addition fails, continue without it
-            verbose_proxy_logger.debug(f"Failed to add {operation_name} request schema: {str(e)}")
+            verbose_proxy_logger.debug(f"Failed to add {operation_name} request schema: {e!s}")
 
         return openapi_schema
 
     @staticmethod
     def add_chat_completion_request_schema(
-        openapi_schema: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        openapi_schema: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Add ProxyChatCompletionRequest schema to chat completion endpoints for documentation.
         This shows the request body in Swagger without runtime validation.
@@ -302,11 +302,11 @@ class CustomOpenAPISpec:
                 operation_name="chat completion",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import ProxyChatCompletionRequest: {str(e)}")
+            verbose_proxy_logger.debug(f"Failed to import ProxyChatCompletionRequest: {e!s}")
             return openapi_schema
 
     @staticmethod
-    def add_embedding_request_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
+    def add_embedding_request_schema(openapi_schema: dict[str, Any]) -> dict[str, Any]:
         """
         Add EmbeddingRequest schema to embedding endpoints for documentation.
         This shows the request body in Swagger without runtime validation.
@@ -328,13 +328,13 @@ class CustomOpenAPISpec:
                 operation_name="embedding",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import EmbeddingRequest: {str(e)}")
+            verbose_proxy_logger.debug(f"Failed to import EmbeddingRequest: {e!s}")
             return openapi_schema
 
     @staticmethod
     def add_responses_api_request_schema(
-        openapi_schema: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        openapi_schema: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Add ResponsesAPIRequestParams schema to responses API endpoints for documentation.
         This shows the request body in Swagger without runtime validation.
@@ -356,13 +356,13 @@ class CustomOpenAPISpec:
                 operation_name="responses API",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import ResponsesAPIRequestParams: {str(e)}")
+            verbose_proxy_logger.debug(f"Failed to import ResponsesAPIRequestParams: {e!s}")
             return openapi_schema
 
     @staticmethod
     def add_llm_api_request_schema_body(
-        openapi_schema: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        openapi_schema: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Add LLM API request schema bodies to OpenAPI specification for documentation.
 

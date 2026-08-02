@@ -10,4 +10,4 @@ guardrail_translation_mappings = {
     CallTypes.aembedding: OpenAIEmbeddingsHandler,
 }
 
-__all__ = ["guardrail_translation_mappings", "OpenAIEmbeddingsHandler"]
+__all__ = ["OpenAIEmbeddingsHandler", "guardrail_translation_mappings"]

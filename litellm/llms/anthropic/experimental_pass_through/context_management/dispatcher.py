@@ -1,7 +1,8 @@
 """Dispatch ``context_management`` edits to registered polyfill editors."""
 
 import inspect
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union, cast
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AppliedEdit
@@ -12,15 +13,15 @@ from .result import PolyfillResult
 
 EditorFn = Callable[..., Any]
 
-_EDITOR_REGISTRY: Dict[str, EditorFn] = {
+_EDITOR_REGISTRY: dict[str, EditorFn] = {
     CLEAR_TOOL_USES_EDIT_TYPE: apply_clear_tool_uses_20250919,
     COMPACT_EDIT_TYPE: apply_compact_20260112,
 }
 
 
 def _normalize_spec(
-    spec: Union[Dict[str, Any], List[Dict[str, Any]], None],
-) -> Optional[List[Dict[str, Any]]]:
+    spec: dict[str, Any] | list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
     """Accept Anthropic-native dict form or OpenAI list form; return edits list."""
     if isinstance(spec, list):
         # Local import to avoid an import cycle at module load.
@@ -45,7 +46,7 @@ def _wrap_editor_return(raw: Any, *, fallback_system: Any) -> PolyfillResult:
         return raw
     # Legacy 2-tuple return — sync editors don't mutate ``system``, so
     # carry the caller's value forward.
-    messages, applied = cast(Tuple[List[Dict[str, Any]], Any], raw)
+    messages, applied = cast(tuple[list[dict[str, Any]], Any], raw)
     return PolyfillResult(
         messages=messages,
         system=fallback_system,
@@ -56,11 +57,11 @@ def _wrap_editor_return(raw: Any, *, fallback_system: Any) -> PolyfillResult:
 async def apply_context_management(
     *,
     model: str,
-    messages: List[Dict[str, Any]],
-    tools: Optional[List[Dict[str, Any]]],
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
     system: Any,
-    context_management_spec: Union[Dict[str, Any], List[Dict[str, Any]], None],
-    litellm_metadata: Optional[Dict[str, Any]] = None,
+    context_management_spec: dict[str, Any] | list[dict[str, Any]] | None,
+    litellm_metadata: dict[str, Any] | None = None,
     llm_router: Any = None,
     user_api_key_auth: Any = None,
 ) -> PolyfillResult:
@@ -77,7 +78,7 @@ async def apply_context_management(
 
     current_messages = messages
     current_system = system
-    aggregated_applied: List[AppliedEdit] = []
+    aggregated_applied: list[AppliedEdit] = []
     aggregated_compaction_block = None
     aggregated_iterations_usage = None
 
@@ -91,7 +92,7 @@ async def apply_context_management(
             )
             continue
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": current_messages,
             "tools": tools,

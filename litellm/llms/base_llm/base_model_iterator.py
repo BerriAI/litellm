@@ -1,6 +1,6 @@
 import json
 from abc import abstractmethod
-from typing import TYPE_CHECKING, List, Optional, Union, cast
+from typing import TYPE_CHECKING, cast
 
 import litellm
 
@@ -35,7 +35,7 @@ def convert_model_response_to_streaming(
         ValueError: If the conversion fails
     """
     try:
-        streaming_choices: List[StreamingChoices] = []
+        streaming_choices: list[StreamingChoices] = []
         for choice in model_response.choices:
             streaming_choices.append(
                 StreamingChoices(
@@ -64,11 +64,11 @@ def convert_model_response_to_streaming(
 
 
 class BaseModelResponseIterator:
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.json_mode = json_mode
-        self.http_response: Optional["httpx.Response"] = None
+        self.http_response: httpx.Response | None = None
 
     async def aclose(self) -> None:
         """Close the upstream HTTP response so the provider connection is
@@ -81,7 +81,7 @@ class BaseModelResponseIterator:
         if self.http_response is not None:
             await self.http_response.aclose()
 
-    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         return GenericStreamingChunk(
             text="",
             is_finished=False,
@@ -96,8 +96,8 @@ class BaseModelResponseIterator:
         return self
 
     @staticmethod
-    def _string_to_dict_parser(str_line: str) -> Optional[dict]:
-        stripped_json_chunk: Optional[dict] = None
+    def _string_to_dict_parser(str_line: str) -> dict | None:
+        stripped_json_chunk: dict | None = None
         stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(str_line)
         try:
             if stripped_chunk is not None:
@@ -108,7 +108,7 @@ class BaseModelResponseIterator:
             stripped_json_chunk = None
         return stripped_json_chunk
 
-    def _handle_string_chunk(self, str_line: str) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         # chunk is a str at this point
         stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
         if "[DONE]" in str_line:
@@ -202,7 +202,7 @@ class BaseModelResponseIterator:
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses
-    def __init__(self, model_response: ModelResponse, json_mode: Optional[bool] = False):
+    def __init__(self, model_response: ModelResponse, json_mode: bool | None = False):
         self.model_response = model_response
         self.json_mode = json_mode
         self.is_done = False
@@ -232,7 +232,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
 
 
 class FakeStreamResponseIterator:
-    def __init__(self, model_response, json_mode: Optional[bool] = False):
+    def __init__(self, model_response, json_mode: bool | None = False):
         self.model_response = model_response
         self.json_mode = json_mode
         self.is_done = False

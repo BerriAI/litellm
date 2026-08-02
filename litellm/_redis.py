@@ -12,7 +12,7 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from typing import Callable, List, Optional, Union
+from collections.abc import Callable
 
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
@@ -76,7 +76,7 @@ def _init_arg_names(cls: type) -> frozenset[str]:
     )
 
 
-def _get_redis_url_kwargs(client: Optional[type] = None) -> tuple[str, ...]:
+def _get_redis_url_kwargs(client: type | None = None) -> tuple[str, ...]:
     """Connection kwargs that redis-py forwards from ``from_url`` down to the connection.
 
     ``from_url`` is declared as ``(cls, url, **kwargs)``, so introspecting it yields no
@@ -160,7 +160,7 @@ def _redis_kwargs_from_environment():
 
 def create_gcp_iam_redis_connect_func(
     service_account: str,
-    ssl_ca_certs: Optional[str] = None,
+    ssl_ca_certs: str | None = None,
 ) -> Callable:
     """
     Creates a custom Redis connection function for GCP IAM authentication.
@@ -203,9 +203,9 @@ def create_gcp_iam_redis_connect_func(
 
 
 def _build_azure_credential(
-    azure_client_id: Optional[str] = None,
-    azure_tenant_id: Optional[str] = None,
-    azure_client_secret: Optional[str] = None,
+    azure_client_id: str | None = None,
+    azure_tenant_id: str | None = None,
+    azure_client_secret: str | None = None,
 ):
     """
     Build a long-lived Azure credential object.
@@ -241,9 +241,9 @@ def _build_azure_credential(
 
 
 def _generate_azure_ad_redis_token(
-    azure_client_id: Optional[str] = None,
-    azure_tenant_id: Optional[str] = None,
-    azure_client_secret: Optional[str] = None,
+    azure_client_id: str | None = None,
+    azure_tenant_id: str | None = None,
+    azure_client_secret: str | None = None,
 ) -> str:
     """
     One-shot helper that builds a credential and fetches a single Azure AD
@@ -263,9 +263,9 @@ def _generate_azure_ad_redis_token(
 
 
 def create_azure_ad_redis_connect_func(
-    azure_client_id: Optional[str] = None,
-    azure_tenant_id: Optional[str] = None,
-    azure_client_secret: Optional[str] = None,
+    azure_client_id: str | None = None,
+    azure_tenant_id: str | None = None,
+    azure_client_secret: str | None = None,
 ) -> Callable:
     """
     Creates a custom Redis connection function for Azure AD authentication.
@@ -369,7 +369,7 @@ def _get_redis_client_logic(**env_overrides):
         **env_overrides,
     }
 
-    _startup_nodes: Optional[Union[str, list]] = redis_kwargs.get("startup_nodes", None) or get_secret(  # type: ignore
+    _startup_nodes: str | list | None = redis_kwargs.get("startup_nodes", None) or get_secret(  # type: ignore
         "REDIS_CLUSTER_NODES"
     )
 
@@ -380,21 +380,21 @@ def _get_redis_client_logic(**env_overrides):
     elif _startup_nodes is None:
         redis_kwargs.pop("startup_nodes", None)
 
-    _sentinel_nodes: Optional[Union[str, list]] = redis_kwargs.get("sentinel_nodes", None) or get_secret(  # type: ignore
+    _sentinel_nodes: str | list | None = redis_kwargs.get("sentinel_nodes", None) or get_secret(  # type: ignore
         "REDIS_SENTINEL_NODES"
     )
 
     if _sentinel_nodes is not None and isinstance(_sentinel_nodes, str):
         redis_kwargs["sentinel_nodes"] = json.loads(_sentinel_nodes)
 
-    _sentinel_password: Optional[str] = redis_kwargs.get("sentinel_password", None) or get_secret_str(
+    _sentinel_password: str | None = redis_kwargs.get("sentinel_password", None) or get_secret_str(
         "REDIS_SENTINEL_PASSWORD"
     )
 
     if _sentinel_password is not None:
         redis_kwargs["sentinel_password"] = _sentinel_password
 
-    _service_name: Optional[str] = redis_kwargs.get("service_name", None) or get_secret(  # type: ignore
+    _service_name: str | None = redis_kwargs.get("service_name", None) or get_secret(  # type: ignore
         "REDIS_SERVICE_NAME"
     )
 
@@ -465,9 +465,12 @@ def _get_redis_client_logic(**env_overrides):
             redis_kwargs.pop("port", None)
             redis_kwargs.pop("db", None)
             redis_kwargs.pop("password", None)
-    elif "startup_nodes" in redis_kwargs and redis_kwargs["startup_nodes"] is not None:
-        pass
-    elif "sentinel_nodes" in redis_kwargs and redis_kwargs["sentinel_nodes"] is not None:
+    elif (
+        "startup_nodes" in redis_kwargs
+        and redis_kwargs["startup_nodes"] is not None
+        or "sentinel_nodes" in redis_kwargs
+        and redis_kwargs["sentinel_nodes"] is not None
+    ):
         pass
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
@@ -477,7 +480,7 @@ def _get_redis_client_logic(**env_overrides):
 
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
-    _redis_cluster_nodes_in_env: Optional[str] = get_secret("REDIS_CLUSTER_NODES")  # type: ignore
+    _redis_cluster_nodes_in_env: str | None = get_secret("REDIS_CLUSTER_NODES")  # type: ignore
     if _redis_cluster_nodes_in_env is not None:
         try:
             redis_kwargs["startup_nodes"] = json.loads(_redis_cluster_nodes_in_env)
@@ -495,7 +498,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
         if arg in args:
             cluster_kwargs[arg] = redis_kwargs[arg]
 
-    new_startup_nodes: List[ClusterNode] = []
+    new_startup_nodes: list[ClusterNode] = []
 
     for item in redis_kwargs["startup_nodes"]:
         new_startup_nodes.append(ClusterNode(**item))
@@ -587,9 +590,9 @@ def get_redis_client(**env_overrides):
 
 
 def get_redis_async_client(
-    connection_pool: Optional[async_redis.BlockingConnectionPool] = None,
+    connection_pool: async_redis.BlockingConnectionPool | None = None,
     **env_overrides,
-) -> Union[async_redis.Redis, async_redis.RedisCluster]:
+) -> async_redis.Redis | async_redis.RedisCluster:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
 
     if "startup_nodes" in redis_kwargs:
@@ -618,7 +621,7 @@ def get_redis_async_client(
                 username=os.environ.get("REDIS_USERNAME") or None,
             )
 
-        new_startup_nodes: List[ClusterNode] = []
+        new_startup_nodes: list[ClusterNode] = []
 
         for item in redis_kwargs["startup_nodes"]:
             new_startup_nodes.append(ClusterNode(**item))
@@ -648,9 +651,7 @@ def get_redis_async_client(
             if arg in args:
                 url_kwargs[arg] = redis_kwargs[arg]
             else:
-                verbose_logger.debug(
-                    "REDIS: ignoring argument: {}. Not an allowed async_redis.Redis.from_url arg.".format(arg)
-                )
+                verbose_logger.debug(f"REDIS: ignoring argument: {arg}. Not an allowed async_redis.Redis.from_url arg.")
         return async_redis.Redis.from_url(**url_kwargs)
 
     # Check for Redis Sentinel
@@ -682,7 +683,7 @@ def get_redis_async_client(
 
 def get_redis_connection_pool(
     **env_overrides,
-) -> Optional[async_redis.BlockingConnectionPool]:
+) -> async_redis.BlockingConnectionPool | None:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
 

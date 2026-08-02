@@ -89,6 +89,7 @@ def agents_table(prisma_client: PrismaClient) -> AgentTableClient:
 class AgentRegistry:
     def __init__(self):
         self.agent_list: list[AgentResponse] = []
+        self.config_agents: tuple[AgentConfig, ...] = ()
 
     def reset_agent_list(self):
         self.agent_list = []
@@ -117,8 +118,20 @@ class AgentRegistry:
         return hashlib.sha256(json.dumps(agent_config, sort_keys=True).encode()).hexdigest()
 
     def load_agents_from_config(self, agent_config: Sequence[AgentConfig] | None = None):
+        """
+        Register the agents declared in config.yaml and remember them for later rebuilds.
+
+        A config entry is skipped when its ``agent_name`` is already registered, so a
+        database record always wins over a config entry that reuses its name and the
+        registry never holds two agents under one name. Enforcing that here rather than
+        in the caller keeps the guarantee independent of the order the two sources load
+        in. Passing ``None`` leaves the remembered agents untouched; passing an empty
+        sequence clears them.
+        """
         if agent_config is None:
-            return None
+            return
+
+        self.config_agents = tuple(agent_config)
 
         for agent_config_item in agent_config:
             if not isinstance(agent_config_item, dict):
@@ -127,6 +140,9 @@ class AgentRegistry:
             agent_name = agent_config_item.get("agent_name")
             agent_card_params = agent_config_item.get("agent_card_params")
             if not all([agent_name, agent_card_params]):
+                continue
+
+            if any(agent.agent_name == agent_name for agent in self.agent_list):
                 continue
 
             # create a stable hash id for config item
@@ -139,19 +155,20 @@ class AgentRegistry:
         agent_config: Sequence[AgentConfig] | None = None,
         db_agents: list[dict[str, Any]] | None = None,
     ):
+        """
+        Rebuild the registry from the DB rows plus the agents declared in config.yaml.
+
+        ``agent_config`` defaults to the agents remembered by the last
+        ``load_agents_from_config`` call, so a periodic DB reload does not drop
+        config-defined agents.
+
+        The DB rows are registered first so that a config entry reusing one of their
+        names is dropped by ``load_agents_from_config``, mirroring how config-declared
+        MCP servers are unioned under the database registry. Name lookups and
+        deregistration both address a single agent, so the registry must never hold two
+        under one name.
+        """
         self.reset_agent_list()
-
-        if agent_config:
-            for agent_config_item in agent_config:
-                if not isinstance(agent_config_item, dict):
-                    raise ValueError("agent_config must be a list of dictionaries")
-
-                self.register_agent(
-                    agent_config=AgentResponse(
-                        agent_id=self._create_agent_id(agent_config_item),
-                        **agent_config_item,
-                    )
-                )  # type: ignore
 
         if db_agents:
             for db_agent in db_agents:
@@ -159,6 +176,8 @@ class AgentRegistry:
                     raise ValueError("db_agents must be a list of dictionaries")
 
                 self.register_agent(agent_config=AgentResponse(**db_agent))  # type: ignore
+
+        self.load_agents_from_config(agent_config if agent_config is not None else self.config_agents)
         return self.agent_list
 
     ###########################################################
@@ -252,7 +271,7 @@ class AgentRegistry:
                     created_agent_dict["object_permission"] = created_agent.object_permission.dict()
             return AgentResponse(**created_agent_dict)  # type: ignore
         except Exception as e:
-            raise Exception(f"Error adding agent to DB: {str(e)}")
+            raise Exception(f"Error adding agent to DB: {e!s}")
 
     async def delete_agent_from_db(self, agent_id: str, prisma_client: PrismaClient) -> Mapping[str, object]:
         """
@@ -262,7 +281,7 @@ class AgentRegistry:
             deleted_agent = await agents_table(prisma_client).delete(where={"agent_id": agent_id})
             return dict(deleted_agent)
         except Exception as e:
-            raise Exception(f"Error deleting agent from DB: {str(e)}")
+            raise Exception(f"Error deleting agent from DB: {e!s}")
 
     async def patch_agent_in_db(
         self,
@@ -344,7 +363,7 @@ class AgentRegistry:
                     patched_agent_dict["object_permission"] = patched_agent.object_permission.dict()
             return AgentResponse(**patched_agent_dict)  # type: ignore
         except Exception as e:
-            raise Exception(f"Error patching agent in DB: {str(e)}")
+            raise Exception(f"Error patching agent in DB: {e!s}")
 
     async def update_agent_in_db(
         self,
@@ -431,7 +450,7 @@ class AgentRegistry:
                     updated_agent_dict["object_permission"] = updated_agent.object_permission.dict()
             return AgentResponse(**updated_agent_dict)  # type: ignore
         except Exception as e:
-            raise Exception(f"Error updating agent in DB: {str(e)}")
+            raise Exception(f"Error updating agent in DB: {e!s}")
 
     @staticmethod
     async def get_all_agents_from_db(
@@ -459,7 +478,7 @@ class AgentRegistry:
 
             return agents
         except Exception as e:
-            raise Exception(f"Error getting agents from DB: {str(e)}")
+            raise Exception(f"Error getting agents from DB: {e!s}")
 
     def get_agent_by_id(
         self,
@@ -475,7 +494,7 @@ class AgentRegistry:
 
             return None
         except Exception as e:
-            raise Exception(f"Error getting agent from DB: {str(e)}")
+            raise Exception(f"Error getting agent from DB: {e!s}")
 
     def get_agent_by_name(self, agent_name: str) -> AgentResponse | None:
         """
@@ -488,7 +507,7 @@ class AgentRegistry:
 
             return None
         except Exception as e:
-            raise Exception(f"Error getting agent from DB: {str(e)}")
+            raise Exception(f"Error getting agent from DB: {e!s}")
 
 
 global_agent_registry = AgentRegistry()

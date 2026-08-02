@@ -3,15 +3,18 @@ import importlib
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import urllib.parse as urlparse
+from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import click
 import httpx
 from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
@@ -58,11 +61,11 @@ class LiteLLMDatabaseConnectionPool(Enum):
 
 def _build_db_connection_url_params(
     connection_limit: int,
-    pool_timeout: Optional[Union[int, float]],
-    connect_timeout: Optional[Union[int, float]] = None,
-    socket_timeout: Optional[Union[int, float]] = None,
+    pool_timeout: float | None,
+    connect_timeout: float | None = None,
+    socket_timeout: float | None = None,
     disable_prepared_statements: bool = False,
-    extra_params: Optional[dict] = None,
+    extra_params: dict | None = None,
 ) -> dict:
     """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
 
@@ -91,7 +94,73 @@ def _build_db_connection_url_params(
     return params
 
 
-def append_query_params(url: Optional[str], params: dict) -> str:
+class DatabaseTimeoutSettings(BaseModel):
+    """The `general_settings` keys that bound how long a statement may hold locks.
+
+    Validated at the boundary so a mistyped value fails at startup with a clear
+    pydantic error instead of a TypeError deep inside URL assembly.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    database_statement_timeout: float | None = None
+    database_lock_timeout: float | None = None
+
+
+def _pg_options_with_timeouts(
+    existing_options: str,
+    statement_timeout: float | None,
+    lock_timeout: float | None,
+) -> str:
+    """Return the Postgres ``options`` value carrying the configured timeouts.
+
+    Prisma has no URL parameter for `statement_timeout` / `lock_timeout`; they are
+    server settings delivered through the standard libpq ``options`` parameter as
+    ``-c <name>=<value>``. Values arrive in seconds (matching the sibling
+    ``database_*_timeout`` settings) and are emitted as integer milliseconds,
+    which is the unit Postgres assumes for a unit-less value.
+
+    Both settings are bounds on how long a single statement may hold its locks.
+    Without them a batch that outlives the Prisma client's HTTP read timeout keeps
+    running server side, holding row locks for as long as the database takes,
+    while the client has already given up; every later flush queues behind it.
+    The query engine's own transaction timeout cannot end that wait, because it
+    cannot interrupt a statement that is already executing.
+
+    Any ``options`` the operator already pinned on the URL is preserved, and a
+    setting they pinned there wins over the configured one. Postgres applies the
+    last occurrence of a setting, so a pinned one is honoured by not appending
+    ours at all; it is matched in every spelling the backend accepts
+    (``-c name=``, ``-cname=``, ``--name=``). The result is applied to
+    ``DATABASE_URL`` only, never ``DIRECT_URL``: that one serves migrations,
+    which legitimately run long and must not be cancelled mid-way.
+    """
+    configured = tuple(
+        f"-c {name}={int(seconds * 1000)}"
+        for name, seconds in (
+            ("statement_timeout", statement_timeout),
+            ("lock_timeout", lock_timeout),
+        )
+        if seconds is not None and not re.search(rf"(?:-c\s*|--){re.escape(name)}=", existing_options)
+    )
+    return " ".join(part for part in (existing_options, *configured) if part)
+
+
+def _url_query_value(url: str | None, key: str) -> str:
+    """Return a single query-param value already present on ``url``, else ""."""
+    if not isinstance(url, str) or url == "":
+        return ""
+    return next(iter(urlparse.parse_qs(urlparse.urlparse(url).query).get(key) or ()), "")
+
+
+def _with_query_value(url: str, key: str, value: str) -> str:
+    """Return ``url`` with a single query param replaced by ``value``."""
+    parsed = urlparse.urlparse(url)
+    pairs = tuple((k, v) for k, v in urlparse.parse_qsl(parsed.query) if k != key) + ((key, value),)
+    return urlparse.urlunparse(parsed._replace(query=urlparse.urlencode(pairs)))
+
+
+def append_query_params(url: str | None, params: dict) -> str:
     from litellm._logging import verbose_proxy_logger
 
     verbose_proxy_logger.debug(f"url: {url}")
@@ -126,7 +195,7 @@ class ProxyInitializationHelpers:
         host: str,
         port: int,
         model: str,
-        test: Union[bool, str],
+        test: bool | str,
     ):
         request_model = model or "gpt-3.5-turbo"
         click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
@@ -175,9 +244,9 @@ class ProxyInitializationHelpers:
     def _get_default_unvicorn_init_args(
         host: str,
         port: int,
-        log_config: Optional[str] = None,
-        keepalive_timeout: Optional[int] = None,
-        timeout_worker_healthcheck: Optional[int] = None,
+        log_config: str | None = None,
+        keepalive_timeout: int | None = None,
+        timeout_worker_healthcheck: int | None = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
@@ -216,7 +285,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def _apply_uvicorn_max_requests_jitter(
         uvicorn_args: dict,
-        max_requests_before_restart: Optional[int],
+        max_requests_before_restart: int | None,
         jitter: int,
     ) -> None:
         """
@@ -242,7 +311,7 @@ class ProxyInitializationHelpers:
             )
 
     @staticmethod
-    def _get_reload_options(config_path: Optional[str]) -> dict:
+    def _get_reload_options(config_path: str | None) -> dict:
         """Build uvicorn reload kwargs so --reload also reacts to .env and YAML edits."""
         cwd = os.path.abspath(os.getcwd())
         reload_dirs = [cwd]
@@ -263,7 +332,7 @@ class ProxyInitializationHelpers:
         }
 
     @staticmethod
-    def _patch_statreload_extra_paths(paths: Iterable[Optional[str]]) -> bool:
+    def _patch_statreload_extra_paths(paths: Iterable[str | None]) -> bool:
         """Make uvicorn's StatReload reloader notice non-Python dev files
         (the --config YAML and .env).
 
@@ -304,7 +373,7 @@ class ProxyInitializationHelpers:
         return True
 
     @staticmethod
-    def _configure_dev_reload(uvicorn_args: dict, config_path: Optional[str]) -> None:
+    def _configure_dev_reload(uvicorn_args: dict, config_path: str | None) -> None:
         """Wire up --reload (dev only): watch *.py, the --config YAML, and .env,
         and signal reloaded workers to re-read .env with override so edits to
         existing keys actually take effect rather than staying masked by the
@@ -328,7 +397,7 @@ class ProxyInitializationHelpers:
         port: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
-        ciphers: Optional[str] = None,
+        ciphers: str | None = None,
     ):
         """
         Initialize litellm with `hypercorn`
@@ -359,11 +428,11 @@ class ProxyInitializationHelpers:
         host: str,
         port: int,
         num_workers: int,
-        ssl_certfile_path: Optional[str],
-        ssl_keyfile_path: Optional[str],
-        max_requests_before_restart: Optional[int],
-        ciphers: Optional[str],
-        granian_runtime_threads: Optional[int] = None,
+        ssl_certfile_path: str | None,
+        ssl_keyfile_path: str | None,
+        max_requests_before_restart: int | None,
+        ciphers: str | None,
+        granian_runtime_threads: int | None = None,
     ) -> None:
         """
         Run the proxy with Granian (Rust-backed ASGI server, HTTP/1 + HTTP/2).
@@ -412,8 +481,8 @@ class ProxyInitializationHelpers:
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
-        max_requests_before_restart: Optional[int] = None,
-        max_requests_before_restart_jitter: Optional[int] = None,
+        max_requests_before_restart: int | None = None,
+        max_requests_before_restart_jitter: int | None = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -544,7 +613,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def _maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
-        litellm_settings: Optional[dict],
+        litellm_settings: dict | None,
     ) -> None:
         """
         Auto-create PROMETHEUS_MULTIPROC_DIR when running with multiple workers
@@ -898,8 +967,8 @@ def run_server(
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
-    max_requests_before_restart_jitter: Optional[int],
-    limit_concurrency: Optional[int],
+    max_requests_before_restart_jitter: int | None,
+    limit_concurrency: int | None,
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
     reload: bool,
@@ -1002,11 +1071,13 @@ def run_server(
 
         db_connection_pool_limit = 100
         # Starts optional due to config fallback checks; guaranteed non-None before use.
-        db_connection_timeout: Optional[Union[int, float]] = 60
-        db_connect_timeout: Optional[Union[int, float]] = None
-        db_socket_timeout: Optional[Union[int, float]] = None
+        db_connection_timeout: int | float | None = 60
+        db_connect_timeout: int | float | None = None
+        db_socket_timeout: int | float | None = None
         db_disable_prepared_statements: bool = False
-        db_extra_connection_params: Optional[dict] = None
+        db_extra_connection_params: dict | None = None
+        db_statement_timeout: float | None = None
+        db_lock_timeout: float | None = None
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
@@ -1117,6 +1188,9 @@ def run_server(
             else:
                 db_disable_prepared_statements = bool(_disable_prepared_statements)
             db_extra_connection_params = general_settings.get("database_extra_connection_params")
+            db_timeouts = DatabaseTimeoutSettings.model_validate(general_settings)
+            db_statement_timeout = db_timeouts.database_statement_timeout
+            db_lock_timeout = db_timeouts.database_lock_timeout
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is
@@ -1176,8 +1250,19 @@ def run_server(
                 )
                 if os.getenv("DATABASE_URL", None) is not None:
                     database_url = get_secret("DATABASE_URL", default_value=None)
+                    resolved_url: str | None = str(database_url) if database_url else None
+                    pg_options: str = _pg_options_with_timeouts(
+                        _url_query_value(resolved_url, "options"),
+                        db_statement_timeout,
+                        db_lock_timeout,
+                    )
+                    writer_url = (
+                        _with_query_value(resolved_url, "options", pg_options)
+                        if resolved_url and pg_options
+                        else resolved_url
+                    )
                     modified_url = append_query_params(
-                        str(database_url) if database_url else None,
+                        writer_url,
                         connection_url_params,
                     )
                     os.environ["DATABASE_URL"] = modified_url

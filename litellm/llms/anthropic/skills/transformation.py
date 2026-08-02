@@ -2,7 +2,7 @@
 Anthropic Skills API configuration and transformations
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import httpx
 
@@ -30,7 +30,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.ANTHROPIC
 
-    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """Add Anthropic-specific headers"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -69,9 +69,9 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         endpoint: str,
-        skill_id: Optional[str] = None,
+        skill_id: str | None = None,
     ) -> str:
         """Get complete URL for Anthropic Skills API"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -89,7 +89,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         create_request: CreateSkillRequest,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """Transform create skill request for Anthropic"""
         verbose_logger.debug("Transforming create skill request: %s", create_request)
 
@@ -114,7 +114,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         list_params: ListSkillsParams,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Transform list skills request for Anthropic"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -122,7 +122,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         url = self.get_complete_url(api_base=api_base, endpoint="skills")
 
         # Build query parameters
-        query_params: Dict[str, Any] = {}
+        query_params: dict[str, Any] = {}
         if "limit" in list_params and list_params["limit"]:
             query_params["limit"] = list_params["limit"]
         if "page" in list_params and list_params["page"]:
@@ -154,7 +154,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Transform get skill request for Anthropic"""
         url = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
 
@@ -179,7 +179,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Transform delete skill request for Anthropic"""
         url = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
 

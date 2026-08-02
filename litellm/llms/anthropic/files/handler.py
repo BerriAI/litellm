@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from typing import Any, Coroutine, Optional, Union
+from collections.abc import Coroutine
+from typing import Any
 
 import httpx
 
@@ -50,10 +51,10 @@ class AnthropicFilesHandler:
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Union[float, httpx.Timeout] = 600.0,
-        max_retries: Optional[int] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        timeout: float | httpx.Timeout = 600.0,
+        max_retries: int | None = None,
     ) -> HttpxBinaryResponseContent:
         """
         Async: Retrieve file content from Anthropic.
@@ -123,11 +124,11 @@ class AnthropicFilesHandler:
         self,
         _is_async: bool,
         file_content_request: FileContentRequest,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Union[float, httpx.Timeout] = 600.0,
-        max_retries: Optional[int] = None,
-    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+        api_base: str | None = None,
+        api_key: str | None = None,
+        timeout: float | httpx.Timeout = 600.0,
+        max_retries: int | None = None,
+    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
         """
         Retrieve file content from Anthropic.
 

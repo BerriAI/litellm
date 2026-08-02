@@ -19,7 +19,7 @@ to the in-memory aggregator). Flush is async and batched.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from litellm._logging import verbose_router_logger
 from litellm.repositories.table_repositories import (
@@ -27,8 +27,8 @@ from litellm.repositories.table_repositories import (
     AdaptiveRouterStateRepository,
 )
 
-StateKey = Tuple[str, str, str]  # (router_name, request_type, model_name)
-SessionKey = Tuple[str, str, str]  # (session_id, router_name, model_name)
+StateKey = tuple[str, str, str]  # (router_name, request_type, model_name)
+SessionKey = tuple[str, str, str]  # (session_id, router_name, model_name)
 
 
 class AdaptiveRouterUpdateQueue:
@@ -38,8 +38,8 @@ class AdaptiveRouterUpdateQueue:
     """
 
     def __init__(self) -> None:
-        self._state_agg: Dict[StateKey, Dict[str, float]] = {}
-        self._session_agg: Dict[SessionKey, Dict[str, Any]] = {}
+        self._state_agg: dict[StateKey, dict[str, float]] = {}
+        self._session_agg: dict[SessionKey, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self._max_state_size_seen = 0
         self._max_session_size_seen = 0
@@ -68,8 +68,7 @@ class AdaptiveRouterUpdateQueue:
                 current["delta_alpha"] += delta_alpha
                 current["delta_beta"] += delta_beta
                 current["samples_added"] += 1
-            if len(self._state_agg) > self._max_state_size_seen:
-                self._max_state_size_seen = len(self._state_agg)
+            self._max_state_size_seen = max(self._max_state_size_seen, len(self._state_agg))
 
     # ---- Hot-path: session snapshot --------------------------------------
 
@@ -78,7 +77,7 @@ class AdaptiveRouterUpdateQueue:
         session_id: str,
         router_name: str,
         model_name: str,
-        state_dict: Dict[str, Any],
+        state_dict: dict[str, Any],
     ) -> None:
         """
         Last-write-wins per session row. The state_dict is a snapshot of the
@@ -88,8 +87,7 @@ class AdaptiveRouterUpdateQueue:
         key: SessionKey = (session_id, router_name, model_name)
         async with self._lock:
             self._session_agg[key] = state_dict
-            if len(self._session_agg) > self._max_session_size_seen:
-                self._max_session_size_seen = len(self._session_agg)
+            self._max_session_size_seen = max(self._max_session_size_seen, len(self._session_agg))
 
     # ---- Flushers (called by background task) ----------------------------
 
@@ -203,7 +201,7 @@ class AdaptiveRouterUpdateQueue:
 
     # ---- Observability ---------------------------------------------------
 
-    async def queue_size(self) -> Dict[str, int]:
+    async def queue_size(self) -> dict[str, int]:
         async with self._lock:
             return {
                 "state_pending": len(self._state_agg),

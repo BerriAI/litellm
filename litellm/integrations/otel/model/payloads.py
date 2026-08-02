@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, ClassVar, Mapping, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 from urllib.parse import urlsplit
 
 from litellm.integrations.otel.model.metadata import (
@@ -30,8 +31,6 @@ from litellm.integrations.otel.model.utils import (
 # :mod:`metadata`; re-exported here so existing ``model.payloads`` imports keep
 # resolving it.
 __all__ = [
-    "RequestContext",
-    "RequestIdentity",
     "GuardrailSpanData",
     "LLMCallSpanData",
     "LLMCost",
@@ -40,6 +39,8 @@ __all__ = [
     "MCPListToolsSpanData",
     "MCPToolCallSpanData",
     "ProxyRequestSpanData",
+    "RequestContext",
+    "RequestIdentity",
     "ServerInfo",
     "ServiceSpanData",
     "SpanError",
@@ -71,7 +72,7 @@ class LLMRequestParams:
     seed: int | None = None
 
     @classmethod
-    def from_model_parameters(cls, params: Mapping[str, object]) -> "LLMRequestParams":
+    def from_model_parameters(cls, params: Mapping[str, object]) -> LLMRequestParams:
         max_tokens = as_int(params.get("max_tokens"))
         if max_tokens is None:
             max_tokens = as_int(params.get("max_completion_tokens"))
@@ -120,7 +121,7 @@ class LLMCost:
     margin_total_amount: float | None = None
 
     @classmethod
-    def from_breakdown(cls, breakdown: Mapping[str, object] | None) -> "LLMCost":
+    def from_breakdown(cls, breakdown: Mapping[str, object] | None) -> LLMCost:
         b = breakdown or {}
         return cls(
             input=as_float(b.get("input_cost")),
@@ -195,7 +196,7 @@ class GuardrailSpanData:
     _ERROR_STATUSES: ClassVar[frozenset[str]] = frozenset({"guardrail_intervened", "guardrail_failed_to_respond"})
 
     @classmethod
-    def from_logging_entry(cls, entry: "StandardLoggingGuardrailInformation") -> "GuardrailSpanData":
+    def from_logging_entry(cls, entry: StandardLoggingGuardrailInformation) -> GuardrailSpanData:
         """Build from one ``standard_logging_guardrail_information`` entry.
 
         Reads the canonical, provider-agnostic ``StandardLoggingGuardrailInformation``
@@ -246,9 +247,9 @@ class ServiceSpanData:
     @classmethod
     def from_payload(
         cls,
-        payload: "ServiceLoggerPayload",
+        payload: ServiceLoggerPayload,
         event_metadata: Mapping[str, object] | None = None,
-    ) -> "ServiceSpanData":
+    ) -> ServiceSpanData:
         # ``payload.service`` is a ``ServiceTypes(str, Enum)`` and ``error`` is
         # ``Optional[str]`` on the Pydantic model — no defensive reads needed.
         # ``event_metadata`` is sanitized: the legacy service decorators pass raw
@@ -313,10 +314,10 @@ class LLMCallSpanData:
     @classmethod
     def from_standard_logging_payload(
         cls,
-        payload: "StandardLoggingPayload",
+        payload: StandardLoggingPayload,
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
-    ) -> "LLMCallSpanData":
+    ) -> LLMCallSpanData:
         params = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
         # model split, the response model, api base, and identity all come from
@@ -386,8 +387,8 @@ class MCPToolCallSpanData:
 
     @classmethod
     def from_standard_logging_payload(
-        cls, payload: "StandardLoggingPayload", capture_content: bool = False
-    ) -> "MCPToolCallSpanData":
+        cls, payload: StandardLoggingPayload, capture_content: bool = False
+    ) -> MCPToolCallSpanData:
         meta = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
         return cls(
             operation=resolve_operation(as_str(payload.get("call_type"))),
@@ -566,7 +567,7 @@ def _finish_reasons(choices: tuple[Mapping[str, object], ...]) -> tuple[str, ...
     return tuple(r for c in choices if (r := as_str(c.get("finish_reason"))))
 
 
-def _parse_error(payload: "StandardLoggingPayload") -> SpanError | None:
+def _parse_error(payload: StandardLoggingPayload) -> SpanError | None:
     """A ``SpanError`` for a failed request, or ``None`` on success."""
     if payload.get("status") != "failure":
         return None

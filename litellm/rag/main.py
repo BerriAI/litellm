@@ -7,23 +7,16 @@ Upload -> (OCR) -> Chunk -> Embed -> Vector Store
 
 from __future__ import annotations
 
-__all__ = ["ingest", "aingest", "query", "aquery"]
+__all__ = ["aingest", "aquery", "ingest", "query"]
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine, Iterator
 from contextlib import contextmanager
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Coroutine,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Tuple,
-    Type,
-    Union,
 )
 
 import httpx
@@ -51,7 +44,7 @@ if TYPE_CHECKING:
 
 
 # Registry of provider-specific ingestion classes
-INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
+INGESTION_REGISTRY: dict[str, type[BaseRAGIngestion]] = {
     "openai": OpenAIRAGIngestion,
     "bedrock": BedrockRAGIngestion,
     "gemini": GeminiRAGIngestion,
@@ -60,7 +53,7 @@ INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
 }
 
 
-def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
+def get_ingestion_class(provider: str) -> type[BaseRAGIngestion]:
     """
     Get the ingestion class for a given provider.
 
@@ -82,10 +75,10 @@ def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
 
 async def _execute_ingest_pipeline(
     ingest_options: RAGIngestOptions,
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file_url: Optional[str] = None,
-    file_id: Optional[str] = None,
-    router: Optional["Router"] = None,
+    file_data: tuple[str, bytes, str] | None = None,
+    file_url: str | None = None,
+    file_id: str | None = None,
+    router: Router | None = None,
 ) -> RAGIngestResponse:
     """
     Execute the RAG ingest pipeline using provider-specific implementation.
@@ -126,12 +119,12 @@ async def _execute_ingest_pipeline(
 
 @client
 async def aingest(
-    ingest_options: Dict[str, Any],
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file: Optional[Dict[str, str]] = None,
-    file_url: Optional[str] = None,
-    file_id: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ingest_options: dict[str, Any],
+    file_data: tuple[str, bytes, str] | None = None,
+    file: dict[str, str] | None = None,
+    file_url: str | None = None,
+    file_id: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> RAGIngestResponse:
     """
@@ -214,9 +207,9 @@ def _suppressed_sub_call_billing() -> Iterator[None]:
 
 async def _execute_query_pipeline(
     model: str,
-    messages: List[Any],
-    retrieval_config: Dict[str, Any],
-    rerank: Optional[Dict[str, Any]] = None,
+    messages: list[Any],
+    retrieval_config: dict[str, Any],
+    rerank: dict[str, Any] | None = None,
     stream: bool = False,
     **kwargs,
 ) -> ModelResponse:
@@ -225,7 +218,7 @@ async def _execute_query_pipeline(
     """
     # Extract router from kwargs - use it for completion if available
     # to properly resolve virtual model names
-    router: Optional["Router"] = kwargs.pop("router", None)
+    router: Router | None = kwargs.pop("router", None)
 
     # 1. Extract query from last user message
     query_text = RAGQuery.extract_query_from_messages(messages)
@@ -321,9 +314,9 @@ async def _execute_query_pipeline(
 @client
 async def aquery(
     model: str,
-    messages: List[Any],
-    retrieval_config: Dict[str, Any],
-    rerank: Optional[Dict[str, Any]] = None,
+    messages: list[Any],
+    retrieval_config: dict[str, Any],
+    rerank: dict[str, Any] | None = None,
     stream: bool = False,
     **kwargs,
 ) -> ModelResponse:
@@ -368,12 +361,12 @@ async def aquery(
 @client
 def query(
     model: str,
-    messages: List[Any],
-    retrieval_config: Dict[str, Any],
-    rerank: Optional[Dict[str, Any]] = None,
+    messages: list[Any],
+    retrieval_config: dict[str, Any],
+    rerank: dict[str, Any] | None = None,
     stream: bool = False,
     **kwargs,
-) -> Union[ModelResponse, Coroutine[Any, Any, ModelResponse]]:
+) -> ModelResponse | Coroutine[Any, Any, ModelResponse]:
     """
     Query a RAG pipeline.
     """
@@ -413,14 +406,14 @@ def query(
 
 @client
 def ingest(
-    ingest_options: Dict[str, Any],
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file: Optional[Dict[str, str]] = None,
-    file_url: Optional[str] = None,
-    file_id: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ingest_options: dict[str, Any],
+    file_data: tuple[str, bytes, str] | None = None,
+    file: dict[str, str] | None = None,
+    file_url: str | None = None,
+    file_id: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[RAGIngestResponse, Coroutine[Any, Any, RAGIngestResponse]]:
+) -> RAGIngestResponse | Coroutine[Any, Any, RAGIngestResponse]:
     """
     Ingest a document into a vector store.
 
@@ -449,7 +442,7 @@ def ingest(
     local_vars = locals()
     try:
         _is_async = kwargs.pop("aingest", False) is True
-        router: Optional["Router"] = kwargs.get("router")
+        router: Router | None = kwargs.get("router")
 
         # Convert file dict to file_data tuple if provided
         if file is not None and file_data is None:

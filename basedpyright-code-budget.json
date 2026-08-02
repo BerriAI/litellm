@@ -21,7 +21,7 @@
     "limit": 325
   },
   "reportDuplicateImport": {
-    "limit": 42
+    "limit": 38
   },
   "reportExplicitAny": {
     "limit": 9473
@@ -42,7 +42,7 @@
     "limit": 18
   },
   "reportIndexIssue": {
-    "limit": 36
+    "limit": 35
   },
   "reportInvalidTypeForm": {
     "limit": 35
@@ -57,7 +57,7 @@
     "limit": 5855
   },
   "reportMissingTypeArgument": {
-    "limit": 15852
+    "limit": 15849
   },
   "reportMissingTypeStubs": {
     "limit": 41
@@ -84,7 +84,7 @@
     "limit": 77
   },
   "reportPrivateUsage": {
-    "limit": 2437
+    "limit": 2436
   },
   "reportRedeclaration": {
     "limit": 12
@@ -99,7 +99,7 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45324
+    "limit": 45269
   },
   "reportUnknownLambdaType": {
     "limit": 113
@@ -114,16 +114,16 @@
     "limit": 31978
   },
   "reportUnnecessaryCast": {
-    "limit": 175
+    "limit": 173
   },
   "reportUnnecessaryComparison": {
-    "limit": 1019
+    "limit": 1017
   },
   "reportUnnecessaryContains": {
     "limit": 7
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 1204
+    "limit": 1203
   },
   "reportUntypedBaseClass": {
     "limit": 165

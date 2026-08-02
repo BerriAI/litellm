@@ -2,7 +2,7 @@ import json
 import os
 import time
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -40,40 +40,40 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
     Reference: https://huggingface.github.io/text-generation-inference/#/Text%20Generation%20Inference/compat_generate
     """
 
-    hf_task: Optional[hf_tasks] = (
+    hf_task: hf_tasks | None = (
         None  # litellm-specific param, used to know the api spec to use when calling huggingface api
     )
-    best_of: Optional[int] = None
-    decoder_input_details: Optional[bool] = None
-    details: Optional[bool] = True  # enables returning logprobs + best of
-    max_new_tokens: Optional[int] = None
-    repetition_penalty: Optional[float] = None
-    return_full_text: Optional[bool] = False  # by default don't return the input as part of the output
-    seed: Optional[int] = None
-    temperature: Optional[float] = None
-    top_k: Optional[int] = None
-    top_n_tokens: Optional[int] = None
-    top_p: Optional[int] = None
-    truncate: Optional[int] = None
-    typical_p: Optional[float] = None
-    watermark: Optional[bool] = None
+    best_of: int | None = None
+    decoder_input_details: bool | None = None
+    details: bool | None = True  # enables returning logprobs + best of
+    max_new_tokens: int | None = None
+    repetition_penalty: float | None = None
+    return_full_text: bool | None = False  # by default don't return the input as part of the output
+    seed: int | None = None
+    temperature: float | None = None
+    top_k: int | None = None
+    top_n_tokens: int | None = None
+    top_p: int | None = None
+    truncate: int | None = None
+    typical_p: float | None = None
+    watermark: bool | None = None
 
     def __init__(
         self,
-        best_of: Optional[int] = None,
-        decoder_input_details: Optional[bool] = None,
-        details: Optional[bool] = None,
-        max_new_tokens: Optional[int] = None,
-        repetition_penalty: Optional[float] = None,
-        return_full_text: Optional[bool] = None,
-        seed: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_n_tokens: Optional[int] = None,
-        top_p: Optional[int] = None,
-        truncate: Optional[int] = None,
-        typical_p: Optional[float] = None,
-        watermark: Optional[bool] = None,
+        best_of: int | None = None,
+        decoder_input_details: bool | None = None,
+        details: bool | None = None,
+        max_new_tokens: int | None = None,
+        repetition_penalty: float | None = None,
+        return_full_text: bool | None = None,
+        seed: int | None = None,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_n_tokens: int | None = None,
+        top_p: int | None = None,
+        truncate: int | None = None,
+        typical_p: float | None = None,
+        watermark: bool | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -101,11 +101,11 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: Dict,
-        optional_params: Dict,
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         for param, value in non_default_params.items():
             # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
             if param == "temperature":
@@ -136,7 +136,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
         return optional_params
 
-    def get_hf_api_key(self) -> Optional[str]:
+    def get_hf_api_key(self) -> str | None:
         return get_secret_str("HUGGINGFACE_API_KEY")
 
     def read_tgi_conv_models(self):
@@ -180,7 +180,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         except Exception:
             return set(), set()
 
-    def get_hf_task_for_model(self, model: str) -> Tuple[hf_tasks, str]:
+    def get_hf_task_for_model(self, model: str) -> tuple[hf_tasks, str]:
         # read text file, cast it to set
         # read the file called "huggingface_llms_metadata/hf_text_generation_models.txt"
         if model.split("/")[0] in hf_task_list:
@@ -200,7 +200,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -208,7 +208,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         task = litellm_params.get("task", None)
         ## VALIDATE API FORMAT
         if task is None or not isinstance(task, str) or task not in hf_task_list:
-            raise Exception("Invalid hf task - {}. Valid formats - {}.".format(task, hf_tasks))
+            raise Exception(f"Invalid hf task - {task}. Valid formats - {hf_tasks}.")
 
         ## Load Config
         config = litellm.HuggingFaceEmbeddingConfig.get_config()
@@ -318,14 +318,14 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Dict:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
         default_headers = {
             "content-type": "application/json",
         }
@@ -337,9 +337,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         headers = {**headers, **default_headers}
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HuggingFaceError(status_code=status_code, message=error_message, headers=headers)
 
     def _convert_streamed_response_to_complete_response(
@@ -348,8 +346,8 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         logging_obj: LoggingClass,
         model: str,
         data: dict,
-        api_key: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        api_key: str | None = None,
+    ) -> list[dict[str, Any]]:
         streamed_response = CustomStreamWrapper(
             completion_stream=response.iter_lines(),
             model=model,
@@ -359,7 +357,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         content = ""
         for chunk in streamed_response:
             content += chunk["choices"][0]["delta"]["content"]
-        completion_response: List[Dict[str, Any]] = [{"generated_text": content}]
+        completion_response: list[dict[str, Any]] = [{"generated_text": content}]
         ## LOGGING
         logging_obj.post_call(
             input=data,
@@ -371,12 +369,12 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
     def convert_to_model_response_object(
         self,
-        completion_response: Union[List[Dict[str, Any]], Dict[str, Any]],
+        completion_response: list[dict[str, Any]] | dict[str, Any],
         model_response: ModelResponse,
-        task: Optional[hf_tasks],
+        task: hf_tasks | None,
         optional_params: dict,
         encoding: Any,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
     ):
         if task is None:
@@ -479,13 +477,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: Dict,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        litellm_params: Dict,
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
         task = litellm_params.get("task", None)

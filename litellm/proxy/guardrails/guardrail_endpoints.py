@@ -11,11 +11,7 @@ from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
     Literal,
-    Optional,
-    Type,
     TypeVar,
     Union,
     cast,
@@ -100,14 +96,14 @@ async def _find_team_guardrail_rows(
 
 
 def _get_guardrails_list_response(
-    guardrails_config: List[Dict],
+    guardrails_config: list[dict],
 ) -> ListGuardrailsResponse:
     """
     Helper function to get the guardrails list response
     """
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 
-    guardrail_configs: List[GuardrailInfoResponse] = []
+    guardrail_configs: list[GuardrailInfoResponse] = []
     for guardrail in guardrails_config:
         litellm_params = guardrail.get("litellm_params") or {}
         masked_params = _get_masked_values(
@@ -171,7 +167,7 @@ async def list_guardrails():
 
     config = proxy_config.config
 
-    _guardrails_config = cast(Optional[list[dict]], config.get("guardrails"))
+    _guardrails_config = cast(list[dict] | None, config.get("guardrails"))
 
     if _guardrails_config is None:
         return _get_guardrails_list_response([])
@@ -235,7 +231,7 @@ async def list_guardrails_v2(
         excluded_guardrail_ids: set = set()
         if not is_admin:
             caller_team_ids = await _get_user_team_ids(user_api_key_dict)
-            allowed: List[Guardrail] = []
+            allowed: list[Guardrail] = []
             for g in guardrails:
                 g_team_id = g.get("team_id")
                 if g_team_id is None or g_team_id in caller_team_ids:
@@ -246,10 +242,10 @@ async def list_guardrails_v2(
                         excluded_guardrail_ids.add(gid)
             guardrails = allowed
 
-        guardrail_configs: List[GuardrailInfoResponse] = []
+        guardrail_configs: list[GuardrailInfoResponse] = []
         seen_guardrail_ids: set = excluded_guardrail_ids.copy()
         for guardrail in guardrails:
-            litellm_params: Optional[Union[LitellmParams, dict]] = guardrail.get("litellm_params")
+            litellm_params: LitellmParams | dict | None = guardrail.get("litellm_params")
             litellm_params_dict = (
                 litellm_params.model_dump(exclude_none=True)
                 if isinstance(litellm_params, LitellmParams)
@@ -614,11 +610,11 @@ class RegisterGuardrailRequest(BaseModel):
     """Request body for POST /guardrails/register. Follows Generic Guardrail API config."""
 
     guardrail_name: str
-    litellm_params: Dict[str, Any]  # guardrail, mode, api_base required; api_key, headers, etc. optional
-    guardrail_info: Optional[Dict[str, object]] = None
-    team_id: Optional[str] = None
+    litellm_params: dict[str, Any]  # guardrail, mode, api_base required; api_key, headers, etc. optional
+    guardrail_info: dict[str, object] | None = None
+    team_id: str | None = None
 
-    def get_litellm_params_dict(self) -> Dict[str, Any]:
+    def get_litellm_params_dict(self) -> dict[str, Any]:
         return dict(self.litellm_params)
 
 
@@ -626,7 +622,7 @@ class RegisterGuardrailResponse(BaseModel):
     guardrail_id: str
     guardrail_name: str
     status: str
-    submitted_at: Optional[datetime] = None
+    submitted_at: datetime | None = None
 
 
 class GuardrailSubmissionSummary(BaseModel):
@@ -640,22 +636,22 @@ class GuardrailSubmissionItem(BaseModel):
     guardrail_id: str
     guardrail_name: str
     status: str  # pending_review | active | rejected
-    team_id: Optional[str] = None
+    team_id: str | None = None
     team_guardrail: bool = (
         False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
     )
-    litellm_params: Optional[Dict[str, object]] = None
-    guardrail_info: Optional[Dict[str, object]] = None
-    submitted_by_user_id: Optional[str] = None
-    submitted_by_email: Optional[str] = None
-    submitted_at: Optional[datetime] = None
-    reviewed_at: Optional[datetime] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    litellm_params: dict[str, object] | None = None
+    guardrail_info: dict[str, object] | None = None
+    submitted_by_user_id: str | None = None
+    submitted_by_email: str | None = None
+    submitted_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class ListGuardrailSubmissionsResponse(BaseModel):
-    submissions: List[GuardrailSubmissionItem]
+    submissions: list[GuardrailSubmissionItem]
     summary: GuardrailSubmissionSummary
 
 
@@ -774,7 +770,7 @@ async def register_guardrail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _parse_json_field(value: object) -> Optional[Dict[str, Any]]:
+def _parse_json_field(value: object) -> dict[str, Any] | None:
     if value is None:
         return None
     if isinstance(value, dict):
@@ -787,7 +783,7 @@ def _parse_json_field(value: object) -> Optional[Dict[str, Any]]:
     return None
 
 
-async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> List[str]:
+async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> list[str]:
     """Return the list of team_ids the caller belongs to (empty list if none)."""
     from litellm.proxy.auth.auth_checks import get_user_object
     from litellm.proxy.proxy_server import (
@@ -841,9 +837,9 @@ def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissi
     response_model=ListGuardrailSubmissionsResponse,
 )
 async def list_guardrail_submissions(
-    status: Optional[str] = None,
-    team_id: Optional[str] = None,
-    search: Optional[str] = None,
+    status: str | None = None,
+    team_id: str | None = None,
+    search: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -868,7 +864,7 @@ async def list_guardrail_submissions(
     # Proxy Admin would (no writes — registration / approval still gated
     # elsewhere by their own per-action checks).
     is_admin = _user_has_admin_view(user_api_key_dict)
-    visible_team_ids: Optional[List[str]] = None
+    visible_team_ids: list[str] | None = None
     if not is_admin:
         visible_team_ids = await _get_user_team_ids(user_api_key_dict)
         if team_id is not None and team_id not in visible_team_ids:
@@ -878,7 +874,7 @@ async def list_guardrail_submissions(
             )
 
     try:
-        where_clause: Dict[str, object] = {"team_id": {"not": None}}
+        where_clause: dict[str, object] = {"team_id": {"not": None}}
         if visible_team_ids is not None:
             if not visible_team_ids:
                 # Non-admin with no team memberships: nothing visible.
@@ -1289,7 +1285,7 @@ async def get_guardrail_info(guardrail_id: str):
         if result is None:
             raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
 
-        litellm_params: Optional[Union[LitellmParams, dict]] = result.get("litellm_params")
+        litellm_params: LitellmParams | dict | None = result.get("litellm_params")
         result_litellm_params_dict = (
             litellm_params.model_dump(exclude_none=True)
             if isinstance(litellm_params, LitellmParams)
@@ -1424,7 +1420,7 @@ async def get_category_yaml(category_name: str):
             "file_type": file_type,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading category file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading category file: {e!s}")
 
 
 @router.get(
@@ -1456,7 +1452,7 @@ async def get_major_airlines():
             airlines = json.load(f)
         return {"airlines": airlines}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {str(e)}") from e
+        raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e!s}") from e
 
 
 @router.post(
@@ -1464,7 +1460,7 @@ async def get_major_airlines():
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def validate_blocked_words_file(request: Dict[str, str]):
+async def validate_blocked_words_file(request: dict[str, str]):
     """
     Validate a blocked_words YAML file content.
 
@@ -1544,10 +1540,10 @@ async def validate_blocked_words_file(request: Dict[str, str]):
             "message": f"Valid YAML file with {len(blocked_words_list)} blocked word(s)",
         }
     except yaml.YAMLError as e:
-        return {"valid": False, "error": f"Invalid YAML syntax: {str(e)}"}
+        return {"valid": False, "error": f"Invalid YAML syntax: {e!s}"}
     except Exception as e:
         verbose_proxy_logger.exception("Error validating blocked words file")
-        return {"valid": False, "error": f"Validation error: {str(e)}"}
+        return {"valid": False, "error": f"Validation error: {e!s}"}
 
 
 def _get_field_type_from_annotation(field_annotation: Any) -> str:
@@ -1584,9 +1580,7 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
     # Handle basic types
     if field_annotation is str:
         return "string"
-    elif field_annotation is int:
-        return "number"
-    elif field_annotation is float:
+    elif field_annotation is int or field_annotation is float:
         return "number"
     elif field_annotation is bool:
         return "boolean"
@@ -1599,7 +1593,7 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
     return "string"
 
 
-def _extract_literal_values(annotation: Any) -> List[str]:
+def _extract_literal_values(annotation: Any) -> list[str]:
     """
     Extract literal values from a Literal type annotation
     """
@@ -1610,7 +1604,7 @@ def _extract_literal_values(annotation: Any) -> List[str]:
     return []
 
 
-def _get_dict_key_options(field_annotation: Any) -> Optional[List[str]]:
+def _get_dict_key_options(field_annotation: Any) -> list[str] | None:
     """
     Extract key options from Dict[Literal[...], T] types
     """
@@ -1642,7 +1636,7 @@ def _get_dict_value_type(field_annotation: Any) -> str:
     return "string"
 
 
-def _get_list_element_options(field_annotation: Any) -> Optional[List[str]]:
+def _get_list_element_options(field_annotation: Any) -> list[str] | None:
     """
     Extract element options from List[Literal[...]] types
     """
@@ -1708,7 +1702,7 @@ def _build_field_dict(
     field_annotation: Any,
     description: str,
     required: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build field dictionary for non-nested fields."""
     # Determine the field type from annotation
     field_type = _get_field_type_from_annotation(field_annotation)
@@ -1769,9 +1763,9 @@ def _build_field_dict(
 
 
 def _extract_fields_recursive(
-    model: Type[BaseModel],
+    model: type[BaseModel],
     depth: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     # Check if we've exceeded the maximum recursion depth
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise HTTPException(
@@ -1807,7 +1801,7 @@ def _extract_fields_recursive(
 
         if is_basemodel_subclass:
             # Recursively get fields from the nested model
-            nested_fields = _extract_fields_recursive(cast(Type[BaseModel], field_annotation), depth + 1)
+            nested_fields = _extract_fields_recursive(cast(type[BaseModel], field_annotation), depth + 1)
             fields[field_name] = {
                 "description": description,
                 "required": required,
@@ -1825,7 +1819,7 @@ def _extract_fields_recursive(
     return fields
 
 
-def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
+def _get_fields_from_model(model_class: type[BaseModel]) -> dict[str, Any]:
     """
     Get the fields from a Pydantic model as a nested dictionary structure
     """
@@ -1926,13 +1920,13 @@ class TestCustomCodeGuardrailRequest(BaseModel):
     custom_code: str
     """The Python-like code containing the apply_guardrail function."""
 
-    test_input: Dict[str, object]
+    test_input: dict[str, object]
     """The test input to pass to the guardrail. Should contain 'texts', optionally 'images', 'tools', etc."""
 
     input_type: str = "request"
     """Whether this is a 'request' or 'response' input type."""
 
-    request_data: Optional[Dict[str, object]] = None
+    request_data: dict[str, object] | None = None
     """Optional mock request_data (model, user_id, team_id, metadata, etc.)."""
 
 
@@ -1942,13 +1936,13 @@ class TestCustomCodeGuardrailResponse(BaseModel):
     success: bool
     """Whether the test executed successfully (no errors)."""
 
-    result: Optional[Dict[str, object]] = None
+    result: dict[str, object] | None = None
     """The guardrail result: action (allow/block/modify), reason, modified_texts, etc."""
 
-    error: Optional[str] = None
+    error: str | None = None
     """Error message if execution failed."""
 
-    error_type: Optional[str] = None
+    error_type: str | None = None
     """Type of error: 'compilation' or 'execution'."""
 
 
@@ -2253,7 +2247,7 @@ async def apply_guardrail(
     start_time = datetime.now(timezone.utc)
 
     try:
-        active_guardrail: Optional[CustomGuardrail] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+        active_guardrail: CustomGuardrail | None = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
             guardrail_name=request.guardrail_name
         )
         if active_guardrail is None:

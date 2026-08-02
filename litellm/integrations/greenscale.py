@@ -57,4 +57,3 @@ class GreenscaleLogger:
                 print_verbose(f"Greenscale Logger Succeeded - {response.text}")
         except Exception as e:
             print_verbose(f"Greenscale Logger Error - {e}, Stack trace: {traceback.format_exc()}")
-            pass

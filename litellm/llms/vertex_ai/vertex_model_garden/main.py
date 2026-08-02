@@ -16,7 +16,7 @@ Sent to this route when `model` is in the format `vertex_ai/openai/{MODEL_ID}`
 Vertex Documentation for using the OpenAI /chat/completions endpoint: https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_pytorch_llama3_deployment.ipynb
 """
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 import httpx  # type: ignore
 
@@ -41,9 +41,9 @@ def _vertex_model_garden_model_id_in_json_body(model: str) -> bool:
 def create_vertex_url(
     vertex_location: str,
     vertex_project: str,
-    stream: Optional[bool],
+    stream: bool | None,
     model: str,
-    api_base: Optional[str] = None,
+    api_base: str | None = None,
 ) -> str:
     """Return the api base for vertex model garden (without /chat/completions)."""
     base_url = get_vertex_base_url(vertex_location)
@@ -64,11 +64,11 @@ class VertexAIModelGardenModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: Optional[dict],
-        timeout: Union[float, httpx.Timeout],
+        headers: dict | None,
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,

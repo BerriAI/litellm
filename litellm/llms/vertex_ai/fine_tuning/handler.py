@@ -1,7 +1,8 @@
 import json
 import traceback
+from collections.abc import Coroutine
 from datetime import datetime
-from typing import Any, Coroutine, Literal, Optional, Union
+from typing import Any, Literal
 
 import httpx
 
@@ -50,7 +51,7 @@ class VertexFineTuningAPI(VertexLLM):
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
         original_hyperparameters: dict = {},
-        kwargs: Optional[dict] = None,
+        kwargs: dict | None = None,
     ) -> FineTuneJobCreate:
         """
         convert request from OpenAI format to Vertex format
@@ -86,7 +87,7 @@ class VertexFineTuningAPI(VertexLLM):
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
         original_hyperparameters: dict = {},
-        kwargs: Optional[dict] = None,
+        kwargs: dict | None = None,
     ) -> FineTuneHyperparameters:
         _oai_hyperparameters = create_fine_tuning_job_data.hyperparameters
         _vertex_hyperparameters = FineTuneHyperparameters()
@@ -199,14 +200,14 @@ class VertexFineTuningAPI(VertexLLM):
         self,
         _is_async: bool,
         create_fine_tuning_job_data: FineTuningJobCreate,
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        kwargs: Optional[dict] = None,
-        original_hyperparameters: Optional[dict] = {},
-    ) -> Union[LiteLLMFineTuningJob, Coroutine[Any, Any, LiteLLMFineTuningJob]]:
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        api_base: str | None,
+        timeout: float | httpx.Timeout,
+        kwargs: dict | None = None,
+        original_hyperparameters: dict | None = {},
+    ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
         verbose_logger.debug("creating fine tuning job, args= %s", create_fine_tuning_job_data)
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -309,13 +310,12 @@ class VertexFineTuningAPI(VertexLLM):
             url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
         elif "/tuningJobs/" in request_route and "cancel" in request_route:
             url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs{request_route}"
-        elif "generateContent" in request_route:
-            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
-        elif "predict" in request_route:
-            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
-        elif "/batchPredictionJobs" in request_route:
-            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
-        elif "countTokens" in request_route:
+        elif (
+            "generateContent" in request_route
+            or "predict" in request_route
+            or "/batchPredictionJobs" in request_route
+            or "countTokens" in request_route
+        ):
             url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         elif "cachedContents" in request_route:
             _model = request_data.get("model")

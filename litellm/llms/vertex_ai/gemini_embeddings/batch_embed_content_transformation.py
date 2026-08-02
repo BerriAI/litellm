@@ -4,8 +4,7 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
-from collections.abc import Mapping
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections.abc import Mapping, Sequence
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -85,7 +84,7 @@ def _infer_mime_type_from_gcs_url(gcs_url: str) -> str:
     )
 
 
-def _parse_data_url(data_url: str) -> Tuple[str, str]:
+def _parse_data_url(data_url: str) -> tuple[str, str]:
     """
     Parse a data URL to extract the media type and base64 data.
 
@@ -161,7 +160,7 @@ def _is_multimodal_element(element: str) -> bool:
 
 def _build_part_for_input(
     element: str,
-    resolved_files: Optional[Dict[str, Dict[str, str]]] = None,
+    resolved_files: dict[str, dict[str, str]] | None = None,
 ) -> PartType:
     """
     Build a single PartType for an input element, handling text, data URIs,
@@ -210,7 +209,7 @@ def transform_openai_input_gemini_content(
     input: GeminiEmbeddingInput,
     model: str,
     optional_params: dict,
-    resolved_files: Optional[Dict[str, Dict[str, str]]] = None,
+    resolved_files: dict[str, dict[str, str]] | None = None,
 ) -> VertexAIBatchEmbeddingsRequestBody:
     """
     Transform OpenAI embedding input to Gemini batchEmbedContents format.
@@ -227,12 +226,12 @@ def transform_openai_input_gemini_content(
         input=[["text", "image"]]       → 1 combined embedding
         input=[["text", "image"], "x"]  → 2 embeddings (1 combined + 1 separate)
     """
-    gemini_model_name = "models/{}".format(model)
+    gemini_model_name = f"models/{model}"
 
     gemini_params = _filter_embed_params(optional_params)
 
     input_list = [input] if isinstance(input, str) else input
-    requests: List[EmbedContentRequest] = []
+    requests: list[EmbedContentRequest] = []
 
     for element in input_list:
         if isinstance(element, list):
@@ -258,7 +257,7 @@ def transform_openai_input_gemini_embed_content(
     input: GeminiEmbeddingInput,
     model: str,
     optional_params: dict,
-    resolved_files: Optional[Dict[str, Dict[str, str]]] = None,
+    resolved_files: dict[str, dict[str, str]] | None = None,
 ) -> dict:
     """
     Transform OpenAI embedding input to Gemini embedContent format (multimodal).
@@ -277,7 +276,7 @@ def transform_openai_input_gemini_embed_content(
     gemini_params = _filter_embed_params(optional_params)
 
     input_list = [input] if isinstance(input, str) else input
-    parts: List[PartType] = []
+    parts: list[PartType] = []
 
     for element in input_list:
         if isinstance(element, list):
@@ -303,7 +302,7 @@ _AUDIO_TOKENS_PER_SECOND = 32.0
 _usage_metadata_adapter = TypeAdapter(UsageMetadata)
 
 
-def _parse_usage_metadata(raw_usage_metadata: object) -> Optional[UsageMetadata]:
+def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
     if not isinstance(raw_usage_metadata, dict):
         return None
     try:
@@ -450,7 +449,7 @@ def process_response(
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
 ) -> EmbeddingResponse:
-    openai_embeddings: List[Embedding] = []
+    openai_embeddings: list[Embedding] = []
     for idx, embedding in enumerate(_predictions["embeddings"]):
         openai_embedding = Embedding(
             embedding=embedding["values"],
@@ -465,7 +464,7 @@ def process_response(
     has_nested = isinstance(input, list) and any(isinstance(e, list) for e in input)
     if _is_multimodal_input(input) or has_nested:
         input_list = input if isinstance(input, list) else [input]
-        text_elements: List[str] = []
+        text_elements: list[str] = []
         for e in input_list:
             if isinstance(e, list):
                 text_elements.extend(sub for sub in e if isinstance(sub, str) and not _is_multimodal_element(sub))

@@ -179,4 +179,3 @@ class LunaryLogger:
 
         except Exception:
             print_verbose(f"Lunary Logging Error - {traceback.format_exc()}")
-            pass

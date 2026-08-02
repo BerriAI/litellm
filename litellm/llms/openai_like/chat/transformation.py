@@ -2,7 +2,7 @@
 OpenAI-like chat completion transformation
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -23,9 +23,9 @@ else:
 class OpenAILikeChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")  # type: ignore
         dynamic_api_key = api_key or get_secret_str("OPENAI_LIKE_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
@@ -83,14 +83,14 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         stream: bool,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        api_key: Optional[str],
-        data: Union[dict, str],
-        messages: List,
+        api_key: str | None,
+        data: dict | str,
+        messages: list,
         print_verbose,
         encoding,
-        json_mode: Optional[bool],
-        custom_llm_provider: Optional[str],
-        base_model: Optional[str],
+        json_mode: bool | None,
+        custom_llm_provider: str | None,
+        base_model: str | None,
     ) -> ModelResponse:
         response_json = response.json()
         logging_obj.post_call(
@@ -126,12 +126,12 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         return OpenAILikeChatConfig._transform_response(
             model=model,

@@ -11,7 +11,7 @@ brand_self so all other major airlines are treated as competitors.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (
     BaseCompetitorIntentChecker,
@@ -113,7 +113,7 @@ AIRLINE_EXPLICIT_OTHER_MEANING_MARKER = (
 _MAJOR_AIRLINES_PATH = Path(__file__).resolve().parent / "major_airlines.json"
 
 
-def _load_competitors_excluding_brand(brand_self: List[str]) -> List[str]:
+def _load_competitors_excluding_brand(brand_self: list[str]) -> list[str]:
     """
     Load competitor tokens from major_airlines.json (harm_toxic_abuse-style format).
     Exclude any airline whose id or match variants overlap with brand_self.
@@ -127,13 +127,13 @@ def _load_competitors_excluding_brand(brand_self: List[str]) -> List[str]:
             airlines = json.load(f)
     except (json.JSONDecodeError, OSError):
         return []
-    result: List[str] = []
+    result: list[str] = []
     for entry in airlines:
         if not isinstance(entry, dict):
             continue
         match_str = entry.get("match") or ""
         variants = [v.strip().lower() for v in match_str.split("|") if v.strip()]
-        words_in_match: Set[str] = set()
+        words_in_match: set[str] = set()
         for v in variants:
             words_in_match.update(v.split())
         if brand_set & words_in_match or any(v in brand_set for v in variants):
@@ -149,8 +149,8 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
     with other_meaning/competitor signals and explicit markers.
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        merged: Dict[str, Any] = dict(config)
+    def __init__(self, config: dict[str, Any]) -> None:
+        merged: dict[str, Any] = dict(config)
         if not merged.get("other_meaning_signals"):
             merged["other_meaning_signals"] = AIRLINE_OTHER_MEANING_SIGNALS
         if not merged.get("competitor_signals"):
@@ -173,7 +173,7 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
         self._explicit_competitor_marker = _compile_marker(merged.get("explicit_competitor_marker"))
         self._explicit_other_meaning_marker = _compile_marker(merged.get("explicit_other_meaning_marker"))
 
-    def _classify_ambiguous(self, text: str, token: str) -> Tuple[str, float]:
+    def _classify_ambiguous(self, text: str, token: str) -> tuple[str, float]:
         """Other meaning vs competitor using airline signals and explicit markers."""
         text_lower = text.lower()
         if (

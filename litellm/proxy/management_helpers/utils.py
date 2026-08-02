@@ -1,8 +1,9 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
+from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
@@ -38,7 +39,7 @@ from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 
 
-def get_new_internal_user_defaults(user_id: str, user_email: Optional[str] = None) -> dict:
+def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) -> dict:
     user_info = litellm.default_internal_user_params or {}
 
     returned_dict: SSOUserDefinedValues = {
@@ -59,11 +60,11 @@ def get_new_internal_user_defaults(user_id: str, user_email: Optional[str] = Non
 
 async def handle_budget_for_entity(
     data,
-    existing_budget_id: Optional[str],
+    existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     litellm_proxy_admin_name: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Common helper to handle budget creation/updates for entities (organizations, tags, etc).
 
@@ -140,7 +141,7 @@ async def handle_budget_for_entity(
 # (i.e. the values an admin sets). We copy these when cloning a team's
 # default member-budget into an individual member-budget so that the new
 # row starts with the same limits as the default.
-_CLONABLE_BUDGET_FIELDS: Tuple[str, ...] = (
+_CLONABLE_BUDGET_FIELDS: tuple[str, ...] = (
     "max_budget",
     "soft_budget",
     "max_parallel_requests",
@@ -157,8 +158,8 @@ async def _clone_team_default_budget_for_member(
     default_team_budget_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-    budget_duration_override: Optional[str] = None,
-) -> Optional[str]:
+    budget_duration_override: str | None = None,
+) -> str | None:
     """
     Create a new budget row that copies the values from the team's default
     member budget. Returns the new budget_id, or None if the default budget
@@ -209,11 +210,11 @@ async def _resolve_member_budget_id(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-    max_budget_in_team: Optional[float],
-    allowed_models: Optional[list[str]],
-    budget_duration: Optional[str],
-    default_team_budget_id: Optional[str],
-) -> Optional[str]:
+    max_budget_in_team: float | None,
+    allowed_models: list[str] | None,
+    budget_duration: str | None,
+    default_team_budget_id: str | None,
+) -> str | None:
     """
     Resolve the budget a new team member should be linked to.
 
@@ -269,15 +270,15 @@ async def _append_team_id_if_absent(prisma_client: PrismaClient, user_id: str, t
 
 async def add_new_member(
     new_member: Member,
-    max_budget_in_team: Optional[float],
+    max_budget_in_team: float | None,
     prisma_client: PrismaClient,
     team_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-    default_team_budget_id: Optional[str] = None,
-    allowed_models: Optional[List[str]] = None,
-    budget_duration: Optional[str] = None,
-) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
+    default_team_budget_id: str | None = None,
+    allowed_models: list[str] | None = None,
+    budget_duration: str | None = None,
+) -> tuple[LiteLLM_UserTable, LiteLLM_TeamMembership | None]:
     """
     Add a new member to a team
 
@@ -286,8 +287,8 @@ async def add_new_member(
 
     Returns created/existing user + team membership w/ budget id
     """
-    returned_user: Optional[LiteLLM_UserTable] = None
-    returned_team_membership: Optional[LiteLLM_TeamMembership] = None
+    returned_user: LiteLLM_UserTable | None = None
+    returned_team_membership: LiteLLM_TeamMembership | None = None
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
         new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
@@ -313,7 +314,7 @@ async def add_new_member(
         new_user_defaults = get_new_internal_user_defaults(user_id=str(uuid.uuid4()), user_email=new_member.user_email)
         ## user email is not unique acc. to prisma schema -> future improvement
         ### for now: check if it exists in db, if not - insert it
-        existing_user_row: Optional[list] = await prisma_client.get_data(
+        existing_user_row: list | None = await prisma_client.get_data(
             key_val={"user_email": new_member.user_email},
             table_name="user",
             query_type="find_all",
@@ -374,7 +375,6 @@ def _delete_user_id_from_cache(kwargs):
         if isinstance(update_user_request, DeleteUserRequest):
             for user_id in update_user_request.user_ids:
                 user_api_key_cache.delete_cache(key=user_id)
-    pass
 
 
 def _delete_api_key_from_cache(kwargs):
@@ -389,7 +389,6 @@ def _delete_api_key_from_cache(kwargs):
         if isinstance(update_request, KeyRequest) and update_request.keys:
             for key in update_request.keys:
                 user_api_key_cache.delete_cache(key=key)
-    pass
 
 
 def _delete_team_id_from_cache(kwargs):
@@ -404,7 +403,6 @@ def _delete_team_id_from_cache(kwargs):
         if isinstance(update_request, DeleteTeamRequest):
             for team_id in update_request.team_ids:
                 user_api_key_cache.delete_cache(key=team_id)
-    pass
 
 
 def _delete_customer_id_from_cache(kwargs):
@@ -419,7 +417,6 @@ def _delete_customer_id_from_cache(kwargs):
         if isinstance(update_request, DeleteCustomerRequest):
             for user_id in update_request.user_ids:
                 user_api_key_cache.delete_cache(key=user_id)
-    pass
 
 
 async def send_management_endpoint_alert(
@@ -525,7 +522,7 @@ async def _emit_management_endpoint_otel_span(
     start_time: datetime,
     end_time: datetime,
     result: Any = None,
-    exception: Optional[Exception] = None,
+    exception: Exception | None = None,
 ) -> None:
     """Stamp + end the parent OTEL SERVER span for a management endpoint.
 
@@ -547,7 +544,7 @@ async def _emit_management_endpoint_otel_span(
     if is_otel_v2_enabled():
         return
 
-    http_request: Optional[Request] = kwargs.get("http_request")
+    http_request: Request | None = kwargs.get("http_request")
     if http_request is not None:
         # Inline import — auth_utils participates in a proxy import cycle.
         from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
@@ -574,7 +571,7 @@ async def _emit_management_endpoint_otel_span(
         }
     )
 
-    _response: Optional[dict] = None
+    _response: dict | None = None
     if exception is None and result is not None:
         try:
             raw = dict(result)
@@ -645,7 +642,6 @@ def management_endpoint_wrapper(func):
             except Exception as e:
                 # Non-Blocking Exception
                 verbose_logger.debug("Error in management endpoint wrapper: %s", str(e))
-                pass
 
             return result
         except Exception as e:

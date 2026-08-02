@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -37,7 +37,7 @@ _IDENTITY_FIELDS = (
 )
 
 
-def _resolve_session_key(kwargs: Dict[str, Any]) -> Optional[str]:
+def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
     """Pick a stable per-conversation key for owner-cache attribution.
 
     Order:
@@ -82,7 +82,7 @@ def _resolve_session_key(kwargs: Dict[str, Any]) -> Optional[str]:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _last_user_content(messages: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+def _last_user_content(messages: list[dict[str, Any]] | None) -> str | None:
     if not messages:
         return None
     for msg in reversed(messages):
@@ -100,8 +100,8 @@ def _last_user_content(messages: Optional[List[Dict[str, Any]]]) -> Optional[str
 
 
 def _recent_tool_results(
-    messages: Optional[List[Dict[str, Any]]],
-) -> List[Dict[str, Any]]:
+    messages: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
     """Extract the current turn's tool result payloads from the request messages.
 
     Tool results are `role == "tool"` messages that sit at the tail of the
@@ -115,7 +115,7 @@ def _recent_tool_results(
     """
     if not messages:
         return []
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for msg in reversed(messages):
         if not isinstance(msg, dict):
             break
@@ -154,7 +154,7 @@ def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
     raw_tool_calls = getattr(msg, "tool_calls", None)
     if raw_tool_calls is None and isinstance(msg, dict):
         raw_tool_calls = msg.get("tool_calls")
-    tool_calls: List[Dict[str, Any]] = []
+    tool_calls: list[dict[str, Any]] = []
     for tc in raw_tool_calls or []:
         if isinstance(tc, dict):
             tool_calls.append(tc)
@@ -174,12 +174,12 @@ class AdaptiveRouterPostCallHook(CustomLogger):
 
     async def async_post_call_response_headers_hook(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         user_api_key_dict: Any,
         response: Any,
-        request_headers: Optional[Dict[str, str]] = None,
-        litellm_call_info: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, str]]:
+        request_headers: dict[str, str] | None = None,
+        litellm_call_info: dict[str, Any] | None = None,
+    ) -> dict[str, str] | None:
         """
         Surface the chosen logical model as the `x-litellm-adaptive-router-model`
         response header for both streaming and non-streaming responses.
@@ -208,7 +208,7 @@ class AdaptiveRouterPostCallHook(CustomLogger):
 
     async def _record(
         self,
-        kwargs: Dict[str, Any],
+        kwargs: dict[str, Any],
         response_obj: Any,
         response_status: int,
     ) -> None:

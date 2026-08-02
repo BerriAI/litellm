@@ -3,7 +3,7 @@
 Azure Text Moderation Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Union, cast
 
 from fastapi import HTTPException
 
@@ -44,7 +44,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
     default_severity_threshold: int = 2
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -55,8 +55,8 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         guardrail_name: str,
         api_key: str,
         api_base: str,
-        severity_threshold: Optional[int] = None,
-        severity_threshold_by_category: Optional[Dict[str, int]] = None,
+        severity_threshold: int | None = None,
+        severity_threshold_by_category: dict[str, int] | None = None,
         **kwargs,
     ):
         """Initialize Azure Text Moderation guardrail handler."""
@@ -82,7 +82,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 "SelfHarm",
                 "Violence",
             ],
-            "blocklistNames": cast(Optional[List[str]], kwargs.get("blocklistNames") or None),
+            "blocklistNames": cast(list[str] | None, kwargs.get("blocklistNames") or None),
             "haltOnBlocklistHit": kwargs.get("haltOnBlocklistHit") or False,
             "outputType": kwargs.get("outputType") or "FourSeverityLevels",
         }
@@ -93,7 +93,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         verbose_proxy_logger.info(f"Initialized Azure Text Moderation Guardrail: {guardrail_name}")
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
             AzureContentSafetyTextModerationConfigModel,
         )
@@ -109,15 +109,16 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         chunk is analysed independently; a severity-threshold violation in
         *any* chunk raises an HTTPException immediately.
         """
-        from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
             AzureTextModerationGuardrailRequestBody,
             AzureTextModerationGuardrailResponse,
         )
 
+        from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
+
         chunks = self.split_text_by_words(text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
-        last_response: Optional[AzureTextModerationGuardrailResponse] = None
+        last_response: AzureTextModerationGuardrailResponse | None = None
 
         for chunk in chunks:
             request_body = AzureTextModerationGuardrailRequestBody(
@@ -203,9 +204,9 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: Any,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         call_type: CallTypesLiteral,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Pre-call hook to scan user prompts before sending to LLM.
 
@@ -215,7 +216,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             "Azure Text Moderation: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        new_messages: list[AllMessageValues] | None = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning("Azure Text Moderation: not running guardrail. No messages in data")
             return data

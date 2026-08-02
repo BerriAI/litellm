@@ -36,7 +36,7 @@ Example: block when response rejects the user (input_type response only):
 
 import asyncio
 import threading
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 from fastapi import HTTPException
 
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 class CustomCodeGuardrailError(Exception):
     """Raised when custom code guardrail execution fails."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.details = details or {}
 
@@ -105,7 +105,7 @@ class CustomCodeGuardrail(CustomGuardrail):
     def __init__(
         self,
         custom_code: str,
-        guardrail_name: Optional[str] = "custom_code",
+        guardrail_name: str | None = "custom_code",
         **kwargs: Any,
     ) -> None:
         """
@@ -117,9 +117,9 @@ class CustomCodeGuardrail(CustomGuardrail):
             **kwargs: Additional arguments passed to CustomGuardrail
         """
         self.custom_code = custom_code
-        self._compiled_function: Optional[Any] = None
+        self._compiled_function: Any | None = None
         self._compile_lock = threading.Lock()
-        self._compile_error: Optional[str] = None
+        self._compile_error: str | None = None
 
         super().__init__(
             guardrail_name=guardrail_name,
@@ -131,12 +131,12 @@ class CustomCodeGuardrail(CustomGuardrail):
         self._compile_custom_code()
 
     @staticmethod
-    def get_config_model() -> Optional[Type[GuardrailConfigModel]]:
+    def get_config_model() -> type[GuardrailConfigModel] | None:
         """Returns the config model for the UI."""
         return CustomCodeGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
@@ -263,7 +263,7 @@ class CustomCodeGuardrail(CustomGuardrail):
                 },
             ) from e
 
-    def _prepare_safe_request_data(self, request_data: dict) -> Dict[str, Any]:
+    def _prepare_safe_request_data(self, request_data: dict) -> dict[str, Any]:
         """
         Prepare a safe subset of request_data for code execution.
 

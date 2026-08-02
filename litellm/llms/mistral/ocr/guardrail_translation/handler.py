@@ -5,7 +5,7 @@ Provides guardrail translation support for the OCR endpoint.
 Processes the extracted markdown text from OCR pages.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -33,7 +33,7 @@ class OCRHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
+        litellm_logging_obj: Any | None = None,
     ) -> Any:
         """
         Process OCR input by applying guardrails to the document reference.
@@ -55,7 +55,7 @@ class OCRHandler(BaseTranslation):
             return data
 
         # Extract the document URL for guardrail checking
-        texts_to_check: List[str] = []
+        texts_to_check: list[str] = []
         doc_type = document.get("type")
         if doc_type == "document_url":
             url = document.get("document_url")
@@ -87,9 +87,9 @@ class OCRHandler(BaseTranslation):
         self,
         response: "OCRResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process OCR output by applying guardrails to extracted page text.
@@ -111,8 +111,8 @@ class OCRHandler(BaseTranslation):
             return response
 
         # Extract markdown text from all pages
-        texts_to_check: List[str] = []
-        page_indices: List[int] = []
+        texts_to_check: list[str] = []
+        page_indices: list[int] = []
         for i, page in enumerate(response.pages):
             if hasattr(page, "markdown") and page.markdown:
                 texts_to_check.append(page.markdown)

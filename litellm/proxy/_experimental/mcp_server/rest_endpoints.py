@@ -654,7 +654,7 @@ if MCP_AVAILABLE:
             return {
                 "tools": [],
                 "error": "server_error",
-                "message": f"Failed to get tools from server {server.name}: {str(e)}",
+                "message": f"Failed to get tools from server {server.name}: {e!s}",
             }
         return {
             "tools": list_tools_result,
@@ -866,7 +866,7 @@ if MCP_AVAILABLE:
                         errors.append(
                             f"{get_server_prefix(server)}: {classify_list_exception(e).tag}"
                             if isinstance(e, (MCPServerListError, MCPUpstreamAuthError))
-                            else f"{get_server_prefix(server)}: {str(e)}"
+                            else f"{get_server_prefix(server)}: {e!s}"
                         )
                         continue
 
@@ -905,7 +905,7 @@ if MCP_AVAILABLE:
             return {
                 "tools": [],
                 "error": "unexpected_error",
-                "message": f"An unexpected error occurred: {str(e)}",
+                "message": f"An unexpected error occurred: {e!s}",
             }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
@@ -1052,7 +1052,7 @@ if MCP_AVAILABLE:
                 },
             )
         except BlockedPiiEntityError as e:
-            verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
+            verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {e!s}")
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1063,7 +1063,7 @@ if MCP_AVAILABLE:
                 },
             )
         except GuardrailRaisedException as e:
-            verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
+            verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {e!s}")
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1082,15 +1082,15 @@ if MCP_AVAILABLE:
             # Locally generated denials (tool/server permission, IP filtering, BYOK) stay at error level
             # so restriction probing keeps full monitoring visibility; the relayed upstream 401 above is
             # the only status demoted to info.
-            verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
+            verbose_logger.error(f"HTTPException in MCP tool call: {e!s}")
             raise e
         except Exception as e:
-            verbose_logger.exception(f"Unexpected error in MCP tool call: {str(e)}")
+            verbose_logger.exception(f"Unexpected error in MCP tool call: {e!s}")
             raise HTTPException(
                 status_code=500,
                 detail={
                     "error": "internal_server_error",
-                    "message": f"An unexpected error occurred: {str(e)}",
+                    "message": f"An unexpected error occurred: {e!s}",
                 },
             )
 

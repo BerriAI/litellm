@@ -4,9 +4,10 @@ Support for OpenAI's `/v1/chat/completions` endpoint.
 Calls done in OpenAI/openai.py as DataRobot is openai-compatible.
 """
 
-from typing import Optional, Tuple
-from litellm.secret_managers.main import get_secret_str
 from urllib.parse import urlparse, urlunparse
+
+from litellm.secret_managers.main import get_secret_str
+
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 LLMGW_PATH = "/genai/llmgw/chat/completions"
@@ -14,7 +15,7 @@ LLMGW_PATH = "/genai/llmgw/chat/completions"
 
 class DataRobotConfig(OpenAILikeChatConfig):
     @staticmethod
-    def _resolve_api_key(api_key: Optional[str] = None) -> str:
+    def _resolve_api_key(api_key: str | None = None) -> str:
         """Attempt to ensure that the API key is set, preferring the user-provided key
         over the secret manager key (``DATAROBOT_API_TOKEN``).
 
@@ -23,7 +24,7 @@ class DataRobotConfig(OpenAILikeChatConfig):
         return api_key or get_secret_str("DATAROBOT_API_TOKEN") or "fake-api-key"
 
     @staticmethod
-    def _resolve_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def _resolve_api_base(api_base: str | None = None) -> str | None:
         """Attempt to ensure that the API base is set, preferring the user-provided key
         over the secret manager key (``DATAROBOT_ENDPOINT``).
 
@@ -54,8 +55,8 @@ class DataRobotConfig(OpenAILikeChatConfig):
         return urlunparse(updated_parsed)
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         """Attempts to ensure that the API base and key are set, preferring user-provided values,
         before falling back to secret manager values (``DATAROBOT_ENDPOINT`` and ``DATAROBOT_API_TOKEN``
         respectively).
@@ -69,12 +70,12 @@ class DataRobotConfig(OpenAILikeChatConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the API call. Datarobot's API base is set to

@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Any, List, Optional, Union, cast
+from typing import Any, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -52,7 +52,7 @@ class _ProxyDBLogger(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
-        traceback_str: Optional[str] = None,
+        traceback_str: str | None = None,
     ):
         try:
             await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
@@ -68,10 +68,12 @@ class _ProxyDBLogger(CustomLogger):
                 )
 
         request_route = user_api_key_dict.request_route
-        if _ProxyDBLogger._should_track_errors_in_db() is False:
-            return
-        elif request_route is not None and not (
-            RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
+        if (
+            _ProxyDBLogger._should_track_errors_in_db() is False
+            or request_route is not None
+            and not (
+                RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
+            )
         ):
             return
 
@@ -180,7 +182,7 @@ class _ProxyDBLogger(CustomLogger):
     async def _PROXY_track_cost_callback(
         self,
         kwargs,  # kwargs to completion
-        completion_response: Optional[Union[litellm.ModelResponse, Any]],  # response from completion
+        completion_response: litellm.ModelResponse | Any | None,  # response from completion
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
@@ -205,12 +207,12 @@ class _ProxyDBLogger(CustomLogger):
                 metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation = _get_budget_reservation_from_metadata(metadata=metadata)
-            user_id = cast(Optional[str], metadata.get("user_api_key_user_id", None))
-            team_id = cast(Optional[str], metadata.get("user_api_key_team_id", None))
-            org_id = cast(Optional[str], metadata.get("user_api_key_org_id", None))
-            key_alias = cast(Optional[str], metadata.get("user_api_key_alias", None))
+            user_id = cast(str | None, metadata.get("user_api_key_user_id", None))
+            team_id = cast(str | None, metadata.get("user_api_key_team_id", None))
+            org_id = cast(str | None, metadata.get("user_api_key_org_id", None))
+            key_alias = cast(str | None, metadata.get("user_api_key_alias", None))
             end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
-            sl_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+            sl_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
             response_cost = (
                 sl_object.get("response_cost", None) if sl_object is not None else kwargs.get("response_cost", None)
             )
@@ -228,7 +230,7 @@ class _ProxyDBLogger(CustomLogger):
                 verbose_proxy_logger.debug(
                     f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
                 )
-                call_type: Optional[str] = kwargs.get("call_type")
+                call_type: str | None = kwargs.get("call_type")
                 if _should_track_cost_callback(
                     user_api_key=user_api_key,
                     user_id=user_id,
@@ -295,7 +297,7 @@ class _ProxyDBLogger(CustomLogger):
                     kwargs.get("stream") is True and "complete_streaming_response" in kwargs
                 ):
                     if sl_object is not None:
-                        cost_tracking_failure_debug_info: Union[dict, str] = (
+                        cost_tracking_failure_debug_info: dict | str = (
                             sl_object["response_cost_failure_debug_info"]  # type: ignore
                             or "response_cost_failure_debug_info is None in standard_logging_object"
                         )
@@ -306,7 +308,7 @@ class _ProxyDBLogger(CustomLogger):
                         f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                     )
         except Exception as e:
-            error_msg = f"Error in tracking cost callback - {str(e)}\n Traceback:{traceback.format_exc()}"
+            error_msg = f"Error in tracking cost callback - {e!s}\n Traceback:{traceback.format_exc()}"
             model = kwargs.get("model", "")
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
             litellm_metadata = kwargs.get("litellm_params", {}).get("litellm_metadata", {})
@@ -419,11 +421,11 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
 
 
 def _should_track_cost_callback(
-    user_api_key: Optional[str],
-    user_id: Optional[str],
-    team_id: Optional[str],
-    end_user_id: Optional[str],
-    call_type: Optional[str] = None,
+    user_api_key: str | None,
+    user_id: str | None,
+    team_id: str | None,
+    end_user_id: str | None,
+    call_type: str | None = None,
 ) -> bool:
     """
     Determine if the cost callback should be tracked based on the kwargs
@@ -443,7 +445,7 @@ def _should_track_cost_callback(
     return call_type in _PASS_THROUGH_CALL_TYPES
 
 
-def _get_budget_reservation_from_metadata(metadata: dict) -> Optional[dict]:
+def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:
     metadata_budget_reservation = metadata.get("user_api_key_budget_reservation")
     if isinstance(metadata_budget_reservation, dict):
         return metadata_budget_reservation
@@ -458,9 +460,9 @@ def _get_budget_reservation_from_metadata(metadata: dict) -> Optional[dict]:
 
 
 def _get_request_tags_for_cost_tracking(
-    sl_object: Optional[StandardLoggingPayload],
+    sl_object: StandardLoggingPayload | None,
     metadata: dict,
-) -> Optional[List[str]]:
+) -> list[str] | None:
     if sl_object is not None:
         request_tags = sl_object.get("request_tags", None)
         if isinstance(request_tags, list):
@@ -476,18 +478,18 @@ def _get_request_tags_for_cost_tracking(
 async def _update_database_and_spend_counters(
     proxy_logging_obj: Any,
     increment_spend_counters: Any,
-    user_api_key: Optional[str],
-    user_id: Optional[str],
-    end_user_id: Optional[str],
-    team_id: Optional[str],
-    org_id: Optional[str],
+    user_api_key: str | None,
+    user_id: str | None,
+    end_user_id: str | None,
+    team_id: str | None,
+    org_id: str | None,
     kwargs: dict,
-    completion_response: Optional[Union[litellm.ModelResponse, Any]],
+    completion_response: litellm.ModelResponse | Any | None,
     start_time: Any,
     end_time: Any,
     response_cost: float,
-    budget_reservation: Optional[dict],
-    request_tags: Optional[List[str]] = None,
+    budget_reservation: dict | None,
+    request_tags: list[str] | None = None,
 ) -> None:
     try:
         await proxy_logging_obj.db_spend_update_writer.update_database(
@@ -540,7 +542,7 @@ async def _update_database_and_spend_counters(
         raise
 
 
-async def _release_budget_reservation(budget_reservation: Optional[dict]) -> None:
+async def _release_budget_reservation(budget_reservation: dict | None) -> None:
     if budget_reservation is None:
         return
 
@@ -554,7 +556,7 @@ async def _release_budget_reservation(budget_reservation: Optional[dict]) -> Non
 
 
 async def _invalidate_budget_reservation_counters(
-    budget_reservation: Optional[dict],
+    budget_reservation: dict | None,
 ) -> None:
     if budget_reservation is None:
         return

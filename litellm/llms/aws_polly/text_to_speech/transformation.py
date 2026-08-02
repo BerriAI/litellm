@@ -6,7 +6,8 @@ Reference: https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Union
 
 import httpx
 
@@ -68,16 +69,16 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         self,
         model: str,
         input: str,
-        voice: Optional[Union[str, Dict]],
-        optional_params: Dict,
-        litellm_params_dict: Dict,
+        voice: str | dict | None,
+        optional_params: dict,
+        litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]],
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, Any] | None,
         base_llm_http_handler: Any,
         aspeech: bool,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         **kwargs: Any,
     ) -> Union[
         "HttpxBinaryResponseContent",
@@ -97,7 +98,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         )
 
         # Convert voice to string if it's a dict
-        voice_str: Optional[str] = None
+        voice_str: str | None = None
         if isinstance(voice, str):
             voice_str = voice
         elif isinstance(voice, dict):
@@ -128,7 +129,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
 
         return response
 
-    def _get_aws_region_name_for_polly(self, optional_params: Dict) -> str:
+    def _get_aws_region_name_for_polly(self, optional_params: dict) -> str:
         """Get AWS region name for Polly API calls."""
         aws_region_name = optional_params.get("aws_region_name")
         if aws_region_name is None:
@@ -144,18 +145,18 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
     def map_openai_params(
         self,
         model: str,
-        optional_params: Dict,
-        voice: Optional[Union[str, Dict]] = None,
+        optional_params: dict,
+        voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: Dict = {},
-    ) -> Tuple[Optional[str], Dict]:
+        kwargs: dict = {},
+    ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to AWS Polly parameters
         """
         mapped_params = {}
 
         # Map voice - support both native Polly voices and OpenAI voice mappings
-        mapped_voice: Optional[str] = None
+        mapped_voice: str | None = None
         if isinstance(voice, str):
             if voice in self.VOICE_MAPPINGS:
                 # OpenAI voice -> Polly voice
@@ -210,8 +211,8 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate AWS environment and set up headers.
@@ -224,7 +225,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -249,10 +250,10 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
 
     def _sign_polly_request(
         self,
-        request_body: Dict[str, Any],
+        request_body: dict[str, Any],
         endpoint_url: str,
-        litellm_params: Dict,
-    ) -> Tuple[Dict[str, str], str]:
+        litellm_params: dict,
+    ) -> tuple[dict[str, str], str]:
         """
         Sign the AWS Polly request using SigV4.
 
@@ -308,9 +309,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         self,
         model: str,
         input: str,
-        voice: Optional[str],
-        optional_params: Dict,
-        litellm_params: Dict,
+        voice: str | None,
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:
         """
@@ -335,7 +336,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         engine = optional_params.get("engine", self.DEFAULT_ENGINE)
 
         # Build request body
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "Engine": engine,
             "OutputFormat": output_format,
             "Text": input,

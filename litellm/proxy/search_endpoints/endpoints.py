@@ -40,7 +40,7 @@ async def search(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    search_tool_name: Optional[str] = None,
+    search_tool_name: str | None = None,
 ):
     """
     Search endpoint for performing web searches.
@@ -170,7 +170,7 @@ async def search(
                     team_object=team_object,
                 )
         except Exception as e:
-            verbose_proxy_logger.error(f"Search tool authorization failed for {search_tool_name_value}: {str(e)}")
+            verbose_proxy_logger.error(f"Search tool authorization failed for {search_tool_name_value}: {e!s}")
             raise
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):

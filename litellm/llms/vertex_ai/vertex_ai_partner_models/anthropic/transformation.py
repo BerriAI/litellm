@@ -1,6 +1,6 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-from typing import Any, List, Optional
+from typing import Any
 
 import httpx
 
@@ -45,7 +45,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "vertex_ai"
 
     def should_strip_billing_metadata(self) -> bool:
@@ -86,7 +86,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -180,12 +180,12 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         response = super().transform_response(
             model,
@@ -211,8 +211,6 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         """
         if custom_llm_provider != "vertex_ai" and custom_llm_provider != "vertex_ai_beta":
             return False
-        if "claude" in model.lower():
-            return True
-        elif model in litellm.vertex_anthropic_models:
+        if "claude" in model.lower() or model in litellm.vertex_anthropic_models:
             return True
         return False

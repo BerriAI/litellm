@@ -1,4 +1,5 @@
-from typing import Callable, List, TypeVar, Union
+from collections.abc import Callable
+from typing import TypeVar
 
 from pydantic import ValidationError
 
@@ -23,7 +24,7 @@ class ScimTransformations:
 
     @staticmethod
     async def transform_litellm_user_to_scim_user(
-        user: Union[LiteLLM_UserTable, NewUserResponse],
+        user: LiteLLM_UserTable | NewUserResponse,
     ) -> SCIMUser:
         from litellm.proxy.proxy_server import prisma_client
 
@@ -89,7 +90,7 @@ class ScimTransformations:
 
     @staticmethod
     def _parse_directory_metadata(
-        user: Union[LiteLLM_UserTable, NewUserResponse],
+        user: LiteLLM_UserTable | NewUserResponse,
         key: str,
         validate: Callable[[object], T],
     ) -> T | None:
@@ -113,7 +114,7 @@ class ScimTransformations:
             return None
 
     @staticmethod
-    def _get_scim_user_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+    def _get_scim_user_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a display name with length > 0
 
@@ -124,7 +125,7 @@ class ScimTransformations:
         return ScimTransformations.DEFAULT_SCIM_DISPLAY_NAME
 
     @staticmethod
-    def _get_scim_family_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+    def _get_scim_family_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a family name with length > 0
         """
@@ -139,7 +140,7 @@ class ScimTransformations:
         return ScimTransformations.DEFAULT_SCIM_FAMILY_NAME
 
     @staticmethod
-    def _get_scim_given_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+    def _get_scim_given_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a given name with length > 0
         """
@@ -155,7 +156,7 @@ class ScimTransformations:
 
     @staticmethod
     async def transform_litellm_team_to_scim_group(
-        team: Union[LiteLLM_TeamTable, dict],
+        team: LiteLLM_TeamTable | dict,
     ) -> SCIMGroup:
         from litellm.proxy.proxy_server import prisma_client
 
@@ -166,7 +167,7 @@ class ScimTransformations:
             team = LiteLLM_TeamTable(**team)
 
         # Get team members with proper display names
-        scim_members: List[SCIMMember] = []
+        scim_members: list[SCIMMember] = []
         for member in team.members_with_roles or []:
             if isinstance(member, dict):
                 member = Member(**member)

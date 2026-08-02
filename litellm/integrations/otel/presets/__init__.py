@@ -8,7 +8,7 @@ the factory in ``litellm_logging`` can resolve a name and build a single
 ``OpenTelemetryV2`` instance from the result.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from litellm.integrations.otel.presets.agentops import agentops_preset
 from litellm.integrations.otel.presets.arize import arize_dynamic_headers, arize_preset
@@ -62,12 +62,12 @@ def dynamic_otlp_headers(
 
 
 __all__ = [
-    "PRESET_BY_CALLBACK",
     "DYNAMIC_HEADERS_BY_CALLBACK",
+    "PRESET_BY_CALLBACK",
     "Preset",
-    "dynamic_otlp_headers",
     "agentops_preset",
     "arize_preset",
+    "dynamic_otlp_headers",
     "langfuse_preset",
     "langtrace_preset",
     "levo_preset",

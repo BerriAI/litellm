@@ -1,12 +1,7 @@
+from collections.abc import AsyncIterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
     cast,
 )
 
@@ -53,9 +48,8 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import ModelResponseStream
 from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
@@ -78,7 +72,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "bedrock"
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
@@ -91,12 +85,12 @@ class AmazonAnthropicClaudeMessagesConfig(
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         return headers, api_base
 
     def sign_request(
@@ -105,11 +99,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
         return AmazonInvokeConfig.sign_request(
             self=self,
             headers=headers,
@@ -124,12 +118,12 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         return AmazonInvokeConfig.get_complete_url(
             self=self,
@@ -141,7 +135,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             stream=stream,
         )
 
-    def _remove_ttl_from_cache_control(self, anthropic_messages_request: Dict, model: Optional[str] = None) -> None:
+    def _remove_ttl_from_cache_control(self, anthropic_messages_request: dict, model: str | None = None) -> None:
         """
         Remove unsupported fields from cache_control for Bedrock.
 
@@ -235,7 +229,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def _ensure_thinking_for_clear_thinking_context_management(
         self,
-        anthropic_messages_request: Dict,
+        anthropic_messages_request: dict,
         model: str,
     ) -> bool:
         """
@@ -464,14 +458,14 @@ class AmazonAnthropicClaudeMessagesConfig(
     # Bedrock InvokeModel DOES support ``clear_tool_uses_20250919`` under the
     # ``context-management-2025-06-27`` beta. AWS docs:
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.md
-    _BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS: Dict[str, str] = {
+    _BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS: dict[str, str] = {
         "compact_20260112": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
         "clear_tool_uses_20250919": ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
     }
 
     @staticmethod
     def _filter_context_management_for_bedrock_invoke(
-        anthropic_messages_request: Dict,
+        anthropic_messages_request: dict,
         beta_set: set,
     ) -> None:
         """
@@ -515,15 +509,15 @@ class AmazonAnthropicClaudeMessagesConfig(
     def _get_bedrock_invoke_anthropic_beta_headers(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         headers: dict,
-        anthropic_messages_request: Dict,
+        anthropic_messages_request: dict,
         injected_thinking_for_clear_thinking: bool,
-    ) -> List[str]:
+    ) -> list[str]:
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
-        messages_typed = cast(List[AllMessageValues], messages)
+        messages_typed = cast(list[AllMessageValues], messages)
         tool_search_used = anthropic_model_info.is_tool_search_used(tools)
         programmatic_tool_calling_used = anthropic_model_info.is_programmatic_tool_calling_used(tools)
         input_examples_used = anthropic_model_info.is_input_examples_used(tools)
@@ -584,8 +578,8 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def _strip_unsupported_bedrock_invoke_fields(
         self,
-        anthropic_messages_request: Dict,
-    ) -> Dict:
+        anthropic_messages_request: dict,
+    ) -> dict:
         allowed = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
         stripped = sorted(k for k in anthropic_messages_request if k not in allowed)
         if stripped:
@@ -596,7 +590,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return {k: v for k, v in anthropic_messages_request.items() if k in allowed}
 
     @staticmethod
-    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, optional_params: Dict) -> None:
+    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, optional_params: dict) -> None:
         """Lower ``reasoning_effort`` to the Bedrock effort ceiling before validation.
 
         The shared ``/v1/messages`` effort gate rejects tiers a model does not
@@ -618,11 +612,11 @@ class AmazonAnthropicClaudeMessagesConfig(
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -769,7 +763,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     async def bedrock_sse_wrapper(
         self,
-        completion_stream: AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]],
+        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
         litellm_logging_obj: LiteLLMLoggingObj,
         request_body: dict,
     ):
@@ -801,8 +795,8 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     @staticmethod
     def _merge_message_start_cache_into_delta_usage(
-        delta_usage: Dict[str, Any],
-        start_usage: Optional[Dict[str, Any]],
+        delta_usage: dict[str, Any],
+        start_usage: dict[str, Any] | None,
     ) -> None:
         """
         Copy cache breakdown from message_start onto message_delta usage when
@@ -822,16 +816,16 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     @staticmethod
     async def _promote_message_stop_usage(
-        completion_stream: AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]],
-    ) -> AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]]:
+        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
+    ) -> AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict]:
         """
         Promote cache usage fields onto message_delta from message_stop (and,
         when stop lacks them, from message_start).  Ensures the final usage
         chunk that logging/cost sees is always self-consistent.
         """
         _CACHE_FIELDS = ("cache_creation_input_tokens", "cache_read_input_tokens")
-        pending_delta: Optional[Dict[str, Any]] = None
-        start_usage_snapshot: Optional[Dict[str, Any]] = None
+        pending_delta: dict[str, Any] | None = None
+        start_usage_snapshot: dict[str, Any] | None = None
 
         async for chunk in completion_stream:
             if not isinstance(chunk, dict):
@@ -844,7 +838,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             chunk_type = chunk.get("type")
 
             if chunk_type == "message_start":
-                msg: Dict[str, Any] = cast(Dict[str, Any], chunk.get("message") or {})
+                msg: dict[str, Any] = cast(dict[str, Any], chunk.get("message") or {})
                 u = msg.get("usage")
                 if isinstance(u, dict):
                     start_usage_snapshot = dict(u)
@@ -855,7 +849,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 continue
 
             if chunk_type == "message_delta":
-                pending_delta = cast(Dict[str, Any], chunk)
+                pending_delta = cast(dict[str, Any], chunk)
                 continue
 
             if chunk_type == "message_stop" and pending_delta is not None:
@@ -909,7 +903,7 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         super().__init__(model=model)
         self.DEFAULT_CHUNK_SIZE = 1024
 
-    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream, dict]:
+    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         """
         Parse the chunk data into anthropic /messages format
 

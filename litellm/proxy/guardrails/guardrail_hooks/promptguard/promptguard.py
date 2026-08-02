@@ -10,11 +10,8 @@ import os
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
     Literal,
     Optional,
-    Type,
 )
 
 from litellm._logging import verbose_proxy_logger
@@ -49,9 +46,9 @@ class PromptGuardMissingCredentials(Exception):
 class PromptGuardGuardrail(CustomGuardrail):
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        block_on_error: Optional[bool] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        block_on_error: bool | None = None,
         **kwargs: Any,
     ) -> None:
         self.api_key = api_key or os.environ.get(
@@ -86,7 +83,7 @@ class PromptGuardGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
             PromptGuardConfigModel,
         )
@@ -94,7 +91,7 @@ class PromptGuardGuardrail(CustomGuardrail):
         return PromptGuardConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -122,7 +119,7 @@ class PromptGuardGuardrail(CustomGuardrail):
 
         direction = "input" if input_type == "request" else "output"
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "messages": messages,
             "direction": direction,
         }
@@ -194,14 +191,14 @@ class PromptGuardGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def _extract_texts_from_messages(messages: list) -> List[str]:
+    def _extract_texts_from_messages(messages: list) -> list[str]:
         """Extract text content from user-role messages only.
 
         Only user messages are extracted to avoid injecting system or
         assistant content into the ``texts`` list, which should mirror
         the original user-provided input.
         """
-        texts: List[str] = []
+        texts: list[str] = []
         for message in messages:
             if message.get("role") != "user":
                 continue

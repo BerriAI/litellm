@@ -6,7 +6,8 @@ Maps OpenAI TTS spec to RunwayML Text-to-Speech API
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Union
 
 import httpx
 
@@ -58,16 +59,16 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: Optional[Union[str, Dict]],
-        optional_params: Dict,
-        litellm_params_dict: Dict,
+        voice: str | dict | None,
+        optional_params: dict,
+        litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]],
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, Any] | None,
         base_llm_http_handler: Any,
         aspeech: bool,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         **kwargs: Any,
     ) -> Union[
         "HttpxBinaryResponseContent",
@@ -100,7 +101,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Convert voice to appropriate format
-        voice_param: Optional[Union[str, Dict]] = voice
+        voice_param: str | dict | None = voice
         if isinstance(voice, str):
             # Keep as string, will be processed in map_openai_params
             voice_param = voice
@@ -142,11 +143,11 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: Dict,
-        voice: Optional[Union[str, Dict]] = None,
+        optional_params: dict,
+        voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: Dict = {},
-    ) -> Tuple[Optional[str], Dict]:
+        kwargs: dict = {},
+    ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to RunwayML TTS parameters
 
@@ -159,7 +160,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         mapped_params = {}
 
         # Map voice parameter to RunwayML format dict
-        voice_dict: Optional[Dict] = None
+        voice_dict: dict | None = None
         if isinstance(voice, str):
             # Check if it's an OpenAI voice name that needs mapping
             if voice in self.VOICE_MAPPINGS:
@@ -192,8 +193,8 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate RunwayML environment and set up authentication headers
@@ -214,7 +215,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -241,7 +242,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             raise TimeoutError(f"RunwayML TTS task polling timed out after {timeout_secs} seconds")
 
     @staticmethod
-    def _check_task_status(response_data: Dict[str, Any]) -> str:
+    def _check_task_status(response_data: dict[str, Any]) -> str:
         """
         Check RunwayML task status from response.
 
@@ -277,7 +278,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         task_id: str,
         api_base: str,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         timeout_secs: float = 600,
     ) -> httpx.Response:
         """
@@ -328,7 +329,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         task_id: str,
         api_base: str,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         timeout_secs: float = 600,
     ) -> httpx.Response:
         """
@@ -376,9 +377,9 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: Optional[Union[str, Dict]],
-        optional_params: Dict,
-        litellm_params: Dict,
+        voice: str | dict | None,
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:
         """

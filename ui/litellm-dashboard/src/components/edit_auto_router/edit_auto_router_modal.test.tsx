@@ -184,3 +184,62 @@ describe("EditAutoRouterModal classifier context window", () => {
     expect(savedConfig().classifier_context_window_size).toBe(8);
   });
 });
+
+describe("EditAutoRouterModal assistant turns", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const STORED_CONFIG = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o-mini"], COMPLEX: ["gpt-4o-mini"], REASONING: ["gpt-4o-mini"] },
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifier_context_include_assistant_turns: true,
+  };
+
+  const renderModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: STORED_CONFIG },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // The create and edit stacks share the rendered control but duplicate the serializer, the
+  // hydrator and the managed-key set, so a field wired into only one of them fails here and
+  // nowhere else: the payload-builder unit tests are handed a form value assembled by hand.
+  it("shows the stored value and preserves it through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await screen.findByText("Include Assistant Turns");
+    expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_context_include_assistant_turns).toBe(true);
+  });
+
+  it("persists turning assistant turns off", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await screen.findByText("Include Assistant Turns");
+    await user.click(screen.getByRole("switch", { name: "Include Assistant Turns" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_context_include_assistant_turns).toBe(false);
+  });
+});

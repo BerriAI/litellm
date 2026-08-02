@@ -8,13 +8,11 @@ Inception's FIM endpoint is OpenAI text-completion compatible: it takes a
 (see the `text-completion-inception` branch in `main.py`).
 """
 
-from typing import List
-
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 
 
 class InceptionTextCompletionConfig(OpenAITextCompletionConfig):
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "suffix",
             "max_tokens",

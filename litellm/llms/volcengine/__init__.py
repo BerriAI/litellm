@@ -19,8 +19,8 @@ __all__ = [
     "VolcEngineChatConfig",
     "VolcEngineConfig",  # backward compatibility
     "VolcEngineEmbeddingConfig",
-    "VolcEngineResponsesAPIConfig",
     "VolcEngineError",
+    "VolcEngineResponsesAPIConfig",
     "get_volcengine_base_url",
     "get_volcengine_headers",
 ]

@@ -10,7 +10,7 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from fastapi import Request, Response
 
@@ -117,7 +117,7 @@ async def background_streaming_task(
         UPDATE_INTERVAL = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
-        terminal_status: Optional[ResponsesAPIStatus] = (
+        terminal_status: ResponsesAPIStatus | None = (
             None  # Will be set by response.completed/failed/incomplete/cancelled
         )
         terminal_error = None
@@ -294,7 +294,6 @@ async def background_streaming_task(
 
                     except json.JSONDecodeError as e:
                         verbose_proxy_logger.warning(f"Failed to parse streaming chunk: {e}")
-                        pass
 
             # Final flush to ensure all accumulated state is saved
             await flush_state_if_needed(force=True)
@@ -329,7 +328,7 @@ async def background_streaming_task(
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error in background streaming task for {polling_id}: {str(e)}")
+        verbose_proxy_logger.error(f"Error in background streaming task for {polling_id}: {e!s}")
         import traceback
 
         verbose_proxy_logger.error(traceback.format_exc())

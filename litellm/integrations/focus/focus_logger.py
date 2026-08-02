@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -14,6 +14,7 @@ from .destinations import FocusTimeWindow
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
     from .export_engine import FocusExportEngine
 else:
     AsyncIOScheduler = Any
@@ -28,13 +29,13 @@ class FocusLogger(CustomLogger):
     def __init__(
         self,
         *,
-        provider: Optional[str] = None,
-        export_format: Optional[str] = None,
-        frequency: Optional[str] = None,
-        cron_offset_minute: Optional[int] = None,
-        interval_seconds: Optional[int] = None,
-        prefix: Optional[str] = None,
-        destination_config: Optional[dict[str, Any]] = None,
+        provider: str | None = None,
+        export_format: str | None = None,
+        frequency: str | None = None,
+        cron_offset_minute: int | None = None,
+        interval_seconds: int | None = None,
+        prefix: str | None = None,
+        destination_config: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -45,7 +46,7 @@ class FocusLogger(CustomLogger):
             cron_offset_minute if cron_offset_minute is not None else int(os.getenv("FOCUS_CRON_OFFSET", "5"))
         )
         raw_interval = interval_seconds if interval_seconds is not None else os.getenv("FOCUS_INTERVAL_SECONDS")
-        self.interval_seconds: Optional[int] = None
+        self.interval_seconds: int | None = None
         if raw_interval is not None:
             try:
                 self.interval_seconds = int(raw_interval)
@@ -58,9 +59,9 @@ class FocusLogger(CustomLogger):
         self.prefix: str = prefix if prefix is not None else (env_prefix if env_prefix else "focus_exports")
 
         self._destination_config = destination_config
-        self._engine: Optional["FocusExportEngine"] = None
+        self._engine: FocusExportEngine | None = None
 
-    def _ensure_engine(self) -> "FocusExportEngine":
+    def _ensure_engine(self) -> FocusExportEngine:
         """Instantiate the heavy export engine lazily."""
         if self._engine is None:
             from .export_engine import FocusExportEngine
@@ -76,9 +77,9 @@ class FocusLogger(CustomLogger):
     async def export_usage_data(
         self,
         *,
-        limit: Optional[int] = None,
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
+        limit: int | None = None,
+        start_time_utc: datetime | None = None,
+        end_time_utc: datetime | None = None,
     ) -> None:
         """Public hook to trigger export immediately.
 
@@ -101,7 +102,7 @@ class FocusLogger(CustomLogger):
             # No time bounds → export all available data
             await self._export_all(limit=limit)
 
-    async def dry_run_export_usage_data(self, limit: Optional[int] = DEFAULT_DRY_RUN_LIMIT) -> dict[str, Any]:
+    async def dry_run_export_usage_data(self, limit: int | None = DEFAULT_DRY_RUN_LIMIT) -> dict[str, Any]:
         """Return transformed data without uploading."""
         engine = self._ensure_engine()
         return await engine.dry_run_export_usage_data(limit=limit)
@@ -136,7 +137,7 @@ class FocusLogger(CustomLogger):
 
         # Use exact type match to exclude subclasses like VantageLogger,
         # which have their own dedicated scheduling method.
-        focus_loggers: List[CustomLogger] = [
+        focus_loggers: list[CustomLogger] = [
             cb
             for cb in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=FocusLogger)
             if type(cb) is FocusLogger
@@ -152,7 +153,7 @@ class FocusLogger(CustomLogger):
             **trigger_kwargs,
         )
 
-    def _build_scheduler_trigger(self) -> Dict[str, Any]:
+    def _build_scheduler_trigger(self) -> dict[str, Any]:
         """Return scheduler configuration for the selected frequency."""
         if self.frequency == "interval":
             seconds = self.interval_seconds or 60
@@ -178,7 +179,7 @@ class FocusLogger(CustomLogger):
     async def _export_all(
         self,
         *,
-        limit: Optional[int],
+        limit: int | None,
     ) -> None:
         """Export all available data without a time window filter."""
         engine = self._ensure_engine()
@@ -188,7 +189,7 @@ class FocusLogger(CustomLogger):
         self,
         *,
         window: FocusTimeWindow,
-        limit: Optional[int],
+        limit: int | None,
     ) -> None:
         engine = self._ensure_engine()
         await engine.export_window(window=window, limit=limit)

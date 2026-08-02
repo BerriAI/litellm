@@ -7,9 +7,10 @@ import time
 import urllib.parse
 import uuid
 from collections import Counter
-from typing import TYPE_CHECKING, Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_guardrail import (
@@ -53,7 +54,7 @@ class _MalformedToolBlockingResponseError(Exception):
 
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
 
     def __init__(
@@ -134,9 +135,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # Periodic flush is started lazily on the first log event so that
         # low-traffic deployments still get their batches drained even when the
         # logger is instantiated outside a running event loop (sync init).
-        self._flush_task: Optional[asyncio.Task[Any]] = self._start_periodic_flush_task()
+        self._flush_task: asyncio.Task[Any] | None = self._start_periodic_flush_task()
 
-    def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
+    def _start_periodic_flush_task(self) -> asyncio.Task[Any] | None:
         """Start the periodic flush task only when an event loop is already running."""
         try:
             loop = asyncio.get_running_loop()
@@ -519,7 +520,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def _extract_blocked_tools(
         service_response: dict[str, Any],
         all_tool_calls: list[ChatCompletionMessageToolCall],
-    ) -> Optional[str]:
+    ) -> str | None:
         """Return the blocking explanation if any tool calls were blocked.
 
         Compares the service response (which contains only allowed tools) against

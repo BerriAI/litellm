@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 

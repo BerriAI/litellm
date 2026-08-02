@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, cast
+from typing import cast
 from urllib.parse import urlparse
 
 import litellm
@@ -72,8 +72,8 @@ def _is_azure_claude_model(model: str) -> bool:
 
 
 def handle_cohere_chat_model_custom_llm_provider(
-    model: str, custom_llm_provider: Optional[str] = None
-) -> Tuple[str, Optional[str]]:
+    model: str, custom_llm_provider: str | None = None
+) -> tuple[str, str | None]:
     """
     if user sets model = "cohere/command-r" -> use custom_llm_provider = "cohere_chat"
 
@@ -98,8 +98,8 @@ def handle_cohere_chat_model_custom_llm_provider(
 
 
 def handle_anthropic_text_model_custom_llm_provider(
-    model: str, custom_llm_provider: Optional[str] = None
-) -> Tuple[str, Optional[str]]:
+    model: str, custom_llm_provider: str | None = None
+) -> tuple[str, str | None]:
     """
     if user sets model = "anthropic/claude-2" -> use custom_llm_provider = "anthropic_text"
 
@@ -129,11 +129,11 @@ def handle_anthropic_text_model_custom_llm_provider(
 
 def get_llm_provider(
     model: str,
-    custom_llm_provider: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    litellm_params: Optional[GenericLiteLLMParams] = None,
-) -> Tuple[str, str, Optional[str], Optional[str]]:
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    litellm_params: GenericLiteLLMParams | None = None,
+) -> tuple[str, str, str | None, str | None]:
     """
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
 
@@ -149,7 +149,7 @@ def get_llm_provider(
             raise ValueError("model parameter is required but was None. Please provide a valid model name.")
 
         if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
-            litellm_params=cast(Optional[LiteLLM_Params], litellm_params)
+            litellm_params=cast(LiteLLM_Params | None, litellm_params)
         ):
             return litellm.LiteLLMProxyChatConfig.litellm_proxy_get_custom_llm_provider_info(
                 model=model, api_base=api_base, api_key=api_key
@@ -222,11 +222,9 @@ def get_llm_provider(
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
             if api_base is not None and not isinstance(api_base, str):
-                raise Exception("api base needs to be a string. api_base={}".format(api_base))
+                raise Exception(f"api base needs to be a string. api_base={api_base}")
             if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
-                raise Exception(
-                    "dynamic_api_key needs to be a string. Got type={}".format(type(dynamic_api_key).__name__)
-                )
+                raise Exception(f"dynamic_api_key needs to be a string. Got type={type(dynamic_api_key).__name__}")
             return model, custom_llm_provider, dynamic_api_key, api_base
         # check if api base is a known openai compatible endpoint
         if api_base:
@@ -301,10 +299,12 @@ def get_llm_provider(
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
-                    elif endpoint == "api.minimax.io/anthropic" or endpoint == "api.minimaxi.com/anthropic":
-                        custom_llm_provider = "minimax"
-                        dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
-                    elif endpoint == "api.minimax.io/v1" or endpoint == "api.minimaxi.com/v1":
+                    elif (
+                        endpoint == "api.minimax.io/anthropic"
+                        or endpoint == "api.minimaxi.com/anthropic"
+                        or endpoint == "api.minimax.io/v1"
+                        or endpoint == "api.minimaxi.com/v1"
+                    ):
                         custom_llm_provider = "minimax"
                         dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
                     elif endpoint == "platform.publicai.co/v1":
@@ -351,11 +351,9 @@ def get_llm_provider(
                         dynamic_api_key = get_secret_str("META_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
-                        raise Exception("api base needs to be a string. api_base={}".format(api_base))
+                        raise Exception(f"api base needs to be a string. api_base={api_base}")
                     if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
-                        raise Exception(
-                            "dynamic_api_key needs to be a string. dynamic_api_key={}".format(dynamic_api_key)
-                        )
+                        raise Exception(f"dynamic_api_key needs to be a string. dynamic_api_key={dynamic_api_key}")
                     return model, custom_llm_provider, dynamic_api_key, api_base  # type: ignore
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
@@ -495,17 +493,17 @@ def get_llm_provider(
                 llm_provider="",
             )
         if api_base is not None and not isinstance(api_base, str):
-            raise Exception("api base needs to be a string. api_base={}".format(api_base))
+            raise Exception(f"api base needs to be a string. api_base={api_base}")
         if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
-            raise Exception("dynamic_api_key needs to be a string. dynamic_api_key={}".format(dynamic_api_key))
+            raise Exception(f"dynamic_api_key needs to be a string. dynamic_api_key={dynamic_api_key}")
         return model, custom_llm_provider, dynamic_api_key, api_base
     except Exception as e:
         if isinstance(e, litellm.exceptions.BadRequestError):
             raise e
         else:
-            error_str = f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}"
+            error_str = f"GetLLMProvider Exception - {e!s}\n\noriginal model: {model}"
             raise litellm.exceptions.BadRequestError(  # type: ignore
-                message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
+                message=f"GetLLMProvider Exception - {e!s}\n\noriginal model: {model}",
                 model=model,
                 response=None,
                 llm_provider="",
@@ -514,11 +512,11 @@ def get_llm_provider(
 
 def _get_openai_compatible_provider_info(
     model: str,
-    api_base: Optional[str],
-    api_key: Optional[str],
-    dynamic_api_key: Optional[str],
-    litellm_params: Optional[GenericLiteLLMParams] = None,
-) -> Tuple[str, str, Optional[str], Optional[str]]:
+    api_base: str | None,
+    api_key: str | None,
+    dynamic_api_key: str | None,
+    litellm_params: GenericLiteLLMParams | None = None,
+) -> tuple[str, str, str | None, str | None]:
     """
     Returns:
         Tuple[str, str, Optional[str], Optional[str]]:
@@ -848,9 +846,9 @@ def _get_openai_compatible_provider_info(
         dynamic_api_key = api_key or get_secret_str("MANUS_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
-        raise Exception("api base needs to be a string. api_base={}".format(api_base))
+        raise Exception(f"api base needs to be a string. api_base={api_base}")
     if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
-        raise Exception("dynamic_api_key needs to be a string. dynamic_api_key={}".format(dynamic_api_key))
+        raise Exception(f"dynamic_api_key needs to be a string. dynamic_api_key={dynamic_api_key}")
     if dynamic_api_key is None and api_key is not None:
         dynamic_api_key = api_key
     return model, custom_llm_provider, dynamic_api_key, api_base

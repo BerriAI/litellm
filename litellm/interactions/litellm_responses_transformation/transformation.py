@@ -6,7 +6,7 @@ This module handles transforming between:
 - Responses API format (OpenAI's format with input[], instructions, etc.)
 """
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, cast
 
 from litellm.types.interactions import (
     InteractionInput,
@@ -26,10 +26,10 @@ class LiteLLMResponsesInteractionsConfig:
     @staticmethod
     def transform_interactions_request_to_responses_request(
         model: str,
-        input: Optional[InteractionInput],
+        input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Transform an Interactions API request to a Responses API request.
 
@@ -39,7 +39,7 @@ class LiteLLMResponsesInteractionsConfig:
         - tools -> tools (similar format)
         - generation_config -> temperature, top_p, etc.
         """
-        responses_request: Dict[str, Any] = {
+        responses_request: dict[str, Any] = {
             "model": model,
         }
 
@@ -127,7 +127,7 @@ class LiteLLMResponsesInteractionsConfig:
                     # Ensure content is a list for _transform_content_array
                     # Cast to List[Any] to handle various content types
                     if isinstance(content, list):
-                        content_list: List[Any] = list(content)
+                        content_list: list[Any] = list(content)
                     elif content is not None:
                         content_list = [content]
                     else:
@@ -162,13 +162,13 @@ class LiteLLMResponsesInteractionsConfig:
         return cast(ResponseInputParam, str(input))
 
     @staticmethod
-    def _transform_content_array(content: List[Any]) -> List[Dict[str, Any]]:
+    def _transform_content_array(content: list[Any]) -> list[dict[str, Any]]:
         """Transform Interactions API content array to Responses API format."""
         if not isinstance(content, list):
             # Single content item - wrap in array
             content = [content]
 
-        transformed: List[Dict[str, Any]] = []
+        transformed: list[dict[str, Any]] = []
         for item in content:
             if isinstance(item, dict):
                 # Already in dict format, pass through
@@ -201,7 +201,7 @@ class LiteLLMResponsesInteractionsConfig:
     @staticmethod
     def transform_responses_response_to_interactions_response(
         responses_response: ResponsesAPIResponse,
-        model: Optional[str] = None,
+        model: str | None = None,
     ) -> InteractionsAPIResponse:
         """
         Transform a Responses API response to an Interactions API response.
@@ -213,15 +213,15 @@ class LiteLLMResponsesInteractionsConfig:
         - Extract usage
         """
         # Extract text from outputs and build both `outputs` (legacy) and `steps` (new schema).
-        outputs: List[Dict[str, Any]] = []
-        steps: List[Dict[str, Any]] = []
+        outputs: list[dict[str, Any]] = []
+        steps: list[dict[str, Any]] = []
         if hasattr(responses_response, "output") and responses_response.output:
             for output_item in responses_response.output:
                 # Use getattr with None default to safely access content
                 content = getattr(output_item, "content", None)
                 if content is not None:
                     content_items = content if isinstance(content, list) else [content]
-                    model_output_contents: List[Dict[str, Any]] = []
+                    model_output_contents: list[dict[str, Any]] = []
                     for content_item in content_items:
                         # Check if content_item has text attribute
                         text = getattr(content_item, "text", None)
@@ -263,7 +263,7 @@ class LiteLLMResponsesInteractionsConfig:
 
         # Build interactions response — populate both `outputs` (legacy schema) and
         # `steps` (new schema) so callers work regardless of which schema they expect.
-        interactions_response_dict: Dict[str, Any] = {
+        interactions_response_dict: dict[str, Any] = {
             "id": getattr(responses_response, "id", ""),
             "object": "interaction",
             "status": interactions_status,

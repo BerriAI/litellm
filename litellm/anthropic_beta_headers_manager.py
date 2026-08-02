@@ -25,14 +25,13 @@ Environment Variables:
 import json
 import os
 from importlib.resources import files
-from typing import Dict, List, Optional, Set
 
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 
 # Cache for the loaded configuration
-_BETA_HEADERS_CONFIG: Optional[Dict] = None
+_BETA_HEADERS_CONFIG: dict | None = None
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -44,7 +43,7 @@ class GetAnthropicBetaHeadersConfig:
     """
 
     @staticmethod
-    def load_local_beta_headers_config() -> Dict:
+    def load_local_beta_headers_config() -> dict:
         """Load the local backup beta headers config bundled with the package."""
         try:
             content = json.loads(
@@ -159,7 +158,7 @@ def get_beta_headers_config(url: str) -> dict:
     return content
 
 
-def _load_beta_headers_config() -> Dict:
+def _load_beta_headers_config() -> dict:
     """
     Load the beta headers configuration.
     Uses caching to avoid repeated fetches/file reads.
@@ -183,7 +182,7 @@ def _load_beta_headers_config() -> Dict:
     return _BETA_HEADERS_CONFIG
 
 
-def reload_beta_headers_config() -> Dict:
+def reload_beta_headers_config() -> dict:
     """
     Force reload the beta headers configuration from source (remote or local).
     Clears the cache and fetches fresh configuration.
@@ -213,9 +212,9 @@ def get_provider_name(provider: str) -> str:
 
 
 def filter_and_transform_beta_headers(
-    beta_headers: List[str],
+    beta_headers: list[str],
     provider: str,
-) -> List[str]:
+) -> list[str]:
     """
     Filter and transform beta headers based on provider's mapping configuration.
 
@@ -240,7 +239,7 @@ def filter_and_transform_beta_headers(
     # Get the header mapping for this provider
     provider_mapping = config.get(provider, {})
 
-    filtered_headers: Set[str] = set()
+    filtered_headers: set[str] = set()
 
     for header in beta_headers:
         header = header.strip()
@@ -289,7 +288,7 @@ def is_beta_header_supported(
 def get_provider_beta_header(
     anthropic_beta_header: str,
     provider: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Get the provider-specific beta header name for a given Anthropic beta header.
 
@@ -390,7 +389,7 @@ def update_request_with_filtered_beta(
     return headers, request_data
 
 
-def get_unsupported_headers(provider: str) -> List[str]:
+def get_unsupported_headers(provider: str) -> list[str]:
     """
     Get all beta headers that are unsupported by a provider (have null values in mapping).
 

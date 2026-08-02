@@ -2,7 +2,8 @@ import asyncio
 import hashlib
 import json
 import os
-from typing import Any, Callable, Dict, Literal, NamedTuple, Optional, Union, cast
+from collections.abc import Callable
+from typing import Any, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -27,10 +28,10 @@ class AzureOpenAIError(BaseLLMException):
         self,
         status_code,
         message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[httpx.Headers, dict]] = None,
-        body: Optional[dict] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: httpx.Headers | dict | None = None,
+        body: dict | None = None,
     ):
         super().__init__(
             status_code=status_code,
@@ -42,7 +43,7 @@ class AzureOpenAIError(BaseLLMException):
         )
 
 
-def process_azure_headers(headers: Union[httpx.Headers, dict]) -> dict:
+def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     openai_headers = {}
     if "x-ratelimit-limit-requests" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["x-ratelimit-limit-requests"]
@@ -152,9 +153,9 @@ def get_azure_ad_token_from_username_password(
 
 def get_azure_ad_token_from_oidc(
     azure_ad_token: str,
-    azure_client_id: Optional[str] = None,
-    azure_tenant_id: Optional[str] = None,
-    scope: Optional[str] = None,
+    azure_client_id: str | None = None,
+    azure_tenant_id: str | None = None,
+    scope: str | None = None,
 ) -> str:
     """
     Get Azure AD token from OIDC token
@@ -252,7 +253,7 @@ def select_azure_base_url_or_endpoint(azure_client_params: dict):
 
 def get_azure_ad_token(
     litellm_params: GenericLiteLLMParams,
-) -> Optional[str]:
+) -> str | None:
     """
     Get Azure AD token from various authentication methods.
 
@@ -332,7 +333,7 @@ def get_azure_ad_token(
             verbose_logger.debug("Azure AD Token Provider could not be used.")
         except Exception as e:
             verbose_logger.error(
-                f"Error calling Azure AD token provider: {str(e)}. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential"
+                f"Error calling Azure AD token provider: {e!s}. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential"
             )
             raise e
 
@@ -358,8 +359,8 @@ def get_azure_ad_token(
             # Re-raise TypeError directly
             raise
         except Exception as e:
-            verbose_logger.error(f"Error calling Azure AD token provider: {str(e)}")
-            raise RuntimeError(f"Failed to get Azure AD token: {str(e)}") from e
+            verbose_logger.error(f"Error calling Azure AD token provider: {e!s}")
+            raise RuntimeError(f"Failed to get Azure AD token: {e!s}") from e
 
     return azure_ad_token
 
@@ -368,7 +369,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     @staticmethod
     def _try_get_default_azure_credential_provider(
         scope: str,
-    ) -> Optional[Callable[[], str]]:
+    ) -> Callable[[], str] | None:
         """
         Try to get DefaultAzureCredential provider
 
@@ -392,20 +393,20 @@ class BaseAzureLLM(BaseOpenAILLM):
             verbose_logger.debug("Successfully obtained Azure AD token provider using DefaultAzureCredential")
             return azure_ad_token_provider
         except Exception as e:
-            verbose_logger.debug(f"DefaultAzureCredential failed: {str(e)}")
+            verbose_logger.debug(f"DefaultAzureCredential failed: {e!s}")
             return None
 
     def get_azure_openai_client(
         self,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None,
+        api_base: str | None,
+        api_version: str | None = None,
+        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
+        litellm_params: dict | None = None,
         _is_async: bool = False,
-        model: Optional[str] = None,
-    ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]]:
-        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None
+        model: str | None = None,
+    ) -> AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None:
+        openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None
         client_initialization_params: dict = locals()
         client_initialization_params["is_async"] = _is_async
         _lp = litellm_params or {}
@@ -452,7 +453,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 # on every request (via `_refresh_api_key`), so passing
                 # `azure_ad_token_provider` directly preserves Azure AD token refresh
                 # behavior that the regular AzureOpenAI client provides.
-                v1_api_key: Optional[Union[str, Callable[[], Any]]] = (
+                v1_api_key: str | Callable[[], Any] | None = (
                     azure_client_params.get("api_key")
                     or azure_client_params.get("azure_ad_token_provider")
                     or azure_client_params.get("azure_ad_token")
@@ -469,7 +470,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
                     v1_api_key = _async_v1_api_key
 
-                v1_params: Dict[str, Any] = {
+                v1_params: dict[str, Any] = {
                     "api_key": v1_api_key,
                     "base_url": f"{api_base}/openai/v1/",
                 }
@@ -513,10 +514,10 @@ class BaseAzureLLM(BaseOpenAILLM):
     def initialize_azure_sdk_client(
         self,
         litellm_params: dict,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        model_name: Optional[str],
-        api_version: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
+        model_name: str | None,
+        api_version: str | None,
         is_async: bool,
     ) -> dict:
         azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
@@ -579,7 +580,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             # only show first 5 chars of api_key
             _api_key = _api_key[:8] + "*" * 15
         verbose_logger.debug(
-            f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{_api_key}"
+            f"Initializing Azure OpenAI Client for {model_name}, Api Base: {api_base!s}, Api Key:{_api_key}"
         )
         azure_client_params = {
             "api_key": api_key,
@@ -614,14 +615,14 @@ class BaseAzureLLM(BaseOpenAILLM):
         model: str,
         api_version: str,
         max_retries: int,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
-        api_key: Optional[str],
-        azure_ad_token: Optional[str],
-        azure_ad_token_provider: Optional[Callable[[], str]],
+        api_key: str | None,
+        azure_ad_token: str | None,
+        azure_ad_token_provider: Callable[[], str] | None,
         acompletion: bool,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
-    ) -> Union[AzureOpenAI, AsyncAzureOpenAI]:
+        client: AzureOpenAI | AsyncAzureOpenAI | None = None,
+    ) -> AzureOpenAI | AsyncAzureOpenAI:
         ## build base url - assume api base includes resource name
         tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
         client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
@@ -634,7 +635,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 api_base += "/"
             api_base += f"{model}"
 
-            azure_client_params: Dict[str, Any] = {
+            azure_client_params: dict[str, Any] = {
                 "api_version": api_version,
                 "base_url": f"{api_base}",
                 "http_client": litellm.client_session,
@@ -663,7 +664,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         return client
 
     @staticmethod
-    def _base_validate_azure_environment(headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def _base_validate_azure_environment(headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
         # Check if api-key is already in headers; if so, use it
@@ -692,10 +693,10 @@ class BaseAzureLLM(BaseOpenAILLM):
 
     @staticmethod
     def _get_base_azure_url(
-        api_base: Optional[str],
-        litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
-        route: Union[Literal["/openai/responses", "/openai/vector_stores"], str],
-        default_api_version: Optional[Union[str, Literal["latest", "preview"]]] = None,
+        api_base: str | None,
+        litellm_params: GenericLiteLLMParams | dict[str, Any] | None,
+        route: Literal["/openai/responses", "/openai/vector_stores"] | str,
+        default_api_version: str | Literal["latest", "preview"] | None = None,
     ) -> str:
         """
         Get the base Azure URL for the given route and API version.
@@ -716,7 +717,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # Extract api_version or use default
         litellm_params = litellm_params or {}
-        api_version = cast(Optional[str], litellm_params.get("api_version")) or default_api_version
+        api_version = cast(str | None, litellm_params.get("api_version")) or default_api_version
 
         # Create a new dictionary with existing params
         query_params = dict(original_url.params)
@@ -743,12 +744,12 @@ class BaseAzureLLM(BaseOpenAILLM):
         return str(final_url)
 
     @staticmethod
-    def _is_azure_v1_api_version(api_version: Optional[str]) -> bool:
+    def _is_azure_v1_api_version(api_version: str | None) -> bool:
         if api_version is None:
             return False
         return api_version in {"preview", "latest", "v1"}
 
-    def _resolve_env_var(self, litellm_params: Dict[str, Any], param_key: str, env_var_key: str) -> Optional[str]:
+    def _resolve_env_var(self, litellm_params: dict[str, Any], param_key: str, env_var_key: str) -> str | None:
         """Resolve the environment variable for a given parameter key.
 
         The logic here is different from `params.get(key, os.getenv(env_var))` because
@@ -762,15 +763,15 @@ class BaseAzureLLM(BaseOpenAILLM):
 
 
 class AzureCredentials(NamedTuple):
-    api_base: Optional[str]
-    api_key: Optional[str]
-    api_version: Optional[str]
+    api_base: str | None
+    api_key: str | None
+    api_version: str | None
 
 
 def get_azure_credentials(
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    api_version: str | None = None,
 ) -> AzureCredentials:
     """Resolve Azure credentials from params, litellm globals, and env vars."""
     resolved_api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
