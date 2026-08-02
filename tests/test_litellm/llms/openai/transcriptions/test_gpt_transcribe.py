@@ -1,5 +1,6 @@
 import io
 import json
+import wave
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -118,6 +119,56 @@ async def test_openai_handler_returns_native_typed_stream():
     logged_response = logging_obj.async_success_handler.await_args.kwargs["result"]
     assert logged_response.text == "hello world"
     assert logged_response.languages == []
+
+
+@pytest.mark.asyncio
+async def test_atranscription_stream_preserves_duration_for_callback_cost():
+    async def send_response(request: httpx.Request) -> httpx.Response:
+        events = (
+            {"type": "transcript.text.delta", "delta": "hello "},
+            {
+                "type": "transcript.text.done",
+                "text": "hello world",
+                "usage": {
+                    "type": "tokens",
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "total_tokens": 12,
+                },
+            },
+        )
+        content = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
+        return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
+    openai_client = AsyncOpenAI(api_key="sk-test", base_url="https://example.com/v1", http_client=http_client)
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.async_failure_handler = AsyncMock()
+    audio_file = io.BytesIO()
+    with wave.open(audio_file, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b"\x00\x00" * 16000)
+    audio_file.name = "sample.wav"
+
+    stream = await litellm.atranscription(
+        model="openai/gpt-transcribe",
+        file=audio_file,
+        stream=True,
+        client=openai_client,
+        litellm_logging_obj=logging_obj,
+    )
+    received = [event async for event in stream]
+    await stream.close()
+    await openai_client.close()
+
+    assert [event.type for event in received] == ["transcript.text.delta", "transcript.text.done"]
+    logging_obj.async_success_handler.assert_awaited_once()
+    logged_response = logging_obj.async_success_handler.await_args.kwargs["result"]
+    assert logged_response._hidden_params["audio_transcription_duration"] == pytest.approx(1.0)
 
 
 def test_gpt_transcribe_rejects_conflicting_language_inputs():
