@@ -870,6 +870,25 @@ def test_unblock_customer_without_enterprise_callback_still_persists(
     mock_prisma_client.db.litellm_endusertable.update_many.assert_awaited_once()
 
 
+def test_unblock_customer_survives_cache_eviction_failure(
+    mock_prisma_client, mock_user_api_key_auth, mock_end_user_cache, monkeypatch
+):
+    """An unreachable cache backend must not turn an already committed unblock into a 500."""
+    monkeypatch.setattr(litellm, "blocked_user_list", ["blocked-1"])
+    mock_prisma_client.db.litellm_endusertable.update_many = AsyncMock(return_value=1)
+    mock_end_user_cache.async_delete_cache = AsyncMock(side_effect=Exception("redis down"))
+
+    response = client.post(
+        "/customer/unblock",
+        json={"user_ids": ["blocked-1"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"blocked_users": []}
+    mock_prisma_client.db.litellm_endusertable.update_many.assert_awaited_once()
+
+
 def test_unblock_customer_rejects_filepath_blocked_user_list(
     mock_prisma_client, mock_user_api_key_auth, mock_end_user_cache, monkeypatch
 ):

@@ -54,8 +54,11 @@ async def _invalidate_end_user_cache(user_ids: Sequence[str]) -> None:
     from litellm.proxy.proxy_server import user_api_key_cache
 
     for user_id in user_ids:
-        await user_api_key_cache.async_delete_cache(key=f"end_user_id:{user_id}")
-        await user_api_key_cache.async_delete_cache(key=f"litellm:end_user_id:{user_id}")
+        try:
+            await user_api_key_cache.async_delete_cache(key=f"end_user_id:{user_id}")
+            await user_api_key_cache.async_delete_cache(key=f"litellm:end_user_id:{user_id}")
+        except Exception as e:  # noqa: BLE001  # the row is already written; a cached view expires on its own
+            verbose_proxy_logger.error(f"Failed to evict cached end-user {user_id} - {e!s}")
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:

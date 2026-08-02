@@ -7,7 +7,7 @@
 ## This accepts a list of user id's for whom calls will be rejected
 
 
-from typing import Optional, Literal
+from typing import List, Literal, Optional
 import litellm
 from litellm.proxy.utils import PrismaClient
 from litellm.caching.caching import DualCache
@@ -23,18 +23,13 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
         self.prisma_client = prisma_client
 
         blocked_user_list = litellm.blocked_user_list
-        if blocked_user_list is None:
-            self.blocked_user_list = None
-            return
-
-        if isinstance(blocked_user_list, list):
-            self.blocked_user_list = blocked_user_list
+        self.file_blocked_user_list: Optional[List[str]] = None
 
         if isinstance(blocked_user_list, str):  # assume it's a filepath
             try:
                 with open(blocked_user_list, "r") as file:
                     data = file.read()
-                    self.blocked_user_list = data.split("\n")
+                    self.file_blocked_user_list = data.split("\n")
             except FileNotFoundError:
                 raise Exception(
                     f"File not found. blocked_user_list={blocked_user_list}"
@@ -43,6 +38,15 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                 raise Exception(
                     f"An error occurred: {str(e)}, blocked_user_list={blocked_user_list}"
                 )
+
+    @property
+    def blocked_user_list(self) -> Optional[List[str]]:
+        """Read the configured list on every call, so /customer/unblock takes effect immediately"""
+        if self.file_blocked_user_list is not None:
+            return self.file_blocked_user_list
+        if isinstance(litellm.blocked_user_list, list):
+            return litellm.blocked_user_list
+        return None
 
     def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
         if level == "INFO":
