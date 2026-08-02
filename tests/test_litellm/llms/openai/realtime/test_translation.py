@@ -1,3 +1,4 @@
+import gzip
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -176,7 +177,11 @@ async def test_translation_calls_use_translation_session_and_path():
 async def test_standard_client_secret_uses_openai_sdk_resource():
     async def send_response(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/realtime/client_secrets"
-        return httpx.Response(200, json={"value": "ek_test"})
+        return httpx.Response(
+            200,
+            content=gzip.compress(b'{"value":"ek_test"}'),
+            headers={"content-encoding": "gzip"},
+        )
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
     openai_client = AsyncOpenAI(api_key="sk-test", base_url="https://example.com/v1", http_client=http_client)
@@ -196,6 +201,7 @@ async def test_standard_client_secret_uses_openai_sdk_resource():
 
     assert response.status_code == 200
     assert response.json() == {"value": "ek_test"}
+    assert "content-encoding" not in response.headers
 
 
 @pytest.mark.asyncio
