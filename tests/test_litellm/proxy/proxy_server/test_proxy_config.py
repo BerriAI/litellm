@@ -2334,6 +2334,127 @@ async def test_ProxyConfig__update_config_from_db_does_not_log_general_settings_
     assert merged["environment_variables"]["DATABASE_URL"] == env_db_url_secret
 
 
+def _patch_config_rows(monkeypatch, rows: Dict[str, Any]) -> None:
+    async def _fake_get_config_param(prisma_client, key):
+        value = rows.get(key)
+        if value is None:
+            return None
+        return SimpleNamespace(param_name=key, param_value=value)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", _fake_get_config_param)
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_config_from_db_resets_ssrf_settings_when_db_row_removed(monkeypatch):
+    """Regression for #35502.
+
+    A DB-backed proxy that allowlisted a host via the ``litellm_settings`` (or
+    ``general_settings``) config row kept that host allowed after the row was
+    deleted, because the sync only applied the keys it found and never unset
+    anything. Removing the override has to take effect on the next sync.
+    """
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["127.0.0.1:9999"])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["evil.example"])
+    _patch_config_rows(monkeypatch, {})
+
+    await ProxyConfig()._update_config_from_db(
+        prisma_client=MagicMock(),
+        config={"general_settings": {}, "litellm_settings": {}},
+        store_model_in_db=True,
+    )
+
+    assert litellm.user_url_allowed_hosts == []
+    assert litellm.provider_url_destination_allowed_hosts == []
+    assert litellm.user_url_validation is True
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_config_from_db_ssrf_reset_falls_back_to_config_file(monkeypatch):
+    """Removing the DB override must fall back to what the config file set, not to
+    the wide-open process defaults; the config file is re-read on every sync."""
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["127.0.0.1:9999"])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["evil.example"])
+    _patch_config_rows(monkeypatch, {})
+
+    await ProxyConfig()._update_config_from_db(
+        prisma_client=MagicMock(),
+        config={
+            "general_settings": {
+                "user_url_allowed_hosts": ["internal.corp"],
+                "user_url_validation": False,
+            },
+            "litellm_settings": {"provider_url_destination_allowed_hosts": ["api.example.com"]},
+        },
+        store_model_in_db=True,
+    )
+
+    assert litellm.user_url_allowed_hosts == ["internal.corp"]
+    assert litellm.provider_url_destination_allowed_hosts == ["api.example.com"]
+    assert litellm.user_url_validation is False
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_config_from_db_applies_ssrf_overrides_from_both_rows(monkeypatch):
+    """The DB rows still win over the config file while they exist, and
+    ``general_settings`` still wins over ``litellm_settings`` on a conflict."""
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [])
+    _patch_config_rows(
+        monkeypatch,
+        {
+            "litellm_settings": {
+                "user_url_allowed_hosts": ["from-litellm-settings"],
+                "provider_url_destination_allowed_hosts": ["provider.example"],
+            },
+            "general_settings": {
+                "user_url_allowed_hosts": ["from-general-settings"],
+                "user_url_validation": "false",
+            },
+        },
+    )
+
+    await ProxyConfig()._update_config_from_db(
+        prisma_client=MagicMock(),
+        config={
+            "general_settings": {"user_url_allowed_hosts": ["from-config-file"]},
+            "litellm_settings": {},
+        },
+        store_model_in_db=True,
+    )
+
+    assert litellm.user_url_allowed_hosts == ["from-general-settings"]
+    assert litellm.provider_url_destination_allowed_hosts == ["provider.example"]
+    assert litellm.user_url_validation is False
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_config_from_db_keeps_ssrf_settings_on_db_error(monkeypatch):
+    """A transient DB failure must not be read as "the operator removed the
+    override" - the live restrictions stay in place until a read succeeds."""
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["127.0.0.1:9999"])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["provider.example"])
+
+    async def _raise_get_config_param(prisma_client, key):
+        raise Exception("connection reset by peer")
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", _raise_get_config_param)
+
+    with pytest.raises(Exception, match="connection reset by peer"):
+        await ProxyConfig()._update_config_from_db(
+            prisma_client=MagicMock(),
+            config={"general_settings": {}, "litellm_settings": {}},
+            store_model_in_db=True,
+        )
+
+    assert litellm.user_url_allowed_hosts == ["127.0.0.1:9999"]
+    assert litellm.provider_url_destination_allowed_hosts == ["provider.example"]
+    assert litellm.user_url_validation is False
+
+
 @pytest.mark.asyncio
 async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plain(tmp_path, monkeypatch):
     """Regression for LIT-4152 on the ``litellm_settings`` apply loop.

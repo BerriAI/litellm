@@ -17,12 +17,15 @@ import traceback
 import warnings
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from itertools import chain
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
     Callable,
     Dict,
+    Final,
     List,
     Literal,
     Optional,
@@ -3654,7 +3657,63 @@ def _normalize_user_url_validation(value: object) -> Optional[bool]:
     return bool(value)
 
 
-def _apply_ssrf_general_settings(settings: Mapping[str, object]) -> None:
+_SSRF_URL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "user_url_allowed_hosts",
+        "user_url_validation",
+        "provider_url_destination_allowed_hosts",
+    }
+)
+
+_SSRF_URL_SETTING_DEFAULTS: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "user_url_allowed_hosts": litellm.user_url_allowed_hosts,
+        "user_url_validation": litellm.user_url_validation,
+        "provider_url_destination_allowed_hosts": litellm.provider_url_destination_allowed_hosts,
+    }
+)
+
+
+def _config_section(config: Mapping[str, object], section_name: str) -> Mapping[str, object] | None:
+    section = config.get(section_name)
+    return section if isinstance(section, Mapping) else None
+
+
+def _ssrf_url_overrides(section: Mapping[str, object] | None) -> tuple[tuple[str, object], ...]:
+    """
+    The SSRF URL-validation keys a single config section sets.
+
+    A ``user_url_validation`` of None counts as unset so an explicit null never
+    turns validation off; the allowlist keys keep None, which reads the same as
+    "no allowlist" everywhere they're consumed.
+    """
+    if section is None:
+        return ()
+    return tuple(
+        (key, value)
+        for key, value in section.items()
+        if key in _SSRF_URL_SETTING_KEYS and not (key == "user_url_validation" and value is None)
+    )
+
+
+def _resolve_ssrf_url_settings(*override_layers: tuple[tuple[str, object], ...]) -> Mapping[str, object]:
+    """
+    The SSRF settings the proxy should be running with: the values the process
+    started with, then each layer applied in precedence order (later layers win).
+    Every key is always present, so applying the result resets a setting whose
+    override went away instead of leaving the last value it was given.
+    """
+    return MappingProxyType(
+        dict(
+            chain(
+                _SSRF_URL_SETTING_DEFAULTS.items(),
+                *override_layers,
+            )
+        )
+    )
+
+
+def _apply_ssrf_url_settings(settings: Mapping[str, object]) -> None:
     if "user_url_allowed_hosts" in settings:
         litellm.user_url_allowed_hosts = cast(list[str], settings["user_url_allowed_hosts"])
 
@@ -4927,7 +4986,7 @@ class ProxyConfig:
                 ]
 
             ### SSRF URL VALIDATION SETTINGS ###
-            _apply_ssrf_general_settings(general_settings)
+            _apply_ssrf_url_settings(general_settings)
 
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
@@ -5985,7 +6044,7 @@ class ProxyConfig:
         ):
             if key in _general_settings:
                 general_settings[key] = _general_settings[key]
-        _apply_ssrf_general_settings(_general_settings)
+        _apply_ssrf_url_settings(_general_settings)
 
     def _update_config_fields(
         self,
@@ -6076,6 +6135,16 @@ class ProxyConfig:
         config: dict,
         store_model_in_db: Optional[bool],
     ):
+        """
+        Overlay the DB config rows onto the config-file config.
+
+        The SSRF URL-validation globals are then re-applied from the merged result,
+        including the keys nothing set (which go back to the process defaults). The
+        config file is re-read on every sync, so dropping an override from the DB
+        falls back to the config-file value instead of staying live until restart.
+        Only a fully successful set of reads gets here; a DB failure raises out of
+        the gather and leaves the current restrictions in place.
+        """
         if store_model_in_db is not True:
             verbose_proxy_logger.info("'store_model_in_db' is not True, skipping db updates")
             return config
@@ -6109,6 +6178,13 @@ class ProxyConfig:
                     param_name=param_name,
                     db_param_value=param_value,
                 )
+
+        _apply_ssrf_url_settings(
+            _resolve_ssrf_url_settings(
+                _ssrf_url_overrides(_config_section(config, "litellm_settings")),
+                _ssrf_url_overrides(_config_section(config, "general_settings")),
+            )
+        )
 
         return config
 
@@ -14980,7 +15056,7 @@ async def update_config_general_settings(
 
     if data.field_name == "plugins":
         register_plugins_from_config(general_settings)
-    _apply_ssrf_general_settings(general_settings)
+    _apply_ssrf_url_settings(general_settings)
 
     return response
 
