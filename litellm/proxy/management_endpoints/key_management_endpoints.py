@@ -401,7 +401,37 @@ def _team_key_generation_check(
         access_group_ids=data.access_group_ids,
     )
 
+    _team_key_model_max_budget_check(
+        team_table=team_table,
+        user_api_key_dict=user_api_key_dict,
+        model_max_budget=data.model_max_budget,
+    )
+
     return True
+
+
+def _team_key_model_max_budget_check(
+    team_table: LiteLLM_TeamTableCachedObj,
+    user_api_key_dict: UserAPIKeyAuth,
+    model_max_budget: Mapping[str, Mapping[str, str | float]] | None,
+) -> None:
+    """
+    A key-level model_max_budget entry overrides the team's per-model cap for
+    that key, so a regular member attaching one to a self-serve team key would
+    opt themselves out of a ceiling a proxy admin imposed. Only a proxy admin
+    or this team's admin may set model_max_budget on a team key.
+    """
+    if not model_max_budget:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    team_member_object = _get_user_in_team(team_table=team_table, user_id=user_api_key_dict.user_id)
+    if team_member_object is not None and team_member_object.role == "admin":
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=f"Only a proxy admin or team admin can set model_max_budget on a team key. team_id={team_table.team_id}",
+    )
 
 
 def _personal_key_membership_check(
@@ -2362,6 +2392,21 @@ async def _validate_mcp_servers_for_key_update(
     return normalized_object_permission
 
 
+def _is_model_max_budget_change(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> bool:
+    """
+    True when the request would change the key's model_max_budget. Key-level
+    model_max_budget overrides the team's per-model caps, so changing it gates on
+    the same admin check as the other budget fields; comparing values (not mere
+    presence) keeps UI edit flows that re-send the unchanged mapping working.
+    """
+    if "model_max_budget" not in data.model_fields_set:
+        return False
+    return (data.model_max_budget or None) != (existing_key_row.model_max_budget or None)
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -2448,6 +2493,7 @@ async def _validate_update_key_data(
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
+        or _is_model_max_budget_change(data=data, existing_key_row=existing_key_row)
     )
 
     _existing_metadata = getattr(existing_key_row, "metadata", None)

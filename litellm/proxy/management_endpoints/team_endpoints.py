@@ -1027,6 +1027,56 @@ def _check_team_budget_update_authority(
         )
 
 
+def _check_team_model_max_budget_update_authority(
+    data: UpdateTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_model_max_budget: Mapping[str, Mapping[str, str | float]] | None,
+) -> None:
+    """
+    Restrict who can loosen a team's per-model caps on /team/update.
+
+    Mirrors _check_team_budget_update_authority: a team admin may add new model
+    caps or lower existing ones, but only a proxy admin may raise a cap, change
+    its window, or remove an entry (including clearing the whole mapping), since
+    that undoes a ceiling a proxy admin imposed.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if "model_max_budget" not in (getattr(data, "model_fields_set", None) or frozenset()):
+        return
+    if not existing_model_max_budget:
+        return
+
+    from types import MappingProxyType
+
+    from litellm.types.utils import BudgetConfig
+
+    existing_configs = MappingProxyType(
+        {_model: BudgetConfig(**_info) for _model, _info in existing_model_max_budget.items()}
+    )
+    requested_items = data.model_max_budget.items() if data.model_max_budget else ()
+    requested_configs = MappingProxyType({_model: BudgetConfig(**_info) for _model, _info in requested_items})
+    for model_name, existing_config in existing_configs.items():
+        requested_config = requested_configs.get(model_name)
+        if requested_config is None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only a proxy admin can remove a team's model_max_budget entry. Entry for model={model_name} is missing from the request.",
+            )
+        if requested_config.budget_duration != existing_config.budget_duration:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only a proxy admin can change a team model_max_budget window. model={model_name} current={existing_config.budget_duration}, requested={requested_config.budget_duration}.",
+            )
+        if existing_config.max_budget is not None and (
+            requested_config.max_budget is None or requested_config.max_budget > existing_config.max_budget
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only a proxy admin can raise a team's model_max_budget. model={model_name} current={existing_config.max_budget}, requested={requested_config.max_budget}.",
+            )
+
+
 def _should_auto_add_team_creator(
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
@@ -1964,6 +2014,12 @@ async def update_team(
                 user_api_key_dict=user_api_key_dict,
                 existing_team_max_budget=existing_team_row.max_budget,
             )
+
+        _check_team_model_max_budget_update_authority(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            existing_model_max_budget=existing_team_row.model_max_budget,
+        )
 
         if data.model_max_budget is not None:
             from litellm.proxy.management_endpoints.key_management_endpoints import (

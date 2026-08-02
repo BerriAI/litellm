@@ -10617,3 +10617,128 @@ def test_validate_member_user_id_provisioning_caps_the_ids_it_echoes_back():
     assert f"u{_MAX_REPORTED_UNKNOWN_USER_IDS}" not in detail
     assert f"and {500 - _MAX_REPORTED_UNKNOWN_USER_IDS} more" in detail
     assert len(detail) < 1000
+
+
+class TestTeamModelMaxBudgetUpdateAuthority:
+    """Only a proxy admin may loosen team-level per-model caps on /team/update;
+    a team admin may only add caps or make existing ones stricter."""
+
+    def _existing(self):
+        return {"gpt-4o": {"budget_limit": 100.0, "time_period": "1d"}}
+
+    def _team_admin(self):
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin-1")
+
+    def test_proxy_admin_can_do_anything(self):
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _check_team_model_max_budget_update_authority,
+        )
+
+        _check_team_model_max_budget_update_authority(
+            data=UpdateTeamRequest(team_id="t1", model_max_budget={}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            existing_model_max_budget=self._existing(),
+        )
+
+    def test_non_proxy_admin_cannot_clear_caps(self):
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _check_team_model_max_budget_update_authority,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_team_model_max_budget_update_authority(
+                data=UpdateTeamRequest(team_id="t1", model_max_budget={}),
+                user_api_key_dict=self._team_admin(),
+                existing_model_max_budget=self._existing(),
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_non_proxy_admin_cannot_remove_one_entry(self):
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _check_team_model_max_budget_update_authority,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_team_model_max_budget_update_authority(
+                data=UpdateTeamRequest(
+                    team_id="t1",
+                    model_max_budget={"claude-3": {"budget_limit": 10.0, "time_period": "1d"}},
+                ),
+                user_api_key_dict=self._team_admin(),
+                existing_model_max_budget=self._existing(),
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_non_proxy_admin_cannot_raise_cap(self):
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _check_team_model_max_budget_update_authority,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_team_model_max_budget_update_authority(
+                data=UpdateTeamRequest(
+                    team_id="t1",
+                    model_max_budget={"gpt-4o": {"budget_limit": 1000000.0, "time_period": "1d"}},
+                ),
+                user_api_key_dict=self._team_admin(),
+                existing_model_max_budget=self._existing(),
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_non_proxy_admin_cannot_change_window(self):
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _check_team_model_max_budget_update_authority,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_team_model_max_budget_update_authority(
+                data=UpdateTeamRequest(
+                    team_id="t1",
+                    model_max_budget={"gpt-4o": {"budget_limit": 100.0, "time_period": "30d"}},
+                ),
+                user_api_key_dict=self._team_admin(),
+                existing_model_max_budget=self._existing(),
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_non_proxy_admin_can_lower_cap_and_add_models(self):
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _check_team_model_max_budget_update_authority,
+        )
+
+        _check_team_model_max_budget_update_authority(
+            data=UpdateTeamRequest(
+                team_id="t1",
+                model_max_budget={
+                    "gpt-4o": {"budget_limit": 50.0, "time_period": "1d"},
+                    "claude-3": {"budget_limit": 10.0, "time_period": "7d"},
+                },
+            ),
+            user_api_key_dict=self._team_admin(),
+            existing_model_max_budget=self._existing(),
+        )
+
+    def test_no_existing_caps_allows_setting(self):
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _check_team_model_max_budget_update_authority,
+        )
+
+        _check_team_model_max_budget_update_authority(
+            data=UpdateTeamRequest(
+                team_id="t1",
+                model_max_budget={"gpt-4o": {"budget_limit": 5.0, "time_period": "1d"}},
+            ),
+            user_api_key_dict=self._team_admin(),
+            existing_model_max_budget=None,
+        )
+
+    def test_field_not_in_request_is_ignored(self):
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _check_team_model_max_budget_update_authority,
+        )
+
+        _check_team_model_max_budget_update_authority(
+            data=UpdateTeamRequest(team_id="t1"),
+            user_api_key_dict=self._team_admin(),
+            existing_model_max_budget=self._existing(),
+        )
