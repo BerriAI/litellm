@@ -239,7 +239,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
 # check-ui-api-types.yml (API-type drift), skipping any whose files you didn't stage.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
-pre-commit:
+pre-commit: bootstrap
 	./scripts/pre_commit_lint.sh
 
 # Testing targets
