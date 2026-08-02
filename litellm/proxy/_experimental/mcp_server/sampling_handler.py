@@ -17,6 +17,7 @@ if typing.TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.mcp_sdk_compat import mcp_tool_input_schema
 
 from fastapi import HTTPException
 
@@ -528,7 +529,7 @@ def _convert_mcp_tools_to_openai(
             "function": {
                 "name": tool.name,
                 "description": tool.description or "",
-                "parameters": tool.inputSchema
+                "parameters": mcp_tool_input_schema(tool)
                 or {
                     "type": "object",
                     "properties": {},

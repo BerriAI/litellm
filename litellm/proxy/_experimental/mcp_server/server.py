@@ -31,6 +31,7 @@ from starlette.types import Message, Receive, Scope, Send
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.mcp_sdk_compat import mcp_content_mime_type
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -478,7 +479,7 @@ if MCP_AVAILABLE:
                 normalized.append(
                     ReadResourceContents(
                         content=content.text,
-                        mime_type=content.mimeType,
+                        mime_type=mcp_content_mime_type(content),
                         meta=meta,
                     )
                 )
@@ -486,7 +487,7 @@ if MCP_AVAILABLE:
                 normalized.append(
                     ReadResourceContents(
                         content=content.blob,
-                        mime_type=content.mimeType,
+                        mime_type=mcp_content_mime_type(content),
                         meta=meta,
                     )
                 )

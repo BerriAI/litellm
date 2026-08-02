@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
+from litellm.litellm_core_utils.mcp_sdk_compat import mcp_tool_input_schema
+
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
 
@@ -105,7 +107,7 @@ async def handle_mcp_tool_search(
         {
             "name": t.name,
             "description": t.description or "",
-            "inputSchema": t.inputSchema,
+            "inputSchema": mcp_tool_input_schema(t),
         }
         for t in mcp_tools
     ]

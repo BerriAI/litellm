@@ -17,6 +17,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     ModifyResponseException,
 )
+from litellm.litellm_core_utils.mcp_sdk_compat import mcp_tool_input_schema
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPUpstreamAuthError,
@@ -375,7 +376,7 @@ if MCP_AVAILABLE:
             ListMCPToolsRestAPIResponseObject(
                 name=tool.name,
                 description=tool.description,
-                inputSchema=tool.inputSchema,
+                inputSchema=mcp_tool_input_schema(tool),
                 mcp_info=enriched_mcp_info,
             )
             for tool in tools
