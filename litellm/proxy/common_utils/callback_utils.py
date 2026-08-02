@@ -1,6 +1,7 @@
 import copy
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
@@ -46,6 +47,105 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 
+_NO_CALLBACK_SPECIFIC_PARAMS: Mapping[str, Any] = MappingProxyType({})
+
+
+def resolve_config_parameterized_callback(
+    callback: str,
+    litellm_settings: Mapping[str, Any],
+    callback_specific_params: Mapping[str, Any] | None = None,
+) -> CustomLogger | None:
+    """
+    Build the ``CustomLogger`` for callbacks whose construction needs config params.
+
+    These callbacks cannot be resolved through ``_init_custom_logger_compatible_class``
+    because that factory takes no config, so every callsite that turns a callback name
+    into a logger has to come through here.
+
+    Returns ``None`` when ``callback`` is not one of them, so callers fall through to
+    their own generic resolution.
+    """
+    callback_params = callback_specific_params or _NO_CALLBACK_SPECIFIC_PARAMS
+    match callback:
+        case "compression_interception":
+            from litellm.integrations.compression_interception.handler import (
+                CompressionInterceptionLogger,
+            )
+
+            return CompressionInterceptionLogger.initialize_from_proxy_config(
+                litellm_settings=litellm_settings,
+                callback_specific_params=callback_params,
+            )
+        case "code_interpreter_interception":
+            from litellm.integrations.code_interpreter_interception.handler import (
+                CodeInterpreterInterceptionLogger,
+            )
+
+            return CodeInterpreterInterceptionLogger.initialize_from_proxy_config(
+                litellm_settings=litellm_settings,
+                callback_specific_params=callback_params,
+            )
+        case "websearch_interception":
+            from litellm.integrations.websearch_interception.handler import (
+                WebSearchInterceptionLogger,
+            )
+
+            return WebSearchInterceptionLogger.initialize_from_proxy_config(
+                litellm_settings=litellm_settings,
+                callback_specific_params=callback_params,
+            )
+        case _:
+            return None
+
+
+def _callback_config_state(logger: CustomLogger) -> tuple[tuple[str, object], ...]:
+    return tuple(
+        sorted(
+            ((name, value) for name, value in vars(logger).items() if not name.startswith("_")),
+            key=lambda item: item[0],
+        )
+    )
+
+
+def install_config_parameterized_callback(
+    callback: str,
+    litellm_settings: Mapping[str, Any],
+    callback_specific_params: Mapping[str, Any] | None = None,
+) -> bool:
+    """
+    Idempotently install a config-parameterized callback into ``litellm.callbacks``.
+
+    Written for the DB-config path, which re-runs on every config poll: an already
+    installed logger built from the same params is left alone, and one built from
+    stale params is replaced rather than stacked.
+
+    Returns ``True`` when ``callback`` was handled here.
+    """
+    resolved = resolve_config_parameterized_callback(
+        callback=callback,
+        litellm_settings=litellm_settings,
+        callback_specific_params=callback_specific_params,
+    )
+    if resolved is None:
+        return False
+
+    installed = next(
+        (
+            existing
+            for existing in litellm.callbacks
+            if isinstance(existing, CustomLogger) and type(existing) is type(resolved)
+        ),
+        None,
+    )
+    if installed is not None:
+        if _callback_config_state(installed) == _callback_config_state(resolved):
+            return True
+        litellm.logging_callback_manager.remove_callback_from_all_lists(installed)
+
+    litellm.logging_callback_manager.add_litellm_callback(resolved)
+    return True
+
+
 def initialize_callbacks_on_proxy(
     value: Any,
     premium_user: bool,
@@ -65,29 +165,15 @@ def initialize_callbacks_on_proxy(
     if isinstance(value, list):
         imported_list: list[Any] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
-            if isinstance(callback, str) and callback == "compression_interception":
-                from litellm.integrations.compression_interception.handler import (
-                    CompressionInterceptionLogger,
-                )
-
-                compression_interception_obj = CompressionInterceptionLogger.initialize_from_proxy_config(
+            if isinstance(callback, str):
+                config_parameterized_obj = resolve_config_parameterized_callback(
+                    callback=callback,
                     litellm_settings=litellm_settings,
                     callback_specific_params=callback_specific_params,
                 )
-                imported_list.append(compression_interception_obj)
-                continue
-
-            if isinstance(callback, str) and callback == "code_interpreter_interception":
-                from litellm.integrations.code_interpreter_interception.handler import (
-                    CodeInterpreterInterceptionLogger,
-                )
-
-                code_interpreter_interception_obj = CodeInterpreterInterceptionLogger.initialize_from_proxy_config(
-                    litellm_settings=litellm_settings,
-                    callback_specific_params=callback_specific_params,
-                )
-                imported_list.append(code_interpreter_interception_obj)
-                continue
+                if config_parameterized_obj is not None:
+                    imported_list.append(config_parameterized_obj)
+                    continue
 
             # check if callback is a custom logger compatible callback
             if isinstance(callback, str):
@@ -272,16 +358,6 @@ def initialize_callbacks_on_proxy(
                     **azure_content_safety_params,
                 )
                 imported_list.append(azure_content_safety_obj)
-            elif isinstance(callback, str) and callback == "websearch_interception":
-                from litellm.integrations.websearch_interception.handler import (
-                    WebSearchInterceptionLogger,
-                )
-
-                websearch_interception_obj = WebSearchInterceptionLogger.initialize_from_proxy_config(
-                    litellm_settings=litellm_settings,
-                    callback_specific_params=callback_specific_params,
-                )
-                imported_list.append(websearch_interception_obj)
             elif isinstance(callback, str) and callback == "datadog_cost_management":
                 from litellm.integrations.datadog.datadog_cost_management import (
                     DatadogCostManagementLogger,

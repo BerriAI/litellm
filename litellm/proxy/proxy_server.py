@@ -295,7 +295,10 @@ from litellm.proxy.common_request_processing import (
     _should_return_raw_model_name,
     create_response,
 )
-from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.callback_utils import (
+    initialize_callbacks_on_proxy,
+    install_config_parameterized_callback,
+)
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -5551,6 +5554,7 @@ class ProxyConfig:
         Adds callbacks from DB config to litellm
         """
         litellm_settings = config_data.get("litellm_settings", {}) or {}
+        callback_specific_params = config_data.get("callback_settings")
         success_callbacks = litellm_settings.get("success_callback", None)
         failure_callbacks = litellm_settings.get("failure_callback", None)
         callbacks = litellm_settings.get("callbacks", None)
@@ -5573,6 +5577,12 @@ class ProxyConfig:
 
         if callbacks is not None and isinstance(callbacks, list):
             for callback in callbacks:
+                if isinstance(callback, str) and install_config_parameterized_callback(
+                    callback=callback,
+                    litellm_settings=litellm_settings,
+                    callback_specific_params=callback_specific_params,
+                ):
+                    continue
                 self._add_callback_from_db_to_in_memory_litellm_callbacks(
                     callback=callback,
                     event_types=["success", "failure"],

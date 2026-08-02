@@ -1577,8 +1577,8 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     @staticmethod
     def initialize_from_proxy_config(
-        litellm_settings: dict[str, Any],
-        callback_specific_params: dict[str, Any],
+        litellm_settings: Mapping[str, Any],
+        callback_specific_params: Mapping[str, Any],
     ) -> "WebSearchInterceptionLogger":
         """
         Static method to initialize WebSearchInterceptionLogger from proxy config.

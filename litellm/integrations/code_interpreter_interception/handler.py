@@ -9,6 +9,7 @@ captured stdout back through the typed agentic loop plan.
 import json
 import time
 import uuid
+from collections.abc import Mapping
 from typing import Any, Literal, TypedDict, cast
 
 from pydantic import ValidationError
@@ -168,8 +169,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     @staticmethod
     def initialize_from_proxy_config(
-        litellm_settings: dict[str, Any],
-        callback_specific_params: dict[str, Any],
+        litellm_settings: Mapping[str, Any],
+        callback_specific_params: Mapping[str, Any],
     ) -> "CodeInterpreterInterceptionLogger":
         params: CodeInterpreterInterceptionConfig = {}
         if "code_interpreter_interception_params" in litellm_settings:
