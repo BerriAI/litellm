@@ -201,6 +201,28 @@ def test_anthropic_provider_fields_support_byok():
     ), "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
 
 
+def test_nanogpt_provider_fields():
+    """Nano-GPT must be selectable in the Add Model flow via /public/providers/fields."""
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    nanogpt = next((p for p in providers if p["provider"] == "NANOGPT"), None)
+    assert nanogpt is not None, "Nano-GPT provider entry not found"
+
+    assert nanogpt["provider_display_name"] == "Nano-GPT"
+    assert nanogpt["litellm_provider"] == "nano-gpt"
+
+    fields_by_key = {f["key"]: f for f in nanogpt["credential_fields"]}
+    assert fields_by_key["api_base"]["default_value"] == "https://nano-gpt.com/api/v1"
+    assert fields_by_key["api_key"]["field_type"] == "password"
+    assert fields_by_key["api_key"]["required"] is False
+
+
 def test_bedrock_mantle_provider_fields():
     """Amazon Bedrock Mantle must be a selectable provider in the Add Model flow.
 
