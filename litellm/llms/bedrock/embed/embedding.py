@@ -5,7 +5,8 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 import urllib.parse
-from typing import Any, Callable, List, Optional, Tuple, Union, get_args
+from collections.abc import Callable
+from typing import Any, get_args
 
 import httpx
 
@@ -41,7 +42,7 @@ class BedrockEmbedding(BaseAWSLLM):
     def _load_credentials(
         self,
         optional_params: dict,
-    ) -> Tuple[Any, str]:
+    ) -> tuple[Any, str]:
         try:
             from botocore.credentials import Credentials
         except ImportError:
@@ -91,8 +92,8 @@ class BedrockEmbedding(BaseAWSLLM):
 
     def _make_sync_call(
         self,
-        client: Optional[HTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
+        client: HTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
         api_base: str,
         headers: dict,
         data: dict,
@@ -119,8 +120,8 @@ class BedrockEmbedding(BaseAWSLLM):
 
     async def _make_async_call(
         self,
-        client: Optional[AsyncHTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
+        client: AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
         api_base: str,
         headers: dict,
         data: dict,
@@ -148,16 +149,16 @@ class BedrockEmbedding(BaseAWSLLM):
 
     def _transform_response(
         self,
-        response_list: List[dict],
+        response_list: list[dict],
         model: str,
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
-        is_async_invoke: Optional[bool] = False,
-        batch_data: Optional[List[dict]] = None,
-    ) -> Optional[EmbeddingResponse]:
+        is_async_invoke: bool | None = False,
+        batch_data: list[dict] | None = None,
+    ) -> EmbeddingResponse | None:
         """
         Transforms the response from the Bedrock embedding provider to the OpenAI format.
         """
-        returned_response: Optional[EmbeddingResponse] = None
+        returned_response: EmbeddingResponse | None = None
 
         # Handle async invoke responses (single response with invocationArn)
         if is_async_invoke and len(response_list) == 1 and "invocationArn" in response_list[0]:
@@ -219,25 +220,25 @@ class BedrockEmbedding(BaseAWSLLM):
         # Validate returned response
         ##########################################################
         if returned_response is None:
-            raise Exception("Unable to map model response to known provider format. model={}".format(model))
+            raise Exception(f"Unable to map model response to known provider format. model={model}")
         return returned_response
 
     def _single_func_embeddings(
         self,
-        client: Optional[HTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
-        batch_data: List[dict],
+        client: HTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
+        batch_data: list[dict],
         credentials: Any,
-        extra_headers: Optional[dict],
+        extra_headers: dict | None,
         endpoint_url: str,
         aws_region_name: str,
         model: str,
         logging_obj: Any,
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
-        api_key: Optional[str] = None,
-        is_async_invoke: Optional[bool] = False,
+        api_key: str | None = None,
+        is_async_invoke: bool | None = False,
     ):
-        responses: List[dict] = []
+        responses: list[dict] = []
         for data in batch_data:
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
@@ -292,20 +293,20 @@ class BedrockEmbedding(BaseAWSLLM):
 
     async def _async_single_func_embeddings(
         self,
-        client: Optional[AsyncHTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
-        batch_data: List[dict],
+        client: AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
+        batch_data: list[dict],
         credentials: Any,
-        extra_headers: Optional[dict],
+        extra_headers: dict | None,
         endpoint_url: str,
         aws_region_name: str,
         model: str,
         logging_obj: Any,
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
-        api_key: Optional[str] = None,
-        is_async_invoke: Optional[bool] = False,
+        api_key: str | None = None,
+        is_async_invoke: bool | None = False,
     ):
-        responses: List[dict] = []
+        responses: list[dict] = []
         for data in batch_data:
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
@@ -363,19 +364,19 @@ class BedrockEmbedding(BaseAWSLLM):
     def embeddings(
         self,
         model: str,
-        input: List[str],
-        api_base: Optional[str],
+        input: list[str],
+        api_base: str | None,
         model_response: EmbeddingResponse,
         print_verbose: Callable,
         encoding,
         logging_obj,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]],
-        timeout: Optional[Union[float, httpx.Timeout]],
-        aembedding: Optional[bool],
-        extra_headers: Optional[dict],
+        client: HTTPHandler | AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
+        aembedding: bool | None,
+        extra_headers: dict | None,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ) -> EmbeddingResponse:
         credentials, aws_region_name = self._load_credentials(optional_params)
 
@@ -403,8 +404,8 @@ class BedrockEmbedding(BaseAWSLLM):
         }
         inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
 
-        data: Optional[CohereEmbeddingRequest] = None
-        batch_data: Optional[List] = None
+        data: CohereEmbeddingRequest | None = None
+        batch_data: list | None = None
         if provider == "cohere":
             data = BedrockCohereEmbeddingConfig()._transform_request(
                 model=model, input=input, inference_params=inference_params

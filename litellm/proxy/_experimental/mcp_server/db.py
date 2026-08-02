@@ -570,9 +570,7 @@ async def get_all_mcp_servers(
             decrypt_global_env_var_values(table.env_vars)
         return tables
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "litellm.proxy._experimental.mcp_server.db.py::get_all_mcp_servers - {}".format(str(e))
-        )
+        verbose_proxy_logger.debug(f"litellm.proxy._experimental.mcp_server.db.py::get_all_mcp_servers - {e!s}")
         return []
 
 
@@ -721,14 +719,12 @@ async def delete_mcp_server_from_team(prisma_client: PrismaClient, server_id: st
     """
     Remove the mcp server from the team
     """
-    pass
 
 
 async def delete_mcp_server_from_virtualkey():
     """
     Remove the mcp server from the virtual key
     """
-    pass
 
 
 async def delete_mcp_server(

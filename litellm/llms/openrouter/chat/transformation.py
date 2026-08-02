@@ -6,12 +6,13 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
+from collections.abc import AsyncIterator, Iterator
 from enum import Enum
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union, cast
+from typing import Any, cast
 
 import httpx
-import litellm
 
+import litellm
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -88,15 +89,15 @@ class OpenrouterConfig(OpenAIGPTConfig):
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
-        messages: List[AllMessageValues],
-        tools: Optional[List["ChatCompletionToolParam"]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        messages: list[AllMessageValues],
+        tools: list["ChatCompletionToolParam"] | None = None,
+    ) -> tuple[list[AllMessageValues], list["ChatCompletionToolParam"] | None]:
         if self._supports_cache_control_in_content(model):
             return messages, tools
         else:
             return super().remove_cache_control_flag_from_messages_and_tools(model, messages, tools)
 
-    def _move_cache_control_to_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
+    def _move_cache_control_to_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
         Move cache_control from message level to content blocks.
         OpenRouter requires cache_control to be inside content blocks, not at message level.
@@ -104,7 +105,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         To avoid exceeding Anthropic's limit of 4 cache breakpoints, cache_control is only
         added to the LAST content block in each message.
         """
-        transformed_messages: List[AllMessageValues] = []
+        transformed_messages: list[AllMessageValues] = []
         for message in messages:
             message_dict = dict(message)
             cache_control = message_dict.pop("cache_control", None)
@@ -141,7 +142,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -173,12 +174,12 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: Any,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform the response from OpenRouter API.
@@ -224,9 +225,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OpenRouterException(
             message=error_message,
             status_code=status_code,
@@ -235,9 +234,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         return OpenRouterChatCompletionStreamingHandler(
             streaming_response=streaming_response,

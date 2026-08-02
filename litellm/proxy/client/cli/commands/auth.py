@@ -4,7 +4,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlencode
 
 import click
@@ -27,12 +27,12 @@ def get_token_file_path() -> str:
     return str(config_dir / "token.json")
 
 
-def save_token(token_data: Dict[str, Any]) -> None:
+def save_token(token_data: dict[str, Any]) -> None:
     """Save token data to file"""
     write_private_json(get_token_file_path(), token_data)
 
 
-def load_token() -> Optional[Dict[str, Any]]:
+def load_token() -> dict[str, Any] | None:
     """Load token data from file"""
     token_file = get_token_file_path()
     if not os.path.exists(token_file):
@@ -41,7 +41,7 @@ def load_token() -> Optional[Dict[str, Any]]:
     try:
         with open(token_file, "r") as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -52,7 +52,7 @@ def clear_token() -> None:
         os.remove(token_file)
 
 
-def get_stored_api_key(expected_base_url: Optional[str] = None) -> Optional[str]:
+def get_stored_api_key(expected_base_url: str | None = None) -> str | None:
     """Get the stored API key from token file.
 
     If expected_base_url is provided, the key is only returned when it was
@@ -65,7 +65,7 @@ def get_stored_api_key(expected_base_url: Optional[str] = None) -> Optional[str]
 
 
 # Team selection utilities
-def display_teams_table(teams: List[Dict[str, Any]]) -> None:
+def display_teams_table(teams: list[dict[str, Any]]) -> None:
     """Display teams in a formatted table"""
     console = Console()
 
@@ -153,7 +153,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(teams: List[Dict[str, Any]], selected_index: int = 0) -> None:
+def display_interactive_team_selection(teams: list[dict[str, Any]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console = Console()
 
@@ -191,7 +191,7 @@ def display_interactive_team_selection(teams: List[Dict[str, Any]], selected_ind
             console.print(f"   Budget: [dim]{budget_str}[/dim]\n")
 
 
-def prompt_team_selection(teams: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Interactive team selection with arrow keys"""
     if not teams:
         return None
@@ -241,8 +241,8 @@ def prompt_team_selection(teams: List[Dict[str, Any]]) -> Optional[Dict[str, Any
 
 
 def prompt_team_selection_fallback(
-    teams: List[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    teams: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     """Fallback team selection for non-interactive environments"""
     if not teams:
         return None
@@ -299,20 +299,20 @@ def _is_permanent_polling_error(status_code: int) -> bool:
 def _poll_for_ready_data(
     url: str,
     *,
-    headers: Optional[Dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
     total_timeout: int = 300,
     poll_interval: int = 2,
     request_timeout: int = 10,
-    pending_message: Optional[str] = None,
+    pending_message: str | None = None,
     pending_log_every: int = 10,
-    other_status_message: Optional[str] = None,
+    other_status_message: str | None = None,
     other_status_log_every: int = 10,
     http_error_log_every: int = 10,
     connection_error_log_every: int = 10,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     for attempt in range(total_timeout // poll_interval):
         try:
-            request_kwargs: Dict[str, Any] = {"timeout": request_timeout}
+            request_kwargs: dict[str, Any] = {"timeout": request_timeout}
             if headers is not None:
                 request_kwargs["headers"] = headers
             response = requests.get(url, **request_kwargs)
@@ -365,7 +365,7 @@ def _normalize_teams(teams, team_details):
     return []
 
 
-def _start_cli_sso_flow(base_url: str) -> Dict[str, Any]:
+def _start_cli_sso_flow(base_url: str) -> dict[str, Any]:
     start_url = f"{base_url}/sso/cli/start"
     try:
         response = requests.post(start_url, timeout=10)
@@ -408,11 +408,11 @@ def _start_cli_sso_flow(base_url: str) -> Dict[str, Any]:
     return data
 
 
-def _get_cli_sso_poll_headers(poll_secret: str) -> Dict[str, str]:
+def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
     return {"x-litellm-cli-poll-secret": poll_secret}
 
 
-def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Optional[dict]:
+def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> dict | None:
     """
     Poll the server for authentication completion and handle team selection.
 
@@ -431,7 +431,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
         teams = data.get("teams", [])
         team_details = data.get("team_details")
         user_id = data.get("user_id")
-        normalized_teams: List[Dict[str, Any]] = _normalize_teams(teams, team_details)
+        normalized_teams: list[dict[str, Any]] = _normalize_teams(teams, team_details)
         if not normalized_teams:
             click.echo("Warning: No teams available for selection.")
             return None
@@ -478,8 +478,8 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
 
 
 def _handle_team_selection_during_polling(
-    base_url: str, key_id: str, poll_secret: str, teams: List[Dict[str, Any]]
-) -> Optional[str]:
+    base_url: str, key_id: str, poll_secret: str, teams: list[dict[str, Any]]
+) -> str | None:
     """
     Handle team selection and re-poll with selected team_id.
 
@@ -522,7 +522,7 @@ def _handle_team_selection_during_polling(
     return None
 
 
-def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Optional[str]:
+def _render_and_prompt_for_team_selection(teams: list[dict[str, Any]]) -> str | None:
     """Render teams table and prompt user for a team selection.
 
     Returns the selected team_id as a string, or None if selection was
@@ -725,7 +725,7 @@ auth_group.add_command(print_token)
 
 
 # Export functions for use by other CLI commands
-__all__ = ["login", "logout", "print_token", "auth_group", "whoami", "prompt_team_selection"]
+__all__ = ["auth_group", "login", "logout", "print_token", "prompt_team_selection", "whoami"]
 
 # Export individual commands instead of grouping them
 # login, logout, and whoami will be added as top-level commands

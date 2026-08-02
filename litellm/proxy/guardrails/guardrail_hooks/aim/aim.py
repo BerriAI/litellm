@@ -7,7 +7,8 @@
 import asyncio
 import json
 import os
-from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Optional, Type, Union
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from websockets.asyncio.client import ClientConnection, connect
@@ -46,14 +47,14 @@ class AimGuardrailMissingSecrets(Exception):
 
 class AimGuardrail(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
+    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         ssl_verify = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
@@ -79,7 +80,7 @@ class AimGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
         return await self.call_aim_guardrail(data, hook="pre_call", key_alias=user_api_key_dict.key_alias)
 
@@ -88,13 +89,13 @@ class AimGuardrail(CustomGuardrail):
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
 
         await self.call_aim_guardrail(data, hook="moderation", key_alias=user_api_key_dict.key_alias)
         return data
 
-    async def call_aim_guardrail(self, data: dict, hook: str, key_alias: Optional[str]) -> dict:
+    async def call_aim_guardrail(self, data: dict, hook: str, key_alias: str | None) -> dict:
         user_email = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
         call_id = data.get("litellm_call_id")
         headers = self._build_aim_headers(
@@ -183,8 +184,8 @@ class AimGuardrail(CustomGuardrail):
         return data
 
     async def call_aim_guardrail_on_output(
-        self, request_data: dict, output: str, hook: str, key_alias: Optional[str]
-    ) -> Optional[dict]:
+        self, request_data: dict, output: str, hook: str, key_alias: str | None
+    ) -> dict | None:
         user_email = request_data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
         call_id = request_data.get("litellm_call_id")
         response = await self.async_handler.post(
@@ -226,9 +227,9 @@ class AimGuardrail(CustomGuardrail):
         self,
         *,
         hook: str,
-        key_alias: Optional[str],
-        user_email: Optional[str],
-        litellm_call_id: Optional[str],
+        key_alias: str | None,
+        user_email: str | None,
+        litellm_call_id: str | None,
     ):
         """
         A helper function to build the http headers that are required by AIM guardrails.
@@ -259,7 +260,7 @@ class AimGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+        response: Any | ModelResponse | EmbeddingResponse | ImageResponse,
     ) -> Any:
         if not (isinstance(response, ModelResponse) and response.choices):
             return response
@@ -344,7 +345,7 @@ class AimGuardrail(CustomGuardrail):
         await websocket.send(json.dumps({"done": True}))
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.aim import (
             AimGuardrailConfigModel,
         )

@@ -4,7 +4,7 @@ import inspect
 import re
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
@@ -101,7 +101,7 @@ def _truncate_base64_in_value(value: Any) -> Any:
                 if isinstance(v, str):
                     container[k] = _truncate_base64_in_string(v)
                 elif isinstance(v, dict):
-                    copy: Union[dict, list] = {ck: cv for ck, cv in v.items()}
+                    copy: dict | list = {ck: cv for ck, cv in v.items()}
                     container[k] = copy
                     stack.append((copy, depth + 1))
                 elif isinstance(v, list):
@@ -125,8 +125,8 @@ def _truncate_base64_in_value(value: Any) -> Any:
 
 
 def truncate_base64_in_messages(
-    messages: Optional[Union[str, list, dict]],
-) -> Optional[Union[str, list, dict]]:
+    messages: str | list | dict | None,
+) -> str | list | dict | None:
     """
     Return a copy of *messages* with long base64 data-URI payloads replaced
     by human-readable size placeholders.
@@ -155,8 +155,8 @@ def _get_service_logger():
 
 
 def _get_parent_otel_span_from_logging_obj(
-    logging_obj: Optional[LiteLLMLoggingObject] = None,
-) -> Optional[Span]:
+    logging_obj: LiteLLMLoggingObject | None = None,
+) -> Span | None:
     """
     Extract the parent OTEL span from the logging object using existing helper.
 
@@ -178,13 +178,13 @@ def _get_parent_otel_span_from_logging_obj(
         return _get_parent_otel_span_from_kwargs(logging_obj.model_call_details)
 
     except Exception as e:
-        verbose_logger.exception(f"Error in _get_parent_otel_span_from_logging_obj: {str(e)}")
+        verbose_logger.exception(f"Error in _get_parent_otel_span_from_logging_obj: {e!s}")
         return None
 
 
 def convert_litellm_response_object_to_str(
-    response_obj: Union[Any, LiteLLMModelResponse],
-) -> Optional[str]:
+    response_obj: Any | LiteLLMModelResponse,
+) -> str | None:
     """
     Get the string of the response object from LiteLLM
 
@@ -201,11 +201,11 @@ def convert_litellm_response_object_to_str(
 
 
 def _assemble_complete_response_from_streaming_chunks(
-    result: Union[ModelResponse, TextCompletionResponse, ModelResponseStream],
+    result: ModelResponse | TextCompletionResponse | ModelResponseStream,
     start_time: datetime,
     end_time: datetime,
     request_kwargs: dict,
-    streaming_chunks: List[Any],
+    streaming_chunks: list[Any],
     is_async: bool,
 ):
     """
@@ -227,7 +227,7 @@ def _assemble_complete_response_from_streaming_chunks(
         Optional[Union[ModelResponse, TextCompletionResponse]]: Complete streaming response
 
     """
-    complete_streaming_response: Optional[Union[ModelResponse, TextCompletionResponse]] = None
+    complete_streaming_response: ModelResponse | TextCompletionResponse | None = None
 
     if isinstance(result, ModelResponse):
         return result
@@ -265,7 +265,7 @@ def _set_duration_in_model_call_details(
         else:
             verbose_logger.debug("`logging_obj` not found - unable to track `llm_api_duration_ms")
     except Exception as e:
-        verbose_logger.warning(f"Error setting `llm_api_duration_ms`: {str(e)}")
+        verbose_logger.warning(f"Error setting `llm_api_duration_ms`: {e!s}")
 
 
 def track_llm_api_timing():
@@ -321,7 +321,7 @@ def track_llm_api_timing():
                         )
                     )
                 except Exception as e:
-                    verbose_logger.debug(f"Error in service logging: {str(e)}")
+                    verbose_logger.debug(f"Error in service logging: {e!s}")
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
@@ -366,7 +366,7 @@ def track_llm_api_timing():
                         parent_otel_span=parent_otel_span,
                     )
                 except Exception as e:
-                    verbose_logger.debug(f"Error in service logging: {str(e)}")
+                    verbose_logger.debug(f"Error in service logging: {e!s}")
 
         # Check if the function is async or sync
         if inspect.iscoroutinefunction(func):

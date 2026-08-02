@@ -10,9 +10,10 @@ import subprocess
 import time
 import urllib
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Protocol, Union
+from typing import Any, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
@@ -911,7 +912,7 @@ class PrismaManager:
 
 
 def should_update_prisma_schema(
-    disable_updates: Union[bool, str] | None = None,
+    disable_updates: bool | str | None = None,
 ) -> bool:
     """
     Determines if Prisma Schema updates should be applied during startup.

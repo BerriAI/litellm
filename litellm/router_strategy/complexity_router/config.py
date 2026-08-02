@@ -10,7 +10,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from litellm._logging import verbose_router_logger
 from litellm.types.router import AdaptiveRouterWeights, RoutingPlugin
 
 
@@ -34,8 +33,6 @@ DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
 
 DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: int = 3
 DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: int = 200
-
-CLASSIFIER_TIER_RUBRIC_WARN_CHARS: int = 2000
 
 
 class KeywordTierRule(BaseModel):
@@ -373,21 +370,6 @@ class ComplexityRouterConfig(BaseModel):
             "spend, for an already-deployed router. Only applies when classifier_type is 'llm'."
         ),
     )
-    classifier_tier_rubric: str | None = Field(
-        default=None,
-        description=(
-            "Replace the built-in tier definitions in the classifier's system prompt with your own; "
-            "blank falls back to the built-in definitions. "
-            "The paragraph instructing the classifier to treat quoted caller text as material to "
-            "judge rather than as instructions is always appended and cannot be overridden, so a "
-            "caller still cannot pin itself to an expensive tier by writing tier names into its own "
-            "system prompt. Tier values stay constrained to SIMPLE/MEDIUM/COMPLEX/REASONING by the "
-            "response schema regardless of what this says, so a rubric that describes only some of "
-            "the four is honoured rather than rejected: the tiers it leaves out simply stop being "
-            "chosen, and the models mapped to them stop receiving traffic. Describe every tier you "
-            "want reachable. Only applies when classifier_type is 'llm'."
-        ),
-    )
 
     adaptive: bool = Field(
         default=False,
@@ -480,23 +462,6 @@ class ComplexityRouterConfig(BaseModel):
             else:
                 coerced[key] = item
         return coerced
-
-    @field_validator("classifier_tier_rubric")
-    @classmethod
-    def _warn_on_long_tier_rubric(cls, value: str | None) -> str | None:
-        """Warn, never reject, when the rubric is long enough to matter on every classification.
-
-        The rubric rides every classifier call, so an oversized one surfaces as a token bill rather
-        than as an error. Which length is too long is a judgement about the operator's own cost, so
-        this says so early and still honours the value.
-        """
-        if value is not None and len(value) > CLASSIFIER_TIER_RUBRIC_WARN_CHARS:
-            verbose_router_logger.warning(
-                f"ComplexityRouter: classifier_tier_rubric is {len(value)} characters "
-                f"(over {CLASSIFIER_TIER_RUBRIC_WARN_CHARS}); it is sent on every classification, "
-                "so this adds prompt tokens to each routed request"
-            )
-        return value
 
     @field_validator("escalation_keywords")
     @classmethod

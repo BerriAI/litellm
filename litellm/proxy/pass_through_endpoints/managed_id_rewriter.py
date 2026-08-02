@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any
 from urllib.parse import quote, unquote
 
 from fastapi import HTTPException
@@ -55,13 +55,13 @@ from .managed_id_codec import ManagedIdPayload, decode, is_managed, new_managed_
 # Field map
 # ---------------------------------------------------------------------------
 
-_FieldSpec = Tuple[str, str]  # (field_name, expected_raw_id_prefix)
-_MapKey = Tuple[str, str, str]  # (provider, HTTP_METHOD, canonical_path)
+_FieldSpec = tuple[str, str]  # (field_name, expected_raw_id_prefix)
+_MapKey = tuple[str, str, str]  # (provider, HTTP_METHOD, canonical_path)
 
 # ``canonical_path`` uses ``/v1/...`` form without any ``/openai/`` prefix.
 # Both ``/openai/...`` and ``/openai_passthrough/...`` are normalised by
 # ``_canonical_path()`` before the lookup so only one set of entries is needed.
-BUILTIN_OUTPUT_ID_FIELD_MAP: Dict[_MapKey, List[_FieldSpec]] = {
+BUILTIN_OUTPUT_ID_FIELD_MAP: dict[_MapKey, list[_FieldSpec]] = {
     # ------------------------------------------------------------------ files
     ("openai", "POST", "/v1/files"): [
         ("id", "file-"),
@@ -146,10 +146,10 @@ BUILTIN_OUTPUT_ID_FIELD_MAP: Dict[_MapKey, List[_FieldSpec]] = {
 }
 
 # Prefixes that live in the *file* table rather than the object table.
-_FILE_PREFIXES: FrozenSet[str] = frozenset({"file-"})
+_FILE_PREFIXES: frozenset[str] = frozenset({"file-"})
 
 # Raw provider-ID prefixes that live in the object table (batches, responses).
-_OBJECT_PREFIXES: FrozenSet[str] = frozenset({"batch_", "resp_"})
+_OBJECT_PREFIXES: frozenset[str] = frozenset({"batch_", "resp_"})
 
 # Guards request-body rewriting against stack exhaustion from adversarially
 # deep payloads. Real OpenAI files/batches bodies nest only a few levels.
@@ -197,7 +197,7 @@ class _RawIdGuardBudget:
 # ---------------------------------------------------------------------------
 
 # Maps (provider, canonical_path) -> "files" | "batches"
-_LIST_ROUTE_TABLE: Dict[Tuple[str, str], str] = {
+_LIST_ROUTE_TABLE: dict[tuple[str, str], str] = {
     ("openai", "/v1/files"): "files",
     ("openai", "/v1/batches"): "batches",
     ("azure", "/v1/files"): "files",
@@ -276,7 +276,7 @@ async def _resolve_one(
     Raises ``HTTPException(404)`` on unknown / forged managed IDs — never
     forwarded upstream as a literal string.
     """
-    payload: Optional[ManagedIdPayload] = decode(managed_id)
+    payload: ManagedIdPayload | None = decode(managed_id)
     if payload is None:
         return managed_id  # not a passthrough managed ID; pass through
     verbose_proxy_logger.debug(
@@ -296,8 +296,8 @@ async def _resolve_one(
             detail=(f"Managed ID was minted for provider '{payload.provider}', not '{provider}'."),
         )
 
-    row_created_by: Optional[str] = None
-    row_team_id: Optional[str] = None
+    row_created_by: str | None = None
+    row_team_id: str | None = None
     found = False
 
     raw_id = payload.raw_provider_id
@@ -373,7 +373,7 @@ async def _guard_raw_provider_id(
     provider: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
-    budget: Optional[_RawIdGuardBudget] = None,
+    budget: _RawIdGuardBudget | None = None,
 ) -> None:
     """Deny a raw provider ID that maps to a managed resource the caller does
     not own, before it is forwarded upstream.
@@ -434,7 +434,7 @@ async def _guard_raw_provider_id(
 # ---------------------------------------------------------------------------
 
 
-def _build_managed_file_object(snapshot: Optional[Dict[str, Any]], managed_id: str) -> Optional[OpenAIFileObject]:
+def _build_managed_file_object(snapshot: dict[str, Any] | None, managed_id: str) -> OpenAIFileObject | None:
     """Build an ``OpenAIFileObject`` (with the managed ID swapped in) from an
     upstream file response so the DB-served list returns the same metadata as a
     direct file GET.  Returns ``None`` when no usable snapshot is available, in
@@ -457,7 +457,7 @@ async def _mint_or_reuse_file(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
     managed_files_hook: Any,
-    file_object_snapshot: Optional[Dict[str, Any]] = None,
+    file_object_snapshot: dict[str, Any] | None = None,
     is_create_route: bool = True,
 ) -> str:
     """Return an existing managed file ID or mint + store a new one."""
@@ -809,7 +809,7 @@ def _parse_file_object(file_object: Any) -> Any:
     return file_object
 
 
-def _empty_list_response() -> Dict[str, Any]:
+def _empty_list_response() -> dict[str, Any]:
     return {
         "object": "list",
         "data": [],
@@ -819,7 +819,7 @@ def _empty_list_response() -> Dict[str, Any]:
     }
 
 
-def _parse_list_limit(query_params: Optional[Dict[str, Any]]) -> Tuple[int, int]:
+def _parse_list_limit(query_params: dict[str, Any] | None) -> tuple[int, int]:
     params = query_params or {}
     try:
         raw_limit = int(params.get("limit", 20))
@@ -833,14 +833,14 @@ async def _build_list_where_with_cursor(
     prisma_client: Any,
     resource_kind: str,
     provider: str,
-    owner_filter: Dict[str, Any],
-    query_params: Optional[Dict[str, Any]],
-) -> Tuple[Dict[str, Any], str]:
+    owner_filter: dict[str, Any],
+    query_params: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str]:
     """Return a Prisma ``where`` clause and fetch order for a list query."""
     params = query_params or {}
-    after_id: Optional[str] = params.get("after")
-    before_id: Optional[str] = params.get("before")
-    where: Dict[str, Any] = dict(owner_filter)
+    after_id: str | None = params.get("after")
+    before_id: str | None = params.get("before")
+    where: dict[str, Any] = dict(owner_filter)
     fetch_order = "desc"
 
     cursor_id = after_id or before_id
@@ -887,10 +887,10 @@ async def _build_list_where_with_cursor(
 async def _fetch_list_rows(
     prisma_client: Any,
     resource_kind: str,
-    where: Dict[str, Any],
+    where: dict[str, Any],
     fetch_order: str,
     fetch_limit: int,
-) -> Optional[List[Any]]:
+) -> list[Any] | None:
     # created_at is not unique, so a second sort on the unique id column gives a
     # total order, keeping the limit+1 page boundary and cursor deterministic
     # across rows that share a created_at timestamp.
@@ -915,11 +915,11 @@ async def _fetch_provider_scoped_list_rows(
     prisma_client: Any,
     resource_kind: str,
     provider: str,
-    where: Dict[str, Any],
+    where: dict[str, Any],
     fetch_order: str,
     raw_limit: int,
     fetch_limit: int,
-) -> Tuple[List[Any], bool]:
+) -> tuple[list[Any], bool]:
     """Fetch one page of list rows scoped to *provider* at the DB level.
 
     Both resource kinds carry a provider-distinguishing value that the query
@@ -951,8 +951,8 @@ async def _fetch_provider_scoped_list_rows(
     return page, has_more
 
 
-def _serialize_file_list_item(row: Any) -> Dict[str, Any]:
-    item: Dict[str, Any] = {
+def _serialize_file_list_item(row: Any) -> dict[str, Any]:
+    item: dict[str, Any] = {
         "id": row.unified_file_id,
         "object": "file",
         "created_at": int(row.created_at.timestamp()) if row.created_at else None,
@@ -964,8 +964,8 @@ def _serialize_file_list_item(row: Any) -> Dict[str, Any]:
     return item
 
 
-def _serialize_batch_list_item(row: Any) -> Dict[str, Any]:
-    item: Dict[str, Any] = {}
+def _serialize_batch_list_item(row: Any) -> dict[str, Any]:
+    item: dict[str, Any] = {}
     file_object = _parse_file_object(row.file_object)
     if isinstance(file_object, dict):
         item.update(file_object)
@@ -974,7 +974,7 @@ def _serialize_batch_list_item(row: Any) -> Dict[str, Any]:
     return item
 
 
-def _list_boundary_ids(rows: List[Any], resource_kind: str) -> Tuple[Optional[str], Optional[str]]:
+def _list_boundary_ids(rows: list[Any], resource_kind: str) -> tuple[str | None, str | None]:
     if not rows:
         return None, None
     id_attr = "unified_file_id" if resource_kind == "files" else "unified_object_id"
@@ -986,8 +986,8 @@ async def list_passthrough_ids_from_db(
     route: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
-    query_params: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
+    query_params: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Query the DB for managed IDs the caller owns and return an OpenAI-style
     paginated list response.
 
@@ -1069,7 +1069,7 @@ async def rewrite_path_ids(
     """
     budget = _RawIdGuardBudget()
     segments = path.split("/")
-    new_segments: List[str] = []
+    new_segments: list[str] = []
     changed = False
     for seg in segments:
         decoded_seg = unquote(seg)
@@ -1092,12 +1092,12 @@ async def rewrite_path_ids(
 
 
 async def rewrite_query_ids(
-    params: Optional[Dict[str, Any]],
+    params: dict[str, Any] | None,
     provider: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
     managed_files_hook: Any,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Walk query param values and resolve any passthrough managed IDs.
     Returns *params* unchanged (same object) when nothing is resolved.
@@ -1106,7 +1106,7 @@ async def rewrite_query_ids(
         return params
     budget = _RawIdGuardBudget()
     mutated = dict(params)
-    rewritten_keys: List[str] = []
+    rewritten_keys: list[str] = []
     for key, val in list(mutated.items()):
         if isinstance(val, str):
             if is_managed(val):
@@ -1124,12 +1124,12 @@ async def rewrite_query_ids(
 
 
 async def rewrite_body_ids(
-    body: Optional[Dict[str, Any]],
+    body: dict[str, Any] | None,
     provider: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
     managed_files_hook: Any,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Recursively walk a request body dict/list and resolve any passthrough
     managed IDs.  Skips litellm internal keys (``litellm_*``).
@@ -1144,7 +1144,7 @@ async def rewrite_body_ids(
         if depth >= _MAX_BODY_REWRITE_DEPTH:
             return node
         if isinstance(node, dict):
-            result: Dict[str, Any] = {}
+            result: dict[str, Any] = {}
             changed_inner = False
             for k, v in node.items():
                 # Skip litellm internal injection keys (e.g. litellm_logging_obj)

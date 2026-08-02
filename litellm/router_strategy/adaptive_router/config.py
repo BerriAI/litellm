@@ -5,8 +5,6 @@ All magic numbers are first-pass guesses (D3-D6 in the handoff plan).
 Expect to retune after first 1000 sessions of real traffic.
 """
 
-from typing import Dict
-
 from litellm.types.router import RequestType  # re-export for convenience  # noqa: F401
 
 # D3 — Score weights (default; user-overridable via AdaptiveRouterConfig.weights)
@@ -15,7 +13,7 @@ DEFAULT_COST_WEIGHT: float = 0.3  # UNVALIDATED — calibrated against [0] sessi
 
 # D4 — Cold-start prior: (alpha + beta) total mass = COLD_START_MASS
 # Mean of Beta = base_tier_weight + (strength_bonus if declared)
-BASE_TIER_WEIGHT: Dict[int, float] = {1: 0.3, 2: 0.5, 3: 0.7}  # UNVALIDATED
+BASE_TIER_WEIGHT: dict[int, float] = {1: 0.3, 2: 0.5, 3: 0.7}  # UNVALIDATED
 STRENGTH_BONUS: float = 0.3  # UNVALIDATED
 COLD_START_MASS: float = 10.0
 

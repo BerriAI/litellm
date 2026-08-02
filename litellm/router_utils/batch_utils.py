@@ -1,7 +1,6 @@
 import io
 import json
 from os import PathLike
-from typing import List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
@@ -14,7 +13,7 @@ class InMemoryFile(io.BytesIO):
         self.content_type = content_type
 
 
-def parse_jsonl_with_embedded_newlines(content: str) -> List[dict]:
+def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
     """
     Parse JSONL content that may contain JSON objects with embedded newlines in string values.
 
@@ -149,7 +148,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         return file_content
 
 
-def _get_router_metadata_variable_name(function_name: Optional[str]) -> str:
+def _get_router_metadata_variable_name(function_name: str | None) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
 

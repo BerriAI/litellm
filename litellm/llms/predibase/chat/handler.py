@@ -2,8 +2,8 @@
 ## Controller file for Predibase Integration - https://predibase.com/
 
 import json
+from collections.abc import Callable
 from functools import partial
-from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
@@ -25,7 +25,7 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
-    timeout: Optional[Union[float, httpx.Timeout]],
+    timeout: float | httpx.Timeout | None,
 ):
     response = await client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
 
@@ -62,11 +62,11 @@ class PredibaseChatCompletion:
         optional_params: dict,
         litellm_params: dict,
         tenant_id: str,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         acompletion=None,
         logger_fn=None,
         headers: dict = {},
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
+    ) -> ModelResponse | CustomStreamWrapper:
         predibase_config = litellm.PredibaseConfig()
         headers = predibase_config.validate_environment(
             api_key=api_key,
@@ -201,7 +201,7 @@ class PredibaseChatCompletion:
         stream,
         data: dict,
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         litellm_params=None,
         logger_fn=None,
         headers={},
@@ -218,16 +218,14 @@ class PredibaseChatCompletion:
         except httpx.HTTPStatusError as e:
             raise PredibaseError(
                 status_code=e.response.status_code,
-                message="HTTPStatusError - received status_code={}, error_message={}".format(
-                    e.response.status_code, e.response.text
-                ),
+                message=f"HTTPStatusError - received status_code={e.response.status_code}, error_message={e.response.text}",
             )
         except Exception as e:
             for exception in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, exception):
                     raise e
             raise PredibaseError(
-                status_code=500, message="{}".format(str(e))
+                status_code=500, message=f"{e!s}"
             )  # don't use verbose_logger.exception, if exception is raised
         return predibase_config.transform_response(
             model=model,
@@ -253,7 +251,7 @@ class PredibaseChatCompletion:
         api_key,
         logging_obj,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         optional_params=None,
         litellm_params=None,
         logger_fn=None,

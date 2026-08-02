@@ -1,6 +1,6 @@
 """Team management commands for LiteLLM CLI."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import click
 import requests
@@ -13,10 +13,9 @@ from litellm.proxy.client import Client
 @click.group()
 def teams():
     """Manage teams and team assignments"""
-    pass
 
 
-def display_teams_table(teams: List[Dict[str, Any]]) -> None:
+def display_teams_table(teams: list[dict[str, Any]]) -> None:
     """Display teams in a formatted table"""
     console = Console()
 
@@ -77,7 +76,7 @@ def list(ctx: click.Context):
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {str(e)}", err=True)
+        click.echo(f"Error: {e!s}", err=True)
         raise click.Abort()
 
 
@@ -100,14 +99,14 @@ def available(ctx: click.Context):
         error_body = e.response.json()
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
     except Exception as e:
-        click.echo(f"Error: {str(e)}", err=True)
+        click.echo(f"Error: {e!s}", err=True)
         raise click.Abort()
 
 
 @teams.command()
 @click.option("--team-id", type=str, help="Team ID to assign the key to")
 @click.pass_context
-def assign_key(ctx: click.Context, team_id: Optional[str]):
+def assign_key(ctx: click.Context, team_id: str | None):
     """Assign your current CLI key to a team"""
     client = Client(ctx.obj["base_url"], ctx.obj["api_key"])
     api_key = ctx.obj["api_key"]
@@ -159,5 +158,5 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {str(e)}", err=True)
+        click.echo(f"Error: {e!s}", err=True)
         raise click.Abort()

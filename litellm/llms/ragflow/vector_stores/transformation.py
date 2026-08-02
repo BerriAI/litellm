@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -44,7 +44,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
             "write": [],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """Validate environment and set headers for RAGFlow API."""
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = litellm_params.api_key or get_secret_str("RAGFLOW_API_KEY")
@@ -62,7 +62,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -86,13 +86,13 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """RAGFlow vector stores are management-only, search is not supported."""
         raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
 
@@ -106,7 +106,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform create request to RAGFlow POST /api/v1/datasets format.
 
@@ -121,7 +121,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
             raise ValueError("name is required for RAGFlow dataset creation")
 
         # Build request body
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "name": name,
         }
 

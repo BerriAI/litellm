@@ -2,7 +2,8 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Union
 
 from typing_extensions import TypedDict
 
@@ -46,7 +47,7 @@ class ResponsesToCompletionBridgeHandler:
     @staticmethod
     def _coerce_response_object(
         response_obj: Any,
-        hidden_params: Optional[dict],
+        hidden_params: dict | None,
     ) -> "ResponsesAPIResponse":
         if isinstance(response_obj, ResponsesAPIResponse):
             response = response_obj

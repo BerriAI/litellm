@@ -7,7 +7,7 @@ so this implementation skips the embedding step and directly uploads files.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import litellm
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
@@ -33,15 +33,15 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         super().__init__(ingest_options=ingest_options, router=router)
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         OpenAI handles embedding internally - skip this step.
 
@@ -53,13 +53,13 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
         existing_file_id: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Store content in OpenAI vector store.
 
