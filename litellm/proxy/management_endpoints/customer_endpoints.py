@@ -42,6 +42,21 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 router = APIRouter()
 
 
+async def _invalidate_end_user_cache(user_ids: list[str]) -> None:
+    """Drop every cached view of an end-user row so a block/unblock takes effect now.
+
+    Core auth caches the row under ``end_user_id:{id}`` and the enterprise
+    blocked-user hook caches it under ``litellm:end_user_id:{id}`` (60s ttl);
+    both live in the proxy's ``user_api_key_cache``, so a warmed entry would
+    otherwise keep serving the pre-change ``blocked`` value.
+    """
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    for user_id in user_ids:
+        await user_api_key_cache.async_delete_cache(key=f"end_user_id:{user_id}")
+        await user_api_key_cache.async_delete_cache(key=f"litellm:end_user_id:{user_id}")
+
+
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
     """Validate a raw end-user DB row into the typed customer response.
 
@@ -101,6 +116,8 @@ async def block_user(data: BlockUsers):
                 detail={"error": "Postgres DB Not connected"},
             )
 
+        await _invalidate_end_user_cache(user_ids=data.user_ids)
+
         return {"blocked_users": records}
     except Exception as e:
         verbose_proxy_logger.error(f"An error occurred - {e!s}")
@@ -132,38 +149,39 @@ async def unblock_user(data: BlockUsers):
     }'
     ```
     """
-    try:
-        from enterprise.enterprise_hooks.blocked_user_list import (
-            _ENTERPRISE_BlockedUserList,
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Postgres DB Not connected"},
         )
-    except ImportError:
+
+    if isinstance(litellm.blocked_user_list, str):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "Blocked user check was never set. This call has no effect."
-                + CommonProxyErrors.missing_enterprise_package_docker.value
+                "error": "`blocked_user_list` is set to a filepath, which can't be updated. "
+                "Remove the user id from that file and restart the proxy."
             },
         )
 
-    if (
-        not any(isinstance(x, _ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
-        or litellm.blocked_user_list is None
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Blocked user check was never set. This call has no effect."},
+    try:
+        await EndUserRepository(prisma_client).table.update_many(
+            where={"user_id": {"in": data.user_ids}},
+            data={"blocked": False},
         )
+    except Exception as e:
+        verbose_proxy_logger.error(f"An error occurred - {e!s}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
+    await _invalidate_end_user_cache(user_ids=data.user_ids)
+
+    unblocked_ids = set(data.user_ids)
     if isinstance(litellm.blocked_user_list, list):
-        for id in data.user_ids:
-            litellm.blocked_user_list.remove(id)
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "`blocked_user_list` must be set as a list. Filepaths can't be updated."},
-        )
+        litellm.blocked_user_list = [user_id for user_id in litellm.blocked_user_list if user_id not in unblocked_ids]
 
-    return {"blocked_users": litellm.blocked_user_list}
+    return {"blocked_users": litellm.blocked_user_list or []}
 
 
 def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
@@ -628,6 +646,8 @@ async def update_end_user(
             if response is None:
                 raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")
             verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
+
+            await _invalidate_end_user_cache(user_ids=[data.user_id])
 
             return _to_customer_response(response)
         else:

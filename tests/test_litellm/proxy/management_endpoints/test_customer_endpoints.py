@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LitellmUserRoles,
@@ -781,3 +782,107 @@ def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):
         "deleted_customers": 2,
         "message": "Successfully deleted customers with ids: ['c1', 'c2']",
     }
+
+
+@pytest.fixture
+def mock_end_user_cache():
+    with patch("litellm.proxy.proxy_server.user_api_key_cache") as mock:
+        mock.async_delete_cache = AsyncMock()
+        yield mock
+
+
+def _deleted_cache_keys(mock_cache: MagicMock) -> set:
+    return {call.kwargs["key"] for call in mock_cache.async_delete_cache.call_args_list}
+
+
+def test_block_customer_invalidates_cached_end_user_objects(
+    mock_prisma_client, mock_user_api_key_auth, mock_end_user_cache
+):
+    """
+    Regression: a warmed cache entry kept a just-blocked customer usable. Core auth caches the row
+    under `end_user_id:{id}` and the enterprise blocked-user hook under `litellm:end_user_id:{id}`,
+    so /customer/block has to drop both.
+    """
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="blocked-1", blocked=True)
+    )
+
+    response = client.post(
+        "/customer/block",
+        json={"user_ids": ["blocked-1"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert _deleted_cache_keys(mock_end_user_cache) == {
+        "end_user_id:blocked-1",
+        "litellm:end_user_id:blocked-1",
+    }
+
+
+def test_unblock_customer_persists_blocked_false_and_invalidates_cache(
+    mock_prisma_client, mock_user_api_key_auth, mock_end_user_cache, monkeypatch
+):
+    """
+    Regression: /customer/unblock only mutated the in-memory litellm.blocked_user_list, so the
+    durable blocked=True written by /customer/block survived and re-blocked the customer once the
+    enterprise cache expired.
+    """
+    monkeypatch.setattr(litellm, "blocked_user_list", ["blocked-1", "other"])
+    mock_prisma_client.db.litellm_endusertable.update_many = AsyncMock(return_value=1)
+
+    response = client.post(
+        "/customer/unblock",
+        json={"user_ids": ["blocked-1"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"blocked_users": ["other"]}
+    mock_prisma_client.db.litellm_endusertable.update_many.assert_awaited_once_with(
+        where={"user_id": {"in": ["blocked-1"]}},
+        data={"blocked": False},
+    )
+    assert _deleted_cache_keys(mock_end_user_cache) == {
+        "end_user_id:blocked-1",
+        "litellm:end_user_id:blocked-1",
+    }
+
+
+def test_unblock_customer_without_enterprise_callback_still_persists(
+    mock_prisma_client, mock_user_api_key_auth, mock_end_user_cache, monkeypatch
+):
+    """
+    /customer/block works without the enterprise callback, so its inverse must too; previously this
+    returned 400 and left blocked=True in the database.
+    """
+    monkeypatch.setattr(litellm, "blocked_user_list", None)
+    mock_prisma_client.db.litellm_endusertable.update_many = AsyncMock(return_value=1)
+
+    response = client.post(
+        "/customer/unblock",
+        json={"user_ids": ["blocked-1"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"blocked_users": []}
+    mock_prisma_client.db.litellm_endusertable.update_many.assert_awaited_once()
+
+
+def test_unblock_customer_rejects_filepath_blocked_user_list(
+    mock_prisma_client, mock_user_api_key_auth, mock_end_user_cache, monkeypatch
+):
+    """A file-backed blocked_user_list can't be edited at runtime, so nothing is written at all."""
+    monkeypatch.setattr(litellm, "blocked_user_list", "/etc/litellm/blocked_users.txt")
+    mock_prisma_client.db.litellm_endusertable.update_many = AsyncMock(return_value=1)
+
+    response = client.post(
+        "/customer/unblock",
+        json={"user_ids": ["blocked-1"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 400
+    mock_prisma_client.db.litellm_endusertable.update_many.assert_not_awaited()
+    assert _deleted_cache_keys(mock_end_user_cache) == set()
