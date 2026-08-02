@@ -118,8 +118,7 @@ def derive_provider_configuration_url(issuer: str) -> str:
     other normalization is applied -- the issuer string itself remains the
     trust anchor.
     """
-    base = issuer[:-1] if issuer.endswith("/") else issuer
-    return base + PROVIDER_CONFIGURATION_PATH
+    return issuer.removesuffix("/") + PROVIDER_CONFIGURATION_PATH
 
 
 def is_trusted_metadata_origin(base_url: str) -> bool:
