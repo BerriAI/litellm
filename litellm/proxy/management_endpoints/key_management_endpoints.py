@@ -578,8 +578,8 @@ def _check_allowed_routes_caller_permission(
 
 
 def _check_key_type_transition_against_existing_routes(
-    data: Optional[BaseModel],
-    existing_key_row: Any,
+    data: BaseModel | None,
+    existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """Keep non-admin key-type presets from replacing custom route restrictions."""
