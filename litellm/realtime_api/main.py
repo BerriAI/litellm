@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 import litellm
 from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
+    AZURE_GA_REALTIME_MODELS,
     REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     request_timeout,
@@ -56,25 +57,6 @@ vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 
-_AZURE_GA_REALTIME_MODELS = frozenset(
-    {
-        "gpt-realtime-2",
-        "gpt-realtime-2-2026-05-06",
-        "gpt-realtime-2.1",
-        "gpt-realtime-2.1-2026-07-07",
-        "gpt-realtime-2.1-mini",
-        "gpt-realtime-2.1-mini-2026-07-07",
-        "gpt-realtime-translate",
-        "gpt-realtime-translate-2026-05-06",
-        "gpt-realtime-translate-2026-05-07",
-        "gpt-realtime-whisper",
-        "gpt-realtime-whisper-2026-05-06",
-        "gpt-realtime-whisper-2026-05-07",
-        "gpt-transcribe",
-        "gpt-live-transcribe",
-    }
-)
-
 
 def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
     if session.get("type") == "transcription":
@@ -121,7 +103,7 @@ def _resolve_azure_realtime_protocol(
     query_params: RealtimeQueryParams | None,
     realtime_mode: str,
 ) -> str:
-    if model in _AZURE_GA_REALTIME_MODELS:
+    if model in AZURE_GA_REALTIME_MODELS:
         if realtime_protocol is not None and realtime_protocol.upper() not in ("GA", "V1"):
             raise ValueError(f"{model} requires the Azure OpenAI v1 Realtime API")
         return "GA"
@@ -206,9 +188,9 @@ async def acreate_realtime_client_secret(
         else None
     )
     model_name: Final = (
-        transcription_model
+        req.model
+        or transcription_model
         or (req.session.model if req.session is not None else None)
-        or req.model
         or "gpt-4o-realtime-preview"
     )
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
