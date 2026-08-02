@@ -122,7 +122,8 @@ class CheckResponsesCost:
                 model_name = stored_response.get("model", None)
                 
                 # Decrypt the response ID
-                responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(unified_object_id)
+                decrypted_id = ResponsesIDSecurity()._decrypt_response_id(unified_object_id)
+                responses_id_security = decrypted_id.response_id if decrypted_id else unified_object_id
                 
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {

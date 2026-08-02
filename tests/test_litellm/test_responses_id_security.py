@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+from litellm.proxy.hooks.responses_id_security import (
+    DecryptedResponseID,
+    ResponsesIDSecurity,
+)
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import SpecialEnums
 
@@ -46,7 +49,7 @@ class TestIsEncryptedResponseId:
         import litellm.proxy.hooks.responses_id_security as responses_module
 
         with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
-            mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_123;user_id:user-456"
+            mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_123;user_id:user-456;team_id:team-789"
 
             result = responses_id_security._is_encrypted_response_id(
                 "resp_encrypted_value"
@@ -77,15 +80,36 @@ class TestDecryptResponseId:
         import litellm.proxy.hooks.responses_id_security as responses_module
 
         with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
-            mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_original_123;user_id:user-456;team_id:team-789"
+            mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_original_123;user_id:user-456;team_id:team-789;key_hash:hashed-key-1"
 
-            original_id, user_id, team_id = responses_id_security._decrypt_response_id(
+            decrypted = responses_id_security._decrypt_response_id(
                 "resp_encrypted_value"
             )
 
-            assert original_id == "resp_original_123"
-            assert user_id == "user-456"
-            assert team_id == "team-789"
+            assert decrypted == DecryptedResponseID(
+                response_id="resp_original_123",
+                user_id="user-456",
+                team_id="team-789",
+                key_hash="hashed-key-1",
+            )
+
+    def test_decrypt_response_id_without_key_hash(self, responses_id_security):
+        """Ids issued before key_hash was added must still decrypt"""
+        import litellm.proxy.hooks.responses_id_security as responses_module
+
+        with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
+            mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_original_123;user_id:user-456;team_id:team-789"
+
+            decrypted = responses_id_security._decrypt_response_id(
+                "resp_encrypted_value"
+            )
+
+            assert decrypted == DecryptedResponseID(
+                response_id="resp_original_123",
+                user_id="user-456",
+                team_id="team-789",
+                key_hash=None,
+            )
 
     def test_decrypt_response_id_no_encryption(self, responses_id_security):
         """Test decrypting a non-encrypted response ID"""
@@ -95,13 +119,9 @@ class TestDecryptResponseId:
         with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
             mock_decrypt.return_value = None
 
-            original_id, user_id, team_id = responses_id_security._decrypt_response_id(
-                "resp_plain_value"
+            assert (
+                responses_id_security._decrypt_response_id("resp_plain_value") is None
             )
-
-            assert original_id == "resp_plain_value"
-            assert user_id is None
-            assert team_id is None
 
 
 class TestEncryptResponseId:
@@ -320,7 +340,7 @@ class TestAsyncPreCallHook:
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
-                return_value=("resp_original_123", "test-user-123", "test-team-123"),
+                return_value=DecryptedResponseID("resp_original_123", "test-user-123", "test-team-123", None),
             ):
                 result = await responses_id_security.async_pre_call_hook(
                     user_api_key_dict=mock_user_api_key_dict,
@@ -344,7 +364,7 @@ class TestAsyncPreCallHook:
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
-                return_value=("resp_original_456", "test-user-123", "test-team-123"),
+                return_value=DecryptedResponseID("resp_original_456", "test-user-123", "test-team-123", None),
             ):
                 result = await responses_id_security.async_pre_call_hook(
                     user_api_key_dict=mock_user_api_key_dict,
@@ -374,7 +394,7 @@ class TestAsyncPreCallHook:
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
-                return_value=("resp_original_team_b", None, "team-b"),
+                return_value=DecryptedResponseID("resp_original_team_b", None, "team-b", None),
             ):
                 with patch("litellm.proxy.proxy_server.general_settings", {}):
                     with pytest.raises(HTTPException) as exc_info:
@@ -407,7 +427,7 @@ class TestAsyncPreCallHook:
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
-                return_value=("resp_original_team_b", "user-from-team-b", "team-b"),
+                return_value=DecryptedResponseID("resp_original_team_b", "user-from-team-b", "team-b", None),
             ):
                 with patch("litellm.proxy.proxy_server.general_settings", {}):
                     with pytest.raises(HTTPException) as exc_info:
@@ -441,7 +461,7 @@ class TestAsyncPreCallHook:
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
-                return_value=("resp_original_team_a", None, "team-a"),
+                return_value=DecryptedResponseID("resp_original_team_a", None, "team-a", None),
             ):
                 result = await responses_id_security.async_pre_call_hook(
                     user_api_key_dict=mock_auth_team_a,
@@ -471,7 +491,7 @@ class TestAsyncPreCallHook:
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
-                return_value=("resp_original_team_b", None, "team-b"),
+                return_value=DecryptedResponseID("resp_original_team_b", None, "team-b", None),
             ):
                 with patch("litellm.proxy.proxy_server.general_settings", {}):
                     with pytest.raises(HTTPException) as exc_info:
@@ -504,7 +524,7 @@ class TestAsyncPreCallHook:
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
-                return_value=("resp_original_team_b", None, "team-b"),
+                return_value=DecryptedResponseID("resp_original_team_b", None, "team-b", None),
             ):
                 with patch("litellm.proxy.proxy_server.general_settings", {}):
                     with pytest.raises(HTTPException) as exc_info:
@@ -531,7 +551,7 @@ class TestAsyncPreCallHook:
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
-                return_value=("resp_original_789", "test-user-123", "test-team-123"),
+                return_value=DecryptedResponseID("resp_original_789", "test-user-123", "test-team-123", None),
             ):
                 result = await responses_id_security.async_pre_call_hook(
                     user_api_key_dict=mock_user_api_key_dict,
@@ -560,7 +580,7 @@ class TestAsyncPreCallHook:
             with patch.object(
                 responses_id_security,
                 "_decrypt_response_id",
-                return_value=("resp_original_team_b", None, "team-b"),
+                return_value=DecryptedResponseID("resp_original_team_b", None, "team-b", None),
             ):
                 with patch("litellm.proxy.proxy_server.general_settings", {}):
                     with pytest.raises(HTTPException) as exc_info:
@@ -617,3 +637,162 @@ class TestAsyncPostCallSuccessHook:
         )
 
         assert result == mock_response
+
+
+class TestUnverifiableResponseIds:
+    """Ids that were not issued by this proxy carry no ownership binding, so they must be rejected"""
+
+    @pytest.fixture
+    def tenant_key(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        return UserAPIKeyAuth(api_key="hashed-key-a", user_id="user-a", team_id="team-a")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "call_type, id_field",
+        [
+            ("aresponses", "previous_response_id"),
+            ("aget_responses", "response_id"),
+            ("adelete_responses", "response_id"),
+            ("acancel_responses", "response_id"),
+            ("alist_input_items", "response_id"),
+        ],
+    )
+    async def test_raw_response_id_is_rejected(
+        self, responses_id_security, mock_cache, tenant_key, call_type, id_field, monkeypatch
+    ):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            with pytest.raises(HTTPException) as exc_info:
+                await responses_id_security.async_pre_call_hook(
+                    user_api_key_dict=tenant_key,
+                    cache=mock_cache,
+                    data={id_field: "resp_raw_provider_id"},
+                    call_type=call_type,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "not issued by this proxy" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_raw_response_id_allowed_for_proxy_admin(
+        self, responses_id_security, mock_cache, monkeypatch
+    ):
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+        admin_key = UserAPIKeyAuth(api_key="hashed-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value)
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = await responses_id_security.async_pre_call_hook(
+                user_api_key_dict=admin_key,
+                cache=mock_cache,
+                data={"response_id": "resp_raw_provider_id"},
+                call_type="aget_responses",
+            )
+
+        assert result["response_id"] == "resp_raw_provider_id"
+
+    @pytest.mark.asyncio
+    async def test_raw_response_id_allowed_when_security_disabled(
+        self, responses_id_security, mock_cache, tenant_key, monkeypatch
+    ):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"disable_responses_id_security": True},
+        ):
+            result = await responses_id_security.async_pre_call_hook(
+                user_api_key_dict=tenant_key,
+                cache=mock_cache,
+                data={"response_id": "resp_raw_provider_id"},
+                call_type="aget_responses",
+            )
+
+        assert result["response_id"] == "resp_raw_provider_id"
+
+    @pytest.mark.asyncio
+    async def test_raw_response_id_allowed_when_no_signing_key(
+        self, responses_id_security, mock_cache, tenant_key, monkeypatch
+    ):
+        monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+
+        with patch("litellm.proxy.proxy_server.master_key", None):
+            with patch("litellm.proxy.proxy_server.general_settings", {}):
+                result = await responses_id_security.async_pre_call_hook(
+                    user_api_key_dict=tenant_key,
+                    cache=mock_cache,
+                    data={"response_id": "resp_raw_provider_id"},
+                    call_type="aget_responses",
+                )
+
+        assert result["response_id"] == "resp_raw_provider_id"
+
+
+class TestOwnerlessResponseIds:
+    """A key with no user_id and no team_id must not hand every other key access to its responses"""
+
+    @staticmethod
+    def _issue_id(responses_id_security, issuing_key) -> str:
+        response = ResponsesAPIResponse(
+            id="resp_provider_original", created_at=1234567890, output=[], status="completed"
+        )
+        return responses_id_security._encrypt_response_id(response, issuing_key).id
+
+    @pytest.mark.asyncio
+    async def test_issuing_key_can_reuse_its_own_ownerless_id(
+        self, responses_id_security, mock_cache, monkeypatch
+    ):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+        issuing_key = UserAPIKeyAuth(api_key="hashed-key-1")
+        encrypted_id = self._issue_id(responses_id_security, issuing_key)
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = await responses_id_security.async_pre_call_hook(
+                user_api_key_dict=issuing_key,
+                cache=mock_cache,
+                data={"response_id": encrypted_id},
+                call_type="aget_responses",
+            )
+
+        assert result["response_id"] == "resp_provider_original"
+
+    @pytest.mark.asyncio
+    async def test_other_ownerless_key_is_rejected(
+        self, responses_id_security, mock_cache, monkeypatch
+    ):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+        encrypted_id = self._issue_id(responses_id_security, UserAPIKeyAuth(api_key="hashed-key-1"))
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            with pytest.raises(HTTPException) as exc_info:
+                await responses_id_security.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key-2"),
+                    cache=mock_cache,
+                    data={"response_id": encrypted_id},
+                    call_type="aget_responses",
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "no owner" in exc_info.value.detail
+
+    def test_legacy_ownerless_id_without_key_hash_is_rejected(self, responses_id_security):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            with pytest.raises(HTTPException) as exc_info:
+                responses_id_security.check_user_access_to_response_id(
+                    response_id_user_id=None,
+                    response_id_team_id=None,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key-1"),
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "no owner" in exc_info.value.detail
