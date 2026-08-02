@@ -2,7 +2,7 @@
 Utility functions for Interactions API.
 """
 
-from typing import Any, Dict, Optional, cast
+from typing import Any, cast
 
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.types.interactions import InteractionsAPIOptionalRequestParams
@@ -26,8 +26,8 @@ INTERACTIONS_API_OPTIONAL_PARAMS = {
 
 def get_provider_interactions_api_config(
     provider: str,
-    model: Optional[str] = None,
-) -> Optional[BaseInteractionsAPIConfig]:
+    model: str | None = None,
+) -> BaseInteractionsAPIConfig | None:
     """
     Get the interactions API config for the given provider.
 
@@ -55,7 +55,7 @@ class InteractionsAPIRequestUtils:
 
     @staticmethod
     def get_requested_interactions_api_optional_params(
-        params: Dict[str, Any],
+        params: dict[str, Any],
     ) -> InteractionsAPIOptionalRequestParams:
         """
         Filter parameters to only include valid optional params per OpenAPI spec.

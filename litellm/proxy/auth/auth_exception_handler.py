@@ -2,19 +2,19 @@
 Handles Authentication Errors
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from fastapi import HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
@@ -40,9 +40,9 @@ class UserAPIKeyAuthExceptionHandler:
         request: Request,
         request_data: dict,
         route: str,
-        parent_otel_span: Optional[Span],
+        parent_otel_span: Span | None,
         api_key: str,
-        resolved_identity: Optional[UserAPIKeyAuth] = None,
+        resolved_identity: UserAPIKeyAuth | None = None,
     ) -> UserAPIKeyAuth:
         """
         Handles Connection Errors when reading a Virtual Key from LiteLLM DB
@@ -95,10 +95,7 @@ class UserAPIKeyAuthExceptionHandler:
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             )
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
-                    str(e),
-                    requester_ip,
-                ),
+                f"litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {e!s}\nRequester IP Address:{requester_ip}",
                 extra={"requester_ip": requester_ip},
             )
 
@@ -153,7 +150,7 @@ class UserAPIKeyAuthExceptionHandler:
                 )
             if isinstance(e, HTTPException):
                 raise ProxyException(
-                    message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                    message=getattr(e, "detail", f"Authentication Error({e!s})"),
                     type=ProxyErrorTypes.auth_error,
                     param=getattr(e, "param", "None"),
                     code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),

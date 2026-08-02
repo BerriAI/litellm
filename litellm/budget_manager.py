@@ -11,7 +11,7 @@ import json
 import os
 import threading
 import time
-from typing import Literal, Optional
+from typing import Literal
 
 import litellm
 from litellm.constants import (
@@ -28,8 +28,8 @@ class BudgetManager:
         self,
         project_name: str,
         client_type: str = "local",
-        api_base: Optional[str] = None,
-        headers: Optional[dict] = None,
+        api_base: str | None = None,
+        headers: dict | None = None,
     ):
         self.client_type = client_type
         self.project_name = project_name
@@ -73,7 +73,7 @@ class BudgetManager:
         self,
         total_budget: float,
         user: str,
-        duration: Optional[Literal["daily", "weekly", "monthly", "yearly"]] = None,
+        duration: Literal["daily", "weekly", "monthly", "yearly"] | None = None,
         created_at: float = time.time(),
     ):
         self.user_dict[user] = {"total_budget": total_budget}
@@ -113,10 +113,10 @@ class BudgetManager:
     def update_cost(
         self,
         user: str,
-        completion_obj: Optional[ModelResponse] = None,
-        model: Optional[str] = None,
-        input_text: Optional[str] = None,
-        output_text: Optional[str] = None,
+        completion_obj: ModelResponse | None = None,
+        model: str | None = None,
+        input_text: str | None = None,
+        output_text: str | None = None,
     ):
         if model and input_text and output_text:
             prompt_tokens = litellm.token_counter(model=model, messages=[{"role": "user", "content": input_text}])

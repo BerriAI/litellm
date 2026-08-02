@@ -23,12 +23,12 @@ Used by JWT Auth to get the user role from the token, and by
 additional_drop_params to remove nested fields from optional parameters.
 """
 
-from typing import Any, Dict, List, Optional, TypeVar, Union
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
 
-def get_nested_value(data: Dict[str, Any], key_path: str, default: Optional[T] = None) -> Optional[T]:
+def get_nested_value(data: dict[str, Any], key_path: str, default: T | None = None) -> T | None:
     """
     Retrieves a value from a nested dictionary using dot notation.
 
@@ -107,7 +107,7 @@ def _parse_path_segments(path: str) -> list:
 
 
 def _delete_nested_value_custom(
-    data: Union[Dict[str, Any], List[Any]],
+    data: dict[str, Any] | list[Any],
     segments: list,
     segment_index: int = 0,
 ) -> None:
@@ -178,11 +178,11 @@ def _delete_nested_value_custom(
 
 
 def delete_nested_value(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     path: str,
     depth: int = 0,
     max_depth: int = 20,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Delete a field from nested data using JSONPath notation.
 

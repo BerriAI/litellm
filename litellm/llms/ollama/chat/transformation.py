@@ -1,14 +1,9 @@
 import json
 import time
-from litellm._uuid import uuid
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Iterator,
-    List,
-    Optional,
-    Union,
     cast,
 )
 
@@ -16,6 +11,7 @@ from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,
@@ -89,40 +85,40 @@ class OllamaChatConfig(BaseConfig):
     - `template` (string): the full prompt or prompt template (overrides what is defined in the Modelfile)
     """
 
-    mirostat: Optional[int] = None
-    mirostat_eta: Optional[float] = None
-    mirostat_tau: Optional[float] = None
-    num_ctx: Optional[int] = None
-    num_gqa: Optional[int] = None
-    num_thread: Optional[int] = None
-    repeat_last_n: Optional[int] = None
-    repeat_penalty: Optional[float] = None
-    seed: Optional[int] = None
-    tfs_z: Optional[float] = None
-    num_predict: Optional[int] = None
-    top_k: Optional[int] = None
-    system: Optional[str] = None
-    template: Optional[str] = None
+    mirostat: int | None = None
+    mirostat_eta: float | None = None
+    mirostat_tau: float | None = None
+    num_ctx: int | None = None
+    num_gqa: int | None = None
+    num_thread: int | None = None
+    repeat_last_n: int | None = None
+    repeat_penalty: float | None = None
+    seed: int | None = None
+    tfs_z: float | None = None
+    num_predict: int | None = None
+    top_k: int | None = None
+    system: str | None = None
+    template: str | None = None
 
     def __init__(
         self,
-        mirostat: Optional[int] = None,
-        mirostat_eta: Optional[float] = None,
-        mirostat_tau: Optional[float] = None,
-        num_ctx: Optional[int] = None,
-        num_gqa: Optional[int] = None,
-        num_thread: Optional[int] = None,
-        repeat_last_n: Optional[int] = None,
-        repeat_penalty: Optional[float] = None,
-        temperature: Optional[float] = None,
-        seed: Optional[int] = None,
-        stop: Optional[list] = None,
-        tfs_z: Optional[float] = None,
-        num_predict: Optional[int] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        system: Optional[str] = None,
-        template: Optional[str] = None,
+        mirostat: int | None = None,
+        mirostat_eta: float | None = None,
+        mirostat_tau: float | None = None,
+        num_ctx: int | None = None,
+        num_gqa: int | None = None,
+        num_thread: int | None = None,
+        repeat_last_n: int | None = None,
+        repeat_penalty: float | None = None,
+        temperature: float | None = None,
+        seed: int | None = None,
+        stop: list | None = None,
+        tfs_z: float | None = None,
+        num_predict: int | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        system: str | None = None,
+        template: str | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -199,11 +195,11 @@ class OllamaChatConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is not None and "Authorization" not in headers:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -211,12 +207,12 @@ class OllamaChatConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         OPTIONAL
@@ -237,7 +233,7 @@ class OllamaChatConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -257,7 +253,7 @@ class OllamaChatConfig(BaseConfig):
             ):  # avoid message serialization issues - https://github.com/BerriAI/litellm/issues/5319
                 m = m.model_dump(exclude_none=True)
             tool_calls = m.get("tool_calls")
-            new_tools: Optional[List[OllamaToolCall]] = None
+            new_tools: list[OllamaToolCall] | None = None
             if tool_calls is not None and isinstance(tool_calls, list):
                 new_tools = []
                 for tool in tool_calls:
@@ -324,12 +320,12 @@ class OllamaChatConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: str,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -373,7 +369,7 @@ class OllamaChatConfig(BaseConfig):
                 content=None,
                 tool_calls=[
                     {
-                        "id": f"call_{str(uuid.uuid4())}",
+                        "id": f"call_{uuid.uuid4()!s}",
                         "function": {
                             "name": function_call.get("name", litellm_params.get("function_name")),
                             "arguments": json.dumps(function_call.get("arguments", function_call)),
@@ -410,14 +406,14 @@ class OllamaChatConfig(BaseConfig):
         )
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return OllamaError(status_code=status_code, message=error_message, headers=headers)
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         return OllamaChatCompletionResponseIterator(
             streaming_response=streaming_response,
@@ -430,7 +426,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
 
-    def _is_function_call_complete(self, function_args: Union[str, dict]) -> bool:
+    def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
             return True
         try:
@@ -482,8 +478,8 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                             tool_call["id"] = str(uuid.uuid4())
 
             # PROCESS REASONING CONTENT
-            reasoning_content: Optional[str] = None
-            content: Optional[str] = None
+            reasoning_content: str | None = None
+            content: str | None = None
             if chunk["message"].get("thinking"):
                 reasoning_content = chunk["message"].get("thinking")
                 self.started_reasoning_content = True

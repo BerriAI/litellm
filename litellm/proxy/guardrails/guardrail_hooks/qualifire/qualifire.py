@@ -7,7 +7,7 @@
 
 import json
 import os
-from typing import Any, Dict, List, Literal, Optional, Type
+from typing import Any, Literal
 
 from fastapi import HTTPException
 
@@ -33,7 +33,7 @@ DEFAULT_QUALIFIRE_API_BASE = "https://proxy.qualifire.ai"
 
 class QualifireGuardrail(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
@@ -42,17 +42,17 @@ class QualifireGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        evaluation_id: Optional[str] = None,
-        prompt_injections: Optional[bool] = None,
-        hallucinations_check: Optional[bool] = None,
-        grounding_check: Optional[bool] = None,
-        pii_check: Optional[bool] = None,
-        content_moderation_check: Optional[bool] = None,
-        tool_selection_quality_check: Optional[bool] = None,
-        assertions: Optional[List[str]] = None,
-        on_flagged: Optional[str] = "block",
+        api_key: str | None = None,
+        api_base: str | None = None,
+        evaluation_id: str | None = None,
+        prompt_injections: bool | None = None,
+        hallucinations_check: bool | None = None,
+        grounding_check: bool | None = None,
+        pii_check: bool | None = None,
+        content_moderation_check: bool | None = None,
+        tool_selection_quality_check: bool | None = None,
+        assertions: list[str] | None = None,
+        on_flagged: str | None = "block",
         **kwargs,
     ):
         """
@@ -112,7 +112,7 @@ class QualifireGuardrail(CustomGuardrail):
             ]
         )
 
-    def _convert_messages_to_api_format(self, messages: List[AllMessageValues]) -> List[Dict[str, Any]]:
+    def _convert_messages_to_api_format(self, messages: list[AllMessageValues]) -> list[dict[str, Any]]:
         """
         Convert LiteLLM messages to Qualifire API format.
         Supports tool calls for tool_selection_quality_check.
@@ -140,7 +140,7 @@ class QualifireGuardrail(CustomGuardrail):
                         text_parts.append(part)
                 content = "\n".join(text_parts)
 
-            api_message: Dict[str, Any] = {
+            api_message: dict[str, Any] = {
                 "role": role,
                 "content": content if isinstance(content, str) else str(content),
             }
@@ -178,7 +178,7 @@ class QualifireGuardrail(CustomGuardrail):
 
         return api_messages
 
-    def _convert_tools_to_api_format(self, tools: Optional[List[Any]]) -> Optional[List[Dict[str, Any]]]:
+    def _convert_tools_to_api_format(self, tools: list[Any] | None) -> list[dict[str, Any]] | None:
         """
         Convert OpenAI-format tools to Qualifire API format.
 
@@ -217,7 +217,7 @@ class QualifireGuardrail(CustomGuardrail):
 
         return api_tools if api_tools else None
 
-    def _check_if_flagged(self, result: Dict[str, Any]) -> bool:
+    def _check_if_flagged(self, result: dict[str, Any]) -> bool:
         """
         Check if the Qualifire evaluation result indicates flagged content.
 
@@ -237,13 +237,13 @@ class QualifireGuardrail(CustomGuardrail):
 
     def _build_evaluate_payload(
         self,
-        api_messages: List[Dict[str, Any]],
-        output: Optional[str],
-        assertions: Optional[List[str]],
-        available_tools: Optional[List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
+        api_messages: list[dict[str, Any]],
+        output: str | None,
+        assertions: list[str] | None,
+        available_tools: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
         """Build payload dictionary for the /api/evaluation/evaluate endpoint."""
-        payload: Dict[str, Any] = {"messages": api_messages}
+        payload: dict[str, Any] = {"messages": api_messages}
 
         if output is not None:
             payload["output"] = output
@@ -275,10 +275,10 @@ class QualifireGuardrail(CustomGuardrail):
 
     async def _run_qualifire_check(
         self,
-        messages: List[AllMessageValues],
-        output: Optional[str],
-        dynamic_params: Dict[str, Any],
-        available_tools: Optional[List[Any]] = None,
+        messages: list[AllMessageValues],
+        output: str | None,
+        dynamic_params: dict[str, Any],
+        available_tools: list[Any] | None = None,
     ) -> None:
         """
         Core Qualifire check logic - shared between hooks.
@@ -398,7 +398,7 @@ class QualifireGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         """
         Apply Qualifire guardrail to the given inputs.
@@ -425,13 +425,13 @@ class QualifireGuardrail(CustomGuardrail):
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
 
         # Extract messages from structured_messages or request_data
-        messages: Optional[List[AllMessageValues]] = inputs.get("structured_messages")
+        messages: list[AllMessageValues] | None = inputs.get("structured_messages")
         if not messages:
             messages = request_data.get("messages")
 
         # For response (post_call), messages may not be available in the inputs
         # We need to work with texts instead and construct messages if needed
-        output: Optional[str] = None
+        output: str | None = None
         texts = inputs.get("texts", [])
 
         if input_type == "response":
@@ -465,7 +465,7 @@ class QualifireGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:  # type: ignore
+    def get_config_model() -> type["GuardrailConfigModel"] | None:  # type: ignore
         from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
             QualifireGuardrailConfigModel,
         )

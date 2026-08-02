@@ -42,9 +42,9 @@ import hmac
 import html
 import secrets
 from base64 import urlsafe_b64encode
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Literal, TypeVar
+from typing import Literal, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request

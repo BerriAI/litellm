@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -24,7 +24,7 @@ else:
     UserAPIKeyAuth = Any
 
 
-def _get_otel_v2_class() -> Optional[type]:
+def _get_otel_v2_class() -> type | None:
     """Return the ``OpenTelemetryV2`` class, or ``None`` if the OTel SDK is absent.
 
     Imported lazily: ``litellm.integrations.otel.logger`` imports the OpenTelemetry
@@ -54,7 +54,7 @@ class ServiceLogging(CustomLogger):
         if "prometheus_system" in litellm.service_callback:
             self.prometheusServicesLogger = PrometheusServicesLogger()
 
-    def _resolve_otel_service_logger(self, callback: Any) -> Optional[Any]:
+    def _resolve_otel_service_logger(self, callback: Any) -> Any | None:
         """Resolve the OTel logger (legacy or V2) to emit a service span on.
 
         Returns the logger instance whose ``async_service_*_hook`` should fire for
@@ -88,9 +88,9 @@ class ServiceLogging(CustomLogger):
         service: ServiceTypes,
         duration: float,
         call_type: str,
-        parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[float, datetime]] = None,
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: float | datetime | None = None,
     ):
         """
         Handles both sync and async monitoring by checking for existing event loop.
@@ -152,10 +152,10 @@ class ServiceLogging(CustomLogger):
         service: ServiceTypes,
         call_type: str,
         duration: float,
-        parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[datetime, float]] = None,
-        event_metadata: Optional[dict] = None,
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
+        event_metadata: dict | None = None,
     ):
         """
         - For counting if the redis, postgres call is successful
@@ -218,7 +218,6 @@ class ServiceLogging(CustomLogger):
             self.prometheusServicesLogger = PrometheusServicesLogger()
         elif self.prometheusServicesLogger is None:
             self.prometheusServicesLogger = self.prometheusServicesLogger()
-        return
 
     async def init_datadog_logger_if_none(self):
         """
@@ -229,8 +228,6 @@ class ServiceLogging(CustomLogger):
 
         if not hasattr(self, "dd_logger"):
             self.dd_logger: DataDogLogger = DataDogLogger()
-
-        return
 
     async def init_otel_logger_if_none(self):
         """
@@ -246,18 +243,17 @@ class ServiceLogging(CustomLogger):
                 verbose_logger.warning(
                     "ServiceLogger: open_telemetry_logger is None or not an instance of OpenTelemetry"
                 )
-        return
 
     async def async_service_failure_hook(
         self,
         service: ServiceTypes,
         duration: float,
-        error: Union[str, Exception],
+        error: str | Exception,
         call_type: str,
-        parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[float, datetime]] = None,
-        event_metadata: Optional[dict] = None,
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: float | datetime | None = None,
+        event_metadata: dict | None = None,
     ):
         """
         - For counting if the redis, postgres call is unsuccessful
@@ -324,7 +320,7 @@ class ServiceLogging(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
-        traceback_str: Optional[str] = None,
+        traceback_str: str | None = None,
     ):
         """
         Hook to track failed litellm-service calls
@@ -347,7 +343,7 @@ class ServiceLogging(CustomLogger):
                 pass
             else:
                 raise Exception(
-                    "Duration={} is not a float or timedelta object. type={}".format(_duration, type(_duration))
+                    f"Duration={_duration} is not a float or timedelta object. type={type(_duration)}"
                 )  # invalid _duration value
             # Batch polling callbacks (check_batch_cost) don't include call_type in kwargs.
             # Use .get() to avoid KeyError.

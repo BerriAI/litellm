@@ -1,9 +1,10 @@
 """``CustomLogger`` adapter on the OpenTelemetry span engine."""
 
 from collections import OrderedDict
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
@@ -13,20 +14,10 @@ from opentelemetry.trace import Span, Tracer, get_current_span, use_span
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.otel.model.baggage import promoted_baggage
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
-from litellm.integrations.otel.plumbing.context import (
-    is_recordable_span,
-    mcp_message_transport_span,
-    request_root_span,
-    resolve_mcp_span_context,
-    resolve_parent_context,
-    resolve_request_span_context,
-    set_request_baggage,
-    set_request_root_span,
-)
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
+from litellm.integrations.otel.model.baggage import promoted_baggage
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
@@ -42,6 +33,18 @@ from litellm.integrations.otel.model.payloads import (
     is_mcp_list_tools,
     is_mcp_tool_call,
 )
+from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
+from litellm.integrations.otel.model.utils import to_ns
+from litellm.integrations.otel.plumbing.context import (
+    is_recordable_span,
+    mcp_message_transport_span,
+    request_root_span,
+    resolve_mcp_span_context,
+    resolve_parent_context,
+    resolve_request_span_context,
+    set_request_baggage,
+    set_request_root_span,
+)
 from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
 from litellm.integrations.otel.plumbing.metrics import (
     GenAIMetricRecorder,
@@ -56,8 +59,6 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
-from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
-from litellm.integrations.otel.model.utils import to_ns
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -157,7 +158,7 @@ class OpenTelemetryV2(CustomLogger):
             event_recorder=self._init_events(logger_provider),
         )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
-        self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
+        self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
     def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":
@@ -668,9 +669,9 @@ class OpenTelemetryV2(CustomLogger):
         SDK dropped it, leaving the POST that actually failed unmarked."""
         span = mcp_message_transport_span() or request_root_span() or user_api_key_dict.parent_otel_span
         if span is None or not is_recordable_span(span):
-            return None
+            return
         stamp_error(span, _span_error_from_exception(original_exception, traceback_str=traceback_str))
-        return None
+        return
 
     def emit_guardrail_span(self, entry: "StandardLoggingGuardrailInformation") -> None:
         # Emitted by the guardrail-recording code the moment a guardrail finishes,

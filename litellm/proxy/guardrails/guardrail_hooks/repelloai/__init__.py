@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 def _event_hook_from_mode(
     mode: str | list[str] | Mode,
-) -> Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode]:
+) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode:
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, list):

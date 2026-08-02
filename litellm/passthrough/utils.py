@@ -1,4 +1,4 @@
-from typing import Dict, List, Mapping, Optional, Union
+from collections.abc import Mapping
 from urllib.parse import parse_qs
 
 import httpx
@@ -28,9 +28,9 @@ class BasePassthroughUtils:
     @staticmethod
     def get_merged_query_parameters(
         existing_url: httpx.URL,
-        request_query_params: Mapping[str, Union[str, list]],
-        default_query_params: Optional[Dict[str, Union[str, list]]] = None,
-    ) -> Dict[str, Union[str, List[str]]]:
+        request_query_params: Mapping[str, str | list],
+        default_query_params: dict[str, str | list] | None = None,
+    ) -> dict[str, str | list[str]]:
         # Get the existing query params from the target URL
         existing_query_string = existing_url.query.decode("utf-8")
         existing_query_params = parse_qs(existing_query_string)
@@ -55,7 +55,7 @@ class BasePassthroughUtils:
     def forward_headers_from_request(
         request_headers: dict,
         headers: dict,
-        forward_headers: Optional[bool] = False,
+        forward_headers: bool | None = False,
     ):
         """
         Helper to forward headers from original request.
