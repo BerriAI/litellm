@@ -3,7 +3,7 @@ import json
 import time
 from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast, get_args
 from uuid import uuid4
 
 import fastapi
@@ -19,8 +19,11 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import REASONING_EFFORT, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 router = APIRouter()
 
@@ -91,6 +94,58 @@ def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
     if isinstance(messages, list) and len(messages) > 0:
         return True
     return "messages" in data and "input" not in data
+
+
+_CURSOR_THINKING_SEPARATOR = "-thinking-"
+_CURSOR_FAST_SUFFIX = "-fast"
+_CURSOR_THINKING_LEVELS: frozenset[str] = frozenset(get_args(REASONING_EFFORT))
+
+
+class _CursorModelVariant(NamedTuple):
+    base_model: str
+    reasoning_effort: str | None
+
+
+def _parse_cursor_model_variant(model: str) -> _CursorModelVariant:
+    stripped = model.removesuffix(_CURSOR_FAST_SUFFIX)
+    base, separator, level = stripped.rpartition(_CURSOR_THINKING_SEPARATOR)
+    if separator and base and level in _CURSOR_THINKING_LEVELS:
+        return _CursorModelVariant(base, level)
+    return _CursorModelVariant(stripped, None)
+
+
+def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
+    if llm_router is None:
+        return False
+    if model in llm_router.model_names or model in llm_router.model_group_alias:
+        return True
+    if model in llm_router.team_public_model_names:
+        return True
+    return bool(llm_router.pattern_router.get_pattern(model))
+
+
+def _resolve_cursor_model_variant(
+    data: dict, llm_router: "Router | None"
+) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    model = data.get("model")
+    if not isinstance(model, str) or _router_can_serve(model, llm_router):
+        return data
+    variant = _parse_cursor_model_variant(model)
+    if variant.base_model == model or not _router_can_serve(variant.base_model, llm_router):
+        return data
+    resolved = {**data, "model": variant.base_model}  # mutable-ok: plain body dict
+    if variant.reasoning_effort is None:
+        return resolved
+    if _is_chat_completions_body(data):
+        if "reasoning_effort" in data:
+            return resolved
+        return {**resolved, "reasoning_effort": variant.reasoning_effort}  # mutable-ok: plain body dict
+    reasoning = data.get("reasoning")
+    if isinstance(reasoning, dict):
+        if reasoning.get("effort"):
+            return resolved
+        return {**resolved, "reasoning": {**reasoning, "effort": variant.reasoning_effort}}  # mutable-ok: same
+    return {**resolved, "reasoning": {"effort": variant.reasoning_effort}}  # mutable-ok: plain body dict
 
 
 @router.post(
@@ -440,7 +495,8 @@ async def cursor_chat_completions(
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
 
-    data = await _read_request_body(request=request)
+    raw_body = await _read_request_body(request=request)
+    data = _resolve_cursor_model_variant(raw_body, llm_router)
 
     if _is_chat_completions_body(data):
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
@@ -448,7 +504,7 @@ async def cursor_chat_completions(
         # Keyed on messages CONTENT, not key presence: Cursor can send a null or
         # empty messages stub alongside a real agent-mode input array
         normalized = _normalize_tool_dialect(data, to_chat=True)
-        if normalized is not data:
+        if normalized is not raw_body:
             _safe_set_request_parsed_body(request=request, parsed_body=normalized)
         return await chat_completion(
             request=request,
