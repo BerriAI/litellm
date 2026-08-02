@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -85,7 +86,7 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
 async def run_async_fallback(
     *args: tuple[Any],
     litellm_router: LitellmRouter,
-    fallback_model_group: list[str],
+    fallback_model_group: Sequence[str],
     original_model_group: str,
     original_exception: Exception,
     max_fallbacks: int,
@@ -121,7 +122,7 @@ async def run_async_fallback(
     error_from_fallbacks = original_exception
     fallback_errors = (get_fallback_error_info(original_exception),)
 
-    for mg in fallback_model_group:
+    for fallback_index, mg in enumerate(fallback_model_group):
         if mg == original_model_group:
             continue
         try:
@@ -138,6 +139,8 @@ async def run_async_fallback(
             fallback_depth = fallback_depth + 1
             kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks
+            kwargs["_fallback_root_model_group"] = kwargs.get("_fallback_root_model_group", original_model_group)
+            kwargs["_remaining_fallback_model_groups"] = tuple(fallback_model_group[fallback_index + 1 :])
             if include_fallback_errors:
                 kwargs["include_fallback_errors"] = include_fallback_errors
             response = await litellm_router.async_function_with_fallbacks(*args, **kwargs)
