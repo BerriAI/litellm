@@ -2735,6 +2735,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     savings_baseline_model: str
+    savings_baseline_pricing_key: str
     conversation_continuing: bool
 
 
@@ -2756,6 +2757,7 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "escalated",
         "tier_boundaries",
         "savings_baseline_model",
+        "savings_baseline_pricing_key",
         "conversation_continuing",
     }
 )

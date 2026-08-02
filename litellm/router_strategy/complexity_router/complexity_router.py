@@ -28,6 +28,7 @@ from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.router_strategy.savings_baseline import Baseline, resolve_baseline
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -229,26 +230,26 @@ def _conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None)
 
     The counterfactual the savings driver prices against is one model serving every
     turn, so whether that model had this prompt cached is just whether an earlier turn
-    exists: a second human ask means it wrote the prompt then and would only read it
-    now, and the write this request paid is what switching models cost. A single ask is
-    a conversation's first turn, where nothing was cached for any model and the baseline
-    would have paid the same write.
+    exists. An assistant turn in the history is the direct evidence of one: something
+    answered before, so a single-model deployment wrote the prompt then and would only
+    read it now, and the write this request paid is what switching models cost. A
+    conversation's first turn has no assistant turn, nothing was cached for any model,
+    and the baseline would have paid the same write.
+
+    Assistant turns rather than human asks, because an agent loop can run twenty turns
+    on one human ask: its tool traffic rides `tool_result` blocks on user turns that
+    flatten to empty text, and on `tool` roles, so counting asks reads a long
+    conversation as its own first turn and hands it the untouched-write arithmetic. That
+    is the one direction this must never fail in, since it inflates.
 
     Reading the conversation rather than remembering it keeps this free of a cache, a
     session id and their failure modes, and it works for callers that send no session
-    header at all. It cannot see a model switch that happened to land on a turn the
-    router did not classify, and it reads a few-shot prompt's synthetic turns as prior
-    conversation; both err toward charging the write, which under-claims.
-
-    Defaults to continuing when the messages cannot be read, for the same reason.
+    header at all. A few-shot prompt's synthetic assistant turns read as prior
+    conversation, which charges the write and under-claims; that is the safe side.
     """
     if not messages:
         return True
-    asks = len(tuple(islice(_iter_human_asks_newest_first(messages), 2)))
-    # Exactly one human ask is a first turn. Zero means the turns carry no readable ask,
-    # which says nothing about the baseline's cache and so is treated like every other
-    # unknown here: charge the write.
-    return asks != 1
+    return any(message.get("role") == "assistant" for message in messages)
 
 
 def _newest_turn_ask(messages: Sequence[Mapping[str, object]]) -> str | None:
@@ -468,7 +469,7 @@ class ComplexityRouter(CustomLogger):
         return ()
 
     @property
-    def savings_baseline_model(self) -> str | None:
+    def savings_baseline_model(self) -> Baseline | None:
         """The model this router's savings are measured against.
 
         A complexity router's tier ladder already names the model an operator
@@ -477,8 +478,6 @@ class ComplexityRouter(CustomLogger):
         router can reach; a cheap tier is a choice the router made, not a ceiling
         it was bounded by.
         """
-        from litellm.router_strategy.savings_baseline import resolve_baseline
-
         return resolve_baseline(
             self.configured_savings_baseline_model, self.litellm_router_instance, self._hardest_tier_models()
         )
@@ -722,9 +721,11 @@ class ComplexityRouter(CustomLogger):
             cause=cause,
             conversation_continuing=conversation_continuing,
         )
-        baseline_model = self.savings_baseline_model
-        if baseline_model is not None:
-            decision["savings_baseline_model"] = baseline_model
+        baseline = self.savings_baseline_model
+        if baseline is not None:
+            decision["savings_baseline_model"] = baseline.model
+            if baseline.pricing_key is not None:
+                decision["savings_baseline_pricing_key"] = baseline.pricing_key
         if tier is not None:
             decision["tier"] = tier.value
         if score is not None:

@@ -5087,18 +5087,18 @@ class TestSavingsBaselineModel:
         """The ladder names what an operator would have had to run for the hardest
         request; a pricier model sitting in a lower tier is a choice, not a ceiling."""
         router = self._router_with_tiers({"SIMPLE": "top", "MEDIUM": "cheap", "REASONING": "mid"})
-        assert router.savings_baseline_model == "anthropic/claude-sonnet-4-5"
+        assert router.savings_baseline_model.model == "anthropic/claude-sonnet-4-5"
     def test_baseline_is_the_priciest_model_when_the_reasoning_tier_is_a_pool(self):
         router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": ["cheap", "top", "mid"]})
-        assert router.savings_baseline_model == "anthropic/claude-opus-4-5"
+        assert router.savings_baseline_model.model == "anthropic/claude-opus-4-5"
     def test_falls_back_to_the_hardest_configured_tier_when_reasoning_is_absent(self):
         router = self._router_with_tiers({"SIMPLE": "cheap", "COMPLEX": "top"})
-        assert router.savings_baseline_model == "anthropic/claude-opus-4-5"
+        assert router.savings_baseline_model.model == "anthropic/claude-opus-4-5"
     def test_a_configured_baseline_wins_and_is_provider_qualified(self):
         router = self._router_with_tiers(
             {"SIMPLE": "cheap", "REASONING": "mid"}, savings_baseline_model="claude-opus-4-5"
         )
-        assert router.savings_baseline_model == "anthropic/claude-opus-4-5"
+        assert router.savings_baseline_model.model == "anthropic/claude-opus-4-5"
     def test_an_unpriceable_tier_disables_the_driver_rather_than_inventing_a_baseline(self):
         router = self._router_with_tiers({"REASONING": "not-a-real-model-anywhere"})
         assert router.savings_baseline_model is None
@@ -5188,6 +5188,43 @@ class TestConversationShapeDiscriminator:
         assert cache.async_get_cache.await_count == 0
         assert cache.async_set_cache.await_count == 0
 
+    @pytest.mark.parametrize(
+        "history",
+        [
+            pytest.param(
+                [
+                    {"role": "user", "content": "do X"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "1", "name": "t", "input": {}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1", "content": "r"}]},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "2", "name": "t", "input": {}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "2", "content": "r"}]},
+                ],
+                id="messages-api-tool-result-blocks",
+            ),
+            pytest.param(
+                [
+                    {"role": "user", "content": "do X"},
+                    {"role": "assistant", "tool_calls": [{"id": "1"}]},
+                    {"role": "tool", "tool_call_id": "1", "content": "r"},
+                ],
+                id="chat-completions-tool-role",
+            ),
+        ],
+    )
+    def test_an_agent_loop_on_one_human_ask_is_not_a_first_turn(self, history):
+        """An agent can run twenty turns on a single human ask: its tool traffic rides
+        `tool_result` blocks that flatten to empty text and `tool` roles. Counting human
+        asks read that as a first turn and handed it the untouched-write arithmetic,
+        which is the one direction this must never fail in, because it inflates."""
+        from litellm.router_strategy.complexity_router.complexity_router import _conversation_is_continuing
+
+        assert _conversation_is_continuing(history) is True
+
+    def test_a_system_prompt_does_not_make_a_first_turn_look_continued(self):
+        from litellm.router_strategy.complexity_router.complexity_router import _conversation_is_continuing
+
+        assert _conversation_is_continuing([{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]) is False
+
     def test_unreadable_messages_stay_conservative(self):
         """No messages says nothing about the baseline's cache, so it keeps charging the
         write and under-claims rather than inflating."""
@@ -5195,7 +5232,7 @@ class TestConversationShapeDiscriminator:
 
         assert _conversation_is_continuing(None) is True
         assert _conversation_is_continuing([]) is True
-        assert _conversation_is_continuing([{"role": "assistant", "content": "no human ask here"}]) is True
+        assert _conversation_is_continuing([{"role": "user", "content": ""}]) is False
 
     @pytest.mark.asyncio
     async def test_the_shape_travels_on_every_pre_routing_response(self):

@@ -75,11 +75,19 @@ def _resolve_model(model: str | None, custom_llm_provider: str | None) -> _Model
     return _ModelIdentity(model=resolved_model, provider=provider)
 
 
-def _cost_of_usage(model: _ModelIdentity, usage: Usage) -> float | None:
-    """What ``usage`` costs on ``model``, or ``None`` when the model has no pricing."""
+def _cost_of_usage(model: _ModelIdentity, usage: Usage, pricing_key: str | None = None) -> float | None:
+    """What ``usage`` costs on ``model``, or ``None`` when the model has no pricing.
+
+    ``pricing_key`` is the key litellm bills this deployment under, which is the
+    deployment's own id when it overrides its prices and the model name otherwise. The
+    router keeps overrides off the shared model-name key so deployments sharing a
+    backend model do not pollute each other, so pricing the name would read the public
+    rate for a model nobody is charged the public rate for, on whichever arm is
+    overridden, in either direction.
+    """
     try:
         prompt_cost, completion_cost = generic_cost_per_token(
-            model=model.model, usage=usage, custom_llm_provider=model.provider
+            model=pricing_key or model.model, usage=usage, custom_llm_provider=model.provider
         )
     except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; degrade to zero savings
         verbose_proxy_logger.debug(
@@ -166,6 +174,8 @@ def compute_autorouter_savings(
     selected_provider: str | None,
     usage: Usage,
     conversation_continuing: bool = True,
+    baseline_pricing_key: str | None = None,
+    selected_pricing_key: str | None = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
 
@@ -187,8 +197,8 @@ def compute_autorouter_savings(
     selected = _resolve_model(selected_model, selected_provider)
     if baseline is None or selected is None or baseline == selected:
         return 0.0
-    baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage, conversation_continuing))
-    selected_cost = _cost_of_usage(selected, usage)
+    baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage, conversation_continuing), baseline_pricing_key)
+    selected_cost = _cost_of_usage(selected, usage, selected_pricing_key)
     if baseline_cost is None or selected_cost is None:
         return 0.0
     return baseline_cost - selected_cost
@@ -215,6 +225,7 @@ def compute_savings_spend(
     cache_read_input_tokens: int,
     routing_decision: Mapping[str, object] | None = None,
     usage_object: Mapping[str, object] | None = None,
+    model_map_information: Mapping[str, object] | None = None,
 ) -> SavingsSpend:
     """
     Dollar savings for one request, split by optimization driver.
@@ -237,6 +248,9 @@ def compute_savings_spend(
 
     decision = routing_decision if isinstance(routing_decision, Mapping) else {}
     baseline_model = decision.get("savings_baseline_model")
+    baseline_key = decision.get("savings_baseline_pricing_key")
+    model_map = model_map_information if isinstance(model_map_information, Mapping) else {}
+    selected_key = model_map.get("model_map_key")
     autorouter = compute_autorouter_savings(
         baseline_model=baseline_model if isinstance(baseline_model, str) else None,
         selected_model=model,
@@ -245,5 +259,12 @@ def compute_savings_spend(
         # Absent means the router never recorded a shape, which is the conservative
         # reading: charge the cache write rather than claim a first turn's saving.
         conversation_continuing=decision.get("conversation_continuing") is not False,
+        baseline_pricing_key=baseline_key if isinstance(baseline_key, str) else None,
+        # The key litellm actually billed this request under, recorded at request time by
+        # `_select_model_name_for_cost_calc`. Re-deriving it from the spend log's `model`
+        # would lose whatever that resolver already applied: an Azure deployment name is
+        # absent from the cost map and prices to nothing, and a deployment's own price
+        # overrides live under a key the model name never reaches.
+        selected_pricing_key=selected_key if isinstance(selected_key, str) and selected_key else None,
     )
     return SavingsSpend(compression=compression, prompt_caching=prompt_caching, autorouter=autorouter)
