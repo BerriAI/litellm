@@ -34,7 +34,8 @@ const alerts = [
   { name: "slack", variables: { SLACK_WEBHOOK_URL: "https://hooks.example.com" } },
 ];
 
-const inputNamed = (name: string) => document.querySelector<HTMLInputElement>(`input[name="${name}"]`)!;
+const fieldNamed = (name: string) =>
+  document.querySelector<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`)!;
 
 describe("EmailSettings", () => {
   beforeEach(() => {
@@ -56,17 +57,19 @@ describe("EmailSettings", () => {
   it("renders one named input per email variable and none for other alert types", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
 
-    expect(inputNamed("SMTP_HOST")).toHaveValue("smtp.example.com");
-    expect(inputNamed("SMTP_PORT")).toHaveValue("587");
-    expect(inputNamed("SMTP_PORT")).toHaveAttribute("type", "number");
-    expect(inputNamed("SMTP_HOST")).toHaveAttribute("type", "text");
-    expect(inputNamed("SMTP_TLS")).toHaveAttribute("type", "text");
-    expect(inputNamed("SMTP_USE_SSL")).toHaveAttribute("type", "text");
-    expect(inputNamed("SMTP_USERNAME")).toHaveAttribute("type", "text");
-    expect(inputNamed("SMTP_PASSWORD")).toHaveValue("********");
-    expect(inputNamed("SMTP_SENDER_EMAIL")).toHaveAttribute("type", "text");
-    expect(inputNamed("TEST_EMAIL_ADDRESS")).toHaveAttribute("type", "text");
-    expect(inputNamed("EMAIL_LOGO_URL")).toHaveAttribute("type", "text");
+    expect(fieldNamed("SMTP_HOST")).toHaveValue("smtp.example.com");
+    expect(fieldNamed("SMTP_PORT")).toHaveValue(587);
+    expect(fieldNamed("SMTP_PORT")).toHaveAttribute("type", "number");
+    expect(fieldNamed("SMTP_HOST")).toHaveAttribute("type", "text");
+    expect(fieldNamed("SMTP_TLS")).toHaveValue("True");
+    expect(fieldNamed("SMTP_TLS").tagName).toBe("SELECT");
+    expect(fieldNamed("SMTP_USE_SSL")).toHaveValue("False");
+    expect(fieldNamed("SMTP_USE_SSL").tagName).toBe("SELECT");
+    expect(fieldNamed("SMTP_USERNAME")).toHaveAttribute("type", "text");
+    expect(fieldNamed("SMTP_PASSWORD")).toHaveValue("********");
+    expect(fieldNamed("SMTP_SENDER_EMAIL")).toHaveAttribute("type", "text");
+    expect(fieldNamed("TEST_EMAIL_ADDRESS")).toHaveAttribute("type", "text");
+    expect(fieldNamed("EMAIL_LOGO_URL")).toHaveAttribute("type", "text");
     expect(document.querySelector('input[name="SLACK_WEBHOOK_URL"]')).toBeNull();
   });
 
@@ -83,22 +86,22 @@ describe("EmailSettings", () => {
   it("only requires the SMTP host and sender email", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
 
-    expect(inputNamed("SMTP_HOST")).toBeRequired();
-    expect(inputNamed("SMTP_SENDER_EMAIL")).toBeRequired();
-    expect(inputNamed("SMTP_PORT")).not.toBeRequired();
-    expect(inputNamed("SMTP_TLS")).not.toBeRequired();
-    expect(inputNamed("SMTP_USE_SSL")).not.toBeRequired();
-    expect(inputNamed("SMTP_USERNAME")).not.toBeRequired();
-    expect(inputNamed("SMTP_PASSWORD")).not.toBeRequired();
-    expect(inputNamed("TEST_EMAIL_ADDRESS")).not.toBeRequired();
+    expect(fieldNamed("SMTP_HOST")).toBeRequired();
+    expect(fieldNamed("SMTP_SENDER_EMAIL")).toBeRequired();
+    expect(fieldNamed("SMTP_PORT")).not.toBeRequired();
+    expect(fieldNamed("SMTP_TLS")).not.toBeRequired();
+    expect(fieldNamed("SMTP_USE_SSL")).not.toBeRequired();
+    expect(fieldNamed("SMTP_USERNAME")).not.toBeRequired();
+    expect(fieldNamed("SMTP_PASSWORD")).not.toBeRequired();
+    expect(fieldNamed("TEST_EMAIL_ADDRESS")).not.toBeRequired();
   });
 
   it("submits only the fields the admin actually edited", async () => {
     const user = userEvent.setup();
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
 
-    await user.clear(inputNamed("SMTP_HOST"));
-    await user.type(inputNamed("SMTP_HOST"), "smtp.changed.com");
+    await user.clear(fieldNamed("SMTP_HOST"));
+    await user.type(fieldNamed("SMTP_HOST"), "smtp.changed.com");
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -123,17 +126,33 @@ describe("EmailSettings", () => {
     });
   });
 
+  it("submits empty values when optional credentials are cleared", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
+
+    await user.clear(fieldNamed("SMTP_USERNAME"));
+    await user.clear(fieldNamed("SMTP_PASSWORD"));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(setCallbacksCall).toHaveBeenCalledWith("sk-test", {
+        general_settings: { alerting: ["email"] },
+        environment_variables: { SMTP_USERNAME: "", SMTP_PASSWORD: "" },
+      });
+    });
+  });
+
   it("disables the premium-only fields for non-premium users", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser={false} alerts={alerts} />);
 
-    expect(inputNamed("EMAIL_LOGO_URL")).toBeDisabled();
-    expect(inputNamed("SMTP_HOST")).not.toBeDisabled();
+    expect(fieldNamed("EMAIL_LOGO_URL")).toBeDisabled();
+    expect(fieldNamed("SMTP_HOST")).not.toBeDisabled();
   });
 
   it("leaves the premium-only fields editable for premium users", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
 
-    expect(inputNamed("EMAIL_LOGO_URL")).not.toBeDisabled();
+    expect(fieldNamed("EMAIL_LOGO_URL")).not.toBeDisabled();
   });
 
   it("triggers a live email health check", async () => {

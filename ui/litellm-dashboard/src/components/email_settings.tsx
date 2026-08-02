@@ -21,6 +21,8 @@ const FIELD_TYPES: Record<string, React.HTMLInputTypeAttribute> = {
   SMTP_PASSWORD: "password",
 };
 
+const BOOLEAN_FIELDS = new Set(["SMTP_TLS", "SMTP_USE_SSL"]);
+
 const FIELD_HELP: Record<string, React.ReactNode> = {
   SMTP_HOST: <>Enter the SMTP host address, e.g. `smtp.resend.com`{REQUIRED_MARKER}</>,
   SMTP_PORT: <>Enter the SMTP port number, e.g. `587`</>,
@@ -50,18 +52,18 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
       .filter((alert) => alert.name === "email")
       .forEach((alert) => {
         Object.entries(alert.variables ?? {}).forEach(([key, value]) => {
-          const inputElement = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
-          if (!inputElement || !inputElement.value) {
+          const fieldElement = document.querySelector(`[name="${key}"]`) as HTMLInputElement | HTMLSelectElement;
+          if (!fieldElement) {
             return;
           }
           // Only send fields the admin actually edited. Values rendered from the
           // server are masked (SMTP_PASSWORD) or sourced from the process
           // environment, so re-submitting an untouched field would persist a mask
           // or copy env-managed config into the database.
-          if (inputElement.value === (value == null ? "" : String(value))) {
+          if (fieldElement.value === (value == null ? "" : String(value))) {
             return;
           }
-          updatedVariables[key] = inputElement.value;
+          updatedVariables[key] = fieldElement.value;
         });
       });
 
@@ -122,14 +124,27 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                       ) : (
                         <p className="text-sm">{key}</p>
                       )}
-                      <Input
-                        name={key}
-                        defaultValue={value as string | undefined}
-                        type={FIELD_TYPES[key] ?? "text"}
-                        required={REQUIRED_FIELDS.has(key)}
-                        disabled={isLocked}
-                        className="max-w-100"
-                      />
+                      {BOOLEAN_FIELDS.has(key) ? (
+                        <select
+                          name={key}
+                          defaultValue={value as string | undefined}
+                          required={REQUIRED_FIELDS.has(key)}
+                          disabled={isLocked}
+                          className="max-w-100 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="True">True</option>
+                          <option value="False">False</option>
+                        </select>
+                      ) : (
+                        <Input
+                          name={key}
+                          defaultValue={value as string | undefined}
+                          type={FIELD_TYPES[key] ?? "text"}
+                          required={REQUIRED_FIELDS.has(key)}
+                          disabled={isLocked}
+                          className="max-w-100"
+                        />
+                      )}
                       <div className="text-xs text-muted-foreground italic">{FIELD_HELP[key]}</div>
                     </div>
                   );
