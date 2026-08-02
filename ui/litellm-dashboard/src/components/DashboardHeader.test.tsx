@@ -20,6 +20,9 @@ vi.mock("next/navigation", () => ({ usePathname: () => "/ui/" }));
 vi.mock("@/utils/migratedPages", () => ({ migratedHref: (seg: string) => `/ui/${seg}` }));
 vi.mock("@/hooks/useWorker", () => ({ useWorker: () => ({ isControlPlane: false, selectedWorker: null }) }));
 vi.mock("@/app/(dashboard)/hooks/useDisableShowPrompts", () => ({ useDisableShowPrompts: () => false }));
+vi.mock("@/contexts/ThemeContext", () => ({
+  useTheme: () => ({ isDarkMode: false, toggleDarkMode: vi.fn(), logoUrl: null, faviconUrl: null }),
+}));
 vi.mock("@/components/Navbar/BlogDropdown/BlogDropdown", () => ({ BlogDropdown: () => null }));
 vi.mock("@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => ({
   CommunityEngagementButtons: () => null,
