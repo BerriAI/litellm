@@ -2461,6 +2461,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     admission_queue_timeout_seconds: float = Field(
         1.0, gt=0, description="maximum time a request waits for a worker slot"
     )
+    allow_non_billable_realtime_protocols: bool = Field(
+        False,
+        description="Allow Realtime WebRTC setup endpoints whose inference usage bypasses LiteLLM spend tracking and budget enforcement",
+    )
     plugins: list[PluginConfig] | None = Field(
         None, description="external services registered as embeddable UI plugins"
     )
