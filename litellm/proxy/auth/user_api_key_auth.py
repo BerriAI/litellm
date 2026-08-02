@@ -1527,6 +1527,14 @@ async def _user_api_key_auth_builder(
             ):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(api_key)
 
+        if valid_token is not None and isinstance(valid_token, UserAPIKeyAuth) and valid_token.blocked is True:
+            await _delete_cache_key_object(
+                hashed_token=hash_token(api_key),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            raise Exception("Key is blocked. Update via `/key/unblock` if you're an admin.")
+
         if (
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
