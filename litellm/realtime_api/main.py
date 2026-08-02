@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 import litellm
-from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES, request_timeout
+from litellm.constants import AZURE_GA_REALTIME_MODELS, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES, request_timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -40,25 +40,6 @@ bedrock_realtime = BedrockRealtime()
 xai_realtime = XAIRealtime()
 vertex_llm_base = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
-
-_AZURE_GA_REALTIME_MODELS = frozenset(
-    {
-        "gpt-realtime-2",
-        "gpt-realtime-2-2026-05-06",
-        "gpt-realtime-2.1",
-        "gpt-realtime-2.1-2026-07-07",
-        "gpt-realtime-2.1-mini",
-        "gpt-realtime-2.1-mini-2026-07-07",
-        "gpt-realtime-translate",
-        "gpt-realtime-translate-2026-05-06",
-        "gpt-realtime-translate-2026-05-07",
-        "gpt-realtime-whisper",
-        "gpt-realtime-whisper-2026-05-06",
-        "gpt-realtime-whisper-2026-05-07",
-        "gpt-transcribe",
-        "gpt-live-transcribe",
-    }
-)
 
 
 def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> dict[str, Any]:
@@ -104,7 +85,7 @@ def _resolve_azure_realtime_protocol(
     query_params: RealtimeQueryParams | None,
     realtime_mode: str,
 ) -> str:
-    if model in _AZURE_GA_REALTIME_MODELS:
+    if model in AZURE_GA_REALTIME_MODELS:
         if realtime_protocol is not None and realtime_protocol.upper() not in ("GA", "V1"):
             raise ValueError(f"{model} requires the Azure OpenAI v1 Realtime API")
         return "GA"
@@ -189,9 +170,9 @@ async def acreate_realtime_client_secret(
         else None
     )
     model_name = (
-        transcription_model
+        req.model
+        or transcription_model
         or (req.session.model if req.session is not None else None)
-        or req.model
         or "gpt-4o-realtime-preview"
     )
     litellm_logging_obj = kwargs.get("litellm_logging_obj")
