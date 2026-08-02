@@ -1268,10 +1268,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.model_call_details["response_headers"] = headers
             stringified_response = response.model_dump()
             ## LOGGING
+            # api_base included for consistency: post_call overwrites
+            # model_call_details["additional_args"] which some logging
+            # integrations read directly. The SpendLogs fix is in pre_call.
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": data, "api_base": api_base},
                 original_response=stringified_response,
             )
             returned_response: EmbeddingResponse = convert_to_model_response_object(
@@ -1286,7 +1289,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": data, "api_base": api_base},
                 original_response=str(e),
             )
             raise e
@@ -1295,7 +1298,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": data, "api_base": api_base},
                 original_response=str(e),
             )
             status_code = getattr(e, "status_code", 500)
@@ -1369,11 +1372,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )  # type: ignore
 
             ## LOGGING
+            # api_base: consistency with pre_call; post_call only updates
+            # additional_args, not litellm_params (see aembedding comment).
             logging_obj.model_call_details["response_headers"] = headers
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": data, "api_base": api_base},
                 original_response=sync_embedding_response,
             )
             response: EmbeddingResponse = convert_to_model_response_object(
