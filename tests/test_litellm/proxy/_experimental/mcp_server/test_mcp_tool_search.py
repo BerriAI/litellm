@@ -790,6 +790,7 @@ class TestCaptureHostProgressCallback:
         host.request_context.session = MagicMock()
         assert callable(_capture_host_progress_callback(host))
 
+
     def test_returns_callable_when_token_is_integer(self) -> None:
         from litellm.proxy._experimental.mcp_server.server import (
             _capture_host_progress_callback,
