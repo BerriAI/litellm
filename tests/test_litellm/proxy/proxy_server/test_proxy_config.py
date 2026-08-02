@@ -2073,6 +2073,33 @@ async def test_ProxyConfig__update_llm_router_keeps_logger_when_config_load_fail
     assert snapshot == {"installed_before": 1, "remaining": 1}
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_llm_router_reconciles_when_search_tool_parsing_fails(monkeypatch):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    installed_before = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+
+    class _MalformedSearchToolsProxyConfig:
+        async def get_config(self) -> dict:
+            return {"litellm_settings": {}, "search_tools": "not-a-list"}
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", _MalformedSearchToolsProxyConfig())
+
+    with pytest.raises(AttributeError):
+        pc.parse_search_tools({"search_tools": "not-a-list"})
+
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+
+    remaining = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    snapshot = {"installed_before": len(installed_before), "remaining": len(remaining)}
+    assert snapshot == {"installed_before": 1, "remaining": 0}
+
+
 def test_ProxyConfig__add_callbacks_from_db_config_bad_config_raises():
     pc = ProxyConfig()
     with pytest.raises(AttributeError):
