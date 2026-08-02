@@ -2,7 +2,7 @@
 Cost calculator for MCP tools.
 """
 
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from litellm.types.mcp import MCPServerCostInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
@@ -18,7 +18,7 @@ else:
 class MCPCostCalculator:
     @staticmethod
     def calculate_mcp_tool_call_cost(
-        litellm_logging_obj: Optional[LitellmLoggingObject],
+        litellm_logging_obj: LitellmLoggingObject | None,
     ) -> float:
         """
         Calculate the cost of an MCP tool call.

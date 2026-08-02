@@ -1,4 +1,6 @@
 import os
+
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.api import Api, Endpoints, HttpMethods
@@ -12,7 +14,6 @@ from litellm.integrations.deepeval.utils import (
     to_zod_compatible_iso,
     validate_environment,
 )
-from litellm._logging import verbose_logger
 
 
 # This file includes the custom callbacks for LiteLLM Proxy

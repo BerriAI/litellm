@@ -2,8 +2,8 @@ import json
 from typing import Literal
 
 import click
-import rich
 import requests
+import rich
 from rich.table import Table
 
 from ...credentials import CredentialsManagementClient
@@ -12,7 +12,6 @@ from ...credentials import CredentialsManagementClient
 @click.group()
 def credentials():
     """Manage credentials for the LiteLLM proxy server"""
-    pass
 
 
 @credentials.command()
@@ -72,7 +71,7 @@ def create(ctx: click.Context, credential_name: str, info: str, values: str):
         credential_info = json.loads(info)
         credential_values = json.loads(values)
     except json.JSONDecodeError as e:
-        raise click.BadParameter(f"Invalid JSON: {str(e)}")
+        raise click.BadParameter(f"Invalid JSON: {e!s}")
 
     try:
         response = client.create(credential_name, credential_info, credential_values)

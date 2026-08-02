@@ -8,7 +8,7 @@
 
 
 from difflib import SequenceMatcher
-from typing import List, Literal, Optional
+from typing import Literal
 
 from fastapi import HTTPException
 
@@ -29,10 +29,10 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
     # Class variables or attributes
     def __init__(
         self,
-        prompt_injection_params: Optional[LiteLLMPromptInjectionParams] = None,
+        prompt_injection_params: LiteLLMPromptInjectionParams | None = None,
     ):
         self.prompt_injection_params = prompt_injection_params
-        self.llm_router: Optional[Router] = None
+        self.llm_router: Router | None = None
 
         self.verbs = [
             "Ignore",
@@ -74,7 +74,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         if litellm.set_verbose is True:
             print(print_statement)  # noqa: T201
 
-    def update_environment(self, router: Optional[Router] = None):
+    def update_environment(self, router: Router | None = None):
         self.llm_router = router
 
         if self.prompt_injection_params is not None and self.prompt_injection_params.llm_api_check is True:
@@ -94,7 +94,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     "PromptInjectionDetection: Invalid LLM API Name. LLM API Name must be a 'model_name' in 'model_list'."
                 )
 
-    def generate_injection_keywords(self) -> List[str]:
+    def generate_injection_keywords(self) -> list[str]:
         combinations = []
         for verb in self.verbs:
             for adj in self.adjectives:
@@ -197,9 +197,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             raise e
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
-                    str(e)
-                )
+                f"litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {e!s}"
             )
 
     async def async_moderation_hook(  # type: ignore
@@ -214,7 +212,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             "moderation",
             "audio_transcription",
         ],
-    ) -> Optional[bool]:
+    ) -> bool | None:
         self.print_verbose(f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}")
 
         if self.prompt_injection_params is None:

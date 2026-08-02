@@ -4,7 +4,7 @@ Based on Google's GenAI Kit dotprompt implementation: https://google.github.io/d
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import yaml
 from jinja2 import DictLoader, select_autoescape
@@ -17,8 +17,8 @@ class PromptTemplate:
     def __init__(
         self,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
-        template_id: Optional[str] = None,
+        metadata: dict[str, Any] | None = None,
+        template_id: str | None = None,
     ):
         self.content = content
         self.metadata = metadata or {}
@@ -52,13 +52,13 @@ class PromptManager:
 
     def __init__(
         self,
-        prompt_id: Optional[str] = None,
-        prompt_directory: Optional[str] = None,
-        prompt_data: Optional[Dict[str, Dict[str, Any]]] = None,
-        prompt_file: Optional[str] = None,
+        prompt_id: str | None = None,
+        prompt_directory: str | None = None,
+        prompt_data: dict[str, dict[str, Any]] | None = None,
+        prompt_file: str | None = None,
     ):
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
-        self.prompts: Dict[str, PromptTemplate] = {}
+        self.prompts: dict[str, PromptTemplate] = {}
         self.prompt_file = prompt_file
         # Sandboxed env: templates can come from user input via /prompts/test,
         # so we must block access to unsafe Python attributes and mutation of
@@ -107,7 +107,7 @@ class PromptManager:
                 # Optional: print(f"Error loading prompt file {prompt_file}")
                 pass
 
-    def _load_prompts_from_json(self, prompt_data: Dict[str, Dict[str, Any]], prompt_id: Optional[str] = None) -> None:
+    def _load_prompts_from_json(self, prompt_data: dict[str, dict[str, Any]], prompt_id: str | None = None) -> None:
         """Load prompts from JSON data structure.
 
         Expected format:
@@ -143,7 +143,7 @@ class PromptManager:
                 # Optional: print(f"Error loading prompt from JSON: {prompt_id}")
                 pass
 
-    def _load_prompt_file(self, file_path: Union[str, Path], prompt_id: str) -> PromptTemplate:
+    def _load_prompt_file(self, file_path: str | Path, prompt_id: str) -> PromptTemplate:
         """Load and parse a single .prompt file."""
         if isinstance(file_path, str):
             file_path = Path(file_path)
@@ -159,7 +159,7 @@ class PromptManager:
             template_id=prompt_id,
         )
 
-    def _parse_frontmatter(self, content: str) -> Tuple[Dict[str, Any], str]:
+    def _parse_frontmatter(self, content: str) -> tuple[dict[str, Any], str]:
         """Parse YAML frontmatter from prompt content."""
         # Match YAML frontmatter between --- delimiters
         frontmatter_pattern = r"^---\s*\n(.*?)\n---\s*\n(.*)$"
@@ -183,8 +183,8 @@ class PromptManager:
     def render(
         self,
         prompt_id: str,
-        prompt_variables: Optional[Dict[str, Any]] = None,
-        version: Optional[int] = None,
+        prompt_variables: dict[str, Any] | None = None,
+        version: int | None = None,
     ) -> str:
         """
         Render a prompt template with the given variables.
@@ -223,7 +223,7 @@ class PromptManager:
         except Exception as e:
             raise ValueError(f"Error rendering template '{prompt_id}': {e}")
 
-    def _validate_input(self, variables: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    def _validate_input(self, variables: dict[str, Any], schema: dict[str, Any]) -> None:
         """Basic validation of input variables against schema."""
         for field_name, field_type in schema.items():
             if field_name in variables:
@@ -236,9 +236,9 @@ class PromptManager:
                         f"expected {getattr(expected_type, '__name__', str(expected_type))}, got {type(value).__name__}"
                     )
 
-    def _get_python_type(self, schema_type: str) -> Union[type, tuple]:
+    def _get_python_type(self, schema_type: str) -> type | tuple:
         """Convert schema type string to Python type."""
-        type_mapping: Dict[str, Union[type, tuple]] = {
+        type_mapping: dict[str, type | tuple] = {
             "string": str,
             "str": str,
             "number": (int, float),
@@ -255,7 +255,7 @@ class PromptManager:
 
         return type_mapping.get(schema_type.lower(), str)  # type: ignore
 
-    def get_prompt(self, prompt_id: str, version: Optional[int] = None) -> Optional[PromptTemplate]:
+    def get_prompt(self, prompt_id: str, version: int | None = None) -> PromptTemplate | None:
         """
         Get a prompt template by ID and optional version.
 
@@ -275,11 +275,11 @@ class PromptManager:
         # Fall back to base prompt_id
         return self.prompts.get(prompt_id)
 
-    def list_prompts(self) -> List[str]:
+    def list_prompts(self) -> list[str]:
         """Get a list of all available prompt IDs."""
         return list(self.prompts.keys())
 
-    def get_prompt_metadata(self, prompt_id: str) -> Optional[Dict[str, Any]]:
+    def get_prompt_metadata(self, prompt_id: str) -> dict[str, Any] | None:
         """Get metadata for a specific prompt."""
         template = self.prompts.get(prompt_id)
         return template.metadata if template else None
@@ -290,12 +290,12 @@ class PromptManager:
         if self.prompt_directory:
             self._load_prompts()
 
-    def add_prompt(self, prompt_id: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    def add_prompt(self, prompt_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
         """Add a prompt template programmatically."""
         template = PromptTemplate(content=content, metadata=metadata or {}, template_id=prompt_id)
         self.prompts[prompt_id] = template
 
-    def prompt_file_to_json(self, file_path: Union[str, Path]) -> Dict[str, Any]:
+    def prompt_file_to_json(self, file_path: str | Path) -> dict[str, Any]:
         """Convert a .prompt file to JSON format.
 
         Args:
@@ -312,7 +312,7 @@ class PromptManager:
 
         return {"content": template_content.strip(), "metadata": frontmatter}
 
-    def json_to_prompt_file(self, prompt_data: Dict[str, Any]) -> str:
+    def json_to_prompt_file(self, prompt_data: dict[str, Any]) -> str:
         """Convert JSON prompt data to .prompt file format.
 
         Args:
@@ -335,7 +335,7 @@ class PromptManager:
 
         return f"---\n{frontmatter_yaml}---\n{content}"
 
-    def get_all_prompts_as_json(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_prompts_as_json(self) -> dict[str, dict[str, Any]]:
         """Get all loaded prompts in JSON format.
 
         Returns:
@@ -349,6 +349,6 @@ class PromptManager:
             }
         return result
 
-    def load_prompts_from_json_data(self, prompt_data: Dict[str, Dict[str, Any]]) -> None:
+    def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, Any]]) -> None:
         """Load additional prompts from JSON data (merges with existing prompts)."""
         self._load_prompts_from_json(prompt_data)

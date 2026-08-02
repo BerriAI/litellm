@@ -17,39 +17,40 @@ until they're actually needed.
 
 import importlib
 import sys
-from typing import Any, Optional, cast, Callable
+from collections.abc import Callable
+from typing import Any, cast
 
 # Import all the data structures that define what can be lazy-loaded
 # These are just lists of names and maps of where to find them
 from ._lazy_imports_registry import (
-    # Name tuples
-    COST_CALCULATOR_NAMES,
-    LITELLM_LOGGING_NAMES,
-    UTILS_NAMES,
-    TOKEN_COUNTER_NAMES,
-    LLM_CLIENT_CACHE_NAMES,
-    BEDROCK_TYPES_NAMES,
-    TYPES_UTILS_NAMES,
-    CACHING_NAMES,
-    HTTP_HANDLER_NAMES,
-    DOTPROMPT_NAMES,
-    LLM_CONFIG_NAMES,
-    TYPES_NAMES,
-    LLM_PROVIDER_LOGIC_NAMES,
-    UTILS_MODULE_NAMES,
-    # Import maps
-    _UTILS_IMPORT_MAP,
-    _COST_CALCULATOR_IMPORT_MAP,
-    _TYPES_UTILS_IMPORT_MAP,
-    _TOKEN_COUNTER_IMPORT_MAP,
     _BEDROCK_TYPES_IMPORT_MAP,
     _CACHING_IMPORT_MAP,
-    _LITELLM_LOGGING_IMPORT_MAP,
+    _COST_CALCULATOR_IMPORT_MAP,
     _DOTPROMPT_IMPORT_MAP,
-    _TYPES_IMPORT_MAP,
+    _LITELLM_LOGGING_IMPORT_MAP,
     _LLM_CONFIGS_IMPORT_MAP,
     _LLM_PROVIDER_LOGIC_IMPORT_MAP,
+    _TOKEN_COUNTER_IMPORT_MAP,
+    _TYPES_IMPORT_MAP,
+    _TYPES_UTILS_IMPORT_MAP,
+    # Import maps
+    _UTILS_IMPORT_MAP,
     _UTILS_MODULE_IMPORT_MAP,
+    BEDROCK_TYPES_NAMES,
+    CACHING_NAMES,
+    # Name tuples
+    COST_CALCULATOR_NAMES,
+    DOTPROMPT_NAMES,
+    HTTP_HANDLER_NAMES,
+    LITELLM_LOGGING_NAMES,
+    LLM_CLIENT_CACHE_NAMES,
+    LLM_CONFIG_NAMES,
+    LLM_PROVIDER_LOGIC_NAMES,
+    TOKEN_COUNTER_NAMES,
+    TYPES_NAMES,
+    TYPES_UTILS_NAMES,
+    UTILS_MODULE_NAMES,
+    UTILS_NAMES,
 )
 
 
@@ -77,7 +78,7 @@ def _get_utils_globals() -> dict:
 # They're separate from the main lazy import system because they have specific use cases
 
 # Lazy loader for default encoding - avoids importing heavy tiktoken library at startup
-_default_encoding: Optional[Any] = None
+_default_encoding: Any | None = None
 
 
 def _get_default_encoding() -> Any:
@@ -99,7 +100,7 @@ def _get_default_encoding() -> Any:
 
 
 # Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time
-_get_modified_max_tokens_func: Optional[Any] = None
+_get_modified_max_tokens_func: Any | None = None
 
 
 def _get_modified_max_tokens() -> Any:
@@ -123,7 +124,7 @@ def _get_modified_max_tokens() -> Any:
 
 
 # Lazy loader for token_counter to avoid importing token_counter module at module import time
-_token_counter_new_func: Optional[Any] = None
+_token_counter_new_func: Any | None = None
 
 
 def _get_token_counter_new() -> Any:
@@ -153,7 +154,7 @@ def _get_token_counter_new() -> Any:
 # This registry maps attribute names (like "ModelResponse") to handler functions
 # It's built once the first time someone accesses a lazy-loaded attribute
 # Example: {"ModelResponse": _lazy_import_utils, "Cache": _lazy_import_caching, ...}
-_LAZY_IMPORT_REGISTRY: Optional[dict[str, Callable[[str], Any]]] = None
+_LAZY_IMPORT_REGISTRY: dict[str, Callable[[str], Any]] | None = None
 
 
 def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:

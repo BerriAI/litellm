@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timezone
-from typing import Any, Optional
+from typing import Any
 
 from litellm._logging import verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
@@ -21,7 +21,7 @@ class FocusGCSDestination(GCSBucketBase, FocusDestination):
         self,
         *,
         prefix: str,
-        config: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         config = config or {}
         bucket_name = config.get("bucket_name")

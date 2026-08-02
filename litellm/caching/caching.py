@@ -13,7 +13,7 @@ import json
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -55,19 +55,18 @@ class CacheMode(str, Enum):
 class Cache:
     def __init__(
         self,
-        type: Optional[LiteLLMCacheType] = LiteLLMCacheType.LOCAL,
-        mode: Optional[
-            CacheMode
-        ] = CacheMode.default_on,  # when default_on cache is always on, when default_off cache is opt in
-        host: Optional[str] = None,
-        port: Optional[str] = None,
-        password: Optional[str] = None,
-        namespace: Optional[str] = None,
-        ttl: Optional[float] = None,
-        default_in_memory_ttl: Optional[float] = None,
-        default_in_redis_ttl: Optional[float] = None,
-        similarity_threshold: Optional[float] = None,
-        supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
+        type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
+        mode: CacheMode
+        | None = CacheMode.default_on,  # when default_on cache is always on, when default_off cache is opt in
+        host: str | None = None,
+        port: str | None = None,
+        password: str | None = None,
+        namespace: str | None = None,
+        ttl: float | None = None,
+        default_in_memory_ttl: float | None = None,
+        default_in_redis_ttl: float | None = None,
+        similarity_threshold: float | None = None,
+        supported_call_types: list[CachingSupportedCallTypes] | None = [
             "completion",
             "acompletion",
             "embedding",
@@ -82,38 +81,38 @@ class Cache:
             "aresponses",
         ],
         # s3 Bucket, boto3 configuration
-        azure_account_url: Optional[str] = None,
-        azure_blob_container: Optional[str] = None,
-        s3_bucket_name: Optional[str] = None,
-        s3_region_name: Optional[str] = None,
-        s3_api_version: Optional[str] = None,
-        s3_use_ssl: Optional[bool] = True,
-        s3_verify: Optional[Union[bool, str]] = None,
-        s3_endpoint_url: Optional[str] = None,
-        s3_aws_access_key_id: Optional[str] = None,
-        s3_aws_secret_access_key: Optional[str] = None,
-        s3_aws_session_token: Optional[str] = None,
-        s3_config: Optional[Any] = None,
-        s3_path: Optional[str] = None,
-        gcs_bucket_name: Optional[str] = None,
-        gcs_path_service_account: Optional[str] = None,
-        gcs_path: Optional[str] = None,
+        azure_account_url: str | None = None,
+        azure_blob_container: str | None = None,
+        s3_bucket_name: str | None = None,
+        s3_region_name: str | None = None,
+        s3_api_version: str | None = None,
+        s3_use_ssl: bool | None = True,
+        s3_verify: bool | str | None = None,
+        s3_endpoint_url: str | None = None,
+        s3_aws_access_key_id: str | None = None,
+        s3_aws_secret_access_key: str | None = None,
+        s3_aws_session_token: str | None = None,
+        s3_config: Any | None = None,
+        s3_path: str | None = None,
+        gcs_bucket_name: str | None = None,
+        gcs_path_service_account: str | None = None,
+        gcs_path: str | None = None,
         redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
-        redis_semantic_cache_index_name: Optional[str] = None,
+        redis_semantic_cache_index_name: str | None = None,
         valkey_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         valkey_semantic_cache_index_name: str | None = None,
-        redis_flush_size: Optional[int] = None,
-        redis_startup_nodes: Optional[List] = None,
-        disk_cache_dir: Optional[str] = None,
-        qdrant_api_base: Optional[str] = None,
-        qdrant_api_key: Optional[str] = None,
-        qdrant_collection_name: Optional[str] = None,
-        qdrant_quantization_config: Optional[str] = None,
+        redis_flush_size: int | None = None,
+        redis_startup_nodes: list | None = None,
+        disk_cache_dir: str | None = None,
+        qdrant_api_base: str | None = None,
+        qdrant_api_key: str | None = None,
+        qdrant_collection_name: str | None = None,
+        qdrant_quantization_config: str | None = None,
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
-        qdrant_semantic_cache_vector_size: Optional[int] = None,
+        qdrant_semantic_cache_vector_size: int | None = None,
         # GCP IAM authentication parameters
-        gcp_service_account: Optional[str] = None,
-        gcp_ssl_ca_certs: Optional[str] = None,
+        gcp_service_account: str | None = None,
+        gcp_ssl_ca_certs: str | None = None,
         **kwargs,
     ):
         """
@@ -352,15 +351,15 @@ class Cache:
             if param in scope_excluded_params:
                 continue
             if param in combined_kwargs:
-                param_value: Optional[str] = self._get_param_value(param, kwargs)
+                param_value: str | None = self._get_param_value(param, kwargs)
                 if param_value is not None:
-                    cache_key += f"{str(param)}: {str(param_value)}"
+                    cache_key += f"{param!s}: {param_value!s}"
             elif param not in litellm_param_kwargs:  # check if user passed in optional param - e.g. top_k
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
                     param_value = kwargs[param]
-                    cache_key += f"{str(param)}: {str(param_value)}"
+                    cache_key += f"{param!s}: {param_value!s}"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
@@ -382,7 +381,7 @@ class Cache:
         self,
         param: str,
         kwargs: dict,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Get the value for the given param from kwargs
         """
@@ -400,15 +399,15 @@ class Cache:
         2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
         3. Else use the `model` passed in kwargs
         """
-        metadata: Dict = kwargs.get("metadata", {}) or {}
-        litellm_params: Dict = kwargs.get("litellm_params", {}) or {}
-        metadata_in_litellm_params: Dict = litellm_params.get("metadata", {}) or {}
-        model_group: Optional[str] = metadata.get("model_group") or metadata_in_litellm_params.get("model_group")
+        metadata: dict = kwargs.get("metadata", {}) or {}
+        litellm_params: dict = kwargs.get("litellm_params", {}) or {}
+        metadata_in_litellm_params: dict = litellm_params.get("metadata", {}) or {}
+        model_group: str | None = metadata.get("model_group") or metadata_in_litellm_params.get("model_group")
         caching_group = self._get_caching_group(metadata, model_group)
         return caching_group or model_group or kwargs["model"]
 
-    def _get_caching_group(self, metadata: dict, model_group: Optional[str]) -> Optional[str]:
-        caching_groups: Optional[List] = metadata.get("caching_groups", [])
+    def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:
+        caching_groups: list | None = metadata.get("caching_groups", [])
         if caching_groups:
             for group in caching_groups:
                 if model_group in group:
@@ -429,7 +428,7 @@ class Cache:
             or litellm_params.get("file_name")
         )
 
-    def _get_preset_cache_key_from_kwargs(self, **kwargs) -> Optional[str]:
+    def _get_preset_cache_key_from_kwargs(self, **kwargs) -> str | None:
         """
         Get the preset cache key from kwargs["litellm_params"]
 
@@ -510,8 +509,8 @@ class Cache:
 
     def _get_cache_logic(
         self,
-        cached_result: Optional[Any],
-        max_age: Optional[float],
+        cached_result: Any | None,
+        max_age: float | None,
     ):
         """
         Common get cache logic across sync + async implementations
@@ -544,8 +543,8 @@ class Cache:
         return cached_result
 
     @staticmethod
-    def _get_safe_cache_lookup_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        cache_lookup_kwargs: Dict[str, Any] = {}
+    def _get_safe_cache_lookup_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+        cache_lookup_kwargs: dict[str, Any] = {}
         for prompt_kwarg in ("messages", "input"):
             if prompt_kwarg in kwargs:
                 cache_lookup_kwargs[prompt_kwarg] = kwargs[prompt_kwarg]
@@ -558,7 +557,7 @@ class Cache:
 
     @staticmethod
     def _update_metadata_from_cache_lookup_kwargs(
-        original_kwargs: Dict[str, Any], cache_lookup_kwargs: Dict[str, Any]
+        original_kwargs: dict[str, Any], cache_lookup_kwargs: dict[str, Any]
     ) -> None:
         original_metadata = original_kwargs.get("metadata")
         cache_lookup_metadata = cache_lookup_kwargs.get("metadata")
@@ -568,7 +567,7 @@ class Cache:
         if "semantic-similarity" in cache_lookup_metadata:
             original_metadata["semantic-similarity"] = cache_lookup_metadata["semantic-similarity"]
 
-    def get_cache(self, dynamic_cache_object: Optional[BaseCache] = None, **kwargs):
+    def get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
         Retrieves the cached result for the given arguments.
 
@@ -603,7 +602,7 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    async def async_get_cache(self, dynamic_cache_object: Optional[BaseCache] = None, **kwargs):
+    async def async_get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
         Async get cache implementation.
 
@@ -677,9 +676,9 @@ class Cache:
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e!s}")
 
-    async def async_add_cache(self, result, dynamic_cache_object: Optional[BaseCache] = None, **kwargs):
+    async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
         Async implementation of add_cache
         """
@@ -696,14 +695,14 @@ class Cache:
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e!s}")
 
     def _convert_to_cached_embedding(
         self,
         embedding_response: Any,
-        model: Optional[str],
-        prompt_tokens: Optional[int] = None,
-        prompt_tokens_details: Optional[dict] = None,
+        model: str | None,
+        prompt_tokens: int | None = None,
+        prompt_tokens_details: dict | None = None,
     ) -> CachedEmbedding:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
@@ -745,7 +744,7 @@ class Cache:
         self,
         result: EmbeddingResponse,
         idx_in_result_data: int,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Extract per-item prompt_tokens_details from a response for caching.
 
@@ -788,7 +787,7 @@ class Cache:
         self,
         result: EmbeddingResponse,
         idx_in_result_data: int,
-    ) -> Optional[int]:
+    ) -> int | None:
         """
         Extract the per-item prompt_tokens from a response for caching.
 
@@ -813,7 +812,7 @@ class Cache:
         input: str,
         kwargs: dict,
         idx_in_result_data: int = 0,
-    ) -> Tuple[str, dict, dict]:
+    ) -> tuple[str, dict, dict]:
         preset_cache_key = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
         embedding_response = result.data[idx_in_result_data]
@@ -843,7 +842,7 @@ class Cache:
         )
         return cache_key, cached_data, kwargs
 
-    async def async_add_cache_pipeline(self, result, dynamic_cache_object: Optional[BaseCache] = None, **kwargs):
+    async def async_add_cache_pipeline(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
         Async implementation of add_cache for Embedding calls
 
@@ -875,7 +874,7 @@ class Cache:
             else:
                 await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e!s}")
 
     def should_use_cache(self, **kwargs):
         """
@@ -926,11 +925,11 @@ class Cache:
 
 
 def enable_cache(
-    type: Optional[LiteLLMCacheType] = LiteLLMCacheType.LOCAL,
-    host: Optional[str] = None,
-    port: Optional[str] = None,
-    password: Optional[str] = None,
-    supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
+    type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
+    host: str | None = None,
+    port: str | None = None,
+    password: str | None = None,
+    supported_call_types: list[CachingSupportedCallTypes] | None = [
         "completion",
         "acompletion",
         "embedding",
@@ -986,11 +985,11 @@ def enable_cache(
 
 
 def update_cache(
-    type: Optional[LiteLLMCacheType] = LiteLLMCacheType.LOCAL,
-    host: Optional[str] = None,
-    port: Optional[str] = None,
-    password: Optional[str] = None,
-    supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
+    type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
+    host: str | None = None,
+    port: str | None = None,
+    password: str | None = None,
+    supported_call_types: list[CachingSupportedCallTypes] | None = [
         "completion",
         "acompletion",
         "embedding",

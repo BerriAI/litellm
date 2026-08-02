@@ -2,14 +2,14 @@
 CompactifAI chat completion transformation
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ModelResponse
-from litellm.llms.openai.common_utils import OpenAIError
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -29,9 +29,9 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
         """
         Get API base and key for CompactifAI provider.
         """
@@ -46,12 +46,12 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List,
+        messages: list,
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform CompactifAI response to LiteLLM format.
@@ -86,9 +86,7 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
 
         return returned_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """
         Get the appropriate error class for CompactifAI errors.
         Since CompactifAI is OpenAI-compatible, we use OpenAI error handling.

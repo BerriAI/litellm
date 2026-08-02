@@ -993,6 +993,7 @@ export interface UserInfoV2Response {
   updated_at: string | null;
   sso_user_id: string | null;
   teams: string[];
+  object_permission?: ObjectPermission | null;
 }
 
 /**
@@ -1570,6 +1571,7 @@ export const modelInfoCall = async (
   teamId?: string,
   sortBy?: string,
   sortOrder?: string,
+  excludeAutoRouters?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1594,6 +1596,9 @@ export const modelInfoCall = async (
     }
     if (sortOrder && sortOrder.trim()) {
       params.append("sortOrder", sortOrder.trim());
+    }
+    if (excludeAutoRouters) {
+      params.append("exclude_auto_routers", "true");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -4746,9 +4751,12 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   }
 };
 
-export const fetchMCPServers = async (accessToken: string, teamId?: string | null) => {
+export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
   try {
-    return await apiClient.get(`/v1/mcp/server`, { accessToken, query: { team_id: teamId || undefined } });
+    return await apiClient.get(`/v1/mcp/server`, {
+      accessToken,
+      query: { team_id: teamId || undefined, connected_app_view: connectedAppView || undefined },
+    });
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
     throw error;

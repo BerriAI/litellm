@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm._logging import verbose_logger
@@ -59,8 +59,8 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         BaseRAGIngestion.__init__(self, ingest_options=ingest_options, router=router)
         BaseAWSLLM.__init__(self)
@@ -127,7 +127,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         return S3_VECTORS_DEFAULT_DIMENSION
 
-    def _get_dimension_from_config(self) -> Optional[int]:
+    def _get_dimension_from_config(self) -> int | None:
         """
         Get vector dimension from config if explicitly provided.
 
@@ -163,8 +163,8 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         self,
         method: str,
         url: str,
-        data: Optional[str] = None,
-        headers: Optional[Dict[str, str]] = None,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         """
         Helper to sign and execute AWS API requests using httpx + SigV4.
@@ -332,7 +332,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             verbose_logger.exception(f"Error creating vector index: {e}")
             raise
 
-    async def _put_vectors(self, vectors: List[Dict[str, Any]]):
+    async def _put_vectors(self, vectors: list[dict[str, Any]]):
         """
         Call PutVectors API to store vectors in S3 Vectors.
 
@@ -364,8 +364,8 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         Generate embeddings using LiteLLM's embedding API.
 
@@ -384,7 +384,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         verbose_logger.debug(f"Generating embeddings for {len(chunks)} chunks using {embedding_model}")
 
         # Convert to list to ensure type compatibility
-        input_chunks: List[str] = list(chunks)
+        input_chunks: list[str] = list(chunks)
 
         if self.router:
             response = await self.router.aembedding(model=embedding_model, input=input_chunks)
@@ -395,13 +395,13 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
         existing_file_id: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Store vectors in S3 Vectors using PutVectors API.
 
@@ -441,7 +441,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         vectors = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
             # Build metadata dict
-            metadata: Dict[str, str] = {
+            metadata: dict[str, str] = {
                 "source_text": chunk,  # Non-filterable (for reference)
                 "chunk_index": str(i),  # Filterable
             }
@@ -464,7 +464,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         vector_store_id = f"{self.vector_bucket_name}:{self.index_name}"
         return vector_store_id, filename
 
-    async def query_vector_store(self, vector_store_id: str, query: str, top_k: int = 5) -> Optional[Dict[str, Any]]:
+    async def query_vector_store(self, vector_store_id: str, query: str, top_k: int = 5) -> dict[str, Any] | None:
         """
         Query S3 Vectors using QueryVectors API.
 

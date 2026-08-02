@@ -1,7 +1,7 @@
 import json
 import re
 import traceback
-from typing import Any, Optional, Protocol, cast
+from typing import Any, Protocol, cast
 
 import httpx
 
@@ -121,7 +121,7 @@ class ExceptionCheckers:
         return False
 
 
-def get_error_message(error_obj) -> Optional[str]:
+def get_error_message(error_obj) -> str | None:
     """
     OpenAI Returns Error message that is nested, this extract the message
 
@@ -177,13 +177,13 @@ def _get_body_error_code(error_str: str) -> int | None:
         return None
 
 
-def _get_response_headers(original_exception: Exception) -> Optional[httpx.Headers]:
+def _get_response_headers(original_exception: Exception) -> httpx.Headers | None:
     """
     Extract and return the response headers from an exception, if present.
 
     Used for accurate retry logic.
     """
-    _response_headers: Optional[httpx.Headers] = None
+    _response_headers: httpx.Headers | None = None
     try:
         _response_headers = getattr(original_exception, "headers", None)
         error_response = getattr(original_exception, "response", None)
@@ -198,7 +198,7 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
 
 
 def extract_and_raise_litellm_exception(
-    response: Optional[Any],
+    response: Any | None,
     error_str: str,
     model: str,
     custom_llm_provider: str,
@@ -273,7 +273,7 @@ def _map_openai_exception(
         message = message.replace("OPENAI", custom_llm_provider.upper())
         message = message.replace(
             "openai.OpenAIError",
-            "{}.{}Error".format(custom_llm_provider, custom_llm_provider),
+            f"{custom_llm_provider}.{custom_llm_provider}Error",
         )
     if custom_llm_provider == "openai":
         exception_provider = "OpenAI" + "Exception"
@@ -507,31 +507,31 @@ def _map_anthropic_exception(
         or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
     ):
         raise ContextWindowExceededError(
-            message="AnthropicError - {}".format(error_str),
+            message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
         )
     elif "overloaded_error" in error_str or "Overloaded" in error_str:
         raise InternalServerError(
-            message="AnthropicError - {}".format(error_str),
+            message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
         )
     if "Invalid API Key" in error_str:
         raise AuthenticationError(
-            message="AnthropicError - {}".format(error_str),
+            message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
         )
     if "content filtering policy" in error_str:
         raise ContentPolicyViolationError(
-            message="AnthropicError - {}".format(error_str),
+            message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
         )
     if "Client error '400 Bad Request'" in error_str:
         raise BadRequestError(
-            message="AnthropicError - {}".format(error_str),
+            message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
         )
@@ -679,7 +679,7 @@ def _map_replicate_exception(
             )
     raise APIError(
         status_code=500,
-        message=f"ReplicateException - {str(original_exception)}",
+        message=f"ReplicateException - {original_exception!s}",
         llm_provider="replicate",
         model=model,
         request=httpx.Request(
@@ -1678,14 +1678,12 @@ def _map_together_ai_exception(
             model=model,
             llm_provider="together_ai",
         )
-    elif "error" in error_response and "API key doesn't match expected format." in error_response["error"]:
-        raise BadRequestError(
-            message=f"TogetherAIException - {error_response['error']}",
-            model=model,
-            llm_provider="together_ai",
-            response=getattr(original_exception, "response", None),
-        )
-    elif "error_type" in error_response and error_response["error_type"] == "validation":
+    elif (
+        "error" in error_response
+        and "API key doesn't match expected format." in error_response["error"]
+        or "error_type" in error_response
+        and error_response["error_type"] == "validation"
+    ):
         raise BadRequestError(
             message=f"TogetherAIException - {error_response['error']}",
             model=model,
@@ -1869,7 +1867,7 @@ def _map_azure_exception(
     # Azure OpenAI (especially Images) often nests error details under
     # body["error"]. Detect content policy violations using the structured
     # payload in addition to string matching.
-    azure_error_code: Optional[str] = None
+    azure_error_code: str | None = None
     try:
         body_dict = getattr(original_exception, "body", None) or {}
         if isinstance(body_dict, dict):
@@ -2461,7 +2459,7 @@ def exception_type(  # type: ignore
         ):  # deal with edge-case invalid request error bug in openai-python sdk
             exception_mapping_worked = True
             raise BadRequestError(
-                message=f"{exception_provider} BadRequestError : This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
+                message=f"{exception_provider} BadRequestError : This can happen due to missing AZURE_API_VERSION: {original_exception!s}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
@@ -2473,17 +2471,14 @@ def exception_type(  # type: ignore
             exception_mapping_worked = True
             if hasattr(original_exception, "request"):
                 raise APIConnectionError(
-                    message="{} - {}".format(exception_provider, error_str),
+                    message=f"{exception_provider} - {error_str}",
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=getattr(original_exception, "request", None),
                 )
             else:
                 raise APIConnectionError(
-                    message="{}\n{}".format(
-                        str(original_exception),
-                        _redact_string(traceback.format_exc()),
-                    ),
+                    message=f"{original_exception!s}\n{_redact_string(traceback.format_exc())}",
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
@@ -2509,10 +2504,7 @@ def exception_type(  # type: ignore
                     setattr(e, "litellm_response_headers", litellm_response_headers)
                     raise e  # it's already mapped
             raised_exc = APIConnectionError(
-                message="{}\n{}".format(
-                    original_exception,
-                    _redact_string(traceback.format_exc()),
-                ),
+                message=f"{original_exception}\n{_redact_string(traceback.format_exc())}",
                 llm_provider="",
                 model="",
             )
@@ -2548,7 +2540,6 @@ def exception_logging(
         verbose_logger.debug(
             f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
         )
-        pass
 
 
 def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:

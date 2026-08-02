@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Any, Dict, Union
+from typing import Any
 
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -22,7 +22,7 @@ def strftime_now(fmt: str) -> str:
     return datetime.now().strftime(fmt)
 
 
-def _get_tokenizer_config(hf_model_name: str) -> Dict[str, Any]:
+def _get_tokenizer_config(hf_model_name: str) -> dict[str, Any]:
     """
     Fetch tokenizer_config.json from HuggingFace (sync)
 
@@ -45,7 +45,7 @@ def _get_tokenizer_config(hf_model_name: str) -> Dict[str, Any]:
         return {"status": "failure"}
 
 
-async def _aget_tokenizer_config(hf_model_name: str) -> Dict[str, Any]:
+async def _aget_tokenizer_config(hf_model_name: str) -> dict[str, Any]:
     """
     Fetch tokenizer_config.json from HuggingFace (async)
 
@@ -70,7 +70,7 @@ async def _aget_tokenizer_config(hf_model_name: str) -> Dict[str, Any]:
         return {"status": "failure"}
 
 
-def _get_chat_template_file(hf_model_name: str) -> Dict[str, Any]:
+def _get_chat_template_file(hf_model_name: str) -> dict[str, Any]:
     """
     Fetch chat template from separate .jinja file (sync)
 
@@ -98,7 +98,7 @@ def _get_chat_template_file(hf_model_name: str) -> Dict[str, Any]:
     return {"status": "failure"}
 
 
-async def _aget_chat_template_file(hf_model_name: str) -> Dict[str, Any]:
+async def _aget_chat_template_file(hf_model_name: str) -> dict[str, Any]:
     """
     Fetch chat template from separate .jinja file (async)
 
@@ -128,7 +128,7 @@ async def _aget_chat_template_file(hf_model_name: str) -> Dict[str, Any]:
     return {"status": "failure"}
 
 
-def _extract_token_value(token_value: Union[None, str, Dict[str, Any]]) -> str:
+def _extract_token_value(token_value: None | str | dict[str, Any]) -> str:
     """
     Extract token string from various formats (string, dict, etc.)
 

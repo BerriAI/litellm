@@ -10,7 +10,7 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -40,8 +40,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         BaseRAGIngestion.__init__(self, ingest_options=ingest_options, router=router)
         VertexBase.__init__(self)
@@ -56,8 +56,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         Vertex AI RAG Engine handles embedding internally - skip this step.
 
@@ -69,13 +69,13 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
         existing_file_id: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Store content in Vertex AI RAG corpus.
 
@@ -120,7 +120,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
     async def _create_rag_corpus(
         self,
         display_name: str,
-        description: Optional[str] = None,
+        description: str | None = None,
     ) -> str:
         """
         Create a Vertex AI RAG corpus.
@@ -148,7 +148,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         url = f"{base_url}/v1beta1/projects/{self.project_id}/locations/{self.location}/ragCorpora"
 
         # Build request body with camelCase keys (Vertex AI API format)
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "displayName": display_name,
         }
 
@@ -282,7 +282,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         rag_corpus_id: str,
         filename: str,
         file_content: bytes,
-        content_type: Optional[str],
+        content_type: str | None,
     ) -> str:
         """
         Upload a file to Vertex AI RAG corpus using multipart upload.
@@ -308,7 +308,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         url = f"{base_url}/upload/v1beta1/{rag_corpus_id}/ragFiles:upload"
 
         # Build metadata for the file with snake_case keys (as per upload API docs)
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, Any] = {
             "rag_file": {
                 "display_name": filename,
             }
@@ -390,7 +390,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
     async def _import_files_from_gcs(
         self,
         rag_corpus_id: str,
-        gcs_uris: List[str],
+        gcs_uris: list[str],
     ) -> str:
         """
         Import files from Google Cloud Storage into RAG corpus.
@@ -414,7 +414,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         url = f"{base_url}/v1beta1/{rag_corpus_id}/ragFiles:import"
 
         # Build request body with camelCase keys (Vertex AI API format)
-        request_body: Dict[str, Any] = {"importRagFilesConfig": {"gcsSource": {"uris": gcs_uris}}}
+        request_body: dict[str, Any] = {"importRagFilesConfig": {"gcsSource": {"uris": gcs_uris}}}
 
         # Add chunking configuration if provided
         chunking_strategy = self.chunking_strategy
