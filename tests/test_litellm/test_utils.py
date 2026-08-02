@@ -833,6 +833,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
+        "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
         "output_db_cost_per_token",
         "output_dbu_cost_per_token",
@@ -931,6 +932,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "number"
                 },
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},

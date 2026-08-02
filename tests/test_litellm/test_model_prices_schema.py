@@ -212,5 +212,30 @@ def test_latest_azure_realtime_dated_variants(prices: dict):
     } <= prices.keys()
 
 
+@pytest.mark.parametrize(
+    ("model", "image_rate", "cached_image_rate"),
+    [
+        ("gpt-realtime-2", 5e-06, 5e-07),
+        ("gpt-realtime-2.1", 5e-06, 5e-07),
+        ("gpt-realtime-2.1-mini", 8e-07, 8e-08),
+        ("azure/gpt-realtime-2", 5e-06, 5e-07),
+        ("azure/gpt-realtime-2-2026-05-06", 5e-06, 5e-07),
+        ("azure/gpt-realtime-2.1", 5e-06, 5e-07),
+        ("azure/gpt-realtime-2.1-2026-07-07", 5e-06, 5e-07),
+        ("azure/gpt-realtime-2.1-mini", 8e-07, 8e-08),
+        ("azure/gpt-realtime-2.1-mini-2026-07-07", 8e-07, 8e-08),
+    ],
+)
+def test_latest_realtime_model_family_image_token_pricing(
+    prices: dict,
+    model: str,
+    image_rate: float,
+    cached_image_rate: float,
+):
+    assert prices[model]["input_cost_per_image_token"] == image_rate
+    assert prices[model]["cache_read_input_image_token_cost"] == cached_image_rate
+    assert "input_cost_per_image" not in prices[model]
+
+
 def test_model_prices_backup_is_synchronized():
     assert PRICES_PATH.read_bytes() == BACKUP_PRICES_PATH.read_bytes()
