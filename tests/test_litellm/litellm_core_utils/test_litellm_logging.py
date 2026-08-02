@@ -4153,3 +4153,38 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_handle_anthropic_messages_response_logging_preserves_fast_mode_speed():
+    """/v1/messages non-streaming rebuilds usage by re-transforming the raw Anthropic
+    response. Anthropic's fast-mode multiplier is applied off ``usage.speed``, which the
+    response body never carries, so the request's optional params have to be passed in or
+    fast-mode spend is logged at the standard rate."""
+    import httpx
+
+    logging_obj = LitellmLogging(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="lit-5115",
+        function_id="lit-5115",
+    )
+    logging_obj.optional_params = {"speed": "fast"}
+    logging_obj.model_call_details["httpx_response"] = httpx.Response(
+        status_code=200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-4-8",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 100},
+        },
+    )
+
+    result = logging_obj._handle_anthropic_messages_response_logging(result=None)
+
+    assert result.usage.speed == "fast"  # type: ignore[attr-defined]

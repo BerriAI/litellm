@@ -80,7 +80,9 @@ class AnthropicPassthroughLoggingHandler:
             model=model,
             messages=[],
             logging_obj=logging_obj,
-            optional_params={},
+            optional_params=AnthropicPassthroughLoggingHandler._cost_relevant_request_params(
+                request_body or kwargs.get("request_body")
+            ),
             api_key="",
             request_data={},
             encoding=litellm.encoding,
@@ -101,6 +103,15 @@ class AnthropicPassthroughLoggingHandler:
             "result": litellm_model_response,
             "kwargs": kwargs,
         }
+
+    @staticmethod
+    def _cost_relevant_request_params(request_body: Optional[dict]) -> dict:
+        """
+        Request params that change how the response is priced, and so must reach the
+        usage-building paths. Anthropic's ``speed=fast`` multiplies non-cache token cost.
+        """
+        speed = (request_body or {}).get("speed")
+        return {"speed": speed} if isinstance(speed, str) else {}
 
     @staticmethod
     def _get_user_from_metadata(
@@ -315,6 +326,7 @@ class AnthropicPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
 
+        speed = AnthropicPassthroughLoggingHandler._cost_relevant_request_params(request_body).get("speed")
         model = request_body.get("model", "")
         # Check if it's available in the logging object
         if (
@@ -334,6 +346,7 @@ class AnthropicPassthroughLoggingHandler:
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
+                speed=speed,
             )
         except Exception as e:
             # stream_chunk_builder re-raises assembly failures (as litellm.APIError)
@@ -355,6 +368,7 @@ class AnthropicPassthroughLoggingHandler:
                 complete_streaming_response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
                     all_chunks=all_chunks,
                     model=model,
+                    speed=speed,
                 )
             except Exception as e:
                 verbose_proxy_logger.warning(
@@ -419,6 +433,7 @@ class AnthropicPassthroughLoggingHandler:
         all_chunks: Sequence[Union[str, bytes]],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
+        speed: Optional[str] = None,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         """
         Builds complete response from raw Anthropic chunks.
@@ -443,11 +458,13 @@ class AnthropicPassthroughLoggingHandler:
                 all_chunks=collapsed,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
+                speed=speed,
             )
         return AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy(
             all_chunks=all_chunks,
             litellm_logging_obj=litellm_logging_obj,
             model=model,
+            speed=speed,
         )
 
     # Anthropic SSE block/delta types that the fast path is NOT allowed to
@@ -575,6 +592,7 @@ class AnthropicPassthroughLoggingHandler:
         all_chunks: Sequence[Union[str, bytes]],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
+        speed: Optional[str] = None,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         """
         Original reconstruction: convert every SSE event to a generic chunk
@@ -590,6 +608,7 @@ class AnthropicPassthroughLoggingHandler:
         anthropic_model_response_iterator = AnthropicModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
+            speed=speed,
         )
         all_openai_chunks = []
 
@@ -649,6 +668,7 @@ class AnthropicPassthroughLoggingHandler:
     def _build_usage_only_response_from_chunks(
         all_chunks: Sequence[Union[str, bytes]],
         model: str,
+        speed: Optional[str] = None,
     ) -> Optional[ModelResponse]:
         """
         Build a usage-bearing ModelResponse from Anthropic SSE token-usage events, for
@@ -742,7 +762,7 @@ class AnthropicPassthroughLoggingHandler:
             usage_object["server_tool_use"] = _server_tool_use
         if inference_geo is not None:
             usage_object["inference_geo"] = inference_geo
-        usage_obj = AnthropicConfig().calculate_usage(usage_object=usage_object, reasoning_content=None)
+        usage_obj = AnthropicConfig().calculate_usage(usage_object=usage_object, reasoning_content=None, speed=speed)
         return ModelResponse(
             model=resolved_model,
             choices=[
