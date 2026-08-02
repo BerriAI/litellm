@@ -60,6 +60,7 @@ from .llms.base import HiddenParams
 from .llms.openai import (
     AllMessageValues,
     Batch,
+    CachedTokensDetails,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,
@@ -207,6 +208,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_read_input_token_cost: Optional[float]
+    cache_read_input_audio_token_cost: Optional[float]
+    cache_read_input_image_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
@@ -1534,6 +1537,8 @@ class PromptTokensDetailsWrapper(
 
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
+
+    cached_tokens_details: Optional[CachedTokensDetails] = None
 
     video_tokens: Optional[int] = None
     """Video tokens sent to the model."""
@@ -3205,6 +3210,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float] = None
     cache_read_input_token_cost_above_272k_tokens_flex: Optional[float] = None
     cache_read_input_audio_token_cost: Optional[float] = None
+    cache_read_input_image_token_cost: Optional[float] = None
     input_cost_per_character: Optional[float] = None
     input_cost_per_character_above_128k_tokens: Optional[float] = None
     input_cost_per_audio_token: Optional[float] = None

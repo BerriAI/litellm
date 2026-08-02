@@ -9,6 +9,9 @@ TranscriptionVerbose/Diarized type.
 
 from unittest.mock import patch
 
+import pytest
+
+import litellm
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
@@ -125,6 +128,58 @@ class TestTranscriptionDurationNotInResponseBody:
 
 class TestCostCalculatorReadsDurationFromHiddenParams:
     """The cost calculator should read duration from _hidden_params via completion_cost()."""
+
+    @patch("litellm.cost_calculator.openai_cost_per_second")
+    def test_completion_cost_prefers_provider_usage_duration(self, mock_cost_fn):
+        mock_cost_fn.return_value = (0.001, 0.0)
+        response = TranscriptionResponse(
+            text="test",
+            usage={"type": "duration", "seconds": 60.0},
+        )
+        response._hidden_params = {
+            "audio_transcription_duration": 17.5,
+            "custom_llm_provider": "openai",
+        }
+
+        completion_cost(
+            completion_response=response,
+            model="gpt-transcribe",
+            call_type="atranscription",
+        )
+
+        mock_cost_fn.assert_called_once()
+        _, kwargs = mock_cost_fn.call_args
+        assert kwargs["duration"] == 60.0
+
+    @pytest.mark.parametrize(
+        ("model", "provider"),
+        [
+            ("gpt-transcribe", "openai"),
+            ("azure/gpt-transcribe", "azure"),
+        ],
+    )
+    def test_gpt_transcribe_provider_usage_duration_costs_without_local_decode(
+        self,
+        monkeypatch,
+        model: str,
+        provider: str,
+    ):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+        response = TranscriptionResponse(
+            text="test",
+            usage={"type": "duration", "seconds": 60.0},
+        )
+        response._hidden_params = {"custom_llm_provider": provider}
+
+        actual = completion_cost(
+            completion_response=response,
+            model=model,
+            call_type="atranscription",
+            custom_llm_provider=provider,
+        )
+
+        assert actual == pytest.approx(0.0045)
 
     @patch("litellm.cost_calculator.openai_cost_per_second")
     def test_completion_cost_uses_hidden_params_duration(self, mock_cost_fn):

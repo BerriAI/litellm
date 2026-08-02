@@ -1200,9 +1200,17 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     model_config = {"extra": "allow"}
 
 
+class CachedTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    audio_tokens: Optional[int] = None
+    image_tokens: Optional[int] = None
+    text_tokens: Optional[int] = None
+
+
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: Optional[int] = None
     cached_tokens: int = 0
+    cached_tokens_details: Optional[CachedTokensDetails] = None
+    image_tokens: Optional[int] = None
     text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
