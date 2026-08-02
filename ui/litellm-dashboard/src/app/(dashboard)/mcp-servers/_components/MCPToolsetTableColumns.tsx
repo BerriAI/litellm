@@ -14,7 +14,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
-import { getProxyBaseUrl } from "@/components/networking";
 import { MCPToolset } from "@/components/mcp_tools/types";
 import { copyToClipboard } from "@/utils/dataUtils";
 
@@ -29,18 +28,19 @@ export function displayToolName(serverPrefix: string | undefined, toolName: stri
   return serverPrefix ? `${serverPrefix}${MCP_TOOL_PREFIX_SEPARATOR}${toolName}` : toolName;
 }
 
-export function toolsetEndpointUrl(toolsetName: string): string {
-  return `${getProxyBaseUrl()}/toolset/${toolsetName}/mcp`;
+export function toolsetEndpointUrl(baseUrl: string, toolsetName: string): string {
+  return `${baseUrl}/toolset/${toolsetName}/mcp`;
 }
 
 interface ToolsetRowActionsProps {
   toolset: MCPToolset;
   isAdmin: boolean;
+  docBaseUrl: string;
   onEditClick: (toolset: MCPToolset) => void;
   onDeleteClick: (toolsetId: string) => void;
 }
 
-function ToolsetRowActions({ toolset, isAdmin, onEditClick, onDeleteClick }: ToolsetRowActionsProps) {
+function ToolsetRowActions({ toolset, isAdmin, docBaseUrl, onEditClick, onDeleteClick }: ToolsetRowActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -53,7 +53,9 @@ function ToolsetRowActions({ toolset, isAdmin, onEditClick, onDeleteClick }: Too
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           data-testid="toolset-action-copy-url"
-          onClick={() => void copyToClipboard(toolsetEndpointUrl(toolset.toolset_name), "Endpoint URL copied")}
+          onClick={() =>
+            void copyToClipboard(toolsetEndpointUrl(docBaseUrl, toolset.toolset_name), "Endpoint URL copied")
+          }
         >
           <Link2 />
           Copy endpoint URL
@@ -90,6 +92,7 @@ function ToolsetRowActions({ toolset, isAdmin, onEditClick, onDeleteClick }: Too
 interface MCPToolsetTableColumnsDeps {
   isAdmin: boolean;
   serverPrefixById: Map<string, string>;
+  docBaseUrl: string;
   onEditClick: (toolset: MCPToolset) => void;
   onDeleteClick: (toolsetId: string) => void;
 }
@@ -97,6 +100,7 @@ interface MCPToolsetTableColumnsDeps {
 export const getMCPToolsetTableColumns = ({
   isAdmin,
   serverPrefixById,
+  docBaseUrl,
   onEditClick,
   onDeleteClick,
 }: MCPToolsetTableColumnsDeps): ColumnDef<MCPToolset>[] => [
@@ -120,7 +124,7 @@ export const getMCPToolsetTableColumns = ({
     cell: ({ row }) => (
       <IdentityCell
         title={row.original.toolset_name}
-        subtitle={toolsetEndpointUrl(row.original.toolset_name)}
+        subtitle={toolsetEndpointUrl(docBaseUrl, row.original.toolset_name)}
         className="max-w-80"
         onClick={isAdmin ? () => onEditClick(row.original) : undefined}
       />
@@ -185,6 +189,7 @@ export const getMCPToolsetTableColumns = ({
         <ToolsetRowActions
           toolset={row.original}
           isAdmin={isAdmin}
+          docBaseUrl={docBaseUrl}
           onEditClick={onEditClick}
           onDeleteClick={onDeleteClick}
         />

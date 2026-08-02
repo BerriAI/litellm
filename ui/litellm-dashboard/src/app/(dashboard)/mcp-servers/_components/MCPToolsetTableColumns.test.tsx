@@ -5,9 +5,7 @@ import { DataTable } from "@/components/shared/DataTable";
 import { MCPToolset } from "@/components/mcp_tools/types";
 import { getMCPToolsetTableColumns } from "./MCPToolsetTableColumns";
 
-vi.mock("@/components/networking", () => ({
-  getProxyBaseUrl: () => "http://localhost:4000",
-}));
+const DOC_BASE_URL = "https://gateway.public.example.com";
 
 const mockToolset: MCPToolset = {
   toolset_id: "ts-1",
@@ -29,7 +27,7 @@ const serverPrefixById = new Map([
 ]);
 
 function renderTable({ isAdmin = true, onEditClick = vi.fn(), onDeleteClick = vi.fn() } = {}) {
-  const deps = { isAdmin, serverPrefixById, onEditClick, onDeleteClick };
+  const deps = { isAdmin, serverPrefixById, docBaseUrl: DOC_BASE_URL, onEditClick, onDeleteClick };
   render(
     <DataTable
       data={[mockToolset]}
@@ -46,7 +44,7 @@ describe("getMCPToolsetTableColumns", () => {
   it("renders the toolset with its endpoint url as subtitle", () => {
     renderTable();
     expect(screen.getByText("github-tools")).toBeInTheDocument();
-    expect(screen.getByText("http://localhost:4000/toolset/github-tools/mcp")).toBeInTheDocument();
+    expect(screen.getByText(`${DOC_BASE_URL}/toolset/github-tools/mcp`)).toBeInTheDocument();
   });
 
   it("renders server-prefixed tool chips capped at four with an overflow count", () => {
@@ -77,7 +75,7 @@ describe("getMCPToolsetTableColumns", () => {
 
     await user.click(screen.getByTestId("toolset-actions-ts-1"));
     await user.click(await screen.findByTestId("toolset-action-copy-url"));
-    expect(await window.navigator.clipboard.readText()).toBe("http://localhost:4000/toolset/github-tools/mcp");
+    expect(await window.navigator.clipboard.readText()).toBe(`${DOC_BASE_URL}/toolset/github-tools/mcp`);
 
     await user.click(screen.getByTestId("toolset-actions-ts-1"));
     await user.click(await screen.findByTestId("toolset-action-copy-id"));
