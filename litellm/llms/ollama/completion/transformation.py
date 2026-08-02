@@ -473,7 +473,7 @@ class _OllamaJsonModeToolCall(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    arguments: dict[str, object]
+    arguments: dict[str, object]  # mutable-ok: mirrors Ollama's arbitrary JSON argument object
 
 
 def _build_tool_call(response_text: str, tool_names: frozenset[str]) -> ChatCompletionToolCallChunk | None:
