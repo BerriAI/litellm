@@ -6114,6 +6114,94 @@ async def test_edit_mcp_server_skips_toolset_cache_invalidation_when_allowed_too
 
 
 @pytest.mark.asyncio
+async def test_add_mcp_toolset_invalidates_cache():
+    """Creating a toolset must invalidate the toolset cache (defensively — a
+    brand-new toolset_id can't itself have a stale entry, but the call must
+    still succeed rather than raise now that invalidate_toolset_cache is async)."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        add_mcp_toolset,
+    )
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset, NewMCPToolsetRequest
+
+    created = MCPToolset(toolset_id="ts-new", toolset_name="my-toolset", tools=[])
+    payload = NewMCPToolsetRequest(toolset_name="my-toolset", tools=[])
+    user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_toolset",
+            AsyncMock(return_value=created),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_manager,
+    ):
+        mock_manager.invalidate_toolset_cache = AsyncMock()
+        result = await add_mcp_toolset(payload=payload, user_api_key_dict=user_auth)
+
+    assert result.toolset_id == "ts-new"
+    mock_manager.invalidate_toolset_cache.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_edit_mcp_toolset_invalidates_cache_for_toolset_id():
+    """Updating a toolset must invalidate precisely that toolset's cache entry."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        edit_mcp_toolset,
+    )
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset, UpdateMCPToolsetRequest
+
+    updated = MCPToolset(toolset_id="ts-1", toolset_name="renamed", tools=[])
+    payload = UpdateMCPToolsetRequest(toolset_id="ts-1", toolset_name="renamed")
+    user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_toolset",
+            AsyncMock(return_value=updated),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_manager,
+    ):
+        mock_manager.invalidate_toolset_cache = AsyncMock()
+        result = await edit_mcp_toolset(payload=payload, user_api_key_dict=user_auth)
+
+    assert result.toolset_id == "ts-1"
+    mock_manager.invalidate_toolset_cache.assert_awaited_once_with("ts-1")
+
+
+@pytest.mark.asyncio
+async def test_remove_mcp_toolset_invalidates_cache_for_toolset_id():
+    """Deleting a toolset must invalidate precisely that toolset's cache entry."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        remove_mcp_toolset,
+    )
+
+    user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_mcp_toolset",
+            AsyncMock(return_value={"toolset_id": "ts-1"}),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_manager,
+    ):
+        mock_manager.invalidate_toolset_cache = AsyncMock()
+        await remove_mcp_toolset(toolset_id="ts-1", user_api_key_dict=user_auth)
+
+    mock_manager.invalidate_toolset_cache.assert_awaited_once_with("ts-1")
+
+
+@pytest.mark.asyncio
 async def test_edit_mcp_server_purge_failure_does_not_fail_the_edit():
     """The purge is best-effort: a purge exception after a successful update must be swallowed and
     logged, never turned into an error response for an edit whose primary job already succeeded."""

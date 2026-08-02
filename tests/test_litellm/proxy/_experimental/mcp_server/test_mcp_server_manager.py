@@ -8929,6 +8929,150 @@ async def test_resolve_toolset_tool_permissions_single_db_fetch_across_checks():
     list_toolsets_mock.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_resolve_toolset_tool_permissions_survives_db_error():
+    """A DB error resolving one batch of toolset_ids must not raise or lose
+    whatever was already resolved from cache; the caller (tool listing/calls)
+    must keep working with partial data rather than 500."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.toolset_db.list_mcp_toolsets",
+            AsyncMock(side_effect=RuntimeError("db unavailable")),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+    ):
+        result = await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_invalidate_toolset_cache_deletes_specific_toolset_precisely():
+    """Regression: invalidating a specific toolset_id must delete its own
+    toolset_perms entry from both the in-memory layer and Redis, without
+    touching a different toolset's still-cached entry. Before the fix, only
+    the in-memory layer was ever cleared, leaving Redis (and every other
+    worker) serving the stale permission set until its TTL expired."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    cache = DualCache(redis_cache=MagicMock(async_delete_cache=AsyncMock()))
+    await cache.in_memory_cache.async_set_cache(key="toolset_perms:ts-1", value={"server-a": ["tool1"]})
+    await cache.in_memory_cache.async_set_cache(key="toolset_perms:ts-2", value={"server-b": ["tool2"]})
+    await cache.in_memory_cache.async_set_cache(key="toolset_name:some-name", value={"toolset_id": "ts-1"})
+
+    with patch("litellm.proxy.proxy_server.user_api_key_cache", cache):
+        await manager.invalidate_toolset_cache("ts-1")
+
+    cache.redis_cache.async_delete_cache.assert_awaited_once_with("toolset_perms:ts-1")
+    assert "toolset_perms:ts-1" not in cache.in_memory_cache.cache_dict
+    assert "toolset_perms:ts-2" in cache.in_memory_cache.cache_dict, (
+        "invalidating one toolset must not evict a different toolset's cached entry"
+    )
+    assert "toolset_name:some-name" not in cache.in_memory_cache.cache_dict
+
+
+@pytest.mark.asyncio
+async def test_invalidate_toolset_cache_clear_all_evicts_every_toolset_entry():
+    """Passing toolset_id=None (used only by toolset creation, which can't have
+    a stale entry for its own brand-new id) clears every in-memory toolset_*
+    entry as a blunt fallback; Redis keys expire via TTL since they can't be
+    enumerated by pattern."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    cache = DualCache(redis_cache=MagicMock(async_delete_cache=AsyncMock()))
+    await cache.in_memory_cache.async_set_cache(key="toolset_perms:ts-1", value={"server-a": ["tool1"]})
+    await cache.in_memory_cache.async_set_cache(key="toolset_name:some-name", value={"toolset_id": "ts-1"})
+    await cache.in_memory_cache.async_set_cache(key="unrelated_key", value="keep-me")
+
+    with patch("litellm.proxy.proxy_server.user_api_key_cache", cache):
+        await manager.invalidate_toolset_cache(None)
+
+    cache.redis_cache.async_delete_cache.assert_not_awaited()
+    assert "toolset_perms:ts-1" not in cache.in_memory_cache.cache_dict
+    assert "toolset_name:some-name" not in cache.in_memory_cache.cache_dict
+    assert "unrelated_key" in cache.in_memory_cache.cache_dict
+
+
+@pytest.mark.asyncio
+async def test_invalidate_toolset_cache_for_server_invalidates_only_referencing_toolsets():
+    """Regression: an MCP server allowed_tools edit must invalidate exactly the
+    toolsets that reference that server, not every toolset in the DB."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    referencing = MagicMock(toolset_id="ts-1", tools=[{"server_id": "server-a", "tool_name": "tool1"}])
+    unrelated = MagicMock(toolset_id="ts-2", tools=[{"server_id": "server-b", "tool_name": "tool2"}])
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.toolset_db.list_mcp_toolsets",
+            AsyncMock(return_value=[referencing, unrelated]),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch.object(manager, "invalidate_toolset_cache", AsyncMock()) as mock_invalidate,
+    ):
+        await manager.invalidate_toolset_cache_for_server("server-a")
+
+    mock_invalidate.assert_awaited_once_with("ts-1")
+
+
+@pytest.mark.asyncio
+async def test_invalidate_toolset_cache_for_server_noop_without_prisma_client():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch.object(manager, "invalidate_toolset_cache", AsyncMock()) as mock_invalidate,
+    ):
+        await manager.invalidate_toolset_cache_for_server("server-a")
+
+    mock_invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalidate_toolset_cache_for_server_survives_db_error():
+    """A DB error listing toolsets must not raise out of the caller (the MCP
+    server edit endpoint), whose primary job -- updating the server -- has
+    already succeeded by the time this runs."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.toolset_db.list_mcp_toolsets",
+            AsyncMock(side_effect=RuntimeError("db unavailable")),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch.object(manager, "invalidate_toolset_cache", AsyncMock()) as mock_invalidate,
+    ):
+        await manager.invalidate_toolset_cache_for_server("server-a")
+
+    mock_invalidate.assert_not_awaited()
+
+
 class TestMaterializeAuthHeaders:
     """_materialize_auth_headers drives one step of a resolved httpx.Auth's own flow to turn it
     into a header dict for the OpenAPI egress arm, which sends plain headers and cannot carry an
