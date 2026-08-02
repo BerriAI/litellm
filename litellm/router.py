@@ -6132,6 +6132,16 @@ class Router:
         if include_fallback_errors:
             input_kwargs["include_fallback_errors"] = True
 
+        remaining_fallback_model_groups: tuple[str, ...] | None = kwargs.get("_remaining_fallback_model_groups")
+        if remaining_fallback_model_groups is not None:
+            response = await run_async_fallback(
+                *args,
+                **input_kwargs,
+                fallback_model_group=remaining_fallback_model_groups,
+                original_model_group=kwargs.get("_fallback_root_model_group", original_model_group),
+            )
+            return response
+
         # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
         # Skip for error types that have their own dedicated fallback handlers
         _skip_order_fallback = isinstance(
