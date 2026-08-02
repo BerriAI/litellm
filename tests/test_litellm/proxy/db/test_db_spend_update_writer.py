@@ -2236,3 +2236,119 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+
+
+@pytest.mark.asyncio
+async def test_update_database_retains_reference_to_batch_task():
+    """
+    Regression test for #35537: the batched entity-update task must be retained by the
+    writer. The event loop only keeps a weak reference to a task, so an unreferenced
+    task can be garbage collected mid-flight and silently drop every entity counter.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+
+    release = asyncio.Event()
+
+    async def _blocked_batch(**kwargs):
+        await release.wait()
+
+    db_writer._batch_database_updates = _blocked_batch
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id="test-end-user",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            team_id="test-team",
+            org_id="test-org",
+            completion_response=MagicMock(),
+            response_cost=0.1,
+            kwargs={"model": "gpt-4", "custom_llm_provider": "openai"},
+        )
+
+    assert len(db_writer._pending_update_tasks) == 1
+    pending_task = next(iter(db_writer._pending_update_tasks))
+
+    release.set()
+    await pending_task
+
+    assert db_writer._pending_update_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_logs_helper_failure_at_error_level():
+    """
+    Regression test for #35537: a helper failure inside the background batch task used to
+    be swallowed at debug level, so a dropped entity counter was invisible in production
+    logs. It must be logged at error level, naming the helper that failed.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    db_writer._update_team_db = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    db_writer._update_user_db = AsyncMock()
+    db_writer._update_key_db = AsyncMock()
+    db_writer._update_org_db = AsyncMock()
+    db_writer._update_tag_db = AsyncMock()
+    db_writer._update_agent_db = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
+
+    with patch("litellm._logging.verbose_proxy_logger.error") as mock_error:
+        await db_writer._batch_database_updates(
+            response_cost=0.1,
+            user_id="u1",
+            hashed_token="t1",
+            team_id="team1",
+            org_id="org1",
+            end_user_id="eu1",
+            prisma_client=MagicMock(),
+            litellm_proxy_budget_name="budget",
+            payload={"request_id": "req-1"},
+        )
+
+    logged = [call_args for call_args in mock_error.call_args_list if "_update_team_db" in call_args.args]
+    assert len(logged) == 1
+    assert "req-1" in logged[0].args
+
+    db_writer.add_spend_log_transaction_to_daily_tag_transaction.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_reports_cancellation():
+    """
+    Regression test for #35537: cancellation (process shutdown) must not be swallowed as a
+    normal helper failure; it is logged and re-raised so the task ends up cancelled.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    db_writer._update_user_db = AsyncMock()
+    db_writer._update_key_db = AsyncMock(side_effect=asyncio.CancelledError())
+    db_writer._update_team_db = AsyncMock()
+
+    with patch("litellm._logging.verbose_proxy_logger.error") as mock_error:
+        with pytest.raises(asyncio.CancelledError):
+            await db_writer._batch_database_updates(
+                response_cost=0.1,
+                user_id="u1",
+                hashed_token="t1",
+                team_id="team1",
+                org_id="org1",
+                end_user_id="eu1",
+                prisma_client=MagicMock(),
+                litellm_proxy_budget_name="budget",
+                payload={"request_id": "req-2"},
+            )
+
+    db_writer._update_team_db.assert_not_awaited()
+    assert any("_update_key_db" in call_args.args for call_args in mock_error.call_args_list)
