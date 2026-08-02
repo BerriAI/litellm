@@ -1,9 +1,7 @@
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, omit
 
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
@@ -104,11 +102,6 @@ def test_openai_realtime_handler_model_parameter_inclusion():
     assert expected_pattern in url_with_extras
 
 
-import asyncio
-
-import pytest
-
-
 @pytest.mark.asyncio
 async def test_async_realtime_success():
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
@@ -185,6 +178,31 @@ async def test_async_realtime_url_contains_model():
 
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_transcription_omits_sdk_model_query():
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+
+    handler = OpenAIRealtime()
+    websocket = AsyncMock()
+    logging_obj = MagicMock()
+    sdk_client = make_realtime_sdk_client()
+    with patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+        mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
+
+        await handler.async_realtime(
+            model="gpt-live-transcribe",
+            websocket=websocket,
+            logging_obj=logging_obj,
+            api_key="test-key",
+            query_params={"intent": "transcription"},
+            client=sdk_client,
+        )
+
+    called_kwargs = sdk_client.realtime.connect.call_args.kwargs
+    assert called_kwargs["model"] is omit
+    assert called_kwargs["extra_query"] == {"intent": "transcription"}
 
 
 @pytest.mark.asyncio

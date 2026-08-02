@@ -739,6 +739,20 @@ async def test_realtime_transcription_websocket_default_model_checks_key_scope()
     assert "not allowed to access model" in close_kwargs["reason"]
 
 
+def test_realtime_transcription_upstream_query_omits_model():
+    from litellm.proxy import proxy_server
+
+    assert (
+        proxy_server._resolve_realtime_upstream_query_model(
+            model="gpt-live-transcribe",
+            intent="transcription",
+            is_translation=False,
+            route_model="gpt-live-transcribe",
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 async def test_realtime_transcription_websocket_default_model_checks_team_scope():
     from litellm.proxy import proxy_server
