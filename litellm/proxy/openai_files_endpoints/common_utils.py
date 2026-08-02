@@ -866,6 +866,36 @@ def validate_managed_files_requirement(
         )
 
 
+def validate_managed_file_id_requirement(file_id: str) -> None:
+    """
+    Enforce proxy-level managed files on the file read/delete routes when
+    ``litellm.require_managed_files`` is enabled.
+
+    Ownership is only recorded for LiteLLM managed files, so a raw provider file id sent to
+    retrieve/content/delete is forwarded to the provider under shared credentials without any
+    tenant check; knowing another tenant's provider file id would be enough to read or delete it.
+
+    Raises:
+        HTTPException: 400 if ``file_id`` is not a LiteLLM managed file id.
+    """
+    import litellm
+    from fastapi import HTTPException
+
+    if litellm.require_managed_files is not True:
+        return
+
+    if _is_base64_encoded_unified_file_id(file_id):
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Raw provider file ids cannot be used when require_managed_files is enabled in "
+            "litellm_settings. Use the LiteLLM managed file id returned when the file was created."
+        ),
+    )
+
+
 def _extract_model_param(request: "Request", request_body: dict) -> str | None:
     """
     Extract model parameter from request.
