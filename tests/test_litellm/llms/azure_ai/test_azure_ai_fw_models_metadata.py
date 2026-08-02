@@ -29,14 +29,6 @@ FW_MODELS = {
         "max_output_tokens": 262144,
         "supports_vision": True,
     },
-    "azure_ai/FW-Kimi-K2.6-Code": {
-        "input_cost_per_token": 1.05e-06,
-        "output_cost_per_token": 4.4e-06,
-        "cache_read_input_token_cost": 2.1e-07,
-        "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
-        "supports_vision": True,
-    },
     "azure_ai/FW-Kimi-K2.7-Code": {
         "input_cost_per_token": 1.05e-06,
         "output_cost_per_token": 4.4e-06,
