@@ -24,7 +24,7 @@
     "limit": 130
   },
   "ANN401": {
-    "limit": 1851
+    "limit": 1850
   },
   "ASYNC230": {
     "limit": 14
@@ -60,7 +60,7 @@
     "limit": 0
   },
   "BLE001": {
-    "limit": 2899
+    "limit": 2898
   },
   "C401": {
     "limit": 11
@@ -222,7 +222,7 @@
     "limit": 0
   },
   "RET504": {
-    "limit": 702
+    "limit": 701
   },
   "RUF010": {
     "limit": 0
