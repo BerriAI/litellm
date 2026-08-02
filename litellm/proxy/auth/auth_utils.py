@@ -902,6 +902,42 @@ def _get_deployment_default_tpm_limit(model_name: str) -> int | None:
     return _get_deployment_default_limit(model_name, "default_api_key_tpm_limit")
 
 
+def resolve_own_model_rate_limits(
+    metadata: object,
+    model_max_budget: object,
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+) -> dict[str, int] | None:
+    """
+    Per-model limits an entity sets on itself, from the two places one can carry
+    them.
+
+    Priority order (returns first found, per metric):
+    1. A ``model_rpm_limit`` / ``model_tpm_limit`` map in metadata
+    2. The per-model ``rpm_limit`` / ``tpm_limit`` entries of a model_max_budget
+
+    Takes the raw maps rather than a typed row so runtime enforcement
+    (UserAPIKeyAuth) and grant-time allocation math (verification-token rows,
+    key request bodies) resolve a key's own limits identically; both sources are
+    untyped JSON, so every level is shape-checked before use.
+    """
+    if isinstance(metadata, dict):
+        metadata_limits = metadata.get(rate_limit_key)
+        if metadata_limits and isinstance(metadata_limits, dict):
+            return metadata_limits
+
+    if isinstance(model_max_budget, dict):
+        budget_field = "rpm_limit" if rate_limit_key == "model_rpm_limit" else "tpm_limit"
+        budget_limits = {
+            model: budget[budget_field]
+            for model, budget in model_max_budget.items()
+            if isinstance(budget, dict) and budget.get(budget_field) is not None
+        }
+        if budget_limits:
+            return budget_limits
+
+    return None
+
+
 def get_key_own_model_rate_limits(
     user_api_key_dict: UserAPIKeyAuth,
     rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
@@ -910,30 +946,15 @@ def get_key_own_model_rate_limits(
     Get the per-model limits configured on the key itself, ignoring anything it
     only inherits (team metadata, deployment defaults).
 
-    Priority order (returns first found):
-    1. Key metadata (model_rpm_limit / model_tpm_limit)
-    2. Key model_max_budget (rpm_limit / tpm_limit per model)
-
     Callers that must know whether the key *overrides* an inherited limit use
     this; callers that want the effective limit use get_key_model_rpm_limit /
     get_key_model_tpm_limit, which continue the chain past the key.
     """
-    if user_api_key_dict.metadata:
-        metadata_limits = user_api_key_dict.metadata.get(rate_limit_key)
-        if metadata_limits:
-            return metadata_limits
-
-    if user_api_key_dict.model_max_budget:
-        budget_field = "rpm_limit" if rate_limit_key == "model_rpm_limit" else "tpm_limit"
-        budget_limits = {
-            model: budget[budget_field]
-            for model, budget in user_api_key_dict.model_max_budget.items()
-            if isinstance(budget, dict) and budget.get(budget_field) is not None
-        }
-        if budget_limits:
-            return budget_limits
-
-    return None
+    return resolve_own_model_rate_limits(
+        metadata=user_api_key_dict.metadata,
+        model_max_budget=user_api_key_dict.model_max_budget,
+        rate_limit_key=rate_limit_key,
+    )
 
 
 def get_key_model_rpm_limit(
