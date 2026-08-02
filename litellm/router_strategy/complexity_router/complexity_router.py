@@ -724,8 +724,8 @@ class ComplexityRouter(CustomLogger):
         baseline = self.savings_baseline_model
         if baseline is not None:
             decision["savings_baseline_model"] = baseline.model
-            if baseline.pricing_key is not None:
-                decision["savings_baseline_pricing_key"] = baseline.pricing_key
+            if baseline.deployment_id is not None:
+                decision["savings_baseline_deployment_id"] = baseline.deployment_id
         if tier is not None:
             decision["tier"] = tier.value
         if score is not None:

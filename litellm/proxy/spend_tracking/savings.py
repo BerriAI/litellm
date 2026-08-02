@@ -14,8 +14,7 @@ from typing import NamedTuple
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.router_strategy.savings_baseline import cost_key
-from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelInfo, PromptTokensDetailsWrapper, Usage
 
 
 class SavingsSpend(NamedTuple):
@@ -76,19 +75,31 @@ def _resolve_model(model: str | None, custom_llm_provider: str | None) -> _Model
     return _ModelIdentity(model=resolved_model, provider=provider)
 
 
-def _cost_of_usage(model: _ModelIdentity, usage: Usage, pricing_key: str | None = None) -> float | None:
-    """What ``usage`` costs on ``model``, or ``None`` when the model has no pricing.
+def _effective_model_info(deployment_id: str | None, model: str) -> ModelInfo | None:
+    """What a deployment is actually charged, or ``None`` to price by name.
 
-    ``pricing_key`` is the key litellm bills this deployment under, which is the
-    deployment's own id when it overrides its prices and the model name otherwise. The
-    router keeps overrides off the shared model-name key so deployments sharing a
-    backend model do not pollute each other, so pricing the name would read the public
-    rate for a model nobody is charged the public rate for, on whichever arm is
-    overridden, in either direction.
+    `Router.get_deployment_model_info` owns this: it merges a deployment's configured
+    prices over the built-in map, folds in `base_model` defaults for deployments whose
+    name is not a model, and falls back to the model name when nothing is overridden.
+    Resolving a name here instead reads the public rate, which a deployment with a
+    negotiated price does not pay, and an Azure deployment name prices to nothing at all.
     """
+    if deployment_id is None:
+        return None
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        return llm_router.get_deployment_model_info(deployment_id, model) if llm_router else None
+    except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail the spend write
+        verbose_proxy_logger.debug("savings: no deployment pricing for %s (%s)", model, e)
+        return None
+
+
+def _cost_of_usage(model: _ModelIdentity, usage: Usage, model_info: ModelInfo | None = None) -> float | None:
+    """What ``usage`` costs on ``model``, or ``None`` when the model has no pricing."""
     try:
         prompt_cost, completion_cost = generic_cost_per_token(
-            model=pricing_key or model.model, usage=usage, custom_llm_provider=model.provider
+            model=model.model, usage=usage, custom_llm_provider=model.provider, model_info=model_info
         )
     except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; degrade to zero savings
         verbose_proxy_logger.debug(
@@ -175,8 +186,8 @@ def compute_autorouter_savings(
     selected_provider: str | None,
     usage: Usage,
     conversation_continuing: bool = True,
-    baseline_pricing_key: str | None = None,
-    selected_pricing_key: str | None = None,
+    baseline_info: ModelInfo | None = None,
+    selected_info: ModelInfo | None = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
 
@@ -202,10 +213,10 @@ def compute_autorouter_savings(
     # deployments of one model can carry different negotiated rates, and routing from
     # the dear one to the cheap one is a real saving that short-circuiting on the model
     # name alone reports as zero.
-    if baseline == selected and baseline_pricing_key == selected_pricing_key:
+    if baseline == selected and baseline_info == selected_info:
         return 0.0
-    baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage, conversation_continuing), baseline_pricing_key)
-    selected_cost = _cost_of_usage(selected, usage, selected_pricing_key)
+    baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage, conversation_continuing), baseline_info)
+    selected_cost = _cost_of_usage(selected, usage, selected_info)
     if baseline_cost is None or selected_cost is None:
         return 0.0
     return baseline_cost - selected_cost
@@ -232,7 +243,6 @@ def compute_savings_spend(
     cache_read_input_tokens: int,
     routing_decision: Mapping[str, object] | None = None,
     usage_object: Mapping[str, object] | None = None,
-    model_map_information: Mapping[str, object] | None = None,
     model_id: str | None = None,
 ) -> SavingsSpend:
     """
@@ -256,16 +266,7 @@ def compute_savings_spend(
 
     decision = routing_decision if isinstance(routing_decision, Mapping) else {}
     baseline_model = decision.get("savings_baseline_model")
-    baseline_key = decision.get("savings_baseline_pricing_key")
-    # Two inputs, because they fix different halves of the same problem and the
-    # resolver needs both. `model_map_key` is the served model already resolved through
-    # `base_model`, which is the only way an Azure deployment name reaches the cost map
-    # at all; it is built without `router_model_id`, so it never carries a deployment's
-    # own price overrides. `model_id` is the key those overrides are registered under.
-    model_map = model_map_information if isinstance(model_map_information, Mapping) else {}
-    mapped = model_map.get("model_map_key")
-    resolved_model = mapped if isinstance(mapped, str) and mapped else model
-    selected_key = cost_key(resolved_model, custom_llm_provider, model_id) or resolved_model
+    baseline_id = decision.get("savings_baseline_deployment_id")
     autorouter = compute_autorouter_savings(
         baseline_model=baseline_model if isinstance(baseline_model, str) else None,
         selected_model=model,
@@ -274,7 +275,7 @@ def compute_savings_spend(
         # Absent means the router never recorded a shape, which is the conservative
         # reading: charge the cache write rather than claim a first turn's saving.
         conversation_continuing=decision.get("conversation_continuing") is not False,
-        baseline_pricing_key=baseline_key if isinstance(baseline_key, str) else None,
-        selected_pricing_key=selected_key,
+        baseline_info=_effective_model_info(baseline_id if isinstance(baseline_id, str) else None, str(baseline_model)),
+        selected_info=_effective_model_info(model_id, model or ""),
     )
     return SavingsSpend(compression=compression, prompt_caching=prompt_caching, autorouter=autorouter)

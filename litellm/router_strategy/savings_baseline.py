@@ -22,42 +22,16 @@ if TYPE_CHECKING:
 
 
 class Baseline(NamedTuple):
-    """The counterfactual model, and the key its rates are looked up under.
+    """The counterfactual deployment: what it is called, and which deployment it was.
 
-    Two identifiers because they answer different questions. ``model`` is what the
-    operator would recognise and what decides whether the router actually switched
-    away from it. ``pricing_key`` is what it costs: a deployment may override the
-    per-token prices, and the router registers that override in the cost map under
-    the deployment's own id, deliberately keeping it off the shared model-name key so
-    deployments do not pollute each other. Pricing the name would silently read the
-    public rate for a model the operator does not pay the public rate for.
+    ``model`` is what the operator would recognise, and what decides whether the router
+    switched away from it. ``deployment_id`` is how its rates are found, because a
+    deployment can be charged something other than its model's public rate and
+    `Router.get_deployment_model_info` is what merges the two.
     """
 
     model: str
-    pricing_key: str | None = None
-
-
-def cost_key(model: str, custom_llm_provider: str | None, deployment_id: str | None) -> str | None:
-    """The key litellm prices this deployment under, or ``None`` when it is just the model.
-
-    Delegates to `_select_model_name_for_cost_calc`, the resolver the real request is
-    billed through, rather than re-deciding when an override counts. Mirroring that rule
-    here would be a second model of the runtime, and it is subtler than it looks: a
-    per-second or tiered override counts, a partially specified one still counts, and a
-    deployment configured at zero is priced at zero rather than treated as unpriced.
-    """
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
-
-    if deployment_id is None:
-        return None
-    resolved = _select_model_name_for_cost_calc(
-        model=model,
-        completion_response=None,
-        custom_pricing=True,
-        router_model_id=str(deployment_id),
-        custom_llm_provider=custom_llm_provider,
-    )
-    return resolved if resolved and resolved != model else None
+    deployment_id: str | None = None
 
 
 def canonical_model(model: str, custom_llm_provider: str | None = None) -> str | None:
@@ -103,24 +77,29 @@ def _models_in(router: "Router", group_name: str) -> tuple[Baseline, ...]:
         if qualified is None:
             return None
         deployment_id = info.get("id") if isinstance(info, dict) else None
-        return Baseline(qualified, cost_key(qualified, params.get("custom_llm_provider"), deployment_id))
+        return Baseline(qualified, str(deployment_id) if deployment_id else None)
 
     return tuple(c for index in indices if (c := candidate(index)) is not None)
 
 
-def _priced(candidate: Baseline) -> tuple[float, float, Baseline] | None:
+def _priced(router: "Router", candidate: Baseline) -> tuple[float, float, Baseline] | None:
     """``(output_rate, input_rate, candidate)``, or ``None`` when it cannot be priced.
 
-    A candidate that costs nothing per token cannot stand in for what the traffic would
-    otherwise have cost; as a baseline it would report the whole real spend as a loss,
-    so it is dropped rather than allowed to win a tie at zero.
-    """
-    import litellm
+    Rates come from `Router.get_deployment_model_info`, which owns what a deployment is
+    actually charged: it merges the deployment's own configured prices over the built-in
+    map, folds in `base_model` defaults for deployments whose name is not a model, and
+    falls back to the model name when the deployment overrides nothing. Every override
+    shape is its problem, not ours.
 
+    A candidate that costs nothing per token cannot stand in for what the traffic would
+    otherwise have cost; as a baseline it would report the whole real spend as a loss.
+    """
     try:
-        info = litellm.get_model_info(model=candidate.pricing_key or candidate.model)
-    except Exception as e:  # noqa: BLE001  # unmapped candidates simply cannot be the baseline
+        info = router.get_deployment_model_info(candidate.deployment_id or "", candidate.model)
+    except Exception as e:  # noqa: BLE001  # an unpriceable candidate simply cannot be the baseline
         verbose_router_logger.debug("savings baseline: no pricing for candidate %s (%s)", candidate.model, e)
+        return None
+    if info is None:
         return None
     output_rate, input_rate = info.get("output_cost_per_token") or 0.0, info.get("input_cost_per_token") or 0.0
     if output_rate <= 0.0 and input_rate <= 0.0:
@@ -129,14 +108,14 @@ def _priced(candidate: Baseline) -> tuple[float, float, Baseline] | None:
     return (output_rate, input_rate, candidate)
 
 
-def _most_expensive(candidates: Iterable[Baseline]) -> Baseline | None:
+def _most_expensive(router: "Router", candidates: Iterable[Baseline]) -> Baseline | None:
     """The priciest candidate by output rate, input rate breaking the tie.
 
     Ranked on what each candidate really costs, so a deployment whose configured price
     is the expensive one is chosen as the counterfactual; ranking on the public rate
     picks the wrong baseline and then prices it at a rate nobody pays.
     """
-    priced = tuple(r for candidate in candidates if (r := _priced(candidate)) is not None)
+    priced = tuple(r for candidate in candidates if (r := _priced(router, candidate)) is not None)
     if not priced:
         verbose_router_logger.debug("savings baseline: no priceable candidates; savings driver disabled")
         return None
@@ -162,7 +141,7 @@ def resolve_baseline(configured: str | None, router: "Router", group_names: Iter
             # No pricing key: a configured override names a model, not a deployment,
             # so it prices under its own name like any other unmatched name.
             return Baseline(qualified) if (qualified := canonical_model(configured)) else None
-        return _most_expensive(c for name in group_names for c in _models_in(router, name))
+        return _most_expensive(router, (c for name in group_names for c in _models_in(router, name)))
     except Exception as e:  # noqa: BLE001  # see docstring: routing must not fail for a metric
         verbose_router_logger.warning("savings baseline: could not resolve, savings will read zero (%s)", e)
         return None
