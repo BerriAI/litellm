@@ -1,6 +1,7 @@
 """Regression tests for Bedrock Converse ``toolSpec.strict`` forwarding.
 
-Bedrock Converse routes Claude Opus 4.7/4.8 and Claude Sonnet 4 through an
+Bedrock Converse routes Claude Opus 4.7/4.8, Claude Sonnet 4, and Claude
+Sonnet 5 through an
 Anthropic-compatible validator that rejects ``toolSpec.strict`` even though
 Anthropic's native API accepts ``strict`` as a top-level tool field. See
 BerriAI/litellm#31582.
@@ -48,12 +49,19 @@ _STRICT_TOOL = [
         "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
         "bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0",
         "bedrock/apac.anthropic.claude-sonnet-4-20250514-v1:0",
+        "anthropic.claude-sonnet-5",
+        "bedrock/global.anthropic.claude-sonnet-5",
+        "bedrock/us.anthropic.claude-sonnet-5",
+        "bedrock/eu.anthropic.claude-sonnet-5",
+        "bedrock/au.anthropic.claude-sonnet-5",
+        "bedrock/jp.anthropic.claude-sonnet-5",
     ],
 )
 def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     model_id: str,
 ) -> None:
-    """Opus 4.7/4.8 and Sonnet 4 reject toolSpec.strict and additionalProperties."""
+    """Opus 4.7/4.8, Sonnet 4, and Sonnet 5 reject toolSpec.strict and
+    additionalProperties."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
     assert (
@@ -129,6 +137,12 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         )
         is False
     )
+    assert (
+        bedrock_converse_supports_strict_tools(
+            "bedrock/global.anthropic.claude-sonnet-5"
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -146,8 +160,8 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
     ],
 )
 def test_strict_tools_flag_set_in_model_cost_map(cost_map_key: str) -> None:
-    """The gate is driven by ``bedrock_converse_supports_strict_tools: false`` in
-    ``model_prices_and_context_window.json``, not hardcoded model patterns."""
+    """Existing metadata-driven unsupported models carry
+    ``bedrock_converse_supports_strict_tools: false`` in the bundled cost map."""
     from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
     cost_map = GetModelCostMap.load_local_model_cost_map()
