@@ -1817,3 +1817,45 @@ def test_get_data_reset_query_selects_null_budget_reset_at(table_name):
     )
 
     _asserts_null_reset_is_due(_extract_reset_where(find_many))
+
+
+@pytest.mark.asyncio
+async def test_reset_expired_window_honors_non_utc_reset_at_offset():
+    """Regression test for #34896.
+
+    A window whose reset_at carries a non-UTC offset (e.g. +09:00 when
+    litellm_settings.timezone is Asia/Tokyo) must be compared against `now`
+    in UTC. The old code stripped tzinfo without converting, so the local
+    wall-clock value was compared against naive UTC now and the reset fired
+    late by the timezone offset.
+    """
+    # reset_at = 2026-08-01T00:00:00+09:00 == 2026-07-31T15:00:00 UTC.
+    window = {
+        "budget_duration": "1mo",
+        "reset_at": "2026-08-01T00:00:00+09:00",
+    }
+
+    # now is 2026-07-31T16:00:00 UTC (naive, as datetime.utcnow() returns).
+    # This is AFTER the true UTC reset instant (15:00 UTC), so the window is
+    # expired and must be reset.
+    now = datetime(2026, 7, 31, 16, 0, 0)
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache = MagicMock()
+    spend_counter_cache.redis_cache = None
+
+    reset_settings = BudgetResetSettings(timezone="Asia/Tokyo")
+
+    was_reset = await ResetBudgetJob._reset_expired_window(
+        window=window,
+        counter_key="spend:key:tok:window:1mo",
+        spend_counter_cache=spend_counter_cache,
+        now=now,
+        reset_settings=reset_settings,
+    )
+
+    # The window is past its (UTC) reset time, so it must be reset.
+    assert was_reset is True
+    spend_counter_cache.in_memory_cache.set_cache.assert_called_once_with(
+        key="spend:key:tok:window:1mo", value=0.0
+    )
