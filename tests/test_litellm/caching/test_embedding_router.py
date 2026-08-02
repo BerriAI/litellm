@@ -4,47 +4,76 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
+import litellm
+
 from litellm.caching._embedding_router import (
     build_router_embedding_metadata,
     resolve_embedding_router,
 )
 
 
-def test_resolve_returns_router_when_model_is_a_deployment():
-    router = MagicMock()
+def test_resolve_routes_exact_name_model_via_real_router():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "sem-embed",
+                "litellm_params": {"model": "text-embedding-3-small"},
+            }
+        ]
+    )
+    assert resolve_embedding_router("sem-embed", router) is router
+
+
+def test_resolve_routes_provider_prefixed_wildcard_via_real_router():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "bedrock/*", "litellm_params": {"model": "bedrock/*"}}
+        ]
+    )
+    # bedrock/amazon.titan-embed-text-v2:0 is NOT an exact model_name; only the
+    # bedrock/* pattern serves it. The old exact-name code returned None here.
     assert (
-        resolve_embedding_router("sem-embed", router, [{"model_name": "sem-embed"}])
+        resolve_embedding_router("bedrock/amazon.titan-embed-text-v2:0", router)
         is router
     )
 
 
-def test_resolve_returns_none_when_model_not_in_router():
-    router = MagicMock()
-    assert (
-        resolve_embedding_router("sem-embed", router, [{"model_name": "other"}]) is None
+def test_resolve_routes_visible_model_group_alias_via_real_router():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "real-embed",
+                "litellm_params": {"model": "text-embedding-3-small"},
+            }
+        ],
+        model_group_alias={"aliased-embed": "real-embed"},
     )
+    # aliased-embed is only reachable through model_group_alias.
+    assert resolve_embedding_router("aliased-embed", router) is router
+
+
+def test_resolve_returns_none_when_real_router_does_not_serve_model():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "other-embed",
+                "litellm_params": {"model": "text-embedding-3-small"},
+            }
+        ]
+    )
+    assert resolve_embedding_router("sem-embed", router) is None
 
 
 def test_resolve_returns_none_when_router_is_none():
-    assert (
-        resolve_embedding_router("sem-embed", None, [{"model_name": "sem-embed"}])
-        is None
-    )
+    assert resolve_embedding_router("sem-embed", None) is None
 
 
-def test_resolve_returns_none_when_model_list_is_none():
+def test_resolve_returns_none_when_get_model_list_returns_none():
+    # get_model_list is annotated Optional[List]; in practice it returns [],
+    # but pin the falsy-None path so the `if ...:` gate stays correct.
     router = MagicMock()
-    assert resolve_embedding_router("sem-embed", router, None) is None
-
-
-def test_resolve_skips_entries_missing_model_name():
-    router = MagicMock()
-    model_list = [
-        {"litellm_params": {"model": "bedrock/x"}},
-        {"model_name": "sem-embed"},
-    ]
-    assert resolve_embedding_router("sem-embed", router, model_list) is router
-    assert resolve_embedding_router("other", router, [{"litellm_params": {}}]) is None
+    router.get_model_list = MagicMock(return_value=None)
+    assert resolve_embedding_router("sem-embed", router) is None
 
 
 def test_build_metadata_preserves_request_fields_and_adds_flag():
