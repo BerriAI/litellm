@@ -6012,7 +6012,7 @@ def test_stamp_oauth2_flow_ignores_non_oauth2():
     assert payload.oauth2_flow is None
 
 
-async def _run_edit(old_record, updated_record, purge_mock=None):
+async def _run_edit(old_record, updated_record, purge_mock=None, allowed_tools=None):
     from litellm.proxy.management_endpoints.mcp_management_endpoints import edit_mcp_server
 
     server_id = updated_record.server_id
@@ -6044,10 +6044,14 @@ async def _run_edit(old_record, updated_record, purge_mock=None):
     ):
         mock_manager.update_server = AsyncMock()
         mock_manager.reload_servers_from_database = AsyncMock()
-        payload = UpdateMCPServerRequest(server_id=server_id, alias=updated_record.alias, url=updated_record.url)
+        mock_manager.invalidate_toolset_cache_for_server = AsyncMock()
+        payload_kwargs = {"server_id": server_id, "alias": updated_record.alias, "url": updated_record.url}
+        if allowed_tools is not None:
+            payload_kwargs["allowed_tools"] = allowed_tools
+        payload = UpdateMCPServerRequest(**payload_kwargs)
         user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
         result = await edit_mcp_server(payload=payload, user_api_key_dict=user_auth)
-        return result, mock_purge
+        return result, mock_purge, mock_manager
 
 
 @pytest.mark.asyncio
@@ -6056,7 +6060,7 @@ async def test_edit_mcp_server_purges_user_tokens_on_mint_relevant_change():
     old = generate_mock_mcp_server_db_record(server_id=server_id, url="https://old.example.com/mcp")
     updated = generate_mock_mcp_server_db_record(server_id=server_id, url="https://new.example.com/mcp")
 
-    result, mock_purge = await _run_edit(old, updated)
+    result, mock_purge, _ = await _run_edit(old, updated)
 
     assert result.server_id == server_id
     mock_purge.assert_awaited_once()
@@ -6069,10 +6073,132 @@ async def test_edit_mcp_server_skips_purge_when_identity_unchanged():
     old = generate_mock_mcp_server_db_record(server_id=server_id, alias="Before")
     updated = generate_mock_mcp_server_db_record(server_id=server_id, alias="After")
 
-    result, mock_purge = await _run_edit(old, updated)
+    result, mock_purge, _ = await _run_edit(old, updated)
 
     assert result.server_id == server_id
     mock_purge.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_edit_mcp_server_invalidates_toolset_cache_when_allowed_tools_changes():
+    """
+    Regression test: a toolset that resolves this server's tools via
+    resolve_toolset_tool_permissions() caches the result in user_api_key_cache,
+    keyed by toolset_id. Re-enabling a tool on the server (allowed_tools
+    change) must invalidate every toolset's cached entry for this server so
+    the toolset immediately reflects the change, instead of serving a stale
+    permission set (403 on the re-enabled tool) until the cache's TTL expires.
+    """
+    server_id = str(uuid.uuid4())
+    old = generate_mock_mcp_server_db_record(server_id=server_id, alias="Same")
+    updated = generate_mock_mcp_server_db_record(server_id=server_id, alias="Same")
+
+    result, _, mock_manager = await _run_edit(old, updated, allowed_tools=["add", "add1", "add2"])
+
+    assert result.server_id == server_id
+    mock_manager.invalidate_toolset_cache_for_server.assert_called_once_with(server_id)
+
+
+@pytest.mark.asyncio
+async def test_edit_mcp_server_skips_toolset_cache_invalidation_when_allowed_tools_unchanged():
+    """An edit that never touches allowed_tools has no reason to evict the toolset
+    permission cache; skip it to avoid unnecessary cache churn on unrelated edits."""
+    server_id = str(uuid.uuid4())
+    old = generate_mock_mcp_server_db_record(server_id=server_id, alias="Before")
+    updated = generate_mock_mcp_server_db_record(server_id=server_id, alias="After")
+
+    result, _, mock_manager = await _run_edit(old, updated)
+
+    assert result.server_id == server_id
+    mock_manager.invalidate_toolset_cache_for_server.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_mcp_toolset_invalidates_cache():
+    """Creating a toolset must invalidate the toolset cache (defensively — a
+    brand-new toolset_id can't itself have a stale entry, but the call must
+    still succeed rather than raise now that invalidate_toolset_cache is async)."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        add_mcp_toolset,
+    )
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset, NewMCPToolsetRequest
+
+    created = MCPToolset(toolset_id="ts-new", toolset_name="my-toolset", tools=[])
+    payload = NewMCPToolsetRequest(toolset_name="my-toolset", tools=[])
+    user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_toolset",
+            AsyncMock(return_value=created),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_manager,
+    ):
+        mock_manager.invalidate_toolset_cache = AsyncMock()
+        result = await add_mcp_toolset(payload=payload, user_api_key_dict=user_auth)
+
+    assert result.toolset_id == "ts-new"
+    mock_manager.invalidate_toolset_cache.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_edit_mcp_toolset_invalidates_cache_for_toolset_id():
+    """Updating a toolset must invalidate precisely that toolset's cache entry."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        edit_mcp_toolset,
+    )
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset, UpdateMCPToolsetRequest
+
+    updated = MCPToolset(toolset_id="ts-1", toolset_name="renamed", tools=[])
+    payload = UpdateMCPToolsetRequest(toolset_id="ts-1", toolset_name="renamed")
+    user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_toolset",
+            AsyncMock(return_value=updated),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_manager,
+    ):
+        mock_manager.invalidate_toolset_cache = AsyncMock()
+        result = await edit_mcp_toolset(payload=payload, user_api_key_dict=user_auth)
+
+    assert result.toolset_id == "ts-1"
+    mock_manager.invalidate_toolset_cache.assert_awaited_once_with("ts-1")
+
+
+@pytest.mark.asyncio
+async def test_remove_mcp_toolset_invalidates_cache_for_toolset_id():
+    """Deleting a toolset must invalidate precisely that toolset's cache entry."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        remove_mcp_toolset,
+    )
+
+    user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_mcp_toolset",
+            AsyncMock(return_value={"toolset_id": "ts-1"}),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_manager,
+    ):
+        mock_manager.invalidate_toolset_cache = AsyncMock()
+        await remove_mcp_toolset(toolset_id="ts-1", user_api_key_dict=user_auth)
+
+    mock_manager.invalidate_toolset_cache.assert_awaited_once_with("ts-1")
 
 
 @pytest.mark.asyncio
@@ -6083,7 +6209,7 @@ async def test_edit_mcp_server_purge_failure_does_not_fail_the_edit():
     old = generate_mock_mcp_server_db_record(server_id=server_id, url="https://old.example.com/mcp")
     updated = generate_mock_mcp_server_db_record(server_id=server_id, url="https://new.example.com/mcp")
 
-    result, mock_purge = await _run_edit(old, updated, purge_mock=AsyncMock(side_effect=RuntimeError("db down")))
+    result, mock_purge, _ = await _run_edit(old, updated, purge_mock=AsyncMock(side_effect=RuntimeError("db down")))
 
     assert result.server_id == server_id
     mock_purge.assert_awaited_once()
@@ -6096,7 +6222,7 @@ async def test_edit_mcp_server_snapshot_failure_skips_purge_but_edit_succeeds():
     server_id = str(uuid.uuid4())
     updated = generate_mock_mcp_server_db_record(server_id=server_id, url="https://new.example.com/mcp")
 
-    result, mock_purge = await _run_edit(RuntimeError("db read failed"), updated)
+    result, mock_purge, _ = await _run_edit(RuntimeError("db read failed"), updated)
 
     assert result.server_id == server_id
     mock_purge.assert_not_awaited()

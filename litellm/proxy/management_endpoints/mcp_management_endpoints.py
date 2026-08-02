@@ -2481,6 +2481,15 @@ if MCP_AVAILABLE:
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
 
+        # allowed_tools changed: any toolset referencing this server has a cached
+        # resolve_toolset_tool_permissions() result (see mcp_server_manager.py) keyed
+        # by toolset_id, so it is never invalidated by a server-level edit. Evict it
+        # (in-memory and Redis, so every worker sees the change) so a re-enabled tool
+        # is immediately callable through a toolset again, instead of only after the
+        # cache's TTL expires.
+        if "allowed_tools" in payload_fields_set:
+            await global_mcp_server_manager.invalidate_toolset_cache_for_server(payload.server_id)
+
         # If a field that determines which upstream OAuth token gets minted changed (url/audience, OAuth
         # mode/grant, authorization-server endpoints, or the OAuth client + scopes), every stored per-user
         # token was minted for the old configuration and is stale. Purge them (DB + cache) so the next
@@ -2741,7 +2750,7 @@ if MCP_AVAILABLE:
             global_mcp_server_manager,
         )
 
-        global_mcp_server_manager.invalidate_toolset_cache()
+        await global_mcp_server_manager.invalidate_toolset_cache()
         return result
 
     @router.get(
@@ -2840,7 +2849,7 @@ if MCP_AVAILABLE:
             global_mcp_server_manager,
         )
 
-        global_mcp_server_manager.invalidate_toolset_cache(getattr(payload, "toolset_id", None))
+        await global_mcp_server_manager.invalidate_toolset_cache(getattr(payload, "toolset_id", None))
         return result
 
     @router.delete(
@@ -2870,5 +2879,5 @@ if MCP_AVAILABLE:
             global_mcp_server_manager,
         )
 
-        global_mcp_server_manager.invalidate_toolset_cache(toolset_id)
+        await global_mcp_server_manager.invalidate_toolset_cache(toolset_id)
         return Response(status_code=status.HTTP_202_ACCEPTED)
