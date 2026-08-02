@@ -269,7 +269,7 @@ def _cost_value_as_float(value: str | float | None) -> float | None:
 
 
 def _copy_custom_pricing_fields(
-    model_info: dict[str, Any],
+    model_info: dict[str, Any],  # mutable-ok: updates model-cost entry in place
     litellm_params: LiteLLM_Params,
 ) -> None:
     """Copy declared and arbitrary threshold pricing into a model-cost entry."""
