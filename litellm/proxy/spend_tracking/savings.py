@@ -196,7 +196,13 @@ def compute_autorouter_savings(
     # so there is no second field that could disagree with it.
     baseline = _resolve_model(baseline_model, None)
     selected = _resolve_model(selected_model, selected_provider)
-    if baseline is None or selected is None or baseline == selected:
+    if baseline is None or selected is None:
+        return 0.0
+    # Same model is only the same cost when it is also the same deployment. Two
+    # deployments of one model can carry different negotiated rates, and routing from
+    # the dear one to the cheap one is a real saving that short-circuiting on the model
+    # name alone reports as zero.
+    if baseline == selected and baseline_pricing_key == selected_pricing_key:
         return 0.0
     baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage, conversation_continuing), baseline_pricing_key)
     selected_cost = _cost_of_usage(selected, usage, selected_pricing_key)
