@@ -229,7 +229,7 @@ async def _execute_query_pipeline(
     _reserved_retrieval_keys = frozenset(
         ("vector_store_id", "top_k", "custom_llm_provider", "query", "max_num_results")
     )
-    search_params = {k: v for k, v in {**retrieval_config, **kwargs}.items() if k not in _reserved_retrieval_keys}
+    search_params = {k: v for k, v in {**retrieval_config, **kwargs}.items() if k not in _reserved_retrieval_keys}  # mutable-ok: must be a dict to unpack as **kwargs into asearch
 
     with _suppressed_sub_call_billing():
         search_response = await litellm.vector_stores.asearch(
