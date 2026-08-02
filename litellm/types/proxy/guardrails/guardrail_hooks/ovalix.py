@@ -38,6 +38,13 @@ class OvalixGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="Cache discovery-mode routing resolution per api-key alias for 1 hour. Default on.",
     )
+    fail_if_no_application: bool | None = Field(
+        default=None,
+        description=(
+            "Fail the call when no application is configured and none is discovered. Default on; "
+            "set false to let such calls through unguarded instead."
+        ),
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

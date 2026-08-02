@@ -21,6 +21,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     post_checkpoint_id = getattr(litellm_params, "post_checkpoint_id", None)
     file_checkpoint_id = getattr(litellm_params, "file_checkpoint_id", None)
     enable_routing_cache = getattr(litellm_params, "enable_routing_cache", None)
+    fail_if_no_application = getattr(litellm_params, "fail_if_no_application", None)
 
     _ovalix_callback = OvalixGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
@@ -31,6 +32,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         post_checkpoint_id=post_checkpoint_id,
         file_checkpoint_id=file_checkpoint_id,
         enable_routing_cache=enable_routing_cache,
+        fail_if_no_application=fail_if_no_application,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

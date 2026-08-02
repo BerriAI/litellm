@@ -46,7 +46,9 @@ if TYPE_CHECKING:
 BLOCKED_BY_OVALIX_FALLBACK_MESSAGE = "This message was blocked by Ovalix"
 BLOCKED_ACTION_TYPE = "block"
 _MODIFY_ACTION_TYPES = ("anonymize", "sanitize")
+_APPLICATION_NOT_FOUND_STATUS = 404
 _ROUTING_CACHE_TTL_SECONDS = 3600
+_ROUTING_CACHE_NEGATIVE_TTL_SECONDS = 300
 _ROUTING_CACHE_MAX_SIZE = 1000
 _DEFAULT_FILE_SIZE_LIMIT = 64 * 1024 * 1024
 _FILE_BLOCK_ESCALATION_REASON = (
@@ -128,6 +130,7 @@ class OvalixGuardrail(CustomGuardrail):
         post_checkpoint_id: Optional[str] = None,
         file_checkpoint_id: str | None = None,
         enable_routing_cache: bool | None = None,
+        fail_if_no_application: bool | None = None,
         **kwargs: Any,
     ):
         self._tracker_api_base = tracker_api_base or os.environ.get("OVALIX_TRACKER_API_BASE")
@@ -143,7 +146,14 @@ class OvalixGuardrail(CustomGuardrail):
         self._enable_routing_cache = (
             True if resolved_enable_routing_cache is None else _coerce_bool(resolved_enable_routing_cache)
         )
-        self._routing_cache: OrderedDict[str, tuple[float, ResolvedRouting]] = OrderedDict()
+        env_fail_if_no_application = os.environ.get("OVALIX_FAIL_IF_NO_APPLICATION")
+        resolved_fail_if_no_application = (
+            fail_if_no_application if fail_if_no_application is not None else env_fail_if_no_application
+        )
+        self._fail_if_no_application = (
+            True if resolved_fail_if_no_application is None else _coerce_bool(resolved_fail_if_no_application)
+        )
+        self._routing_cache: OrderedDict[str, tuple[float, ResolvedRouting | None]] = OrderedDict()
         self._app_name_regex: re.Pattern[str] | None = None
 
         if "supported_event_hooks" not in kwargs:
@@ -313,6 +323,8 @@ class OvalixGuardrail(CustomGuardrail):
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
         routing = await self._resolve_routing(request_data)
+        if routing is None:
+            return inputs
         actor = self._get_actor(request_data)
         session_id = self._get_session_id_for_application(request_data, routing.application_id)
         is_response = input_type == "response"
@@ -474,24 +486,45 @@ class OvalixGuardrail(CustomGuardrail):
         name = (match.group(1) if match.groups() else match.group(0)).strip()
         return name or None
 
-    def _routing_cache_get(self, name: str) -> ResolvedRouting | None:
+    def _routing_cache_get(self, name: str) -> tuple[bool, ResolvedRouting | None]:
         entry = self._routing_cache.get(name)
         if entry is None:
-            return None
-        stored_at, routing = entry
-        if time.monotonic() - stored_at >= _ROUTING_CACHE_TTL_SECONDS:
+            return False, None
+        expires_at, routing = entry
+        if time.monotonic() >= expires_at:
             del self._routing_cache[name]
-            return None
+            return False, None
         self._routing_cache.move_to_end(name)
-        return routing
+        return True, routing
 
-    def _routing_cache_put(self, name: str, routing: ResolvedRouting) -> None:
-        self._routing_cache[name] = (time.monotonic(), routing)
+    def _routing_cache_put(self, name: str, routing: ResolvedRouting | None) -> None:
+        ttl = _ROUTING_CACHE_TTL_SECONDS if routing is not None else _ROUTING_CACHE_NEGATIVE_TTL_SECONDS
+        self._routing_cache[name] = (time.monotonic() + ttl, routing)
         self._routing_cache.move_to_end(name)
         while len(self._routing_cache) > _ROUTING_CACHE_MAX_SIZE:
             self._routing_cache.popitem(last=False)
 
-    async def _resolve_routing(self, request_data: dict) -> ResolvedRouting:
+    def _no_application(self, reason: str) -> None:
+        if self._fail_if_no_application:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=f"Ovalix guardrail error: {reason}",
+                should_wrap_with_default_message=False,
+            )
+        verbose_proxy_logger.warning(
+            "Ovalix guardrail passing the call through unguarded (fail_if_no_application=false): %s", reason
+        )
+        return None
+
+    def _routing_error(self, error: Exception) -> GuardrailRaisedException:
+        verbose_proxy_logger.exception("Ovalix routing resolution failed: %s", error)
+        return GuardrailRaisedException(
+            guardrail_name=self.guardrail_name,
+            message=f"Ovalix guardrail error: routing resolution failed: {error!s}",
+            should_wrap_with_default_message=False,
+        )
+
+    async def _resolve_routing(self, request_data: dict) -> ResolvedRouting | None:
         if self._application_id:
             return ResolvedRouting(
                 self._application_id,
@@ -502,29 +535,23 @@ class OvalixGuardrail(CustomGuardrail):
             )
         alias = self._get_key_alias(request_data)
         if not alias:
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name,
-                message="Ovalix guardrail error: no application_id configured and no user_api_key_alias to resolve by",
-                should_wrap_with_default_message=False,
-            )
+            return self._no_application("no application_id configured and no user_api_key_alias to resolve by")
         regex = await self._get_app_name_regex()
         name = self._extract_application_name(alias, regex)
         if not name:
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name,
-                message="Ovalix guardrail error: could not extract an application name from the api key alias",
-                should_wrap_with_default_message=False,
-            )
+            return self._no_application("could not extract an application name from the api key alias")
         if self._enable_routing_cache:
-            cached = self._routing_cache_get(name)
-            if cached is not None:
-                return cached
+            hit, cached = self._routing_cache_get(name)
+            if hit:
+                return cached if cached is not None else self._no_application(f"application '{name}' was not found")
         routing = await self._resolve_via_tracker(name)
         if self._enable_routing_cache:
             self._routing_cache_put(name, routing)
+        if routing is None:
+            return self._no_application(f"application '{name}' was not found")
         return routing
 
-    async def _resolve_via_tracker(self, application_name: str) -> ResolvedRouting:
+    async def _resolve_via_tracker(self, application_name: str) -> ResolvedRouting | None:
         url = f"{self._tracker_api_base}/tracking/custom_application/resolve_litellm_application"
         try:
             response = await self._async_handler.post(
@@ -532,21 +559,19 @@ class OvalixGuardrail(CustomGuardrail):
             )
             response.raise_for_status()
             body = response.json()
-            routing = ResolvedRouting(
+            return ResolvedRouting(
                 application_id=str(body["application_id"]),
                 checkpoint_id_pre=body.get("checkpoint_id_pre"),
                 checkpoint_id_post=body.get("checkpoint_id_post"),
                 checkpoint_id_pre_file=body.get("checkpoint_id_pre_file"),
                 checkpoint_id_post_file=body.get("checkpoint_id_post_file"),
             )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == _APPLICATION_NOT_FOUND_STATUS:
+                return None
+            raise self._routing_error(e) from e
         except Exception as e:
-            verbose_proxy_logger.exception("Ovalix routing resolution failed: %s", e)
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name,
-                message=f"Ovalix guardrail error: routing resolution failed: {e!s}",
-                should_wrap_with_default_message=False,
-            ) from e
-        return routing
+            raise self._routing_error(e) from e
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
