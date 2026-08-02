@@ -4153,3 +4153,84 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_vector_store_hook_not_hijacked_by_prompt_manager(logging_obj, tmp_path, monkeypatch):
+    """
+    Regression: a model with always-on `vector_store_ids` and a registered prompt manager
+    (e.g. dotprompt) sent the request through the prompt manager, which raised
+    "prompt_id is required for Prompt Management Base class" instead of running vector store retrieval.
+    """
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+        VectorStorePreCallHook,
+    )
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    (tmp_path / "stem.prompt").write_text("---\nmodel: gpt-4\n---\nyou are a stem tutor\n")
+    dotprompt_manager = DotpromptManager(prompt_directory=str(tmp_path))
+    litellm.logging_callback_manager.add_litellm_callback(dotprompt_manager)
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(vector_store_id="vs_123", custom_llm_provider="openai")
+            ]
+        ),
+    )
+
+    try:
+        non_default_params = {"vector_store_ids": ["vs_123"]}
+        assert logging_obj.should_run_prompt_management_hooks(
+            prompt_id=None, non_default_params=non_default_params
+        )
+
+        selected_logger = logging_obj.get_custom_logger_for_prompt_management(
+            model="claude-opus-4-6",
+            non_default_params=non_default_params,
+            prompt_id=None,
+            dynamic_callback_params={},
+        )
+        assert isinstance(selected_logger, VectorStorePreCallHook)
+
+        messages = [{"role": "user", "content": "what is in my study notes?"}]
+        model, returned_messages, returned_params = logging_obj.get_chat_completion_prompt(
+            model="claude-opus-4-6",
+            messages=messages,
+            non_default_params=non_default_params,
+            prompt_variables=None,
+            prompt_id=None,
+        )
+        assert (model, returned_messages, returned_params) == (
+            "claude-opus-4-6",
+            messages,
+            non_default_params,
+        )
+
+        assert dotprompt_manager.get_chat_completion_prompt(
+            model="claude-opus-4-6",
+            messages=messages,
+            non_default_params=non_default_params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        ) == ("claude-opus-4-6", messages, non_default_params)
+
+        assert isinstance(
+            logging_obj.get_custom_logger_for_prompt_management(
+                model="claude-opus-4-6",
+                non_default_params=non_default_params,
+                prompt_id="stem",
+                dynamic_callback_params={},
+            ),
+            DotpromptManager,
+        )
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, dotprompt_manager
+        )
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm._async_success_callback, dotprompt_manager
+        )
