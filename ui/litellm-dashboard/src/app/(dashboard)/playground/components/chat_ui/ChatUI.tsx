@@ -23,7 +23,7 @@ import {
 } from "@ant-design/icons";
 import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
 import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -76,6 +76,7 @@ import RealtimePlayground from "./RealtimePlayground";
 import { A2ATaskMetadata, MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
+import { usePlaygroundTeamSession } from "../../hooks/usePlaygroundTeamSession";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 
@@ -106,6 +107,8 @@ const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
 ]);
 
 const CUSTOM_MODEL_DEBOUNCE_WAIT_MS = 500;
+
+type ApiKeySource = "session" | "team" | "custom";
 
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
@@ -172,11 +175,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     clearMCPEvents,
   } = useChatHistory({ simplified });
   // codeql[js/clear-text-storage-of-sensitive-data]
-  const [apiKeySource, setApiKeySource] = useState<"session" | "custom">(() => {
+  const [apiKeySource, setApiKeySource] = useState<ApiKeySource>(() => {
     const saved = getSecureItem("apiKeySource");
     if (saved) {
       try {
-        return JSON.parse(saved) as "session" | "custom";
+        return JSON.parse(saved) as ApiKeySource;
       } catch (error) {
         console.error("Error parsing apiKeySource from sessionStorage", error);
       }
@@ -184,6 +187,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return disabledPersonalKeyCreation ? "custom" : "session";
   });
   const [apiKey, setApiKey] = useState<string>(() => getSecureItem("apiKey") || "");
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(
+    () => sessionStorage.getItem("playgroundTeamId") || null,
+  );
   const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
@@ -267,9 +273,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  const {
+    teams,
+    teamKey,
+    isLoadingTeams,
+    isMintingKey,
+    error: teamSessionError,
+  } = usePlaygroundTeamSession({
+    accessToken,
+    userID,
+    teamId: selectedTeamId,
+    enabled: !simplified && apiKeySource === "team",
+  });
+
+  const effectiveApiKey = useMemo(() => {
+    if (simplified) return accessToken;
+    if (apiKeySource === "team") return teamKey;
+    if (apiKeySource === "custom") return apiKey || null;
+    return accessToken;
+  }, [simplified, apiKeySource, accessToken, apiKey, teamKey]);
+
   // Fetch MCP servers and toolsets
   const loadMCPServers = async () => {
-    const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    const userApiKey = effectiveApiKey;
     if (!userApiKey) return;
 
     setIsLoadingMCPServers(true);
@@ -297,7 +323,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   // Fetch tools for a specific server
   const loadServerTools = async (serverId: string) => {
-    const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    const userApiKey = effectiveApiKey;
     if (!userApiKey || serverToolsMap[serverId]) return;
 
     try {
@@ -314,9 +340,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   useEffect(() => {
     if (isGetCodeModalVisible) {
       const code = generateCodeSnippet({
-        apiKeySource,
-        accessToken,
-        apiKey,
+        apiKey: effectiveApiKey,
         inputMessage,
         chatHistory,
         selectedTags,
@@ -337,9 +361,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [
     isGetCodeModalVisible,
     selectedSdk,
-    apiKeySource,
-    accessToken,
-    apiKey,
+    effectiveApiKey,
     inputMessage,
     chatHistory,
     selectedTags,
@@ -370,6 +392,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     sessionStorage.setItem("mcpServerToolRestrictions", JSON.stringify(mcpServerToolRestrictions));
     sessionStorage.setItem("selectedVoice", selectedVoice);
     sessionStorage.removeItem("selectedMCPTools"); // Clean up old key
+    if (selectedTeamId) {
+      sessionStorage.setItem("playgroundTeamId", selectedTeamId);
+    } else {
+      sessionStorage.removeItem("playgroundTeamId");
+    }
 
     if (!simplified) {
       if (selectedModel) {
@@ -383,6 +410,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     simplified,
     apiKeySource,
     apiKey,
+    selectedTeamId,
     selectedModel,
     endpointType,
     selectedTags,
@@ -395,8 +423,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   ]);
 
   useEffect(() => {
-    let userApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    const userApiKey = effectiveApiKey;
     if (!userApiKey || !token || !userRole || !userID) {
+      setModelInfo([]);
       return;
     }
 
@@ -426,7 +455,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       loadModels();
     }
     loadMCPServers();
-  }, [accessToken, userID, userRole, apiKeySource, apiKey, token, simplified]);
+  }, [effectiveApiKey, userID, userRole, token, simplified]);
 
   // Load tools when MCP direct mode has a server (or toolset) selected
   useEffect(() => {
@@ -450,7 +479,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   // Fetch agents when A2A endpoint is selected
   useEffect(() => {
-    const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    const userApiKey = effectiveApiKey;
     if (!userApiKey || endpointType !== EndpointType.A2A_AGENTS) {
       return;
     }
@@ -469,7 +498,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     };
 
     loadAgents();
-  }, [accessToken, apiKeySource, apiKey, endpointType, customProxyBaseUrl, selectedAgent]);
+  }, [effectiveApiKey, endpointType, customProxyBaseUrl, selectedAgent]);
 
   useEffect(() => {
     // Scroll to the bottom of the chat whenever chatHistory updates
@@ -650,10 +679,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    const effectiveApiKey = simplified ? accessToken : apiKeySource === "session" ? accessToken : apiKey;
-
     if (!effectiveApiKey) {
-      NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
+      NotificationsManager.fromBackend(
+        apiKeySource === "team"
+          ? "Please select a team to chat as"
+          : "Please provide a Virtual Key or select Current UI Session",
+      );
       return;
     }
 
@@ -1051,14 +1082,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <KeyOutlined className="mr-2" /> Virtual Key Source
                   </Text>
                   <Select
-                    disabled={disabledPersonalKeyCreation}
                     value={apiKeySource}
                     style={{ width: "100%" }}
                     onChange={(value) => {
-                      setApiKeySource(value as "session" | "custom");
+                      setApiKeySource(value as ApiKeySource);
                     }}
                     options={[
-                      { value: "session", label: "Current UI Session" },
+                      { value: "session", label: "Current UI Session", disabled: disabledPersonalKeyCreation },
+                      { value: "team", label: "Team" },
                       { value: "custom", label: "Virtual Key" },
                     ]}
                     className="rounded-md"
@@ -1072,6 +1103,31 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       value={apiKey}
                       icon={KeyOutlined}
                     />
+                  )}
+                  {apiKeySource === "team" && (
+                    <>
+                      <Select
+                        data-testid="playground-team-select"
+                        className="mt-2 rounded-md"
+                        style={{ width: "100%" }}
+                        placeholder={isLoadingTeams ? "Loading teams..." : "Select a team"}
+                        loading={isLoadingTeams || isMintingKey}
+                        value={selectedTeamId ?? undefined}
+                        onChange={(value: string) => setSelectedTeamId(value)}
+                        showSearch
+                        optionFilterProp="label"
+                        options={teams.map((team) => ({
+                          value: team.team_id,
+                          label: team.team_alias || team.team_id,
+                        }))}
+                        notFoundContent={isLoadingTeams ? <Spin size="small" /> : "You are not a member of any team"}
+                      />
+                      <Text className="text-xs text-gray-500 mt-1">
+                        Requests use a short lived key scoped to this team, so the model list shows the team&apos;s
+                        models.
+                      </Text>
+                      {teamSessionError && <Text className="text-xs text-red-600 mt-1">{teamSessionError}</Text>}
+                    </>
                   )}
                 </div>
 
@@ -1694,7 +1750,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 {endpointType === EndpointType.RESPONSES && (
                   <div>
                     <CodeInterpreterTool
-                      accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                      accessToken={effectiveApiKey || ""}
                       enabled={codeInterpreter.enabled}
                       onEnabledChange={codeInterpreter.setEnabled}
                       selectedContainerId={null}
@@ -1711,7 +1767,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           <div className={`flex flex-col bg-white ${simplified ? "flex-1 w-full" : "w-3/4"}`}>
             {endpointType === EndpointType.REALTIME ? (
               <RealtimePlayground
-                accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                accessToken={effectiveApiKey || ""}
                 selectedModel={selectedModel || ""}
                 customProxyBaseUrl={customProxyBaseUrl || undefined}
                 selectedGuardrails={selectedGuardrails.length > 0 ? selectedGuardrails : undefined}
@@ -1755,7 +1811,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         endpointType={endpointType as EndpointType}
                         mcpEvents={mcpEvents}
                         codeInterpreterResult={codeInterpreter.result}
-                        accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                        accessToken={effectiveApiKey || ""}
                       />
                     </div>
                   ))}

@@ -1,7 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders as render, testQueryClient } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
+import * as networking from "@/components/networking";
+import { PLAYGROUND_TEAM_KEY_DURATION, playgroundTeamKeyStorageKey } from "../../hooks/usePlaygroundTeamSession";
+import { getSecureItem } from "@/utils/secureStorage";
 
 // Mock the fetchAvailableModels function
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -14,6 +18,8 @@ vi.mock("@/components/networking", () => ({
   vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
   getGuardrailsList: vi.fn().mockResolvedValue({ data: [] }),
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
+  teamListCall: vi.fn().mockResolvedValue([]),
+  keyCreateCall: vi.fn().mockResolvedValue({ key: "sk-team-key" }),
 }));
 
 // Mock scrollIntoView which is not available in jsdom
@@ -26,6 +32,7 @@ describe("ChatUI", () => {
     // Reset mocks before each test
     vi.clearAllMocks();
     sessionStorage.clear();
+    testQueryClient.clear();
 
     // Mock scrollIntoView which is not available in JSDOM
     Element.prototype.scrollIntoView = vi.fn();
@@ -412,5 +419,113 @@ describe("ChatUI", () => {
         expect(searchInput).toBeInTheDocument();
       }
     }
+  });
+
+  describe("team scoped session", () => {
+    const clickOption = async (label: string) => {
+      await waitFor(() => {
+        const option = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
+          (el) => el.getAttribute("title") === label,
+        );
+        expect(option).toBeTruthy();
+      });
+      const option = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
+        (el) => el.getAttribute("title") === label,
+      );
+      await act(async () => {
+        fireEvent.click(option!);
+      });
+    };
+
+    const selectTeamKeySource = async () => {
+      const keySourceSelect = screen
+        .getByText("Virtual Key Source")
+        .parentElement?.querySelector(".ant-select-selector");
+      expect(keySourceSelect).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.mouseDown(keySourceSelect!);
+      });
+      await clickOption("Team");
+    };
+
+    const selectTeam = async (label: string) => {
+      const teamSelect = screen.getByTestId("playground-team-select").querySelector(".ant-select-selector");
+      expect(teamSelect).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.mouseDown(teamSelect!);
+      });
+      await clickOption(label);
+    };
+
+    beforeEach(() => {
+      (networking.teamListCall as any).mockResolvedValue([
+        { team_id: "team-alpha", team_alias: "Alpha Team" },
+        { team_id: "team-beta", team_alias: "Beta Team" },
+      ]);
+      (networking.keyCreateCall as any).mockResolvedValue({ key: "sk-team-alpha-key" });
+    });
+
+    const renderChatUI = () =>
+      render(
+        <ChatUI
+          accessToken="ui-session-key"
+          token="jwt"
+          userRole="Internal User"
+          userID="user-1"
+          disabledPersonalKeyCreation={false}
+        />,
+      );
+
+    it("mints a team scoped key and lists the team's models with it", async () => {
+      renderChatUI();
+      await waitFor(() => expect(screen.getByText("Test Key")).toBeInTheDocument());
+
+      await selectTeamKeySource();
+      await waitFor(() => expect(networking.teamListCall).toHaveBeenCalledWith("ui-session-key", null, "user-1"));
+
+      (fetchModelsModule.fetchAvailableModels as any).mockResolvedValue([{ model_group: "team-only-model" }]);
+      await selectTeam("Alpha Team");
+
+      await waitFor(() =>
+        expect(networking.keyCreateCall).toHaveBeenCalledWith(
+          "ui-session-key",
+          "user-1",
+          expect.objectContaining({ team_id: "team-alpha", duration: PLAYGROUND_TEAM_KEY_DURATION }),
+        ),
+      );
+      await waitFor(() => expect(fetchModelsModule.fetchAvailableModels).toHaveBeenCalledWith("sk-team-alpha-key"));
+      expect(getSecureItem(playgroundTeamKeyStorageKey("team-alpha"))).toBe("sk-team-alpha-key");
+    });
+
+    it("reuses a cached team key instead of minting another one", async () => {
+      renderChatUI();
+      await waitFor(() => expect(screen.getByText("Test Key")).toBeInTheDocument());
+
+      await selectTeamKeySource();
+      await selectTeam("Alpha Team");
+      await waitFor(() => expect(networking.keyCreateCall).toHaveBeenCalledTimes(1));
+
+      await selectTeam("Beta Team");
+      await waitFor(() => expect(networking.keyCreateCall).toHaveBeenCalledTimes(2));
+
+      await selectTeam("Alpha Team");
+      await waitFor(() => expect(fetchModelsModule.fetchAvailableModels).toHaveBeenCalledWith("sk-team-alpha-key"));
+      expect(networking.keyCreateCall).toHaveBeenCalledTimes(2);
+    });
+
+    it("surfaces an error and keeps the model list empty when the team key cannot be minted", async () => {
+      (networking.keyCreateCall as any).mockRejectedValue(new Error("not a member of team"));
+
+      renderChatUI();
+      await waitFor(() => expect(screen.getByText("Test Key")).toBeInTheDocument());
+
+      await selectTeamKeySource();
+      await selectTeam("Alpha Team");
+
+      await waitFor(() => expect(screen.getByText("not a member of team")).toBeInTheDocument());
+      expect(getSecureItem(playgroundTeamKeyStorageKey("team-alpha"))).toBeNull();
+    });
   });
 });

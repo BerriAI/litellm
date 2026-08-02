@@ -27,8 +27,6 @@ describe("CodeSnippets", () => {
     endpointType: EndpointType.EMBEDDINGS,
     inputMessage: "Hello, world!",
     selectedModel: "text-embedding-3-small",
-    apiKeySource: "session" as const,
-    accessToken: "1234567890",
     apiKey: "1234567890",
     chatHistory: [],
     selectedTags: [],

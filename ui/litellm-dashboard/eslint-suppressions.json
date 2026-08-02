@@ -1129,13 +1129,10 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 7
+      "count": 6
     },
     "no-restricted-imports": {
       "count": 2
-    },
-    "prefer-const": {
-      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 4
