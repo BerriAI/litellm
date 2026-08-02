@@ -3,17 +3,11 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 """
 
 import os
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
-    Iterator,
-    List,
     Literal,
-    Optional,
-    Tuple,
-    Union,
     cast,
     overload,
 )
@@ -111,7 +105,7 @@ def _split_parallel_tool_calls(messages: list[AllMessageValues]) -> list[AllMess
 
     def _expand(
         assistant: ChatCompletionAssistantMessage,
-        calls_by_id: dict[Optional[str], ChatCompletionAssistantToolCall],
+        calls_by_id: dict[str | None, ChatCompletionAssistantToolCall],
         tool_messages: list[ChatCompletionToolMessage],
     ) -> Iterator[AllMessageValues]:
         for position, tool_message in enumerate(tool_messages):
@@ -160,21 +154,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     Reference: https://docs.databricks.com/en/machine-learning/foundation-models/api-reference.html#chat-request
     """
 
-    max_tokens: Optional[int] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    top_k: Optional[int] = None
-    stop: Optional[Union[List[str], str]] = None
-    n: Optional[int] = None
+    max_tokens: int | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    top_k: int | None = None
+    stop: list[str] | str | None = None
+    n: int | None = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        top_k: Optional[int] = None,
-        stop: Optional[Union[List[str], str]] = None,
-        n: Optional[int] = None,
+        max_tokens: int | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        top_k: int | None = None,
+        stop: list[str] | str | None = None,
+        n: int | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -182,14 +176,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 setattr(self.__class__, key, value)
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "databricks"
 
     @classmethod
     def get_config(cls):
         return super().get_config()
 
-    def get_required_params(self) -> List[ProviderField]:
+    def get_required_params(self) -> list[ProviderField]:
         """For a given provider, return it's required fields with a description"""
         return [
             ProviderField(
@@ -210,11 +204,11 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         # Check for custom user agent in optional_params or environment
         # This allows partners building on LiteLLM to set their own telemetry
@@ -241,18 +235,18 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base)
         complete_url = f"{api_base}/chat/completions"
         return complete_url
 
-    def get_supported_openai_params(self, model: Optional[str] = None) -> list:
+    def get_supported_openai_params(self, model: str | None = None) -> list:
         return [
             "stream",
             "stop",
@@ -268,9 +262,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             "thinking",
         ]
 
-    def convert_anthropic_tool_to_databricks_tool(
-        self, tool: Optional[AllAnthropicToolsValues]
-    ) -> Optional[DatabricksTool]:
+    def convert_anthropic_tool_to_databricks_tool(self, tool: AllAnthropicToolsValues | None) -> DatabricksTool | None:
         if tool is None:
             return None
 
@@ -283,14 +275,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # Only add description if it exists
         description = tool.get("description")
         if description is not None:
-            function_params["description"] = cast(Union[dict, str], description)
+            function_params["description"] = cast(dict | str, description)
 
         return DatabricksTool(
             type="function",
             function=function_params,
         )
 
-    def _map_openai_to_dbrx_tool(self, model: str, tools: List) -> List[DatabricksTool]:
+    def _map_openai_to_dbrx_tool(self, model: str, tools: list) -> list[DatabricksTool]:
         # if not claude, send as is
         if "claude" not in model:
             return tools
@@ -305,10 +297,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def map_response_format_to_databricks_tool(
         self,
         model: str,
-        value: Optional[dict],
+        value: dict | None,
         optional_params: dict,
         is_thinking_enabled: bool,
-    ) -> Optional[DatabricksTool]:
+    ) -> DatabricksTool | None:
         if value is None:
             return None
 
@@ -320,9 +312,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,  # allows overrides to selectively run this
-        messages: List[AllMessageValues],
-        tools: Optional[List["ChatCompletionToolParam"]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        messages: list[AllMessageValues],
+        tools: list["ChatCompletionToolParam"] | None = None,
+    ) -> tuple[list[AllMessageValues], list["ChatCompletionToolParam"] | None]:
         """
         Override the parent class method to preserve cache_control for models on Databricks.
         Databricks supports Anthropic-style cache control for Claude models.
@@ -385,7 +377,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             else:
                 optional_params["thinking"] = mapped_thinking
                 if AnthropicConfig._is_adaptive_thinking_model(model, "databricks"):
-                    mapped_effort: Optional[str] = None
+                    mapped_effort: str | None = None
                     if isinstance(reasoning_effort_value, str):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort_value)
                     if mapped_effort is None:
@@ -414,20 +406,20 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """
         Databricks does not support:
         - 'name' in user message.
@@ -480,8 +472,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
     @staticmethod
     def extract_content_str(
-        content: Optional[AllDatabricksContentValues],
-    ) -> Optional[str]:
+        content: AllDatabricksContentValues | None,
+    ) -> str | None:
         if content is None:
             return None
         if isinstance(content, str):
@@ -498,18 +490,18 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
     @staticmethod
     def extract_reasoning_content(
-        content: Optional[AllDatabricksContentValues],
-    ) -> Tuple[
-        Optional[str],
-        Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]],
+        content: AllDatabricksContentValues | None,
+    ) -> tuple[
+        str | None,
+        list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
     ]:
         """
         Extract and return the reasoning content and thinking blocks
         """
         if content is None:
             return None, None
-        thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = None
-        reasoning_content: Optional[str] = None
+        thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
+        reasoning_content: str | None = None
         if isinstance(content, list):
             for item in content:
                 if item.get("type") == "reasoning":
@@ -531,8 +523,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
     @staticmethod
     def extract_citations(
-        content: Optional[AllDatabricksContentValues],
-    ) -> Optional[List[Any]]:
+        content: AllDatabricksContentValues | None,
+    ) -> list[Any] | None:
         if content is None:
             return None
         citations = []
@@ -543,9 +535,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                     citations.append([{**citation, "supported_text": text} for citation in citations_item])
         return citations or None
 
-    def _transform_dbrx_choices(
-        self, choices: List[DatabricksChoice], json_mode: Optional[bool] = None
-    ) -> List[Choices]:
+    def _transform_dbrx_choices(self, choices: list[DatabricksChoice], json_mode: bool | None = None) -> list[Choices]:
         transformed_choices = []
 
         for choice in choices:
@@ -561,14 +551,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 if fixed_tool_calls is not None:
                     tool_calls = fixed_tool_calls
 
-            translated_message: Optional[Message] = None
-            finish_reason: Optional[str] = None
+            translated_message: Message | None = None
+            finish_reason: str | None = None
             if tool_calls and _should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls,
                 convert_tool_call_to_json_mode=json_mode,
             ):
                 # to support response_format on claude models
-                json_mode_content_str: Optional[str] = str(tool_calls[0]["function"].get("arguments", "")) or None
+                json_mode_content_str: str | None = str(tool_calls[0]["function"].get("arguments", "")) or None
                 if json_mode_content_str is not None:
                     translated_message = Message(content=json_mode_content_str)
                     finish_reason = "stop"
@@ -616,12 +606,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         # Redact sensitive data before logging to prevent credential leakage
         redacted_request_data = self.redact_sensitive_data(request_data)
@@ -640,7 +630,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise DatabricksException(
-                message="Unable to get json response - {}, Original Response: {}".format(str(e), raw_response.text),
+                message=f"Unable to get json response - {e!s}, Original Response: {raw_response.text}",
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
@@ -661,9 +651,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         return DatabricksChatResponseIterator(
             streaming_response=streaming_response,
@@ -675,9 +665,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 class DatabricksChatResponseIterator(BaseModelResponseIterator):
     def __init__(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         super().__init__(streaming_response, sync_stream)
 

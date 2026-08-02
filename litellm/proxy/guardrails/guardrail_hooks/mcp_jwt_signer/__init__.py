@@ -77,6 +77,6 @@ guardrail_class_registry = {
 
 __all__ = [
     "MCPJWTSigner",
-    "initialize_guardrail",
     "get_mcp_jwt_signer",
+    "initialize_guardrail",
 ]

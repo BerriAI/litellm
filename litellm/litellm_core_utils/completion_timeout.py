@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 import httpx
 
@@ -14,7 +14,7 @@ class CompletionTimeout:
 
     @staticmethod
     def _fallback_when_no_explicit_timeout(
-        global_timeout: Optional[Union[float, str]],
+        global_timeout: float | str | None,
     ) -> float:
         """
         Used when ``model_timeout`` and kwargs timeouts are all unset.
@@ -30,13 +30,13 @@ class CompletionTimeout:
 
     @staticmethod
     def resolve(
-        model_timeout: Optional[Union[float, str, httpx.Timeout]],
+        model_timeout: float | str | httpx.Timeout | None,
         kwargs: dict,
         custom_llm_provider: str,
         *,
-        global_timeout: Optional[Union[float, str]],
+        global_timeout: float | str | None,
         supports_httpx_timeout: Callable[[str], bool],
-    ) -> Union[float, httpx.Timeout]:
+    ) -> float | httpx.Timeout:
         """
         Resolution order (first non-None wins):
 
@@ -48,7 +48,7 @@ class CompletionTimeout:
 
         Coerce :class:`httpx.Timeout` when the provider does not support it.
         """
-        resolved: Union[float, str, httpx.Timeout]
+        resolved: float | str | httpx.Timeout
         if model_timeout is not None:
             resolved = model_timeout
         elif kwargs.get("timeout") is not None:

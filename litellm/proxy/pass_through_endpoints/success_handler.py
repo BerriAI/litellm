@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Any, Optional, Union
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -30,6 +30,7 @@ from .llm_provider_handlers.gemini_passthrough_logging_handler import (
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
+from .upstream_usage_headers import has_upstream_reported_usage
 
 cohere_passthrough_logging_handler = CoherePassthroughLoggingHandler()
 
@@ -92,11 +93,9 @@ class PassThroughEndpointLogging:
     async def _handle_logging(
         self,
         logging_obj: LiteLLMLoggingObj,
-        standard_logging_response_object: Union[
-            StandardPassThroughResponseObject,
-            PassThroughEndpointLoggingResultValues,
-            dict,
-        ],
+        standard_logging_response_object: StandardPassThroughResponseObject
+        | PassThroughEndpointLoggingResultValues
+        | dict,
         result: str,
         start_time: datetime,
         end_time: datetime,
@@ -123,7 +122,7 @@ class PassThroughEndpointLogging:
     def normalize_llm_passthrough_logging_payload(
         self,
         httpx_response: httpx.Response,
-        response_body: Optional[dict],
+        response_body: dict | None,
         request_body: dict,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
@@ -131,14 +130,14 @@ class PassThroughEndpointLogging:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
         **kwargs,
     ):
         return_dict = {
             "standard_logging_response_object": None,
             "kwargs": kwargs,
         }
-        standard_logging_response_object: Optional[Any] = None
+        standard_logging_response_object: Any | None = None
 
         if self.is_gemini_route(url_route, custom_llm_provider):
             gemini_passthrough_logging_handler_result = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
@@ -267,7 +266,7 @@ class PassThroughEndpointLogging:
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
-        response_body: Optional[dict],
+        response_body: dict | None,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
@@ -276,10 +275,10 @@ class PassThroughEndpointLogging:
         cache_hit: bool,
         request_body: dict,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
         **kwargs,
     ):
-        standard_logging_response_object: Optional[PassThroughEndpointLoggingResultValues] = None
+        standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
         if self.is_assemblyai_route(url_route):
             if AssemblyAIPassthroughLoggingHandler._should_log_request(httpx_response.request.method) is not True:
@@ -357,9 +356,7 @@ class PassThroughEndpointLogging:
 
     def is_assemblyai_route(self, url_route: str):
         parsed_url = urlparse(url_route)
-        if parsed_url.hostname == "api.assemblyai.com":
-            return True
-        elif "/transcript" in parsed_url.path:
+        if parsed_url.hostname == "api.assemblyai.com" or "/transcript" in parsed_url.path:
             return True
         return False
 
@@ -379,7 +376,7 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
-    def is_cursor_route(self, url_route: str, custom_llm_provider: Optional[str] = None):
+    def is_cursor_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Cursor Cloud Agents API route."""
         if custom_llm_provider == "cursor":
             return True
@@ -408,7 +405,7 @@ class PassThroughEndpointLogging:
 
         return _is_openai_compatible_url(url_route)
 
-    def is_gemini_route(self, url_route: str, custom_llm_provider: Optional[str] = None):
+    def is_gemini_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Gemini API route."""
         for route in self.TRACKED_GEMINI_ROUTES:
             if route in url_route and custom_llm_provider == "gemini":
@@ -448,10 +445,20 @@ class PassThroughEndpointLogging:
 
         Only set the cost per request if it's set in the passthrough logging payload.
         If it's not set, don't set it in the logging object.
+
+        An upstream that prices its own requests always wins: ``cost_per_request``
+        is a flat per-request estimate for targets LiteLLM cannot price, and it
+        defaults to 0.0 on every config-defined endpoint, so honoring it here
+        would zero out the real cost the upstream reported. That holds even when
+        the reported value was unusable, where the contract records 0 rather
+        than billing an estimate the upstream just contradicted.
         """
         #########################################################
         # Check if cost per request is set
         #########################################################
+        if has_upstream_reported_usage(logging_obj):
+            return kwargs
+
         if passthrough_logging_payload.get("cost_per_request") is not None:
             kwargs["response_cost"] = passthrough_logging_payload.get("cost_per_request")
             logging_obj.model_call_details["response_cost"] = passthrough_logging_payload.get("cost_per_request")

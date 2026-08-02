@@ -1,12 +1,17 @@
 import copy
 import os
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Literal, Optional
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -27,6 +32,10 @@ _EXTRA_SENSITIVE_CALLBACK_KEYS = {"gcs_path_service_account"}
 # already-encrypted input cheaply (no decrypt-attempt round trip) and
 # avoid double-encrypting if `LITELLM_SALT_KEY` is rotated between writes.
 _CALLBACK_VAR_ENCRYPTED_PREFIX = "litellm_enc::"
+# Metadata slots that hold operator-configured callback setup (and therefore
+# integration credentials). Resolved from UserAPIKeyAuth during pre-call setup,
+# never read back off the copies stamped into request metadata.
+_CALLBACK_CONFIG_SLOTS = frozenset({"logging", "callback_settings"})
 
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
@@ -42,7 +51,7 @@ def initialize_callbacks_on_proxy(
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-    callback_specific_params: Optional[dict] = None,
+    callback_specific_params: dict | None = None,
 ):
     if not isinstance(callback_specific_params, dict):
         callback_specific_params = {}
@@ -54,7 +63,7 @@ def initialize_callbacks_on_proxy(
 
     verbose_proxy_logger.debug(f"{blue_color_code}initializing callbacks={value} on proxy{reset_color_code}")
     if isinstance(value, list):
-        imported_list: List[Any] = []
+        imported_list: list[Any] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
             if isinstance(callback, str) and callback == "compression_interception":
                 from litellm.integrations.compression_interception.handler import (
@@ -90,7 +99,7 @@ def initialize_callbacks_on_proxy(
                     _OPTIONAL_PresidioPIIMasking,
                 )
 
-                presidio_logging_only: Optional[bool] = litellm_settings.get("presidio_logging_only", None)
+                presidio_logging_only: bool | None = litellm_settings.get("presidio_logging_only", None)
                 if presidio_logging_only is not None:
                     presidio_logging_only = bool(presidio_logging_only)  # validate boolean given
 
@@ -98,7 +107,7 @@ def initialize_callbacks_on_proxy(
                 if "presidio" in callback_specific_params and isinstance(callback_specific_params["presidio"], dict):
                     _presidio_params = callback_specific_params["presidio"]
 
-                params: Dict[str, Any] = {
+                params: dict[str, Any] = {
                     "logging_only": presidio_logging_only,
                     **_presidio_params,
                 }
@@ -316,7 +325,7 @@ def initialize_callbacks_on_proxy(
     verbose_proxy_logger.debug(f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}")
 
 
-def get_model_group_from_litellm_kwargs(kwargs: dict) -> Optional[str]:
+def get_model_group_from_litellm_kwargs(kwargs: dict) -> str | None:
     _litellm_params = kwargs.get("litellm_params", None) or {}
     _metadata = _litellm_params.get(get_metadata_variable_name_from_kwargs(kwargs)) or {}
     _model_group = _metadata.get("model_group", None)
@@ -326,7 +335,7 @@ def get_model_group_from_litellm_kwargs(kwargs: dict) -> Optional[str]:
     return None
 
 
-def get_model_group_from_request_data(data: dict) -> Optional[str]:
+def get_model_group_from_request_data(data: dict) -> str | None:
     _metadata = data.get("metadata", None) or {}
     _model_group = _metadata.get("model_group", None)
     if _model_group is not None:
@@ -335,7 +344,7 @@ def get_model_group_from_request_data(data: dict) -> Optional[str]:
     return None
 
 
-def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str, str]:
+def get_remaining_tokens_and_requests_from_request_data(data: dict) -> dict[str, str]:
     """
     Helper function to return x-litellm-key-remaining-tokens-{model_group} and x-litellm-key-remaining-requests-{model_group}
 
@@ -364,8 +373,8 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
     return headers
 
 
-def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
-    _metadata: Dict = {}
+def get_logging_caching_headers(request_data: dict) -> dict | None:
+    _metadata: dict = {}
     metadata_bucket = request_data.get("metadata")
     litellm_metadata_bucket = request_data.get("litellm_metadata")
     if isinstance(metadata_bucket, dict):
@@ -406,23 +415,6 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
     return headers
 
 
-def get_metadata_variable_name_from_kwargs(
-    kwargs: dict,
-) -> Literal["metadata", "litellm_metadata"]:
-    """
-    Helper to return what the "metadata" field should be called in the request data
-
-    - New endpoints return `litellm_metadata`
-    - Old endpoints return `metadata`
-
-    Context:
-    - LiteLLM used `metadata` as an internal field for storing metadata
-    - OpenAI then started using this field for their metadata
-    - LiteLLM is now moving to using `litellm_metadata` for our metadata
-    """
-    return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-
-
 LITELLM_PROXY_INTERNAL_METADATA_KEYS = frozenset(
     {
         "applied_policies",
@@ -450,26 +442,9 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS = frozenset(
 )
 
 
-def _get_or_create_proxy_metadata_bucket(
-    request_data: Dict,
-) -> tuple[Literal["metadata", "litellm_metadata"], dict]:
-    """
-    Return the proxy-internal metadata bucket for this request.
-
-    Batch/file routes store proxy state in ``litellm_metadata`` so the OpenAI
-    ``metadata`` field can remain provider-safe (string values only).
-    """
-    metadata_key = get_metadata_variable_name_from_kwargs(request_data)
-    metadata_bucket = request_data.get(metadata_key)
-    if not isinstance(metadata_bucket, dict):
-        metadata_bucket = {}
-        request_data[metadata_key] = metadata_bucket
-    return metadata_key, metadata_bucket
-
-
 def sanitize_openai_provider_metadata(
-    metadata: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, str]]:
+    metadata: dict[str, Any] | None,
+) -> dict[str, str] | None:
     """
     Keep only provider-safe OpenAI metadata entries (string keys -> string values).
 
@@ -478,7 +453,7 @@ def sanitize_openai_provider_metadata(
     """
     if not metadata:
         return metadata
-    sanitized: Dict[str, str] = {}
+    sanitized: dict[str, str] = {}
     for key, value in metadata.items():
         if key in LITELLM_PROXY_INTERNAL_METADATA_KEYS:
             continue
@@ -493,10 +468,10 @@ def sanitize_openai_provider_metadata(
     return sanitized or None
 
 
-def add_guardrail_to_applied_guardrails_header(request_data: Dict, guardrail_name: Optional[str]):
+def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_name: str | None):
     if guardrail_name is None:
         return
-    _, _metadata = _get_or_create_proxy_metadata_bucket(request_data)
+    _, _metadata = get_or_create_metadata_bucket(request_data)
     if "applied_guardrails" in _metadata:
         if guardrail_name not in _metadata["applied_guardrails"]:
             _metadata["applied_guardrails"].append(guardrail_name)
@@ -504,7 +479,7 @@ def add_guardrail_to_applied_guardrails_header(request_data: Dict, guardrail_nam
         _metadata["applied_guardrails"] = [guardrail_name]
 
 
-def add_policy_to_applied_policies_header(request_data: Dict, policy_name: Optional[str]):
+def add_policy_to_applied_policies_header(request_data: dict, policy_name: str | None):
     """
     Add a policy name to the applied_policies list in request metadata.
 
@@ -513,7 +488,7 @@ def add_policy_to_applied_policies_header(request_data: Dict, policy_name: Optio
     """
     if policy_name is None:
         return
-    _, _metadata = _get_or_create_proxy_metadata_bucket(request_data)
+    _, _metadata = get_or_create_metadata_bucket(request_data)
     if "applied_policies" in _metadata:
         if policy_name not in _metadata["applied_policies"]:
             _metadata["applied_policies"].append(policy_name)
@@ -521,7 +496,7 @@ def add_policy_to_applied_policies_header(request_data: Dict, policy_name: Optio
         _metadata["applied_policies"] = [policy_name]
 
 
-def add_policy_sources_to_metadata(request_data: Dict, policy_sources: Dict[str, str]):
+def add_policy_sources_to_metadata(request_data: dict, policy_sources: dict[str, str]):
     """
     Store policy match reasons in metadata for x-litellm-policy-sources header.
 
@@ -531,7 +506,7 @@ def add_policy_sources_to_metadata(request_data: Dict, policy_sources: Dict[str,
     """
     if not policy_sources:
         return
-    _, _metadata = _get_or_create_proxy_metadata_bucket(request_data)
+    _, _metadata = get_or_create_metadata_bucket(request_data)
     existing = _metadata.get("policy_sources", {})
     if not isinstance(existing, dict):
         existing = {}
@@ -545,7 +520,7 @@ def add_guardrail_response_to_standard_logging_object(
 ):
     if litellm_logging_obj is None:
         return
-    standard_logging_object: Optional[StandardLoggingPayload] = litellm_logging_obj.model_call_details.get(
+    standard_logging_object: StandardLoggingPayload | None = litellm_logging_obj.model_call_details.get(
         "standard_logging_object"
     )
     if standard_logging_object is None:
@@ -571,10 +546,17 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
 
 
-def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
+def normalize_callback_names(callbacks: Iterable[Any]) -> list[Any]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
+
+
+def strip_callback_config(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return key/team metadata without the slots that carry callback credentials."""
+    if not isinstance(metadata, dict):
+        return metadata
+    return {k: v for k, v in metadata.items() if k not in _CALLBACK_CONFIG_SLOTS}
 
 
 def encrypt_callback_vars(metadata: Any) -> Any:
@@ -611,7 +593,7 @@ def _transform_callback_vars(metadata: Any, transform: Callable[[str, Any], Any]
 
 def is_sensitive_callback_key(
     key: str,
-    extra: Optional[set[str]] = None,
+    extra: set[str] | None = None,
 ) -> bool:
     """Return ``True`` if ``key`` is present in ``extra`` (checked as-is), or
     if its lowercase form is in ``_EXTRA_SENSITIVE_CALLBACK_KEYS``, or if

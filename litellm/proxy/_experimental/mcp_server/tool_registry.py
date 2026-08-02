@@ -1,5 +1,6 @@
 import json
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_logger
 from litellm.proxy.types_utils.utils import get_instance_fn
@@ -21,13 +22,13 @@ class MCPToolRegistry:
 
     def __init__(self):
         # Registry to store all registered tools
-        self.tools: Dict[str, MCPTool] = {}
+        self.tools: dict[str, MCPTool] = {}
 
     def register_tool(
         self,
         name: str,
         description: str,
-        input_schema: Dict[str, Any],
+        input_schema: dict[str, Any],
         handler: Callable,
     ) -> None:
         """
@@ -41,13 +42,13 @@ class MCPToolRegistry:
         )
         verbose_logger.debug(f"Registered tool: {name}")
 
-    def get_tool(self, name: str) -> Optional[MCPTool]:
+    def get_tool(self, name: str) -> MCPTool | None:
         """
         Get a tool from the registry by name
         """
         return self.tools.get(name)
 
-    def list_tools(self, tool_prefix: Optional[str] = None) -> List[MCPTool]:
+    def list_tools(self, tool_prefix: str | None = None) -> list[MCPTool]:
         """
         List all registered tools
         """
@@ -71,7 +72,7 @@ class MCPToolRegistry:
                 verbose_logger.debug("Unregistered MCP tool %s", name)
         return removed
 
-    def convert_tools_to_mcp_sdk_tool_type(self, tools: List[MCPTool]) -> List["MCPToolSDKTool"]:
+    def convert_tools_to_mcp_sdk_tool_type(self, tools: list[MCPTool]) -> list["MCPToolSDKTool"]:
         if MCPToolSDKTool is None:
             raise ImportError("MCP SDK is not installed. Please install it with: pip install 'litellm[proxy]'")
         return [
@@ -85,8 +86,8 @@ class MCPToolRegistry:
 
     def load_tools_from_config(
         self,
-        mcp_tools_config: Optional[Dict[str, Any]] = None,
-        config_file_path: Optional[str] = None,
+        mcp_tools_config: dict[str, Any] | None = None,
+        config_file_path: str | None = None,
     ) -> None:
         """
         Load and register tools from the proxy config

@@ -18,6 +18,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_remaining_tokens_and_requests_from_request_data,
     normalize_callback_names,
     sanitize_openai_provider_metadata,
+    strip_callback_config,
 )
 import litellm
 
@@ -452,3 +453,41 @@ def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
         )
     finally:
         litellm.callbacks = original_callbacks
+
+
+def test_strip_callback_config_drops_credential_bearing_slots():
+    """
+    `logging` and `callback_settings` hold operator-configured integration
+    credentials. Both must be dropped from the key/team metadata the proxy
+    stamps into request metadata, while every other field survives untouched
+    (`priority` is read back by the dynamic rate limiter, `guardrails` by the
+    guardrail hooks).
+    """
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langsmith",
+                "callback_vars": {"langsmith_api_key": "litellm_enc::ciphertext"},
+            }
+        ],
+        "callback_settings": {"callback_vars": {"langfuse_secret_key": "litellm_enc::other"}},
+        "priority": "high",
+        "guardrails": ["presidio"],
+        "langsmith_provisioning": {"api_key_id": "prov-1"},
+    }
+
+    stripped = strip_callback_config(metadata)
+
+    assert "logging" not in stripped
+    assert "callback_settings" not in stripped
+    assert stripped["priority"] == "high"
+    assert stripped["guardrails"] == ["presidio"]
+    assert stripped["langsmith_provisioning"] == {"api_key_id": "prov-1"}
+    # the caller's dict (UserAPIKeyAuth.metadata) is shared state - never mutate it
+    assert "logging" in metadata
+    assert "callback_settings" in metadata
+
+
+@pytest.mark.parametrize("value", [None, "not-a-dict", 42])
+def test_strip_callback_config_passes_through_non_dicts(value):
+    assert strip_callback_config(value) is value

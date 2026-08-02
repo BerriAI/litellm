@@ -9,15 +9,17 @@ identifying ids are denied so an empty user_id can never select an
 unscoped query.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm.proxy._types import (
     UserAPIKeyAuth,
+)
+from litellm.proxy._types import (
     user_api_key_has_admin_view as _user_has_admin_view,
 )
 
 
-def build_list_page(items: List[Any], has_more: bool = False) -> Dict[str, Any]:
+def build_list_page(items: list[Any], has_more: bool = False) -> dict[str, Any]:
     """Build the OpenAI-style paginated list response shape used by managed
     file/batch/vector-store listings. ``first_id`` and ``last_id`` are
     sourced from each item's ``.id`` attribute."""
@@ -32,7 +34,7 @@ def build_list_page(items: List[Any], has_more: bool = False) -> Dict[str, Any]:
 
 def build_owner_filter(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return a Prisma `where` fragment that scopes a managed-resource listing
     to records the caller is allowed to see.
 
@@ -71,8 +73,8 @@ def build_owner_filter(
 
 def can_access_resource(
     user_api_key_dict: UserAPIKeyAuth,
-    created_by: Optional[str],
-    resource_team_id: Optional[str],
+    created_by: str | None,
+    resource_team_id: str | None,
 ) -> bool:
     """Return True iff the caller may read/modify a managed resource.
 

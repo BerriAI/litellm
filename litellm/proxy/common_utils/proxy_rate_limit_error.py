@@ -36,7 +36,8 @@ This module provides a single proxy-side error class that:
 """
 
 import json
-from typing import Any, Dict, Mapping, Optional, Union
+from collections.abc import Mapping
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -44,8 +45,8 @@ from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimit
 
 
 def map_v3_rate_limit_type(
-    v3_value: Optional[str],
-) -> Optional[RateLimitType]:
+    v3_value: str | None,
+) -> RateLimitType | None:
     """
     Map the v3 rate limiter's internal `status["rate_limit_type"]` strings
     onto the public :class:`RateLimitType` enum.
@@ -143,11 +144,11 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
     def __init__(
         self,
         detail: Any,
-        headers: Optional[Mapping[str, Any]] = None,
-        category: Union[str, RateLimitErrorCategory] = RateLimitErrorCategory.LITELLM_RATE_LIMIT,
-        rate_limit_type: Optional[Union[str, RateLimitType]] = None,
-        model: Optional[str] = None,
-        llm_provider: Optional[str] = "litellm_proxy",
+        headers: Mapping[str, Any] | None = None,
+        category: str | RateLimitErrorCategory = RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+        rate_limit_type: str | RateLimitType | None = None,
+        model: str | None = None,
+        llm_provider: str | None = "litellm_proxy",
     ):
         # Normalize None → safe defaults so callers (and the resolver helper
         # in `rate_limiter_utils`) can pass `None` without producing an
@@ -157,7 +158,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
         model = model or ""
         llm_provider = llm_provider or "litellm_proxy"
         message = _coerce_message(detail)
-        stringified_headers: Optional[Dict[str, str]] = {k: str(v) for k, v in headers.items()} if headers else None
+        stringified_headers: dict[str, str] | None = {k: str(v) for k, v in headers.items()} if headers else None
 
         # Initialize the FastAPI HTTPException portion first so its attributes
         # (status_code, detail, headers) are already on the instance before

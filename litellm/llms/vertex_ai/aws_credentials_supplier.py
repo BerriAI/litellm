@@ -8,7 +8,7 @@ without hitting the EC2 instance metadata service.
 Requires google-auth >= 2.29.0.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from google.auth import aws
 

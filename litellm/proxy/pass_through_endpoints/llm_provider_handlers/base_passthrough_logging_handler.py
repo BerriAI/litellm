@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -87,7 +87,7 @@ class BasePassthroughLoggingHandler(ABC):
     def _get_user_from_metadata(
         self,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
-    ) -> Optional[str]:
+    ) -> str | None:
         request_body = passthrough_logging_payload.get("request_body")
         if request_body:
             return get_end_user_id_from_request_body(request_body)
@@ -95,7 +95,7 @@ class BasePassthroughLoggingHandler(ABC):
 
     def _create_response_logging_payload(
         self,
-        litellm_model_response: Union[ModelResponse, TextCompletionResponse],
+        litellm_model_response: ModelResponse | TextCompletionResponse,
         model: str,
         kwargs: dict,
         start_time: datetime,
@@ -119,7 +119,7 @@ class BasePassthroughLoggingHandler(ABC):
             # the pass-through success path reads spend from
             # model_call_details["response_cost"], not from kwargs
             logging_obj.model_call_details["response_cost"] = response_cost
-            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
+            passthrough_logging_payload: PassthroughStandardLoggingPayload | None = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
             )
             if passthrough_logging_payload:
@@ -159,10 +159,10 @@ class BasePassthroughLoggingHandler(ABC):
     @abstractmethod
     def _build_complete_streaming_response(
         self,
-        all_chunks: List[str],
+        all_chunks: list[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    ) -> ModelResponse | TextCompletionResponse | None:
         """
         Builds complete response from raw chunks
 
@@ -170,7 +170,6 @@ class BasePassthroughLoggingHandler(ABC):
         - Converts generic chunks to litellm chunks (OpenAI format)
         - Builds complete response from litellm chunks
         """
-        pass
 
     def _handle_logging_llm_collected_chunks(
         self,
@@ -180,7 +179,7 @@ class BasePassthroughLoggingHandler(ABC):
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        all_chunks: List[str],
+        all_chunks: list[str],
         end_time: datetime,
     ) -> PassThroughEndpointLoggingTypedDict:
         """

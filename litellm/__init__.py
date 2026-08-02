@@ -211,6 +211,9 @@ filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 )
+overwrite_user_with_key_hash: bool = (
+    False  # force the outgoing `user` param to the hashed api key, so providers see a stable, tamper-proof id
+)
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
@@ -446,6 +449,8 @@ enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
+prometheus_exclude_metrics: Optional[List[str]] = None
+prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
 # Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
 # `litellm_proxy_failed_requests_metric`. Off by default to preserve the

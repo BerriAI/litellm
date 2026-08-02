@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
-from typing import Any, Optional
+from typing import Any
 
 import httpx  # noqa: F401 - used at runtime (AsyncClient, HTTPStatusError)
 
@@ -94,7 +94,7 @@ class FocusVantageDestination(FocusDestination):
         self,
         *,
         prefix: str,
-        config: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         config = config or {}
         api_key = config.get("api_key")
@@ -173,7 +173,7 @@ class FocusVantageDestination(FocusDestination):
         header = lines[0]
         data_lines = [line for line in lines[1:] if line.strip()]
 
-        first_error: Optional[Exception] = None
+        first_error: Exception | None = None
         batch_num = 0
         for start in range(0, len(data_lines), VANTAGE_MAX_ROWS_PER_UPLOAD):
             batch_lines = data_lines[start : start + VANTAGE_MAX_ROWS_PER_UPLOAD]
@@ -214,7 +214,7 @@ class FocusVantageDestination(FocusDestination):
         current_size = len(header) + 1  # header + newline
         sub_batch = 0
         header_size = len(header) + 1
-        first_error: Optional[Exception] = None
+        first_error: Exception | None = None
 
         for line in data_lines:
             line_size = len(line) + 1  # line + newline

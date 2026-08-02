@@ -6,7 +6,7 @@ insert into SpendLogGuardrailIndex when spend logs are written.
 import json
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
@@ -16,7 +16,7 @@ from litellm.repositories.table_repositories import (
 )
 
 
-def _guardrail_status_to_action(status: Optional[str]) -> str:
+def _guardrail_status_to_action(status: str | None) -> str:
     """Map StandardLogging guardrail_status to blocked/passed/flagged."""
     if not status:
         return "passed"
@@ -28,7 +28,7 @@ def _guardrail_status_to_action(status: Optional[str]) -> str:
     return "passed"
 
 
-def _parse_guardrail_info_from_payload(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _parse_guardrail_info_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract guardrail_information from spend log payload metadata."""
     meta = payload.get("metadata")
     if not meta:
@@ -55,7 +55,7 @@ def _date_str(dt: datetime) -> str:
 
 async def process_spend_logs_guardrail_usage(
     prisma_client: PrismaClient,
-    logs_to_process: List[Dict[str, Any]],
+    logs_to_process: list[dict[str, Any]],
 ) -> None:
     """
     After spend logs are written: update DailyGuardrailMetrics and insert
@@ -64,7 +64,7 @@ async def process_spend_logs_guardrail_usage(
     if not logs_to_process:
         return
     # Aggregate daily metrics by (guardrail_id, date). Latency/score metrics dropped.
-    daily_guardrail: Dict[tuple, Dict[str, Any]] = defaultdict(
+    daily_guardrail: dict[tuple, dict[str, Any]] = defaultdict(
         lambda: {
             "requests_evaluated": 0,
             "passed_count": 0,
@@ -72,7 +72,7 @@ async def process_spend_logs_guardrail_usage(
             "flagged_count": 0,
         }
     )
-    index_rows: List[Dict[str, Any]] = []
+    index_rows: list[dict[str, Any]] = []
 
     for payload in logs_to_process:
         request_id = payload.get("request_id")

@@ -9,8 +9,9 @@ omits each feature's routes until the feature is warmed.
 import asyncio
 import importlib
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Dict, Tuple
+from typing import TYPE_CHECKING
 
 from starlette.types import Receive, Scope, Send
 
@@ -38,11 +39,11 @@ def _mount_app(prefix: str, attr_name: str = "app") -> Callable[["FastAPI", obje
 class LazyFeature:
     name: str
     module_path: str
-    path_prefixes: Tuple[str, ...]
+    path_prefixes: tuple[str, ...]
     register_fn: Callable[["FastAPI", object], None] = field(default_factory=lambda: _include_router("router"))
     # For routes whose path has a leading parameter (e.g. /{server}/authorize)
     # — startswith can't match those, so the matcher also checks endswith.
-    path_suffixes: Tuple[str, ...] = ()
+    path_suffixes: tuple[str, ...] = ()
     # Keep the stub injected even after load — for mounted ASGI sub-apps
     # whose routes don't appear in the parent app's openapi spec.
     persistent_swagger_stub: bool = False
@@ -51,7 +52,7 @@ class LazyFeature:
         return any(path.startswith(p) for p in self.path_prefixes) or any(path.endswith(s) for s in self.path_suffixes)
 
 
-LAZY_FEATURES: Tuple[LazyFeature, ...] = (
+LAZY_FEATURES: tuple[LazyFeature, ...] = (
     LazyFeature(
         name="guardrails",
         module_path="litellm.proxy.guardrails.guardrail_endpoints",
@@ -264,7 +265,7 @@ class LazyFeatureMiddleware:
         self,
         app,
         fastapi_app: "FastAPI",
-        features: Tuple[LazyFeature, ...] = LAZY_FEATURES,
+        features: tuple[LazyFeature, ...] = LAZY_FEATURES,
     ):
         self.app = app
         self._fastapi_app = fastapi_app
@@ -394,7 +395,7 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
     return router
 
 
-def inject_lazy_stubs(schema: Dict) -> Dict:
+def inject_lazy_stubs(schema: dict) -> dict:
     """Inject openapi entries for unloaded features. Uses the snapshot file
     when available (full route info), otherwise falls back to a single
     placeholder per feature. Any failure logs and returns the schema unchanged
@@ -433,7 +434,7 @@ def inject_lazy_stubs(schema: Dict) -> Dict:
     return schema
 
 
-def lazy_tag_to_prefix() -> Dict[str, str]:
+def lazy_tag_to_prefix() -> dict[str, str]:
     """feature.name -> first prefix, used by the Swagger warmup JS plugin.
     Returns empty when the snapshot is loaded — the plugin is unnecessary
     because /openapi.json already has full route info."""

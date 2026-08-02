@@ -22,13 +22,12 @@ import json
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
 from httpx import Response as HttpxResponse
-from typing_extensions import TypeGuard
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -47,6 +46,12 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.content_text import (
+    assistant_text_from_response,
+    content_to_text,
+    is_all_text_parts,
+    merge_rewritten_text_parts,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.integrations.custom_logger import (
@@ -144,48 +149,20 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isin
     return isinstance(value, list)
 
 
-def _content_to_text(content: object) -> str:
-    """Collapse a message ``content`` (str or list-of-parts) to plain text.
-
-    For the multimodal list shape, joins ``{type: "text", text: ...}`` parts
-    with blank-line separators; non-text parts are ignored.
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                text = part.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-        return "\n\n".join(parts)
-    return ""
-
-
 def _replace_text_in_content(content: object, new_text: str) -> object:
     """Write ``new_text`` back into a ``content`` value, preserving shape.
 
-    ``str`` content is replaced directly. For list-of-parts content the first
-    text part carries ``new_text``, later text parts are dropped, and
-    non-text parts (images, audio, files) pass through untouched.
+    ``str`` content is replaced directly. An all-text part list collapses to a
+    single part carrying the last declared cache_control breakpoint. Anything
+    else is returned unchanged: breakpoints are positional, so one compressed
+    string cannot be written back across a non-text part without moving text
+    to the other side of it.
     """
     if isinstance(content, str):
         return new_text
-    if isinstance(content, list):
-        out: list[object] = []
-        replaced = False
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                if not replaced:
-                    out.append({**part, "text": new_text})
-                    replaced = True
-                continue
-            out.append(part)
-        if not replaced:
-            out.insert(0, {"type": "text", "text": new_text})
-        return out
-    return new_text
+    if _is_object_list(content) and is_all_text_parts(content):
+        return merge_rewritten_text_parts(content, new_text)
+    return content
 
 
 def _render_tool_intent(fn: dict[str, object]) -> str:
@@ -414,47 +391,6 @@ def _is_anthropic_messages_response(response: object) -> bool:
     return isinstance(get_attribute_or_key(response, "content", None), list)
 
 
-def _assistant_text_from_response(response: object) -> str | None:
-    """The assistant's natural-language text from a model response, across chat,
-    Anthropic, and Responses shapes. Preserved when the turn is rebuilt for the
-    retrieval follow-up so the model's reasoning is not lost."""
-    choices = get_attribute_or_key(response, "choices", None)
-    if isinstance(choices, list) and choices:
-        message = get_attribute_or_key(choices[0], "message", None)
-        if message is not None:
-            text = _content_to_text(get_attribute_or_key(message, "content", None))
-            if text:
-                return text
-    content = get_attribute_or_key(response, "content", None)
-    if isinstance(content, list):
-        parts = [
-            text
-            for block in content
-            if get_attribute_or_key(block, "type", None) == "text"
-            for text in (get_attribute_or_key(block, "text", None),)
-            if isinstance(text, str) and text
-        ]
-        if parts:
-            return "".join(parts)
-    output = get_attribute_or_key(response, "output", None)
-    if isinstance(output, list):
-        parts = []
-        for item in output:
-            if get_attribute_or_key(item, "type", None) != "message":
-                continue
-            item_content = get_attribute_or_key(item, "content", None)
-            if not isinstance(item_content, list):
-                continue
-            for chunk in item_content:
-                if get_attribute_or_key(chunk, "type", None) == "output_text":
-                    text = get_attribute_or_key(chunk, "text", None)
-                    if isinstance(text, str) and text:
-                        parts.append(text)
-        if parts:
-            return "".join(parts)
-    return None
-
-
 def _build_assistant_message_from_response(
     response: object,
     retrieved: list[tuple[dict[str, object], str]],
@@ -469,7 +405,7 @@ def _build_assistant_message_from_response(
     """
     return {
         "role": "assistant",
-        "content": _assistant_text_from_response(response),
+        "content": assistant_text_from_response(response),
         "tool_calls": [
             {
                 "id": tool_call.get("id"),
@@ -493,7 +429,7 @@ def _build_anthropic_followup_messages(
     assistant text is preserved; non-retrieve tool calls are re-planned by the
     follow-up (see _build_assistant_message_from_response)."""
     assistant_content: list[dict[str, object]] = []
-    text = _assistant_text_from_response(response)
+    text = assistant_text_from_response(response)
     if text:
         assistant_content.append({"type": "text", "text": text})
     assistant_content.extend(
@@ -524,7 +460,7 @@ def _build_responses_followup_items(
     with a function_call_output keyed by the same call_id. The assistant text is
     preserved; non-retrieve tool calls are re-planned by the follow-up."""
     items: list[dict[str, object]] = []
-    text = _assistant_text_from_response(response)
+    text = assistant_text_from_response(response)
     if text:
         items.append({"role": "assistant", "content": text})
     for tool_call, content in retrieved:
@@ -905,7 +841,10 @@ class CompresrGuardrail(CustomGuardrail):
                     continue
             else:
                 continue
-            if len(_content_to_text(msg.get("content"))) < self.min_chars_to_compress:
+            content = msg.get("content")
+            if _is_object_list(content) and not is_all_text_parts(content):
+                continue
+            if len(content_to_text(content)) < self.min_chars_to_compress:
                 continue
             targets.append(idx)
         return targets
@@ -916,7 +855,7 @@ class CompresrGuardrail(CustomGuardrail):
     ) -> tuple[str, int | None]:
         for idx in range(len(messages) - 1, -1, -1):
             if messages[idx].get("role") == "user":
-                return _content_to_text(messages[idx].get("content")), idx
+                return content_to_text(messages[idx].get("content")), idx
         return "", None
 
     def _apply_compression_results(
@@ -1034,7 +973,7 @@ class CompresrGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Compresr: no messages eligible for compression")
             return inputs
 
-        contexts = [_content_to_text(messages[idx].get("content")) for idx in targets]
+        contexts = [content_to_text(messages[idx].get("content")) for idx in targets]
 
         start_time = time.monotonic()
         results = await self._call_compress(contexts=contexts, queries=queries)

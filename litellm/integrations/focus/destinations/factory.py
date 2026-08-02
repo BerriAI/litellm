@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .base import FocusDestination
 from .gcs_destination import FocusGCSDestination
-from .s3_destination import FocusS3Destination
 from .mavvrik_destination import FocusMavvrikDestination
+from .s3_destination import FocusS3Destination
 from .vantage_destination import FocusVantageDestination
 
 
@@ -20,7 +20,7 @@ class FocusDestinationFactory:
         *,
         provider: str,
         prefix: str,
-        config: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> FocusDestination:
         """Return a destination implementation for the requested provider."""
         provider_lower = provider.lower()
@@ -39,8 +39,8 @@ class FocusDestinationFactory:
     def _resolve_config(
         *,
         provider: str,
-        overrides: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        overrides: dict[str, Any],
+    ) -> dict[str, Any]:
         if provider == "s3":
             resolved = {
                 "bucket_name": overrides.get("bucket_name") or os.getenv("FOCUS_S3_BUCKET_NAME"),

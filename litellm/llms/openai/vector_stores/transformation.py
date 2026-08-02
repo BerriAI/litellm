@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
@@ -47,7 +47,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             "write": [("POST", "/vector_stores")],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
         headers.update(
@@ -71,7 +71,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -93,13 +93,13 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url = f"{api_base}/{encoded_vector_store_id}/search"
         typed_request_body = VectorStoreSearchRequest(
@@ -130,7 +130,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         url = api_base  # Base URL for creating vector stores
         metadata = vector_store_create_optional_params.get("metadata", None)
         metadata_payload = add_openai_metadata(metadata)

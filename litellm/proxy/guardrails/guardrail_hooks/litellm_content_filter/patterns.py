@@ -9,10 +9,11 @@ import json
 import os
 import re
 from enum import Enum
-from typing import Any, Dict, List, Pattern
+from re import Pattern
+from typing import Any
 
 
-def _load_patterns_from_json() -> Dict:
+def _load_patterns_from_json() -> dict:
     """Load pattern definitions from patterns.json file"""
     json_path = os.path.join(os.path.dirname(__file__), "patterns.json")
     with open(json_path, "r") as f:
@@ -26,8 +27,6 @@ _PATTERNS_DATA = _load_patterns_from_json()
 class PrebuiltPatternName(str, Enum):
     """Enum for prebuilt pattern names - dynamically generated from JSON"""
 
-    pass
-
 
 # Dynamically create enum values from JSON
 for pattern_data in _PATTERNS_DATA["patterns"]:
@@ -35,7 +34,7 @@ for pattern_data in _PATTERNS_DATA["patterns"]:
 
 
 # Build lookup dictionaries from JSON
-PREBUILT_PATTERNS: Dict[str, str] = {
+PREBUILT_PATTERNS: dict[str, str] = {
     pattern_data["name"]: pattern_data["pattern"] for pattern_data in _PATTERNS_DATA["patterns"]
 }
 
@@ -50,7 +49,7 @@ KNOWN_PATTERN_KEYS = {
     "description",
 }
 
-PATTERN_EXTRA_CONFIG: Dict[str, Dict[str, Any]] = {}
+PATTERN_EXTRA_CONFIG: dict[str, dict[str, Any]] = {}
 for pattern_data in _PATTERNS_DATA["patterns"]:
     extra_config = {key: value for key, value in pattern_data.items() if key not in KNOWN_PATTERN_KEYS}
     PATTERN_EXTRA_CONFIG[pattern_data["name"]] = extra_config
@@ -76,7 +75,7 @@ def get_compiled_pattern(pattern_name: str) -> Pattern:
     return re.compile(PREBUILT_PATTERNS[pattern_name], re.IGNORECASE)
 
 
-def get_all_pattern_names() -> List[str]:
+def get_all_pattern_names() -> list[str]:
     """
     Get a list of all available prebuilt pattern names.
 
@@ -87,7 +86,7 @@ def get_all_pattern_names() -> List[str]:
 
 
 # Build category mapping from JSON
-PATTERN_CATEGORIES: Dict[str, List[str]] = {}
+PATTERN_CATEGORIES: dict[str, list[str]] = {}
 for pattern_data in _PATTERNS_DATA["patterns"]:
     category = pattern_data["category"]
     if category not in PATTERN_CATEGORIES:
@@ -96,18 +95,18 @@ for pattern_data in _PATTERNS_DATA["patterns"]:
 
 
 # Build display names mapping from JSON
-PATTERN_DISPLAY_NAMES: Dict[str, str] = {
+PATTERN_DISPLAY_NAMES: dict[str, str] = {
     pattern_data["name"]: pattern_data["display_name"] for pattern_data in _PATTERNS_DATA["patterns"]
 }
 
 
 # Build descriptions mapping from JSON
-PATTERN_DESCRIPTIONS: Dict[str, str] = {
+PATTERN_DESCRIPTIONS: dict[str, str] = {
     pattern_data["name"]: pattern_data["description"] for pattern_data in _PATTERNS_DATA["patterns"]
 }
 
 
-def get_pattern_metadata() -> List[Dict[str, str]]:
+def get_pattern_metadata() -> list[dict[str, str]]:
     """
     Return pattern metadata for UI display.
 
@@ -125,7 +124,7 @@ def get_pattern_metadata() -> List[Dict[str, str]]:
     ]
 
 
-def get_available_content_categories() -> List[Dict[str, str]]:
+def get_available_content_categories() -> list[dict[str, str]]:
     """
     Return available content categories for UI display.
 
@@ -169,7 +168,7 @@ def get_available_content_categories() -> List[Dict[str, str]]:
                 # Skip files that can't be loaded but log the error for debugging
                 from litellm._logging import verbose_proxy_logger
 
-                verbose_proxy_logger.warning(f"Failed to load category file {filename}: {str(e)}")
+                verbose_proxy_logger.warning(f"Failed to load category file {filename}: {e!s}")
                 continue
         elif filename.endswith(".json"):
             # JSON category files (e.g. harm_toxic_abuse.json) - no YAML header, use filename

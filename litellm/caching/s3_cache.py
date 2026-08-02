@@ -11,9 +11,8 @@ Has 4 methods:
 import ast
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Optional
-from datetime import datetime, timezone, timedelta
 
 from litellm._logging import print_verbose, verbose_logger
 
@@ -26,7 +25,7 @@ class S3Cache(BaseCache):
         s3_bucket_name,
         s3_region_name=None,
         s3_api_version=None,
-        s3_use_ssl: Optional[bool] = True,
+        s3_use_ssl: bool | None = True,
         s3_verify=None,
         s3_endpoint_url=None,
         s3_aws_access_key_id=None,
