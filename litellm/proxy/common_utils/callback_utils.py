@@ -44,10 +44,67 @@ reset_color_code = "\033[0m"
 TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY = "_pillar_response_headers_trusted"
 
 if TYPE_CHECKING:
+    from litellm.integrations.code_interpreter_interception.handler import (
+        CodeInterpreterInterceptionLogger,
+    )
+    from litellm.integrations.compression_interception.handler import (
+        CompressionInterceptionLogger,
+    )
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    ConfigParameterizedLoggerClass = (
+        type[CompressionInterceptionLogger]
+        | type[CodeInterpreterInterceptionLogger]
+        | type[WebSearchInterceptionLogger]
+    )
 
 
 _NO_CALLBACK_SPECIFIC_PARAMS: Mapping[str, Any] = MappingProxyType({})
+CONFIG_PARAMETERIZED_CALLBACKS: frozenset[str] = frozenset(
+    {
+        "compression_interception",
+        "code_interpreter_interception",
+        "websearch_interception",
+    }
+)
+
+
+def config_parameterized_logger_class(callback: str) -> "ConfigParameterizedLoggerClass | None":
+    """
+    The logger class for callbacks whose construction needs config params.
+
+    These callbacks cannot be resolved through ``_init_custom_logger_compatible_class``
+    because that factory takes no config, so every callsite that turns one of these
+    names into a logger has to come through here.
+
+    Returns ``None`` when ``callback`` is not one of them, so callers fall through to
+    their own generic resolution. The names it answers to are
+    ``CONFIG_PARAMETERIZED_CALLBACKS``.
+    """
+    match callback:
+        case "compression_interception":
+            from litellm.integrations.compression_interception.handler import (
+                CompressionInterceptionLogger,
+            )
+
+            return CompressionInterceptionLogger
+        case "code_interpreter_interception":
+            from litellm.integrations.code_interpreter_interception.handler import (
+                CodeInterpreterInterceptionLogger,
+            )
+
+            return CodeInterpreterInterceptionLogger
+        case "websearch_interception":
+            from litellm.integrations.websearch_interception.handler import (
+                WebSearchInterceptionLogger,
+            )
+
+            return WebSearchInterceptionLogger
+        case _:
+            return None
 
 
 def resolve_config_parameterized_callback(
@@ -56,46 +113,18 @@ def resolve_config_parameterized_callback(
     callback_specific_params: Mapping[str, Any] | None = None,
 ) -> CustomLogger | None:
     """
-    Build the ``CustomLogger`` for callbacks whose construction needs config params.
+    Build the ``CustomLogger`` for a config-parameterized callback from its config params.
 
-    These callbacks cannot be resolved through ``_init_custom_logger_compatible_class``
-    because that factory takes no config, so every callsite that turns a callback name
-    into a logger has to come through here.
-
-    Returns ``None`` when ``callback`` is not one of them, so callers fall through to
-    their own generic resolution.
+    Returns ``None`` when ``callback`` is not one of them.
     """
-    callback_params = callback_specific_params or _NO_CALLBACK_SPECIFIC_PARAMS
-    match callback:
-        case "compression_interception":
-            from litellm.integrations.compression_interception.handler import (
-                CompressionInterceptionLogger,
-            )
+    logger_class = config_parameterized_logger_class(callback)
+    if logger_class is None:
+        return None
 
-            return CompressionInterceptionLogger.initialize_from_proxy_config(
-                litellm_settings=litellm_settings,
-                callback_specific_params=callback_params,
-            )
-        case "code_interpreter_interception":
-            from litellm.integrations.code_interpreter_interception.handler import (
-                CodeInterpreterInterceptionLogger,
-            )
-
-            return CodeInterpreterInterceptionLogger.initialize_from_proxy_config(
-                litellm_settings=litellm_settings,
-                callback_specific_params=callback_params,
-            )
-        case "websearch_interception":
-            from litellm.integrations.websearch_interception.handler import (
-                WebSearchInterceptionLogger,
-            )
-
-            return WebSearchInterceptionLogger.initialize_from_proxy_config(
-                litellm_settings=litellm_settings,
-                callback_specific_params=callback_params,
-            )
-        case _:
-            return None
+    return logger_class.initialize_from_proxy_config(
+        litellm_settings=litellm_settings,
+        callback_specific_params=callback_specific_params or _NO_CALLBACK_SPECIFIC_PARAMS,
+    )
 
 
 def _callback_config_state(logger: CustomLogger) -> tuple[tuple[str, object], ...]:
@@ -144,6 +173,29 @@ def install_config_parameterized_callback(
 
     litellm.logging_callback_manager.add_litellm_callback(resolved)
     return True
+
+
+def uninstall_deconfigured_parameterized_callbacks(configured_callbacks: Iterable[object]) -> None:
+    """
+    Drop config-parameterized loggers whose callback name is no longer configured.
+
+    The DB-config path re-runs on every poll and only visits the names the config
+    still lists, so without this an operator who removes ``websearch_interception``
+    from ``litellm_settings.callbacks`` would keep paying for interception until the
+    proxy restarts. Call it only with a callbacks list the config actually produced;
+    a failed config load must not be read as "nothing is configured".
+    """
+    configured = frozenset(name for name in configured_callbacks if isinstance(name, str))
+    for callback in CONFIG_PARAMETERIZED_CALLBACKS - configured:
+        logger_class = config_parameterized_logger_class(callback)
+        if logger_class is None:
+            continue
+        for installed in tuple(existing for existing in litellm.callbacks if isinstance(existing, logger_class)):
+            verbose_proxy_logger.info(
+                "%s no longer configured; removing its callback from litellm.callbacks",
+                callback,
+            )
+            litellm.logging_callback_manager.remove_callback_from_all_lists(installed)
 
 
 def initialize_callbacks_on_proxy(

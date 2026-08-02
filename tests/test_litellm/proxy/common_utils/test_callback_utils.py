@@ -10,8 +10,11 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
+    CONFIG_PARAMETERIZED_CALLBACKS,
     add_policy_to_applied_policies_header,
+    config_parameterized_logger_class,
     decrypt_callback_vars,
+    uninstall_deconfigured_parameterized_callbacks,
     encrypt_callback_vars,
     get_logging_caching_headers,
     initialize_callbacks_on_proxy,
@@ -313,6 +316,32 @@ def test_initialize_callbacks_on_proxy_instantiates_websearch_interception_with_
     assert installed[0].search_tool_name == "tavily-search"
     assert installed[0].enabled_providers == ["bedrock"]
     assert "websearch_interception" not in litellm.callbacks
+
+
+def test_every_config_parameterized_callback_name_resolves_to_a_logger_class():
+    resolved = {name: config_parameterized_logger_class(name) for name in CONFIG_PARAMETERIZED_CALLBACKS}
+
+    assert all(cls is not None for cls in resolved.values()), resolved
+    assert len({id(cls) for cls in resolved.values()}) == len(CONFIG_PARAMETERIZED_CALLBACKS)
+
+
+def test_uninstall_deconfigured_parameterized_callbacks_keeps_still_configured_logger(
+    monkeypatch,
+):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+    install_config_parameterized_callback(
+        callback="websearch_interception",
+        litellm_settings={"websearch_interception_params": {"search_tool_name": "tavily-search"}},
+    )
+
+    uninstall_deconfigured_parameterized_callbacks(["websearch_interception", "langfuse"])
+
+    installed = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    assert len(installed) == 1
 
 
 def test_install_config_parameterized_callback_ignores_unrelated_callbacks(monkeypatch):

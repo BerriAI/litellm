@@ -298,6 +298,7 @@ from litellm.proxy.common_request_processing import (
 from litellm.proxy.common_utils.callback_utils import (
     initialize_callbacks_on_proxy,
     install_config_parameterized_callback,
+    uninstall_deconfigured_parameterized_callbacks,
 )
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
@@ -5588,6 +5589,7 @@ class ProxyConfig:
                     event_types=["success", "failure"],
                     existing_callbacks=litellm.callbacks,
                 )
+            uninstall_deconfigured_parameterized_callbacks(callbacks)
 
     def _encrypt_env_variables(self, environment_variables: dict, new_encryption_key: str | None = None) -> dict:
         """

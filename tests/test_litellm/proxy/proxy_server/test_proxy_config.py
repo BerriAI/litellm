@@ -1986,6 +1986,65 @@ def test_ProxyConfig__add_callbacks_from_db_config_replaces_logger_when_params_c
     assert snapshot == {"instance_count": 1, **expected}
 
 
+def test_ProxyConfig__add_callbacks_from_db_config_uninstalls_logger_when_callback_removed(
+    monkeypatch,
+):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    installed_before = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"callbacks": ["some_other_callback"]}})
+
+    remaining_anywhere = [
+        cb
+        for callback_list in (
+            litellm.callbacks,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        )
+        for cb in callback_list
+        if isinstance(cb, WebSearchInterceptionLogger)
+    ]
+    snapshot = {
+        "installed_before": len(installed_before),
+        "remaining_anywhere": len(remaining_anywhere),
+    }
+    assert snapshot == {"installed_before": 1, "remaining_anywhere": 0}
+
+
+@pytest.mark.parametrize(
+    "config_without_callbacks",
+    [
+        {},
+        {"litellm_settings": {}},
+        {"litellm_settings": {"success_callback": ["langfuse"]}},
+    ],
+)
+def test_ProxyConfig__add_callbacks_from_db_config_keeps_logger_when_config_omits_callbacks(
+    monkeypatch, config_without_callbacks
+):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    pc._add_callbacks_from_db_config(config_without_callbacks)
+
+    installed = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    assert len(installed) == 1
+
+
 def test_ProxyConfig__add_callbacks_from_db_config_bad_config_raises():
     pc = ProxyConfig()
     with pytest.raises(AttributeError):
