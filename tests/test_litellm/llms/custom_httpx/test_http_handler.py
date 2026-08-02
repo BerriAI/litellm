@@ -678,7 +678,17 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
 # Amazon Nova's direct API (api.nova.amazon.com) returns
 # `content-encoding: zstd` for streaming SSE as independent frames, which made
 # amazon_nova streaming fail 100% of the time. gzip/deflate/br are unaffected.
+#
+# The advertised set is derived from httpx's own capability-aware decoder
+# registry so that optional codecs (br, zstd) are only offered when their
+# decoder is actually installed - advertising `br` without a Brotli decoder
+# would hand undecoded bytes to downstream parsing.
 # ---------------------------------------------------------------------------
+
+
+def _decoder_registry(*encodings):
+    """A stand-in for httpx's SUPPORTED_DECODERS with a chosen capability set."""
+    return {name: object() for name in ("identity", *encodings)}
 
 
 def test_default_accept_encoding_excludes_zstd(monkeypatch):
@@ -702,8 +712,122 @@ def test_default_accept_encoding_still_offers_other_compression(monkeypatch):
 
     accept_encoding = get_default_headers()["Accept-Encoding"]
 
+    assert "gzip" in accept_encoding
     assert "deflate" in accept_encoding
+
+
+def test_accept_encoding_advertises_brotli_when_decoder_is_available(monkeypatch):
+    """br is offered when the installed HTTP stack can decode it."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate", "br", "zstd"),
+    )
+
+    accept_encoding = get_default_headers()["Accept-Encoding"]
+
     assert "br" in accept_encoding
+    assert "zstd" not in accept_encoding
+
+
+def test_accept_encoding_omits_brotli_when_decoder_is_unavailable(monkeypatch):
+    """br must NOT be advertised without a Brotli decoder.
+
+    httpx pops "br" from SUPPORTED_DECODERS when neither brotli nor brotlicffi
+    is importable. Advertising it anyway would let a server return Brotli that
+    nothing can decode, handing compressed bytes to text/JSON parsing.
+    """
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate", "zstd"),
+    )
+
+    accept_encoding = get_default_headers()["Accept-Encoding"]
+
+    assert "br" not in accept_encoding
+    assert "zstd" not in accept_encoding
+    assert "gzip" in accept_encoding
+
+
+def test_accept_encoding_excludes_zstd_even_when_decoder_is_installed(monkeypatch):
+    """zstd is never advertised, precisely because its decoder is the broken one."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate", "br", "zstd"),
+    )
+
+    assert "zstd" not in get_default_headers()["Accept-Encoding"]
+
+
+def test_accept_encoding_when_zstd_decoder_is_not_installed(monkeypatch):
+    """With zstandard absent httpx already drops zstd; the result is unchanged."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate", "br"),
+    )
+
+    assert get_default_headers()["Accept-Encoding"] == "gzip, deflate, br"
+
+
+def test_accept_encoding_with_no_optional_decoders(monkeypatch):
+    """Neither br nor zstd available: fall back to the always-present codecs."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        httpx._decoders,
+        "SUPPORTED_DECODERS",
+        _decoder_registry("gzip", "deflate"),
+    )
+
+    assert get_default_headers()["Accept-Encoding"] == "gzip, deflate"
+
+
+def test_accept_encoding_falls_back_when_registry_cannot_be_read(monkeypatch):
+    """A private-symbol change upstream must not break header construction."""
+    import httpx._decoders
+
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_ACCEPT_ENCODING", raising=False)
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+    monkeypatch.delattr(httpx._decoders, "SUPPORTED_DECODERS", raising=False)
+
+    accept_encoding = get_default_headers()["Accept-Encoding"]
+
+    assert "gzip" in accept_encoding
+    assert "deflate" in accept_encoding
+    assert "zstd" not in accept_encoding
 
 
 def test_accept_encoding_can_be_overridden_via_env_var(monkeypatch):

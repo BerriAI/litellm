@@ -33,8 +33,9 @@ from litellm.constants import (
     AIOHTTP_TCP_KEEPINTVL,
     AIOHTTP_TTL_DNS_CACHE,
     COMPLETION_HTTP_FALLBACK_SECONDS,
-    DEFAULT_ACCEPT_ENCODING,
     DEFAULT_SSL_CIPHERS,
+    EXCLUDED_ACCEPT_ENCODINGS,
+    FALLBACK_ACCEPT_ENCODINGS,
     HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -101,6 +102,30 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[tuple[Any, ...]], soc
     return factory
 
 
+def _supported_accept_encodings() -> tuple[str, ...]:
+    """Content encodings this installation can actually decode, minus `zstd`.
+
+    Mirrors how httpx builds its own ``Accept-Encoding``: its
+    ``SUPPORTED_DECODERS`` registry drops ``br`` when neither ``brotli`` nor
+    ``brotlicffi`` is importable, and drops ``zstd`` when ``zstandard`` is
+    absent. Deriving from it keeps the advertised set capability-aware, so we
+    never ask a server for a codec nothing here can decode - advertising ``br``
+    without a Brotli decoder would hand compressed bytes to downstream text or
+    JSON parsing.
+
+    ``zstd`` is then removed unconditionally: it is the codec whose decoder is
+    broken for multi-frame streams (see ``get_default_headers``).
+    """
+    try:
+        from httpx._decoders import SUPPORTED_DECODERS
+
+        encodings: tuple[str, ...] = tuple(name for name in SUPPORTED_DECODERS if name != "identity")
+    except Exception:  # pragma: no cover - private httpx symbol moved or renamed
+        encodings = FALLBACK_ACCEPT_ENCODINGS
+
+    return tuple(name for name in encodings if name not in EXCLUDED_ACCEPT_ENCODINGS)
+
+
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
@@ -108,11 +133,12 @@ def get_default_headers() -> dict:
     - Default: `User-Agent: litellm/{version}`
     - Override: set `LITELLM_USER_AGENT` to fully override the header value.
 
-    `Accept-Encoding` deliberately omits `zstd`. httpx's ``ZStandardDecoder``
-    resets its decompressor only when ``unused_data`` is non-empty within the
-    same ``decode()`` call, so a streamed response that delivers exactly one
-    complete zstd frame per network chunk leaves the decompressor at ``eof``
-    with no leftover bytes, and the next chunk raises
+    `Accept-Encoding` is derived from the decoders this installation actually
+    has, minus `zstd`. httpx's ``ZStandardDecoder`` resets its decompressor only
+    when ``unused_data`` is non-empty within the same ``decode()`` call, so a
+    streamed response that delivers exactly one complete zstd frame per network
+    chunk leaves the decompressor at ``eof`` with no leftover bytes, and the
+    next chunk raises
     ``httpx.DecodingError: cannot use a decompressobj multiple times``.
     Amazon Nova's direct API streams SSE as independent zstd frames, which made
     every `amazon_nova` streaming request fail. gzip/deflate/br are unaffected,
@@ -120,7 +146,7 @@ def get_default_headers() -> dict:
 
     - Override: set `LITELLM_ACCEPT_ENCODING` (e.g. `identity`) to change it.
     """
-    accept_encoding = os.environ.get("LITELLM_ACCEPT_ENCODING", DEFAULT_ACCEPT_ENCODING)
+    accept_encoding = os.environ.get("LITELLM_ACCEPT_ENCODING", ", ".join(_supported_accept_encodings()))
 
     user_agent = os.environ.get("LITELLM_USER_AGENT")
     if user_agent is not None:
