@@ -6132,8 +6132,10 @@ class Router:
         if include_fallback_errors:
             input_kwargs["include_fallback_errors"] = True
 
+        from litellm.exceptions import MidStreamFallbackError
+
         remaining_fallback_model_groups: tuple[str, ...] | None = kwargs.get("_remaining_fallback_model_groups")
-        if remaining_fallback_model_groups is not None:
+        if isinstance(e, MidStreamFallbackError) and remaining_fallback_model_groups is not None:
             response = await run_async_fallback(
                 *args,
                 **input_kwargs,
