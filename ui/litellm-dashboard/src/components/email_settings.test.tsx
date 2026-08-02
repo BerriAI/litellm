@@ -22,7 +22,12 @@ const alerts = [
     variables: {
       SMTP_HOST: "smtp.example.com",
       SMTP_PORT: "587",
+      SMTP_TLS: "True",
+      SMTP_USE_SSL: "False",
+      SMTP_USERNAME: "smtp-user",
       SMTP_PASSWORD: "********",
+      SMTP_SENDER_EMAIL: "alerts@example.com",
+      TEST_EMAIL_ADDRESS: "admin@example.com",
       EMAIL_LOGO_URL: "https://example.com/logo.png",
     },
   },
@@ -53,7 +58,15 @@ describe("EmailSettings", () => {
 
     expect(inputNamed("SMTP_HOST")).toHaveValue("smtp.example.com");
     expect(inputNamed("SMTP_PORT")).toHaveValue("587");
+    expect(inputNamed("SMTP_PORT")).toHaveAttribute("type", "number");
+    expect(inputNamed("SMTP_HOST")).toHaveAttribute("type", "text");
+    expect(inputNamed("SMTP_TLS")).toHaveAttribute("type", "text");
+    expect(inputNamed("SMTP_USE_SSL")).toHaveAttribute("type", "text");
+    expect(inputNamed("SMTP_USERNAME")).toHaveAttribute("type", "text");
     expect(inputNamed("SMTP_PASSWORD")).toHaveValue("********");
+    expect(inputNamed("SMTP_SENDER_EMAIL")).toHaveAttribute("type", "text");
+    expect(inputNamed("TEST_EMAIL_ADDRESS")).toHaveAttribute("type", "text");
+    expect(inputNamed("EMAIL_LOGO_URL")).toHaveAttribute("type", "text");
     expect(document.querySelector('input[name="SLACK_WEBHOOK_URL"]')).toBeNull();
   });
 
@@ -63,6 +76,21 @@ describe("EmailSettings", () => {
     expect(screen.getByText("SMTP_HOST")).toBeInTheDocument();
     expect(screen.getByText(/Enter the SMTP host address/)).toBeInTheDocument();
     expect(screen.getByText(/Enter the SMTP port number/)).toBeInTheDocument();
+    expect(screen.getByText(/Optional SMTP username/)).toBeInTheDocument();
+    expect(screen.getByText(/Optional SMTP password/)).toBeInTheDocument();
+  });
+
+  it("only requires the SMTP host and sender email", () => {
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
+
+    expect(inputNamed("SMTP_HOST")).toBeRequired();
+    expect(inputNamed("SMTP_SENDER_EMAIL")).toBeRequired();
+    expect(inputNamed("SMTP_PORT")).not.toBeRequired();
+    expect(inputNamed("SMTP_TLS")).not.toBeRequired();
+    expect(inputNamed("SMTP_USE_SSL")).not.toBeRequired();
+    expect(inputNamed("SMTP_USERNAME")).not.toBeRequired();
+    expect(inputNamed("SMTP_PASSWORD")).not.toBeRequired();
+    expect(inputNamed("TEST_EMAIL_ADDRESS")).not.toBeRequired();
   });
 
   it("submits only the fields the admin actually edited", async () => {

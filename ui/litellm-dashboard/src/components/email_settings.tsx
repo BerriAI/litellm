@@ -14,13 +14,22 @@ interface EmailSettingsProps {
 
 const REQUIRED_MARKER = <span className="text-destructive"> Required * </span>;
 
+const REQUIRED_FIELDS = new Set(["SMTP_HOST", "SMTP_SENDER_EMAIL"]);
+
+const FIELD_TYPES: Record<string, React.HTMLInputTypeAttribute> = {
+  SMTP_PORT: "number",
+  SMTP_PASSWORD: "password",
+};
+
 const FIELD_HELP: Record<string, React.ReactNode> = {
   SMTP_HOST: <>Enter the SMTP host address, e.g. `smtp.resend.com`{REQUIRED_MARKER}</>,
-  SMTP_PORT: <>Enter the SMTP port number, e.g. `587`{REQUIRED_MARKER}</>,
-  SMTP_USERNAME: <>Enter the SMTP username, e.g. `username`{REQUIRED_MARKER}</>,
-  SMTP_PASSWORD: REQUIRED_MARKER,
+  SMTP_PORT: <>Enter the SMTP port number, e.g. `587`</>,
+  SMTP_TLS: <>Use STARTTLS for the SMTP connection. Defaults to `True`</>,
+  SMTP_USE_SSL: <>Use implicit SSL for the SMTP connection. Defaults to `False`</>,
+  SMTP_USERNAME: <>Optional SMTP username for authenticated servers</>,
+  SMTP_PASSWORD: <>Optional SMTP password for authenticated servers</>,
   SMTP_SENDER_EMAIL: <>Enter the sender email address, e.g. `sender@berri.ai`{REQUIRED_MARKER}</>,
-  TEST_EMAIL_ADDRESS: <>Email Address to send `Test Email Alert` to. example: `info@berri.ai`{REQUIRED_MARKER}</>,
+  TEST_EMAIL_ADDRESS: <>Optional address for the `Test Email Alert` action</>,
   EMAIL_LOGO_URL: <>(Optional) Customize the Logo that appears in the email, pass a url to your logo</>,
   EMAIL_SUPPORT_CONTACT: (
     <>(Optional) Customize the support email address that appears in the email. Default is support@berri.ai</>
@@ -115,8 +124,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                       )}
                       <Input
                         name={key}
-                        defaultValue={value as string}
-                        type="password"
+                        defaultValue={value as string | undefined}
+                        type={FIELD_TYPES[key] ?? "text"}
+                        required={REQUIRED_FIELDS.has(key)}
                         disabled={isLocked}
                         className="max-w-100"
                       />
