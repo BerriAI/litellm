@@ -1873,6 +1873,73 @@ async def test_acompletion_streaming_iterator():
 
 
 @pytest.mark.asyncio
+async def test_midstream_failure_from_fallback_continues_remaining_chain():
+    from litellm.router_utils.fallback_event_handlers import run_async_fallback
+
+    router = litellm.Router(
+        model_list=[],
+        fallbacks=[{"pool-free": ["fallback-one", "fallback-two"]}],
+    )
+    midstream_error = MidStreamFallbackError(
+        message="fallback-one stream failed",
+        model="fallback-one",
+        llm_provider="openai",
+        generated_content="partial",
+    )
+
+    class BrokenFallbackStream:
+        model = "fallback-one"
+        custom_llm_provider = "openai"
+        logging_obj = MagicMock()
+        chunks: list = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise midstream_error
+
+    async def successful_fallback_stream():
+        yield "fallback-two"
+
+    dispatched_model_groups: list[str] = []
+
+    async def dispatch_fallback(*args, **kwargs):
+        model_group = kwargs["model"]
+        dispatched_model_groups.append(model_group)
+        if model_group == "fallback-one":
+            return await router._acompletion_streaming_iterator(
+                model_response=BrokenFallbackStream(),
+                messages=kwargs["messages"],
+                initial_kwargs=dict(kwargs),
+            )
+        return successful_fallback_stream()
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks",
+        side_effect=dispatch_fallback,
+    ):
+        response = await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["fallback-one", "fallback-two"],
+            original_model_group="pool-free",
+            original_exception=Exception("primary failed"),
+            max_fallbacks=5,
+            fallback_depth=0,
+            messages=[{"role": "user", "content": "hello"}],
+            metadata={},
+            original_function=router._acompletion,
+            stream=True,
+            fallbacks=[{"pool-free": ["fallback-one", "fallback-two"]}],
+        )
+        chunks = [chunk async for chunk in response]
+
+    assert dispatched_model_groups == ["fallback-one", "fallback-two"]
+    assert chunks == ["fallback-two"]
+
+
+@pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_edge_cases():
     """Test edge cases for _acompletion_streaming_iterator."""
     from unittest.mock import MagicMock
