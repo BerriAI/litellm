@@ -1611,6 +1611,12 @@ def client(original_function):
                         chunks.append(chunk)
                     return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else:
+                    if call_type == CallTypes.transcription.value and isinstance(result, openai.Stream):
+                        from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+                            wrap_transcription_stream,
+                        )
+
+                        result = wrap_transcription_stream(result, logging_obj, start_time)
                     # RETURN RESULT
                     update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
                     update_response_metadata(
@@ -1893,6 +1899,12 @@ def client(original_function):
                         chunks.append(chunk)
                     return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else:
+                    if call_type == CallTypes.atranscription.value and isinstance(result, openai.AsyncStream):
+                        from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+                            wrap_transcription_stream,
+                        )
+
+                        result = wrap_transcription_stream(result, logging_obj, start_time)
                     _update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
@@ -3210,10 +3222,13 @@ def get_optional_params_transcription(
     model: str,
     custom_llm_provider: str,
     language: str | None = None,
+    languages: Sequence[str] | None = None,
+    keywords: Sequence[str] | None = None,
     prompt: str | None = None,
     response_format: str | None = None,
     temperature: int | None = None,
     timestamp_granularities: list[Literal["word", "segment"]] | None = None,
+    stream: bool | None = None,
     drop_params: bool | None = None,
     **kwargs,
 ):
@@ -3223,6 +3238,7 @@ def get_optional_params_transcription(
     passed_params: Final = locals()
 
     passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
+    passed_params.pop("model")
     custom_llm_provider = passed_params.pop("custom_llm_provider")
     drop_params = passed_params.pop("drop_params")
     special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
@@ -3231,10 +3247,13 @@ def get_optional_params_transcription(
 
     default_params: Final = {
         "language": None,
+        "languages": None,
+        "keywords": None,
         "prompt": None,
         "response_format": None,
         "temperature": None,  # openai defaults this to 0
         "timestamp_granularities": None,
+        "stream": None,
     }
 
     non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
@@ -3291,6 +3310,9 @@ def get_optional_params_transcription(
         openai_params=OPENAI_TRANSCRIPTION_PARAMS,
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
+    extra_body = optional_params.get("extra_body")
+    if isinstance(extra_body, dict) and not extra_body:
+        optional_params.pop("extra_body")
 
     return optional_params
 
@@ -8528,7 +8550,13 @@ class ProviderConfigManager:
 
             return ElevenLabsAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
-            if "gpt-4o" in model:
+            if model == "gpt-transcribe":
+                from litellm.llms.openai.transcriptions.gpt_transformation import (
+                    OpenAIGPTTranscribeAudioTranscriptionConfig,
+                )
+
+                return OpenAIGPTTranscribeAudioTranscriptionConfig()
+            elif "gpt-4o" in model:
                 return litellm.OpenAIGPTAudioTranscriptionConfig()
             else:
                 return litellm.OpenAIWhisperAudioTranscriptionConfig()

@@ -63,6 +63,12 @@ class BaseRealtimeHTTPConfig(ABC):
         base = base.removesuffix("/v1")
         return f"{base}/v1/realtime/transcription_sessions"
 
+    def get_translation_client_secret_url(
+        self, api_base: str | None, model: str, api_version: str | None = None
+    ) -> str:
+        base = (api_base or "").rstrip("/")
+        return f"{base}/v1/realtime/translations/client_secrets"
+
     @abstractmethod
     def validate_environment(
         self,
@@ -85,6 +91,10 @@ class BaseRealtimeHTTPConfig(ABC):
         """Return the full URL for POST /realtime/calls (SDP exchange)."""
         base: Final = (api_base or "").rstrip("/")
         return f"{base}/v1/realtime/calls"
+
+    def get_translation_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+        base = (api_base or "").rstrip("/")
+        return f"{base}/v1/realtime/translations/calls"
 
     def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
         """
