@@ -198,6 +198,55 @@ async def test_azure_text_moderation_violation_in_chunk():
 
 
 @pytest.mark.asyncio
+async def test_azure_text_moderation_blocklist_match_is_rejected():
+    azure_text_moderation_guardrail = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+        blocklistNames=["blocked-terms"],
+        haltOnBlocklistHit=True,
+    )
+    mock_response = Mock()
+    mock_response.json.return_value = {
+        "blocklistsMatch": [
+            {
+                "blocklistName": "blocked-terms",
+                "blocklistItemId": "item-1",
+                "blocklistItemText": "blocked phrase",
+            }
+        ],
+        "categoriesAnalysis": [],
+    }
+
+    with patch.object(
+        azure_text_moderation_guardrail.async_handler,
+        "post",
+        return_value=mock_response,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await azure_text_moderation_guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="azure_text_moderation_api_key"
+                ),
+                cache=None,
+                data={
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "contains a blocked phrase",
+                        }
+                    ]
+                },
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {
+        "error": "Azure Content Safety Guardrail: Blocklist match detected"
+    }
+
+
+@pytest.mark.asyncio
 async def test_azure_text_moderation_guardrail_post_call_success_hook():
 
     azure_text_moderation_guardrail = AzureContentSafetyTextModerationGuardrail(
