@@ -338,6 +338,99 @@ class TestDarkbloom:
             assert model_cost[model]["output_cost_per_token"] == output_cost
 
 
+class TestAvalAI:
+    def test_avalai_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        avalai = JSONProviderRegistry.get("avalai")
+        assert avalai is not None
+        assert avalai.base_url == "https://api.avalai.ir/v1"
+        assert avalai.api_key_env == "AVALAI_API_KEY"
+        assert avalai.api_base_env == "AVALAI_API_BASE"
+
+    def test_avalai_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="avalai/gpt-4o",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "gpt-4o"
+        assert provider == "avalai"
+        assert api_key is None
+        assert api_base == "https://api.avalai.ir/v1"
+
+    def test_avalai_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("avalai")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://api.avalai.ir/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://custom.avalai.ir/v1", "test-key"
+        )
+        assert api_base == "https://custom.avalai.ir/v1"
+        assert api_key == "test-key"
+
+    def test_avalai_complete_url_appends_endpoint(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("avalai")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        url = config.get_complete_url(
+            api_base="https://api.avalai.ir/v1",
+            api_key="test-key",
+            model="avalai/gpt-4o",
+            optional_params={},
+            litellm_params={},
+            stream=True,
+        )
+
+        assert url == "https://api.avalai.ir/v1/chat/completions"
+
+    def test_avalai_provider_config_manager(self):
+        from litellm import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="gpt-4o", provider=LlmProviders.AVALAI
+        )
+
+        assert config is not None
+        assert config.custom_llm_provider == "avalai"
+
+    def test_avalai_model_cost_map(self):
+        with open(
+            os.path.join(workspace_path, "model_prices_and_context_window.json")
+        ) as f:
+            model_cost = json.load(f)
+
+        expected_models = (
+            "avalai/gpt-4o",
+            "avalai/gpt-4o-mini",
+            "avalai/gpt-4.1",
+            "avalai/claude-sonnet-4-5",
+            "avalai/gemini-2.5-flash",
+        )
+        for model in expected_models:
+            assert model in model_cost
+            assert model_cost[model]["litellm_provider"] == "avalai"
+            assert model_cost[model]["mode"] == "chat"
+            assert model_cost[model]["supports_function_calling"] is True
+            assert model_cost[model]["supports_tool_choice"] is True
+
+
 class TestPublicAIIntegration:
     """Integration tests for PublicAI provider"""
 
