@@ -6,10 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from openai import AsyncOpenAI, AsyncStream
+from openai import AsyncOpenAI, AsyncStream, AzureOpenAI
 
 import litellm
 from litellm.llms.azure.audio_transcriptions import AzureAudioTranscription
+from litellm.main import _validate_gpt_transcription_request
 from litellm.llms.openai.transcriptions.gpt_transformation import (
     OpenAIGPTTranscribeAudioTranscriptionConfig,
 )
@@ -226,3 +227,71 @@ def test_azure_async_gpt_transcribe_forwards_v1_api_version():
     )
 
     assert handler.async_audio_transcriptions.call_args.kwargs["api_version"] == "v1"
+
+
+@pytest.mark.parametrize("api_version", [None, "v1", "latest", "preview"])
+def test_azure_gpt_transcribe_uses_deployment_scoped_api_version(api_version: str | None):
+    resolved_api_version = _validate_gpt_transcription_request(
+        model="gpt-transcribe",
+        custom_llm_provider="azure",
+        language=None,
+        languages=None,
+        response_format="json",
+        api_version=api_version,
+    )
+
+    assert resolved_api_version == litellm.AZURE_DEFAULT_API_VERSION
+
+
+def test_azure_gpt_transcribe_uses_deployment_scoped_route():
+    def send_response(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == (
+            "https://example.openai.azure.com/openai/deployments/gpt-transcribe/audio/transcriptions"
+            f"?api-version={litellm.AZURE_DEFAULT_API_VERSION}"
+        )
+        return httpx.Response(
+            200,
+            json={"text": "hello", "languages": [{"code": "en"}], "usage": {"type": "duration", "seconds": 1}},
+        )
+
+    http_client = httpx.Client(transport=httpx.MockTransport(send_response))
+    client = AzureOpenAI(
+        api_key="azure-test-key",
+        azure_endpoint="https://example.openai.azure.com",
+        api_version=litellm.AZURE_DEFAULT_API_VERSION,
+        http_client=http_client,
+    )
+    audio_file = io.BytesIO(b"audio")
+    audio_file.name = "sample.wav"
+
+    response = AzureAudioTranscription().audio_transcriptions(
+        model="gpt-transcribe",
+        audio_file=audio_file,
+        optional_params={"response_format": "json"},
+        logging_obj=MagicMock(),
+        model_response=TranscriptionResponse(),
+        timeout=10,
+        max_retries=0,
+        api_key="azure-test-key",
+        api_base="https://example.openai.azure.com",
+        api_version=litellm.AZURE_DEFAULT_API_VERSION,
+        client=client,
+    )
+
+    assert response.text == "hello"
+    assert response.languages is not None
+    assert [language.code for language in response.languages] == ["en"]
+    client.close()
+
+
+def test_azure_gpt_transcribe_preserves_dated_api_version():
+    resolved_api_version = _validate_gpt_transcription_request(
+        model="gpt-transcribe",
+        custom_llm_provider="azure",
+        language=None,
+        languages=None,
+        response_format="json",
+        api_version="2025-04-01-preview",
+    )
+
+    assert resolved_api_version == "2025-04-01-preview"

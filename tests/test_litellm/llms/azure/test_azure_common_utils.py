@@ -443,12 +443,17 @@ def test_select_azure_base_url_called(setup_mocks):
             "agenerate_content",
             "allm_passthrough_route",
             "llm_passthrough_route",
-            "asearch",
-            "avector_store_create",
-            "avector_store_search",
-            "acreate_skill",
-        ]
-    ],
+                "asearch",
+                "avector_store_create",
+                "avector_store_search",
+                "acreate_skill",
+                "acreate_realtime_client_secret",
+                "acreate_realtime_transcription_session",
+                "acreate_realtime_translation_client_secret",
+                "arealtime_calls",
+                "arealtime_translation_calls",
+            ]
+        ],
 )
 @pytest.mark.asyncio
 async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
