@@ -6314,6 +6314,49 @@ class TestAggregateGatewayDcrChallenge:
             www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
             assert www_authenticate == f'Bearer resource_metadata="http://testserver{expected_metadata_path}"'
 
+    async def test_per_server_challenge_keeps_spelling_under_server_root_path(self):
+        """On a sub-path deployment the challenge must still advertise the spelling the client
+        used. ``_original_path`` is a raw request-line path, so under SERVER_ROOT_PATH it reads
+        ``/litellm/{server}/mcp``; matching that against the root-relative ``/{server}/mcp`` shape
+        used to fail, silently pointing a legacy-spelling client at the standard-pattern document
+        whose ``resource`` is ``{base}/mcp/{server}`` rather than the ``{base}/{server}/mcp`` URL it
+        called, which a strict RFC 9728 section 3 client rejects."""
+        import os
+
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        server = MCPServer(
+            server_id="gh-id",
+            name="github",
+            server_name="github",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+        )
+        for original_path, expected_metadata_path in (
+            ("/litellm/mcp/github", "/litellm/.well-known/oauth-protected-resource/litellm/mcp/github"),
+            ("/litellm/github/mcp", "/litellm/.well-known/oauth-protected-resource/litellm/github/mcp"),
+        ):
+            scope = {
+                **self._scope(path="/mcp/github"),
+                "root_path": "/litellm",
+                "_original_path": original_path,
+            }
+            with (
+                patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}),
+                patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+                ) as mock_mgr,
+            ):
+                mock_mgr.get_mcp_server_by_name.return_value = server
+                with pytest.raises(HTTPException) as exc_info:
+                    await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+            www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+            assert www_authenticate == f'Bearer resource_metadata="http://testserver{expected_metadata_path}"'
+
     async def test_no_per_server_challenge_for_non_gateway_managed_targets(self):
         """The per-server challenge fires only for the server set the gateway's keyless flow
         serves: an OBO server and a multi-server CSV path keep the original admission error
