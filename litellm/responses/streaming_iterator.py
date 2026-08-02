@@ -168,6 +168,8 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
         "insufficient_quota": 429,
         "vector_store_timeout": 504,
         "invalid_prompt": 400,
+        "data_residency_mismatch": 400,
+        "bio_policy": 400,
         "invalid_image": 400,
         "invalid_image_format": 400,
         "invalid_base64_image": 400,
