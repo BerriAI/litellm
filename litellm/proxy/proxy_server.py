@@ -3650,17 +3650,48 @@ def _normalize_user_url_validation(value: object) -> Optional[bool]:
     return bool(value)
 
 
-def _apply_ssrf_general_settings(settings: Mapping[str, object]) -> None:
+def _apply_ssrf_general_settings(
+    settings: Mapping[str, object],
+    litellm_settings: Mapping[str, object] | None = None,
+) -> None:
+    """Wire SSRF / URL-allowlist settings from the config into the
+    ``litellm`` module globals consumed by ``url_utils.is_url_allowed``.
+
+    Reads from ``general_settings`` first; falls back to
+    ``litellm_settings`` when a key is not present in
+    ``general_settings``. The two sections document the same SSRF
+    settings; the fallback preserves the older doc that pointed users
+    at ``litellm_settings`` (see issue #35177) and avoids silently
+    dropping values that operators already have working in the field.
+
+    When ``litellm_settings`` is ``None`` (e.g. the DB-loaded
+    general-settings update path), only ``general_settings`` is
+    consulted.
+    """
     if "user_url_allowed_hosts" in settings:
         litellm.user_url_allowed_hosts = cast(list[str], settings["user_url_allowed_hosts"])
+    elif litellm_settings is not None and "user_url_allowed_hosts" in litellm_settings:
+        litellm.user_url_allowed_hosts = cast(
+            list[str], litellm_settings["user_url_allowed_hosts"]
+        )  # cast-ok: same shape as the primary branch above; list schema enforced by ConfigGeneralSettings.user_url_allowed_hosts.
 
-    user_url_validation = _normalize_user_url_validation(settings.get("user_url_validation"))
-    if user_url_validation is not None:
-        litellm.user_url_validation = user_url_validation
+    if "user_url_validation" in settings:
+        normalized = _normalize_user_url_validation(settings["user_url_validation"])
+        if normalized is not None:
+            litellm.user_url_validation = normalized
+    elif litellm_settings is not None and "user_url_validation" in litellm_settings:
+        normalized = _normalize_user_url_validation(litellm_settings["user_url_validation"])
+        if normalized is not None:
+            litellm.user_url_validation = normalized
 
     if "provider_url_destination_allowed_hosts" in settings:
         litellm.provider_url_destination_allowed_hosts = cast(
             list[str], settings["provider_url_destination_allowed_hosts"]
+        )
+    elif litellm_settings is not None and "provider_url_destination_allowed_hosts" in litellm_settings:
+        # cast-ok: see comment on the user_url_allowed_hosts fallback above.
+        litellm.provider_url_destination_allowed_hosts = cast(  # cast-ok: same shape as the primary branch above; list schema enforced by ConfigGeneralSettings.provider_url_destination_allowed_hosts.
+            list[str], litellm_settings["provider_url_destination_allowed_hosts"]
         )
 
 
@@ -4922,7 +4953,11 @@ class ProxyConfig:
                 ]
 
             ### SSRF URL VALIDATION SETTINGS ###
-            _apply_ssrf_general_settings(general_settings)
+            # Pass ``litellm_settings`` as a fallback so operators who
+            # followed the older doc and put these settings there still
+            # see them apply (regression for #35177). ``general_settings``
+            # wins when both are set.
+            _apply_ssrf_general_settings(general_settings, litellm_settings)
 
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
