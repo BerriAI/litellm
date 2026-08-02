@@ -1340,3 +1340,231 @@ class TestChatCompletionsBodyDetection:
         assert response.status_code == 200
         assert mock_router.aresponses.call_args is not None
         assert mock_router.aresponses.call_args.kwargs["input"] == [{"role": "user", "content": "hello"}]
+
+
+class TestParseCursorModelVariant:
+    @pytest.mark.parametrize(
+        "model,expected_base,expected_effort",
+        [
+            ("claude-opus-5-thinking-high", "claude-opus-5", "high"),
+            ("claude-opus-5-thinking-xhigh-fast", "claude-opus-5", "xhigh"),
+            ("gemini-3.0-pro-thinking-low", "gemini-3.0-pro", "low"),
+            ("claude-opus-5-fast", "claude-opus-5", None),
+            ("gpt-5.6-sol", "gpt-5.6-sol", None),
+            ("foo-thinking-ultra-fast", "foo-thinking-ultra", None),
+            ("-thinking-high", "-thinking-high", None),
+        ],
+    )
+    def test_parse_matrix(self, model, expected_base, expected_effort):
+        from litellm.proxy.response_api_endpoints.endpoints import _parse_cursor_model_variant
+
+        variant = _parse_cursor_model_variant(model)
+        assert variant.base_model == expected_base
+        assert variant.reasoning_effort == expected_effort
+
+
+class TestResolveCursorModelVariant:
+    @pytest.fixture(scope="class")
+    def wildcard_router(self):
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "fake"}},
+                {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "fake"}},
+                {
+                    "model_name": "explicit-alias-thinking-high",
+                    "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "fake"},
+                },
+            ]
+        )
+
+    def test_chat_body_suffix_stripped_into_reasoning_effort(self, wildcard_router):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        body = {
+            "model": "claude-opus-5-thinking-xhigh-fast",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        resolved = _resolve_cursor_model_variant(body, wildcard_router)
+        assert resolved["model"] == "claude-opus-5"
+        assert resolved["reasoning_effort"] == "xhigh"
+        assert resolved["messages"] == body["messages"]
+        assert body["model"] == "claude-opus-5-thinking-xhigh-fast"
+
+    def test_responses_body_suffix_stripped_into_reasoning_dict(self, wildcard_router):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        body = {"model": "claude-opus-5-thinking-high", "input": [{"role": "user", "content": "hi"}]}
+        resolved = _resolve_cursor_model_variant(body, wildcard_router)
+        assert resolved["model"] == "claude-opus-5"
+        assert resolved["reasoning"] == {"effort": "high"}
+
+    def test_responses_body_merges_effort_into_existing_reasoning(self, wildcard_router):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        body = {
+            "model": "claude-opus-5-thinking-high",
+            "input": [{"role": "user", "content": "hi"}],
+            "reasoning": {"summary": "auto"},
+        }
+        resolved = _resolve_cursor_model_variant(body, wildcard_router)
+        assert resolved["model"] == "claude-opus-5"
+        assert resolved["reasoning"] == {"summary": "auto", "effort": "high"}
+
+    def test_existing_reasoning_effort_wins_but_model_still_rewritten(self, wildcard_router):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        chat_body = {
+            "model": "claude-opus-5-thinking-high",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "low",
+        }
+        resolved_chat = _resolve_cursor_model_variant(chat_body, wildcard_router)
+        assert resolved_chat["model"] == "claude-opus-5"
+        assert resolved_chat["reasoning_effort"] == "low"
+
+        responses_body = {
+            "model": "claude-opus-5-thinking-high",
+            "input": [{"role": "user", "content": "hi"}],
+            "reasoning": {"effort": "low"},
+        }
+        resolved_responses = _resolve_cursor_model_variant(responses_body, wildcard_router)
+        assert resolved_responses["model"] == "claude-opus-5"
+        assert resolved_responses["reasoning"] == {"effort": "low"}
+
+    def test_fast_only_suffix_strips_without_reasoning(self, wildcard_router):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        body = {"model": "claude-opus-5-fast", "messages": [{"role": "user", "content": "hi"}]}
+        resolved = _resolve_cursor_model_variant(body, wildcard_router)
+        assert resolved["model"] == "claude-opus-5"
+        assert "reasoning_effort" not in resolved
+
+    def test_explicitly_configured_suffixed_name_untouched(self, wildcard_router):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        body = {"model": "explicit-alias-thinking-high", "messages": [{"role": "user", "content": "hi"}]}
+        assert _resolve_cursor_model_variant(body, wildcard_router) is body
+
+    def test_provider_inferable_bare_name_untouched(self, wildcard_router):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        assert _resolve_cursor_model_variant(body, wildcard_router) is body
+
+    def test_unservable_base_untouched(self, wildcard_router):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        body = {"model": "totally-unknown-thinking-high", "messages": [{"role": "user", "content": "hi"}]}
+        assert _resolve_cursor_model_variant(body, wildcard_router) is body
+
+    def test_no_router_untouched(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        body = {"model": "claude-opus-5-thinking-high", "messages": [{"role": "user", "content": "hi"}]}
+        assert _resolve_cursor_model_variant(body, None) is body
+
+    def test_missing_or_non_string_model_untouched(self, wildcard_router):
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        no_model = {"messages": [{"role": "user", "content": "hi"}]}
+        assert _resolve_cursor_model_variant(no_model, wildcard_router) is no_model
+        null_model = {"model": None, "messages": [{"role": "user", "content": "hi"}]}
+        assert _resolve_cursor_model_variant(null_model, wildcard_router) is null_model
+
+
+def _router_serving_only(base_model: str) -> MagicMock:
+    mock_router = MagicMock()
+    mock_router.model_names = set()
+    mock_router.model_group_alias = {}
+    mock_router.team_public_model_names = frozenset()
+    mock_router.pattern_router.get_pattern.side_effect = (
+        lambda model: [{"model_name": "anthropic/*"}] if model == base_model else None
+    )
+    return mock_router
+
+
+class TestCursorModelSuffixResolutionEndToEnd:
+    @pytest.mark.asyncio
+    async def test_chat_arm_rewrites_suffixed_model_before_delegation(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        seen = {}
+
+        async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
+            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+            seen["body"] = await _read_request_body(request=request)
+            return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with (
+                patch("litellm.proxy.proxy_server.llm_router", new=_router_serving_only("claude-opus-5")),
+                patch("litellm.proxy.proxy_server.chat_completion", new=fake_chat_completion),
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json={
+                        "model": "claude-opus-5-thinking-xhigh-fast",
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        assert seen["body"]["model"] == "claude-opus-5"
+        assert seen["body"]["reasoning_effort"] == "xhigh"
+        assert seen["body"]["messages"] == [{"role": "user", "content": "hi"}]
+
+    @pytest.mark.asyncio
+    async def test_responses_arm_rewrites_suffixed_model_before_routing(self):
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_suffix1",
+            created_at=1234567890,
+            model="claude-opus-5",
+            object="response",
+            output=[
+                ResponseOutputMessage(
+                    id="msg_suffix1",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[ResponseOutputText(type="output_text", text="ok", annotations=[])],
+                )
+            ],
+        )
+
+        mock_router = _router_serving_only("claude-opus-5")
+        mock_router.aresponses = AsyncMock(return_value=mock_response)
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with patch("litellm.proxy.proxy_server.llm_router", new=mock_router):
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json={
+                        "model": "claude-opus-5-thinking-high",
+                        "input": [{"role": "user", "content": "hello"}],
+                    },
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        assert mock_router.aresponses.call_args is not None
+        assert mock_router.aresponses.call_args.kwargs["model"] == "claude-opus-5"
+        assert mock_router.aresponses.call_args.kwargs["reasoning"] == {"effort": "high"}
