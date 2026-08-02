@@ -569,6 +569,8 @@ class ChunkProcessor:
         # lost and 1h cache writes get billed at the 5m rate.
         cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         cost: Optional[float] = None
+        inference_geo: Optional[str] = None
+        speed: Optional[str] = None
 
         for chunk in chunks:
             usage_chunk = self._extract_usage_chunk(chunk)
@@ -627,6 +629,13 @@ class ChunkProcessor:
                 if usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
 
+                chunk_inference_geo = getattr(usage_chunk, "inference_geo", None)
+                if isinstance(chunk_inference_geo, str):
+                    inference_geo = chunk_inference_geo
+                chunk_speed = getattr(usage_chunk, "speed", None)
+                if isinstance(chunk_speed, str):
+                    speed = chunk_speed
+
         prompt_tokens_details = self._attach_cache_creation_token_details(
             prompt_tokens_details, cache_creation_token_details
         )
@@ -647,6 +656,8 @@ class ChunkProcessor:
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
+            inference_geo=inference_geo,
+            speed=speed,
         )
 
     @staticmethod
@@ -805,6 +816,11 @@ class ChunkProcessor:
 
         if cost is not None:
             setattr(returned_usage, "cost", cost)
+
+        if calculated_usage_per_chunk["inference_geo"] is not None:
+            setattr(returned_usage, "inference_geo", calculated_usage_per_chunk["inference_geo"])
+        if calculated_usage_per_chunk["speed"] is not None:
+            setattr(returned_usage, "speed", calculated_usage_per_chunk["speed"])
 
         # Return a new usage object with the new values
 
