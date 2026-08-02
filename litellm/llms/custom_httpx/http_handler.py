@@ -33,6 +33,7 @@ from litellm.constants import (
     AIOHTTP_TCP_KEEPINTVL,
     AIOHTTP_TTL_DNS_CACHE,
     COMPLETION_HTTP_FALLBACK_SECONDS,
+    DEFAULT_ACCEPT_ENCODING,
     DEFAULT_SSL_CIPHERS,
     HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
@@ -106,12 +107,29 @@ def get_default_headers() -> dict:
 
     - Default: `User-Agent: litellm/{version}`
     - Override: set `LITELLM_USER_AGENT` to fully override the header value.
+
+    `Accept-Encoding` deliberately omits `zstd`. httpx's ``ZStandardDecoder``
+    resets its decompressor only when ``unused_data`` is non-empty within the
+    same ``decode()`` call, so a streamed response that delivers exactly one
+    complete zstd frame per network chunk leaves the decompressor at ``eof``
+    with no leftover bytes, and the next chunk raises
+    ``httpx.DecodingError: cannot use a decompressobj multiple times``.
+    Amazon Nova's direct API streams SSE as independent zstd frames, which made
+    every `amazon_nova` streaming request fail. gzip/deflate/br are unaffected,
+    so responses are still compressed.
+
+    - Override: set `LITELLM_ACCEPT_ENCODING` (e.g. `identity`) to change it.
     """
+    accept_encoding = os.environ.get("LITELLM_ACCEPT_ENCODING", DEFAULT_ACCEPT_ENCODING)
+
     user_agent = os.environ.get("LITELLM_USER_AGENT")
     if user_agent is not None:
-        return {"User-Agent": user_agent}
+        return {"User-Agent": user_agent, "Accept-Encoding": accept_encoding}
 
-    return {"User-Agent": f"litellm/{version}"}
+    return {
+        "User-Agent": f"litellm/{version}",
+        "Accept-Encoding": accept_encoding,
+    }
 
 
 # Initialize headers (User-Agent)

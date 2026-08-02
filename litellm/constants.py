@@ -228,6 +228,14 @@ AIOHTTP_NEEDS_CLEANUP_CLOSED = (3, 13, 0) <= sys.version_info < (
 _max_size_env = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
 REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = int(_max_size_env) if _max_size_env is not None else None
 
+# Content encodings litellm advertises on outbound HTTP requests.
+# `zstd` is deliberately excluded: httpx's ZStandardDecoder reuses a finished
+# decompressobj when a network chunk contains exactly one complete zstd frame,
+# which is what a streamed SSE flush produces. Providers that stream multi-frame
+# zstd (e.g. Amazon Nova's direct API) then fail with
+# `httpx.DecodingError: cannot use a decompressobj multiple times`.
+DEFAULT_ACCEPT_ENCODING = "gzip, deflate, br"
+
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
 # This balances performance with broad compatibility
