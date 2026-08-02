@@ -1276,6 +1276,191 @@ async def test_vertex_ai_token_counter_routes_gemini_models():
 
 
 @pytest.mark.asyncio
+async def test_vertex_ai_token_counter_converts_anthropic_messages_to_contents():
+    """
+    Regression test: callers using the Anthropic-compatible /v1/messages/count_tokens
+    endpoint (e.g. Claude Code) only send `messages`, never `contents`. Previously
+    `contents` stayed `None` in that case, Vertex's countTokens API silently accepted
+    the empty body as valid and returned {"totalTokens": 0}, and callers got a
+    confidently-wrong 0 instead of a real count.
+
+    `contents` must now be derived from `messages` before calling the Gemini
+    countTokens handler.
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    token_counter = VertexAITokenCounter()
+
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
+    ) as mock_gemini_count_tokens:
+        mock_gemini_count_tokens.return_value = {
+            "totalTokens": 12,
+            "tokenizer_used": "gemini",
+        }
+
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hello, count my tokens please."}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                }
+            },
+            request_model="vertex_ai/gemini-1.5-pro",
+        )
+
+        assert result is not None
+        assert result.total_tokens == 12
+
+        call_kwargs = mock_gemini_count_tokens.call_args.kwargs
+        assert call_kwargs["contents"], "contents must be derived from messages, not left as None"
+        assert call_kwargs["contents"][0]["parts"][0]["text"] == "Hello, count my tokens please."
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_folds_system_and_tools_into_contents():
+    """
+    Regression test: `system` and `tools` (Anthropic Messages API fields) were
+    silently dropped -- only `contents` was ever forwarded to Vertex's countTokens
+    API -- so a caller counting tokens for a system prompt or a list of tool/function
+    schemas (e.g. Claude Code's per-category /context accounting for MCP tools)
+    still under-counted even after `messages` were converted.
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    token_counter = VertexAITokenCounter()
+
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
+    ) as mock_gemini_count_tokens:
+        mock_gemini_count_tokens.return_value = {
+            "totalTokens": 40,
+            "tokenizer_used": "gemini",
+        }
+
+        await token_counter.count_tokens(
+            model_to_use="gemini-1.5-pro",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            system="You are a helpful coding assistant.",
+            tools=[
+                {
+                    "name": "bash",
+                    "description": "Run a bash command",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                }
+            },
+            request_model="vertex_ai/gemini-1.5-pro",
+        )
+
+        call_kwargs = mock_gemini_count_tokens.call_args.kwargs
+        contents = call_kwargs["contents"]
+        assert len(contents) == 2  # 1 real message + 1 folded system/tools block
+        # Folded block is appended (not prepended): the converted message above is
+        # role="user", so prepending another role="user" block would create two
+        # consecutive same-role turns.
+        folded_text = contents[-1]["parts"][0]["text"]
+        assert "helpful coding assistant" in folded_text
+        assert "bash" in folded_text
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_leaves_native_contents_untouched():
+    """
+    Regression safety net: a caller that already sends Gemini-native `contents`
+    directly (not through the Anthropic-format endpoint) must not have its payload
+    altered by the messages/system/tools fallback logic.
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    token_counter = VertexAITokenCounter()
+    native_contents = [{"role": "user", "parts": [{"text": "already gemini format"}]}]
+
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
+    ) as mock_gemini_count_tokens:
+        mock_gemini_count_tokens.return_value = {
+            "totalTokens": 5,
+            "tokenizer_used": "gemini",
+        }
+
+        await token_counter.count_tokens(
+            model_to_use="gemini-1.5-pro",
+            messages=None,
+            contents=native_contents,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                }
+            },
+            request_model="vertex_ai/gemini-1.5-pro",
+        )
+
+        call_kwargs = mock_gemini_count_tokens.call_args.kwargs
+        assert call_kwargs["contents"] == native_contents
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_native_contents_ignores_system_and_tools():
+    """
+    Regression test (found in review of BerriAI/litellm#32115): a caller that
+    already sends Gemini-native `contents` but *also* happens to pass `system`/
+    `tools` must not have those folded in -- the messages/system/tools fallback
+    logic is only for callers that didn't provide `contents` at all. Previously
+    the system/tools folding ran unconditionally, so a native-Gemini caller's
+    `contents` would have been silently mutated with an extra prepended turn.
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    token_counter = VertexAITokenCounter()
+    native_contents = [{"role": "user", "parts": [{"text": "already gemini format"}]}]
+
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
+    ) as mock_gemini_count_tokens:
+        mock_gemini_count_tokens.return_value = {
+            "totalTokens": 5,
+            "tokenizer_used": "gemini",
+        }
+
+        await token_counter.count_tokens(
+            model_to_use="gemini-1.5-pro",
+            messages=None,
+            contents=native_contents,
+            system="this should be ignored",
+            tools=[{"name": "should_be_ignored"}],
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                }
+            },
+            request_model="vertex_ai/gemini-1.5-pro",
+        )
+
+        call_kwargs = mock_gemini_count_tokens.call_args.kwargs
+        assert call_kwargs["contents"] == native_contents
+
+
+@pytest.mark.asyncio
 async def test_vertex_ai_partner_model_detection():
     """
     Test that VertexAIPartnerModels.is_vertex_partner_model correctly identifies
