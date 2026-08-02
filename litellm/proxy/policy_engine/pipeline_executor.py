@@ -6,7 +6,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
 import time
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -35,7 +35,7 @@ class PipelineExecutor:
 
     @staticmethod
     async def execute_steps(
-        steps: List[PipelineStep],
+        steps: list[PipelineStep],
         mode: str,
         data: dict,
         user_api_key_dict: Any,
@@ -56,7 +56,7 @@ class PipelineExecutor:
         Returns:
             PipelineExecutionResult with terminal action and step results
         """
-        step_results: List[PipelineStepResult] = []
+        step_results: list[PipelineStepResult] = []
         working_data = data.copy()
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
@@ -140,9 +140,9 @@ class PipelineExecutor:
         call_type: str,
     ) -> tuple[
         Literal["pass", "fail", "error"],
-        Optional[dict],
-        Optional[str],
-        Optional[Exception],
+        dict | None,
+        str | None,
+        Exception | None,
     ]:
         """
         Run a single pipeline step's guardrail.
@@ -209,7 +209,7 @@ class PipelineExecutor:
                 return ("error", None, str(e), e)
 
     @staticmethod
-    def find_guardrail_callback(guardrail_name: str) -> Optional[CustomGuardrail]:
+    def find_guardrail_callback(guardrail_name: str) -> CustomGuardrail | None:
         """Look up an initialized guardrail callback by name from litellm.callbacks."""
         for callback in litellm.callbacks:
             if isinstance(callback, CustomGuardrail):

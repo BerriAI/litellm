@@ -3,7 +3,6 @@ Replace messages with compact stubs and extract human-readable keys.
 """
 
 import re
-from typing import Set
 
 from litellm.compression.content_detection import detect_content_type
 
@@ -17,7 +16,7 @@ _FILE_PATH_PATTERNS = [
 ]
 
 
-def extract_key(message: dict, fallback_index: int, used_keys: Set[str]) -> str:
+def extract_key(message: dict, fallback_index: int, used_keys: set[str]) -> str:
     """
     Extract a human-readable key for the message.
 

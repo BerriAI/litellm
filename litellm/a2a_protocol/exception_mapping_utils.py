@@ -4,7 +4,7 @@ A2A Protocol Exception Mapping Utils.
 Maps A2A SDK exceptions to LiteLLM A2A exception types.
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.card_resolver import (
@@ -57,7 +57,7 @@ class A2AExceptionCheckers:
         return any(pattern in error_str_lower for pattern in CONNECTION_ERROR_PATTERNS)
 
     @staticmethod
-    def is_localhost_url(url: Optional[str]) -> bool:
+    def is_localhost_url(url: str | None) -> bool:
         """
         Check if a URL is a localhost/internal URL.
 
@@ -96,9 +96,9 @@ class A2AExceptionCheckers:
 
 def map_a2a_exception(
     original_exception: Exception,
-    card_url: Optional[str] = None,
-    api_base: Optional[str] = None,
-    model: Optional[str] = None,
+    card_url: str | None = None,
+    api_base: str | None = None,
+    model: str | None = None,
 ) -> Exception:
     """
     Map an A2A SDK exception to a LiteLLM A2A exception type.

@@ -15,7 +15,7 @@ fetcher dispatches by ``discovery_mode``:
 """
 
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 from urllib.parse import urlencode
 
 from litellm._logging import verbose_proxy_logger
@@ -37,7 +37,7 @@ class DiscoveryMode(str, Enum):
 # Paths the pure-A2A fetcher tries in order. The first two are the current and
 # previous A2A spec locations; ``/agent.json`` is a non-standard root fallback
 # some agents still serve.
-AGENT_CARD_WELL_KNOWN_PATHS: Tuple[str, ...] = (
+AGENT_CARD_WELL_KNOWN_PATHS: tuple[str, ...] = (
     "/.well-known/agent-card.json",
     "/.well-known/agent.json",
     "/agent.json",
@@ -55,8 +55,8 @@ def _normalize_base_url(base_url: str) -> str:
 
 
 def _build_langgraph_platform_paths(
-    params: Optional[Dict[str, Any]],
-) -> Tuple[str, ...]:
+    params: dict[str, Any] | None,
+) -> tuple[str, ...]:
     """Build the paths to try for LangGraph Platform discovery.
 
     LangGraph serves the card at ``/.well-known/agent-card.json`` with the
@@ -71,7 +71,7 @@ def _build_langgraph_platform_paths(
     return tuple(f"{path}?{query}" for path in AGENT_CARD_WELL_KNOWN_PATHS)
 
 
-def _paths_for_mode(mode: DiscoveryMode, params: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
+def _paths_for_mode(mode: DiscoveryMode, params: dict[str, Any] | None) -> tuple[str, ...]:
     if mode == DiscoveryMode.WELL_KNOWN_FALLBACK:
         return AGENT_CARD_WELL_KNOWN_PATHS
     if mode == DiscoveryMode.LANGGRAPH_PLATFORM:
@@ -83,10 +83,10 @@ async def fetch_well_known_card(
     base_url: str,
     *,
     discovery_mode: DiscoveryMode = DiscoveryMode.WELL_KNOWN_FALLBACK,
-    params: Optional[Dict[str, Any]] = None,
+    params: dict[str, Any] | None = None,
     timeout: float = DEFAULT_DISCOVERY_TIMEOUT_SECONDS,
-    headers: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """
     Fetch an agent card from ``base_url`` using the strategy chosen by
     ``discovery_mode``. Returns the parsed JSON from the first path that
@@ -106,7 +106,7 @@ async def fetch_well_known_card(
         params={"timeout": timeout},
     )
 
-    last_error: Optional[str] = None
+    last_error: str | None = None
     for path in paths:
         url = f"{normalized}{path}"
         try:

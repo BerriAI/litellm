@@ -4998,3 +4998,105 @@ async def test_split_usage_still_respects_the_configured_limit_type(monkeypatch)
     token_operations = [op for op in captured_operations if op["key"].endswith(":tokens")]
     assert token_operations
     assert all(op["increment_value"] == 7 for op in token_operations)
+
+
+@pytest.mark.asyncio
+async def test_atomic_check_with_zero_increment_still_enforces_token_limit():
+    """Regression: a zero token increment must still CHECK the token limit.
+
+    The dynamic rate limiter calls atomic_check_and_increment_by_n with
+    {"requests": 1, "tokens": 0} because tokens land on the counter post-call.
+    The payload builder used to skip any counter whose increment was <= 0, so a
+    TPM-only descriptor produced zero counters to evaluate and the call
+    returned OK with empty statuses; TPM limits were never enforced at all.
+    """
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitDescriptor
+
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    descriptor = RateLimitDescriptor(
+        key="model_saturation_check",
+        value="tpm-only-model",
+        rate_limit={"tokens_per_unit": 100, "window_size": 60},
+    )
+    zero_token_increment: Dict[str, int] = {"requests": 1, "tokens": 0}
+
+    under_limit = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[zero_token_increment],
+    )
+    assert under_limit["overall_code"] == "OK"
+    assert [s["rate_limit_type"] for s in under_limit["statuses"]] == ["tokens"]
+
+    counter_key = handler.create_rate_limit_keys(
+        "model_saturation_check", "tpm-only-model", "tokens"
+    )
+    await handler.async_increment_tokens_with_ttl_preservation(
+        pipeline_operations=[
+            RedisPipelineIncrementOperation(
+                key=counter_key, increment_value=100, ttl=60
+            )
+        ],
+    )
+
+    at_limit = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[zero_token_increment],
+    )
+    assert at_limit["overall_code"] == "OVER_LIMIT", (
+        "a check-only pass must block once recorded usage reaches the limit, "
+        "matching RPM's >= semantics; > would leak one extra request"
+    )
+    blocked = at_limit["statuses"][0]
+    assert blocked["rate_limit_type"] == "tokens"
+    assert blocked["current_limit"] == 100
+
+    assert (
+        await handler.internal_usage_cache.async_get_cache(
+            key=counter_key, litellm_parent_otel_span=None, local_only=True
+        )
+        == 100
+    )
+
+    negative_increment: Dict[str, int] = {"requests": -1, "tokens": -50}
+    refund_attempt = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[negative_increment],
+    )
+    assert refund_attempt["overall_code"] == "OK"
+    assert refund_attempt["statuses"] == []
+    assert (
+        await handler.internal_usage_cache.async_get_cache(
+            key=counter_key, litellm_parent_otel_span=None, local_only=True
+        )
+        == 100
+    )
+
+
+@pytest.mark.asyncio
+async def test_reserve_tpm_tokens_never_evaluates_the_requests_dimension():
+    """The reservation path deliberately leaves RPM to the separate
+    should_rate_limit pass. Now that zero-increment counters are checked
+    instead of skipped, reserve_tpm_tokens must strip requests_per_unit from
+    its descriptors or an exhausted RPM budget would double-enforce here."""
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitDescriptor
+
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    descriptor = RateLimitDescriptor(
+        key="api_key",
+        value="reserve-test-key",
+        rate_limit={"requests_per_unit": 0, "tokens_per_unit": 1000, "window_size": 60},
+    )
+
+    response = await handler.reserve_tpm_tokens(
+        descriptors=[descriptor],
+        estimated_tokens=10,
+    )
+    assert response["overall_code"] == "OK", (
+        "an exhausted requests budget (limit 0) must not block the token "
+        f"reservation pass, got: {response}"
+    )
+    assert [s["rate_limit_type"] for s in response["statuses"]] == ["tokens"]

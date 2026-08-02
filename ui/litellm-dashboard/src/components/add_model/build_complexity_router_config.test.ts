@@ -18,6 +18,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierLlmConfig: undefined,
   classifierContextWindowSize: undefined,
   classifierContextPerTurnChars: undefined,
+  classifierContextIncludeAssistantTurns: undefined,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
@@ -316,5 +317,37 @@ describe("getSemanticConfigError", () => {
     expect(
       getSemanticConfigError({ semanticMatchingEnabled: true, embeddingModel: "voyage-3-5", keywordTierRules: [rule] }),
     ).toBeNull();
+  });
+});
+
+describe("buildComplexityRouterConfig assistant turns", () => {
+  const llmParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  };
+
+  it("emits the field when the LLM classifier is selected", () => {
+    const config = buildComplexityRouterConfig({ ...llmParams, classifierContextIncludeAssistantTurns: true });
+    expect(config.classifier_context_include_assistant_turns).toBe(true);
+  });
+
+  it("emits the switch turned off, since false is a choice the operator made and not an absent value", () => {
+    const config = buildComplexityRouterConfig({ ...llmParams, classifierContextIncludeAssistantTurns: false });
+    expect(config.classifier_context_include_assistant_turns).toBe(false);
+  });
+
+  it("omits it when classifier_type is heuristic even if a value lingers in state", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "heuristic",
+      classifierContextIncludeAssistantTurns: true,
+    });
+    expect(config.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+
+  it("omits it when unset, leaving the backend default", () => {
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_context_include_assistant_turns).toBeUndefined();
   });
 });

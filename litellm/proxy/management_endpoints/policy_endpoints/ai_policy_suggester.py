@@ -4,7 +4,6 @@ based on user-provided attack examples and descriptions.
 """
 
 import json
-from typing import List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -53,9 +52,9 @@ class AiPolicySuggester:
     async def suggest(
         self,
         templates: list,
-        attack_examples: List[str],
+        attack_examples: list[str],
         description: str,
-        model: Optional[str] = None,
+        model: str | None = None,
     ) -> dict:
         system_prompt = self._build_system_prompt(templates)
         user_prompt = self._build_user_prompt(attack_examples, description)
@@ -117,7 +116,7 @@ class AiPolicySuggester:
             "Available templates:\n\n" + "\n\n".join(template_descriptions)
         )
 
-    def _build_user_prompt(self, attack_examples: List[str], description: str) -> str:
+    def _build_user_prompt(self, attack_examples: list[str], description: str) -> str:
         parts = []
         filtered_examples = [e for e in attack_examples if e.strip()]
         if filtered_examples:

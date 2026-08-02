@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
@@ -23,7 +23,7 @@ _BEDROCK_MIJ_STATUS_TO_OPENAI = {
 }
 
 
-def _extract_region_from_bedrock_arn(arn: str) -> Optional[str]:
+def _extract_region_from_bedrock_arn(arn: str) -> str | None:
     """ARN shape: ``arn:aws:bedrock:<region>:<account>:<type>/<id>``"""
     try:
         parts = arn.split(":")
@@ -34,14 +34,14 @@ def _extract_region_from_bedrock_arn(arn: str) -> Optional[str]:
     return None
 
 
-def _extract_job_id_from_arn(arn: str) -> Optional[str]:
+def _extract_job_id_from_arn(arn: str) -> str | None:
     """``arn:aws:bedrock:<region>:<acct>:model-invocation-job/<job-id>`` -> ``<job-id>``."""
     if ":model-invocation-job/" not in arn:
         return None
     return arn.rsplit("/", 1)[-1] or None
 
 
-def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: Optional[str]) -> Optional[str]:
+def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: str | None) -> str | None:
     """
     Compute the deterministic per-job result file URI Bedrock writes to.
 
@@ -63,7 +63,7 @@ def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: Optiona
     return f"{output_prefix}{job_id}/{input_basename}.out"
 
 
-def _to_epoch(value: Any) -> Optional[int]:
+def _to_epoch(value: Any) -> int | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -162,7 +162,7 @@ class BedrockBatchesHandler:
     @staticmethod
     def _handle_model_invocation_job_status(
         batch_id: str,
-        aws_region_name: Optional[str] = None,
+        aws_region_name: str | None = None,
         logging_obj=None,
         **kwargs,
     ) -> "LiteLLMBatch":
