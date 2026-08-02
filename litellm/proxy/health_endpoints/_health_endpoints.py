@@ -78,6 +78,56 @@ def _reject_os_environ_references(params: dict) -> None:
                 stack.append(value)
 
 
+# Caller-supplied `model_info` keys that are safe to forward to
+# `_update_litellm_params_for_health_check` even when no server-side
+# deployment was resolved. Routing-affecting keys (e.g.
+# `health_check_model`, `mode`, `health_check_voice`, `id`, `team_id`)
+# are intentionally excluded — letting a request override them after
+# `can_user_make_model_call()` has authorized the original deployment
+# would allow a caller to redirect this endpoint to probe a different
+# provider model with the deployment's credentials.
+_HEALTH_CHECK_SAFE_MODEL_INFO_KEYS: frozenset = frozenset(
+    {
+        "health_check_supports_max_tokens",
+        "health_check_max_tokens",
+        "health_check_max_tokens_reasoning",
+        "health_check_max_tokens_non_reasoning",
+        "health_check_reasoning_effort",
+        "health_check_timeout",
+    }
+)
+
+
+def _safe_health_check_model_info(
+    *,
+    resolved_model_info: Optional[dict],
+    request_model_info: Optional[dict],
+) -> dict:
+    """
+    Return the `model_info` to pass into
+    `_update_litellm_params_for_health_check` for the
+    `/health/test_connection` endpoint.
+
+    - When the deployment was resolved server-side via the router, use
+      that `model_info` so routing-affecting fields come from server
+      config, not the request body.
+    - Otherwise (e.g. ad-hoc curl with raw credentials), forward only an
+      allow-listed set of caller-supplied non-routing flags so health
+      tuning still works without letting the caller redirect the probe.
+    """
+    if resolved_model_info is not None:
+        return dict(resolved_model_info)
+
+    if not request_model_info:
+        return {}
+
+    return {
+        k: v
+        for k, v in request_model_info.items()
+        if k in _HEALTH_CHECK_SAFE_MODEL_INFO_KEYS
+    }
+
+
 def get_callback_identifier(callback):
     """
     Get the callback identifier string, handling both strings and objects.
@@ -1768,6 +1818,16 @@ async def test_model_connection(
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
+        # Resolved server-side `model_info` for the deployment we authorize
+        # against. Used to drive `_update_litellm_params_for_health_check`
+        # so caller-supplied routing fields (e.g. `health_check_model`,
+        # `mode`, `health_check_voice`) cannot override server config —
+        # `_update_litellm_params_for_health_check` rewrites
+        # `litellm_params["model"]` from `model_info.health_check_model`,
+        # which would otherwise let a caller make the proxy use this
+        # deployment's credentials to call a different provider model
+        # after `can_user_make_model_call()` has authorized the original.
+        resolved_model_info: Optional[dict] = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -1788,6 +1848,9 @@ async def test_model_connection(
 
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(
+                        exclude_none=True
+                    )
+                    resolved_model_info = deployment_by_id.model_info.model_dump(
                         exclude_none=True
                     )
                 elif model_name:
@@ -1816,6 +1879,9 @@ async def test_model_connection(
                         config_litellm_params = dict(
                             deployments[0].get("litellm_params", {})
                         )
+                        resolved_model_info = dict(
+                            deployments[0].get("model_info", {}) or {}
+                        )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. "
@@ -1837,9 +1903,28 @@ async def test_model_connection(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
-        # Include health_check_params if provided
+        # Include health_check_params if provided. Pass through the
+        # caller-supplied `model_info` so flags like
+        # `health_check_supports_max_tokens` are honored — matches the
+        # behavior of the background `/health` endpoint. Previously this
+        # was hardcoded to `{}`, silently dropping those flags and always
+        # injecting `max_tokens: 5`.
+        #
+        # Security: prefer server-side `model_info` when we resolved the
+        # deployment from the router. The helper rewrites
+        # `litellm_params["model"]` from `model_info.health_check_model`
+        # (and reads `mode`, `health_check_voice`, etc.); trusting the
+        # request body would let a caller authorized for one deployment
+        # use its credentials to probe a different provider model. When
+        # no server-side deployment was resolved (e.g. ad-hoc curl with
+        # raw credentials), restrict caller `model_info` to the
+        # non-routing flags this endpoint legitimately needs.
+        helper_model_info = _safe_health_check_model_info(
+            resolved_model_info=resolved_model_info,
+            request_model_info=model_info,
+        )
         litellm_params = _update_litellm_params_for_health_check(
-            model_info={},
+            model_info=helper_model_info,
             litellm_params=litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
