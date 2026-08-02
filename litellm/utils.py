@@ -5809,6 +5809,8 @@ def _get_model_info_helper(
                     "cache_creation_input_token_cost_ultrafast", None
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
+                cache_read_input_audio_token_cost=_model_info.get("cache_read_input_audio_token_cost", None),
+                cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None

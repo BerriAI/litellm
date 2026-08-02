@@ -123,6 +123,10 @@
           "type": "number",
           "minimum": 0
         },
+        "cache_read_input_image_token_cost": {
+          "type": "number",
+          "minimum": 0
+        },
         "cache_read_input_token_cost": {
           "type": "number",
           "minimum": 0,

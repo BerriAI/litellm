@@ -534,7 +534,12 @@ def test_realtime_stream_combines_text_and_audio_token_details():
                     "input_tokens": 10,
                     "output_tokens": 20,
                     "total_tokens": 30,
-                    "input_token_details": {"text_tokens": 8, "audio_tokens": 2},
+                    "input_token_details": {
+                        "text_tokens": 8,
+                        "audio_tokens": 2,
+                        "cached_tokens": 3,
+                        "cached_tokens_details": {"text_tokens": 1, "audio_tokens": 2},
+                    },
                     "output_token_details": {"text_tokens": 12, "audio_tokens": 8},
                 }
             },
@@ -546,7 +551,12 @@ def test_realtime_stream_combines_text_and_audio_token_details():
                     "input_tokens": 5,
                     "output_tokens": 15,
                     "total_tokens": 20,
-                    "input_token_details": {"text_tokens": 3, "audio_tokens": 2},
+                    "input_token_details": {
+                        "text_tokens": 3,
+                        "audio_tokens": 2,
+                        "cached_tokens": 2,
+                        "cached_tokens_details": {"text_tokens": 1, "audio_tokens": 1},
+                    },
                     "output_token_details": {"text_tokens": 5, "audio_tokens": 10},
                 }
             },
@@ -560,10 +570,101 @@ def test_realtime_stream_combines_text_and_audio_token_details():
     assert combined.prompt_tokens_details is not None
     assert combined.prompt_tokens_details.text_tokens == 11
     assert combined.prompt_tokens_details.audio_tokens == 4
+    assert combined.prompt_tokens_details.cached_tokens == 5
+    assert combined.prompt_tokens_details.cached_tokens_details is not None
+    assert combined.prompt_tokens_details.cached_tokens_details.text_tokens == 2
+    assert combined.prompt_tokens_details.cached_tokens_details.audio_tokens == 3
 
     assert combined.completion_tokens_details is not None
     assert combined.completion_tokens_details.text_tokens == 17
     assert combined.completion_tokens_details.audio_tokens == 18
+
+
+@pytest.mark.parametrize(
+    (
+        "provider",
+        "model",
+        "input_text_rate",
+        "input_audio_rate",
+        "input_image_rate",
+        "cached_text_rate",
+        "cached_audio_rate",
+        "cached_image_rate",
+        "output_text_rate",
+        "output_audio_rate",
+    ),
+    [
+        ("openai", "gpt-realtime-2", 4e-06, 3.2e-05, 5e-06, 4e-07, 4e-07, 5e-07, 2.4e-05, 6.4e-05),
+        ("openai", "gpt-realtime-2.1", 4e-06, 3.2e-05, 5e-06, 4e-07, 4e-07, 5e-07, 2.4e-05, 6.4e-05),
+        ("openai", "gpt-realtime-2.1-mini", 6e-07, 1e-05, 8e-07, 6e-08, 3e-07, 8e-08, 2.4e-06, 2e-05),
+        ("azure", "gpt-realtime-2", 4e-06, 3.2e-05, 5e-06, 4e-07, 4e-07, 5e-07, 2.4e-05, 6.4e-05),
+        ("azure", "gpt-realtime-2.1", 4e-06, 3.2e-05, 5e-06, 4e-07, 4e-07, 5e-07, 2.4e-05, 6.4e-05),
+        ("azure", "gpt-realtime-2.1-mini", 6e-07, 1e-05, 8e-07, 6e-08, 3e-07, 8e-08, 2.4e-06, 2e-05),
+    ],
+)
+def test_realtime_cached_multimodal_token_cost(
+    monkeypatch,
+    provider: str,
+    model: str,
+    input_text_rate: float,
+    input_audio_rate: float,
+    input_image_rate: float,
+    cached_text_rate: float,
+    cached_audio_rate: float,
+    cached_image_rate: float,
+    output_text_rate: float,
+    output_audio_rate: float,
+):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": model}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 300,
+                    "total_tokens": 1300,
+                    "input_token_details": {
+                        "text_tokens": 400,
+                        "audio_tokens": 400,
+                        "image_tokens": 200,
+                        "cached_tokens": 300,
+                        "cached_tokens_details": {
+                            "text_tokens": 100,
+                            "audio_tokens": 150,
+                            "image_tokens": 50,
+                        },
+                    },
+                    "output_token_details": {
+                        "text_tokens": 100,
+                        "audio_tokens": 100,
+                        "reasoning_tokens": 100,
+                    },
+                }
+            },
+        },
+    ]
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(results)
+    litellm_model_name = f"azure/{model}" if provider == "azure" else model
+    actual = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined,
+        custom_llm_provider=provider,
+        litellm_model_name=litellm_model_name,
+    )
+    expected = (
+        300 * input_text_rate
+        + 250 * input_audio_rate
+        + 150 * input_image_rate
+        + 100 * cached_text_rate
+        + 150 * cached_audio_rate
+        + 50 * cached_image_rate
+        + 200 * output_text_rate
+        + 100 * output_audio_rate
+    )
+    assert actual == pytest.approx(expected)
 
 
 def test_realtime_logging_object_allows_null_transcript_in_conversation_item_added():

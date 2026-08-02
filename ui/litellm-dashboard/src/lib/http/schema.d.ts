@@ -29109,6 +29109,8 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost */
+            cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
@@ -39099,6 +39101,8 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost */
+            cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
