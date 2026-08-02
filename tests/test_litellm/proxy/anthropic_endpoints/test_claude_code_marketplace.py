@@ -199,6 +199,60 @@ async def test_register_plugin_git_subdir_path_traversal():
 
 
 @pytest.mark.asyncio
+async def test_register_plugin_git_subdir_dot_prefix_paths():
+    """git-subdir paths with dot-prefixed segments (e.g. .claude/skills) are accepted.
+
+    Regression test for #34778: the path validation regex previously required each
+    segment to start with an alphanumeric character, which incorrectly rejected
+    standard Unix hidden-directory names such as .claude/ and .github/.
+    """
+    for good_path in [
+        ".claude/skills",
+        ".github/actions/my-action",
+        ".claude",
+        "plugins/.claude/skills",
+        ".config/litellm",
+    ]:
+        request = RegisterPluginRequest(
+            name="dot-prefix-plugin",
+            source={
+                "source": "git-subdir",
+                "url": "https://github.com/org/monorepo.git",
+                "path": good_path,
+            },
+        )
+        response = await register_plugin(request=request, user_api_key_dict=_USER)
+        assert response["status"] == "success", f"expected success for path {good_path!r}"
+
+
+@pytest.mark.asyncio
+async def test_register_plugin_git_subdir_dot_only_segments_rejected():
+    """Bare dot and double-dot segments are still rejected after the regex fix.
+
+    Regression guard: allowing a leading dot must not re-open path-traversal via
+    '.' or '..' segments.
+    """
+    for bad_path in [
+        ".",
+        "..",
+        "plugins/../secrets",
+        "plugins/.",
+        "plugins/..",
+    ]:
+        request = RegisterPluginRequest(
+            name="bad-dot-plugin",
+            source={
+                "source": "git-subdir",
+                "url": "https://github.com/org/monorepo.git",
+                "path": bad_path,
+            },
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await register_plugin(request=request, user_api_key_dict=_USER)
+        assert exc_info.value.status_code == 400, f"expected 400 for path {bad_path!r}"
+
+
+@pytest.mark.asyncio
 async def test_register_plugin_unknown_source_type():
     """Unknown source type raises HTTP 400 listing all valid types."""
     request = RegisterPluginRequest(
