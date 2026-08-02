@@ -34,8 +34,7 @@ const alerts = [
   { name: "slack", variables: { SLACK_WEBHOOK_URL: "https://hooks.example.com" } },
 ];
 
-const fieldNamed = (name: string) =>
-  document.querySelector<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`)!;
+const fieldNamed = (name: string) => document.querySelector<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`)!;
 
 describe("EmailSettings", () => {
   beforeEach(() => {
