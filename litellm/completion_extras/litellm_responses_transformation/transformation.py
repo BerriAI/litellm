@@ -141,7 +141,7 @@ def _tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Ch
     return tool_call_dict
 
 
-def _flat_responses_tool_choice(choice_type: str, name: str) -> Union[ToolChoiceFunctionParam, ToolChoiceCustomParam]:
+def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFunctionParam | ToolChoiceCustomParam:
     if choice_type == "custom":
         return ToolChoiceCustomParam(type="custom", name=name)
     return ToolChoiceFunctionParam(type="function", name=name)
