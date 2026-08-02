@@ -120,23 +120,26 @@ class TenantTracerCache:
             return (dynamic,)
         return (dynamic, *self.tracers_for(default, destinations, include_base_on_first=False))
 
-    def dynamic_tracer_for(self, default: Tracer, dynamic_params: "StandardCallbackDynamicParams | None") -> Tracer:
-        """The credential-scoped tracer when the request carries this backend's team/key OTLP
-        credentials, else ``default``. Distinct from ``tracer_for`` (admin destinations); this
-        is the per-request path restored for parity with the pre-v2-refactor behavior."""
-        headers = dynamic_otlp_headers(self._callback_name, dynamic_params)
-        if not headers:
-            return default
-        return self._credential_scoped_tracer(headers)
-
     def _credential_scoped_tracer(
         self,
         headers: "dict[str, str]",
         dynamic_params: "StandardCallbackDynamicParams | None" = None,
     ) -> Tracer:
         """A cached provider that keeps the configured exporters and rewrites only this
-        backend's owned exporter's headers to ``headers`` (the per-request credentials)."""
-        cache_key: tuple[object, ...] = ("dynamic", tuple(sorted(headers.items())))
+        backend's owned exporter's headers to ``headers`` (the per-request credentials).
+
+        The endpoint is part of the key: when the preset contributed no exporter the
+        synthesized one resolves its endpoint from the request's own credentials, so two
+        tenants sharing vendor credentials on different hosts would otherwise collide and
+        the second tenant's traces would ship to the first tenant's collector.
+        """
+        from litellm.integrations.otel.presets import dynamic_otlp_endpoint
+
+        cache_key: tuple[object, ...] = (
+            "dynamic",
+            tuple(sorted(headers.items())),
+            dynamic_otlp_endpoint(self._callback_name, dynamic_params),
+        )
         provider = self._providers.get(cache_key)
         if provider is not None:
             self._providers.move_to_end(cache_key)
@@ -245,23 +248,6 @@ class TenantTracerCache:
             provider = build_tracer_provider(
                 self._config_with_destinations(tuple(group), include_base_exporters=include_base)
             )
-            self._providers[cache_key] = provider
-            self._evict_if_full()
-        return get_tracer(provider, self._tracer_name)
-
-    def tracer_for(self, default: Tracer, destinations: "tuple[OtelDestination, ...]") -> Tracer:
-        """Single merged tracer for ``destinations`` (one provider, one Resource).
-
-        The single-group primitive ``tracers_for`` composes per group.
-        """
-        if not destinations:
-            return default
-        cache_key = tuple(sorted((d.endpoint, tuple(sorted(d.headers.items()))) for d in destinations))
-        provider = self._providers.get(cache_key)
-        if provider is not None:
-            self._providers.move_to_end(cache_key)
-        else:
-            provider = build_tracer_provider(self._config_with_destinations(destinations))
             self._providers[cache_key] = provider
             self._evict_if_full()
         return get_tracer(provider, self._tracer_name)

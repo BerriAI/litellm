@@ -3171,8 +3171,6 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
 
-    otel_destinations: Optional[Sequence[OtelDestinationParams]]
-
 
 class CustomPricingLiteLLMParams(BaseModel):
     ## CUSTOM PRICING ##

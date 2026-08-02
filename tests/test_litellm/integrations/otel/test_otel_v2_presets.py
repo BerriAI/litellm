@@ -107,10 +107,14 @@ def test_arize_keeps_its_exporter_for_an_operators_own_collector(monkeypatch):
     assert specs[0].headers == "authorization=Bearer OPERATOR-COLLECTOR-SECRET"
 
 
-def test_arize_never_sends_the_operators_otlp_headers_to_the_public_endpoint(monkeypatch):
-    # A global arize callback with no credentials still exports (additive parity), but it
-    # must not fall back to the operator's OTLP auth header while pointed at Arize's public
-    # endpoint: that hands a collector credential to a vendor the operator has no account with.
+def test_arize_public_endpoint_spec_carries_no_operator_headers(monkeypatch):
+    # A global arize callback with no credentials still exports (additive parity), and the
+    # spec this preset contributes carries no headers of its own, so the operator's OTLP auth
+    # header is never written into an exporter aimed at Arize's public endpoint.
+    #
+    # This asserts the spec only. The OTLP SDK still reads OTEL_EXPORTER_OTLP_TRACES_HEADERS
+    # from the environment for any header-less exporter; that is standard OTLP behaviour that
+    # predates this PR and applies to every integration, so it is out of scope here.
     from litellm.integrations.otel.model.config import ExporterOwner
     from litellm.integrations.otel.presets.arize import ARIZE_PUBLIC_OTLP_ENDPOINT, arize_preset
 

@@ -3136,11 +3136,6 @@
       "count": 1
     }
   },
-  "src/components/logging_credentials/LoggingExportersSelect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/logging_settings_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1

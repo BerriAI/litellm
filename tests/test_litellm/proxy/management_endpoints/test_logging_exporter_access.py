@@ -185,16 +185,18 @@ def test_identity_scope_empty_for_none():
 # --- resolved_logging_exporter_names: the /team/info + /organization/info disclosure --
 
 
-def _cred(name, access=None, ctype="logging", buildable=True):
+def _cred(name, access=None, ctype="logging", buildable=True, endpoint=None):
     info = {"credential_type": ctype}
     if access is not None:
         info["access"] = access
     values = {}
     if buildable:
         # a generic OTLP backend with an endpoint builds a destination, so disclosure
-        # (which now mirrors the resolver's buildability) includes it.
+        # (which now mirrors the resolver's buildability) includes it. The endpoint is
+        # per-name by default so these fixtures are distinct destinations; disclosure
+        # dedupes ones that resolve to the same target, which is covered separately.
         info["description"] = "generic"
-        values = {"otel_endpoint": "http://collector.example/v1/traces"}
+        values = {"otel_endpoint": endpoint or f"http://collector.example/{name}/v1/traces"}
     return CredentialItem(credential_name=name, credential_values=values, credential_info=info)
 
 
@@ -276,3 +278,21 @@ def test_resolved_names_excludes_unbuildable(monkeypatch):
         ],
     )
     assert resolved_logging_exporter_names("t1", None) == ("buildable-generic",)
+
+
+def test_resolved_names_drop_duplicates_of_the_same_target(monkeypatch):
+    """Regression: the resolver dedupes destinations resolving to the same endpoint,
+    headers and resource attributes, so disclosure must too. Listing both names told a
+    team it had two exporters when only one would ever receive a trace."""
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    same = "http://collector.example/shared/v1/traces"
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            _cred("dup-one", access={"teams": ["t1"]}, endpoint=same),
+            _cred("dup-two", access={"teams": ["t1"]}, endpoint=same),
+            _cred("distinct", access={"teams": ["t1"]}),
+        ],
+    )
+    assert resolved_logging_exporter_names("t1", None) == ("dup-one", "distinct")

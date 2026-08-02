@@ -261,11 +261,12 @@ class OpenTelemetryV2(CustomLogger):
         # call id; keep the first span so its start time is the true one.
         if call_id in self._open_llm_calls:
             return
-        # A retry that reuses a call id whose span already closed must not open new spans:
-        # the close callback short-circuits on ``_closed_call_ids``, so those spans would
-        # never be finished or exported (a leak). The completed attempt was already traced.
-        if call_id in self._closed_call_ids:
-            return
+        # A router retry or fallback re-enters ``pre_call`` with the call id of an
+        # attempt that already closed, because the id is minted once per request. That
+        # is a genuinely new upstream attempt and gets its own span, so the marker left
+        # by the previous attempt is cleared here; leaving it made the close callback
+        # short-circuit and the successful attempt after a failure went untraced.
+        self._closed_call_ids.pop(call_id, None)
         start_time_ns = to_ns(datetime.now())
         spans: tuple[Span, ...] = ()
         # Parent to the request's anchored root span (stable across the request),
@@ -466,18 +467,29 @@ class OpenTelemetryV2(CustomLogger):
         call = LLMCallEvent.from_dict(kwargs)
         call_id = call.call_id
 
-        if call_id and call_id in self._closed_call_ids:
-            return None
-
         carrier = self._open_llm_calls.pop(call_id, None) if call_id else None
         payload = call.payload
+
+        # The closed marker guards the carrier-less path only, where it stops a repeat
+        # success/failure callback re-emitting a span that already shipped. An open
+        # carrier is this attempt's own live span and must always be finished, or a
+        # retry's span would be left open and never exported.
+        #
+        # It is keyed on the payload's own id rather than the call id, because a router
+        # retry reuses one ``litellm_call_id`` for every attempt while each attempt gets
+        # its own payload id (the provider's response id, falling back to the call id).
+        # Keying on the call id made the successful attempt after a failure look like a
+        # duplicate, so a destination saw only the failure.
+        emit_key = (payload.get("id") if payload else None) or call_id
+        if carrier is None and emit_key and emit_key in self._closed_call_ids:
+            return None
 
         if carrier is None:
             destinations = self._destinations_for_backend(call)
             own_credentials = bool(dynamic_otlp_headers(self.callback_name, call.dynamic_params))
             if call.is_no_upstream_call or payload is None or not (destinations or own_credentials):
                 return None
-            self._mark_closed(call_id)
+            self._mark_closed(emit_key)
             return self._emit_deferred_llm_call(
                 payload,
                 destinations,
@@ -488,7 +500,7 @@ class OpenTelemetryV2(CustomLogger):
             )
 
         end_time_ns = to_ns(end_time)
-        self._mark_closed(call_id)
+        self._mark_closed(emit_key)
         if payload is None:
             for span in carrier.spans:
                 span.end(end_time=end_time_ns)

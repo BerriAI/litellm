@@ -68,7 +68,7 @@ def _event(destinations):
 def test_no_destinations_uses_default_tracer():
     cache = _cache("langfuse_otel")
     default = NoOpTracer()
-    assert cache.tracer_for(default, ()) is default
+    assert cache.tracers_for(default, ()) == (default,)
     assert cache._providers == {}
 
 
@@ -78,10 +78,10 @@ def test_provider_cached_per_destination_set():
     a = (_dest("https://eu.example/v1", "Basic A"),)
     b = (_dest("https://eu.example/v1", "Basic B"),)
 
-    cache.tracer_for(default, a)
-    cache.tracer_for(default, a)  # same set -> reuse
+    cache.tracers_for(default, a)
+    cache.tracers_for(default, a)  # same set -> reuse
     assert len(cache._providers) == 1
-    cache.tracer_for(default, b)  # different creds -> new provider
+    cache.tracers_for(default, b)  # different creds -> new provider
     assert len(cache._providers) == 2
 
 
@@ -92,8 +92,8 @@ def test_different_host_is_a_distinct_provider():
     default = NoOpTracer()
     eu = (_dest("https://cloud.langfuse.com/api/public/otel", "Basic X"),)
     us = (_dest("https://us.cloud.langfuse.com/api/public/otel", "Basic X"),)
-    cache.tracer_for(default, eu)
-    cache.tracer_for(default, us)
+    cache.tracers_for(default, eu)
+    cache.tracers_for(default, us)
     assert len(cache._providers) == 2
 
 
@@ -102,8 +102,8 @@ def test_destination_set_is_order_independent():
     default = NoOpTracer()
     a = _dest("https://a/v1", "Basic A")
     b = _dest("https://b/v1", "Basic B")
-    cache.tracer_for(default, (a, b))
-    cache.tracer_for(default, (b, a))  # same set, different order -> one provider
+    cache.tracers_for(default, (a, b))
+    cache.tracers_for(default, (b, a))  # same set, different order -> one provider
     assert len(cache._providers) == 1
 
 
@@ -132,10 +132,10 @@ def test_provider_cache_evicts_lru_and_shuts_it_down_off_hot_path(monkeypatch):
 
     cache = _cache("langfuse_otel")
     default = NoOpTracer()
-    cache.tracer_for(default, (_dest("https://1/v1"),))  # created[0]
-    cache.tracer_for(default, (_dest("https://2/v1"),))  # created[1]
-    cache.tracer_for(default, (_dest("https://1/v1"),))  # touch "1" -> "2" is LRU
-    cache.tracer_for(default, (_dest("https://3/v1"),))  # created[2]: overflow -> evict "2"
+    cache.tracers_for(default, (_dest("https://1/v1"),))  # created[0]
+    cache.tracers_for(default, (_dest("https://2/v1"),))  # created[1]
+    cache.tracers_for(default, (_dest("https://1/v1"),))  # touch "1" -> "2" is LRU
+    cache.tracers_for(default, (_dest("https://3/v1"),))  # created[2]: overflow -> evict "2"
 
     assert len(cache._providers) == 2
     # eviction shuts down off the hot path, so wait for the background daemon thread
@@ -225,7 +225,7 @@ def test_fan_out_to_many_destinations_is_one_provider_with_all_exporters():
         "https://a/v1",
         "https://b/v1",
     ]
-    cache.tracer_for(NoOpTracer(), (_dest("https://a/v1"), _dest("https://b/v1")))
+    cache.tracers_for(NoOpTracer(), (_dest("https://a/v1"), _dest("https://b/v1")))
     assert len(cache._providers) == 1
 
 
@@ -304,20 +304,22 @@ def test_clone_provider_emits_genai_span_with_destination_resource():
         "arize",
         {"model_id": "team-b-proj", "arize.project.name": "team-b-proj"},
     )
-    tracer = cache.tracer_for(get_tracer(build_tracer_provider(cfg)), (dest,))
+    tracers = cache.tracers_for(get_tracer(build_tracer_provider(cfg)), (dest,))
+    tracer = tracers[-1]
     with tracer.start_as_current_span("chat anthropic-haiku") as span:
         span.set_attribute("gen_ai.operation.name", "chat")
 
+    # The destination group carries the destination's Resource and only the
+    # destination's exporter; the configured in-memory exporter rides the base tracer
+    # (``tracers[0]``) on a clean Resource, so the tenant's project can never stamp it.
     provider = next(iter(cache._providers.values()))
     provider.force_flush()
-    captured = []
-    for proc in provider._active_span_processor._span_processors:
-        exporter = getattr(proc, "span_exporter", None)
-        if isinstance(exporter, InMemorySpanExporter):
-            captured = exporter.get_finished_spans()
-    assert captured, "clone provider exported no span to its in-memory exporter"
-    resource_attrs = dict(captured[0].resource.attributes)
+    resource_attrs = dict(provider.resource.attributes)
     assert resource_attrs.get("model_id") == "team-b-proj"
+    assert not any(
+        isinstance(getattr(proc, "span_exporter", None), InMemorySpanExporter)
+        for proc in provider._active_span_processor._span_processors
+    ), "the configured exporter must not ride a destination group"
     assert resource_attrs.get("arize.project.name") == "team-b-proj"
 
 
@@ -409,7 +411,7 @@ def test_admin_destinations_route():
     )
     assert len(event.otel_destinations) == 1
     cache = _cache("langfuse_otel")
-    cache.tracer_for(NoOpTracer(), event.otel_destinations)
+    cache.tracers_for(NoOpTracer(), event.otel_destinations)
     assert len(cache._providers) == 1
 
 

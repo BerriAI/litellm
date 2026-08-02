@@ -44,7 +44,6 @@ from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.utils import as_str, to_seconds
-from litellm.integrations.otel.plumbing.context import request_destinations
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
@@ -209,6 +208,12 @@ class LLMCallEvent:
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> "LLMCallEvent":
+        # Imported here rather than at module scope: this module is reachable from
+        # ``litellm/__init__`` and ``plumbing.context`` imports opentelemetry eagerly, so a
+        # top-level import makes the whole package a hard dependency of the proxy, which
+        # installs without the optional tracing extras.
+        from litellm.integrations.otel.plumbing.context import request_destinations
+
         raw_payload = kwargs.get("standard_logging_object")
         payload = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
         operation = resolve_operation(as_str(kwargs.get("call_type")))

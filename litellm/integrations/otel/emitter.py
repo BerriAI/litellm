@@ -233,7 +233,16 @@ class SpanEmitter:
         each tracer (each provider stamps its own Resource). Returns the first span (or
         ``None`` if deduped/empty).
         """
-        dedup_key = data.identity.call_id if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData)) else None
+        # A router retry reuses one ``litellm_call_id`` across every attempt, so the call id
+        # alone coalesced the successful attempt into the failed one it replaced and the
+        # retried call reached its destinations only as the failure. The response id splits
+        # the attempts apart while a sync+async double-firing of one attempt still shares it.
+        attempt_id = data.response_id if isinstance(data, LLMCallSpanData) else None
+        dedup_key = (
+            (f"{data.identity.call_id}:{attempt_id}" if attempt_id else data.identity.call_id)
+            if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData))
+            else None
+        )
         if self._seen(dedup_key, role):
             return None
         name = _NAME_BUILDERS[role](data)

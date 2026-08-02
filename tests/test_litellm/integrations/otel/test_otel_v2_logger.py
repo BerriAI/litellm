@@ -858,26 +858,99 @@ def test_pre_call_idempotent_keeps_first_span():
     assert first is second  # not overwritten
 
 
-def test_pre_call_after_close_does_not_reopen_leaked_span():
-    """A retry that reuses a call id whose span already closed must NOT open a new
-    span: the close callback short-circuits on ``_closed_call_ids``, so a reopened
-    span would never be finished or exported (a leak)."""
-    logger, _ = _logger()
+def test_retry_reusing_a_closed_call_id_gets_its_own_span():
+    """Regression: a router retry or fallback reuses the request's ``litellm_call_id``,
+    and the failed attempt's close marks that id closed before the retry runs. Treating
+    the marker as final meant the retry opened no span and emitted nothing, so a request
+    that failed once and then succeeded exported only the failure -- no tokens, no cost.
+
+    The retry now reopens, and the reopened span is finished and exported, so it cannot
+    leak instead.
+    """
+    logger, exporter = _logger()
+    kwargs = _kwargs()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+
+    # attempt 1: opened, then closed by the failure callback
+    with trace.use_span(server, end_on_exit=False):
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    assert "call_1" in logger._open_llm_calls
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    assert "call_1" in logger._closed_call_ids
+    first_round = len([s for s in exporter.get_finished_spans() if s.name == "chat gpt-4o"])
+    assert first_round == 1
+
+    # attempt 2 reuses the same call id and must get its own span
+    with trace.use_span(server, end_on_exit=False):
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    assert "call_1" in logger._open_llm_calls, "the retry must reopen, not be skipped"
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+
+    assert "call_1" not in logger._open_llm_calls, "the reopened span must be finished, not leaked"
+    assert len([s for s in exporter.get_finished_spans() if s.name == "chat gpt-4o"]) == 2
+
+
+def test_retry_reaching_destinations_emits_a_span_per_attempt(monkeypatch):
+    """Regression, deferred/destination path: the destination logger is activated
+    lazily at success time, so both the failed attempt and the retry that replaced it
+    arrive as carrier-less closes sharing one ``litellm_call_id``. Deduping the fan-out
+    on the call id alone collapsed the two, and the destination saw only the failure --
+    no tokens, no cost. Each attempt carries its own response id and must emit.
+    """
+    logger, exporter = _logger()
+    monkeypatch.setattr(logger, "callback_name", "in_memory")
+    monkeypatch.setattr(logger._tenant_tracers, "genai_tracers_for", lambda default, dests, params: (default,))
+    _anchor([{"callback_name": "in_memory", "endpoint": "https://otlp.example.com/v1", "headers": {"api_key": "k"}}])
+
+    failed = _payload(
+        id="attempt_1",
+        status="failure",
+        response={"id": "attempt_1", "model": "gpt-4o-2024", "choices": []},
+    )
+    succeeded = _payload(
+        id="attempt_2",
+        response={"id": "attempt_2", "model": "gpt-4o-2024", "choices": [{"finish_reason": "stop"}]},
+    )
+    assert failed["litellm_call_id"] == succeeded["litellm_call_id"], "a retry reuses one call id"
+
+    asyncio.run(logger.async_log_success_event(_kwargs(failed), None, None, None))
+    asyncio.run(logger.async_log_success_event(_kwargs(succeeded), None, None, None))
+
+    emitted = [s for s in exporter.get_finished_spans() if s.name == "chat gpt-4o"]
+    assert len(emitted) == 2, "the retry must reach the destination, not be deduped into the failure"
+
+
+def test_repeat_deferred_callback_for_one_attempt_still_dedupes(monkeypatch):
+    """The counterpart the fan-out dedup still guards: a sync+async double-firing of a
+    single attempt shares its response id and must emit once."""
+    logger, exporter = _logger()
+    monkeypatch.setattr(logger, "callback_name", "in_memory")
+    monkeypatch.setattr(logger._tenant_tracers, "genai_tracers_for", lambda default, dests, params: (default,))
+    _anchor([{"callback_name": "in_memory", "endpoint": "https://otlp.example.com/v1", "headers": {"api_key": "k"}}])
+
+    payload = _payload(id="attempt_1", response={"id": "attempt_1", "model": "gpt-4o-2024", "choices": []})
+    asyncio.run(logger.async_log_success_event(_kwargs(payload), None, None, None))
+    asyncio.run(logger.async_log_success_event(_kwargs(payload), None, None, None))
+
+    assert len([s for s in exporter.get_finished_spans() if s.name == "chat gpt-4o"]) == 1
+
+
+def test_repeat_callback_without_an_open_span_emits_nothing():
+    """The counterpart the closed marker still guards: a second success callback for a
+    call that has no open carrier must not re-emit through the deferred path."""
+    logger, exporter = _logger()
     kwargs = _kwargs()
     server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     with trace.use_span(server, end_on_exit=False):
         logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
-    assert "call_1" in logger._open_llm_calls
-
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
-    assert "call_1" not in logger._open_llm_calls
-    assert "call_1" in logger._closed_call_ids
+    emitted = len([s for s in exporter.get_finished_spans() if s.name == "chat gpt-4o"])
 
-    # A retry reuses the same call id; pre_call must not reopen a carrier/span for it.
-    with trace.use_span(server, end_on_exit=False):
-        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))  # duplicate
     server.end()
-    assert "call_1" not in logger._open_llm_calls
+
+    assert len([s for s in exporter.get_finished_spans() if s.name == "chat gpt-4o"]) == emitted
 
 
 # --------------------------------------------------------------------------- #

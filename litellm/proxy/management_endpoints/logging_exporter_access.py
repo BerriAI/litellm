@@ -16,7 +16,6 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.integrations.otel.presets.destinations import build_destination
 from litellm.models.credentials import CredentialAccess, CredentialInfo, CredentialItem
 
 if TYPE_CHECKING:
@@ -82,8 +81,12 @@ def resolved_logging_exporter_names(
 
     Mirrors the request-time resolver's selection so it never advertises an exporter that
     receives no traces: a destination is disclosed only when its ``access`` grants the
-    identity AND it actually builds (see ``_builds``). Names only; endpoints, headers, and
-    the access map itself stay proxy-admin information.
+    identity AND it actually builds. Names only; endpoints, headers, and the access map
+    itself stay proxy-admin information.
+
+    The resolver also dedupes destinations that resolve to the same endpoint, headers and
+    resource attributes, so this drops the later duplicates too; listing both names would
+    advertise a second exporter that no trace ever reaches.
 
     Gated on ``is_otel_v2_enabled`` for parity with the resolver, which returns nothing
     when the flag is off: disclosing a destination the request path would never fire
@@ -92,15 +95,29 @@ def resolved_logging_exporter_names(
     if not is_otel_v2_enabled():
         return ()
     team_ids, org_ids = identity_scope(team_id, org_id)
-    selected = tuple(
-        credential.credential_name
+    granted = tuple(
+        (credential.credential_name, _export_target(built[1]))
         for credential in litellm.credential_list
         if (info := parse_credential_info(credential.credential_info)) is not None
         and info.credential_type == "logging"
         and access_grants(info.access, team_ids, org_ids)
-        and destination_for_credential(credential) is not None
+        if (built := destination_for_credential(credential)) is not None
     )
-    return tuple(dict.fromkeys(selected))
+    targets = tuple(target for _name, target in granted)
+    return tuple(name for index, (name, target) in enumerate(granted) if target not in targets[:index])
+
+
+def _export_target(destination: "OtelDestination") -> tuple[object, ...]:
+    """What two destinations must share to be the same export target.
+
+    Two names for one target would advertise a second exporter that no trace ever reaches,
+    so the disclosure keeps only the first credential that resolves to each of these.
+    """
+    return (
+        destination.endpoint,
+        tuple(sorted(destination.headers.items())),
+        tuple(sorted(destination.resource_attributes.items())),
+    )
 
 
 def destination_for_credential(credential: CredentialItem) -> 'tuple[str, "OtelDestination"] | None':
@@ -112,6 +129,8 @@ def destination_for_credential(credential: CredentialItem) -> 'tuple[str, "OtelD
     out to the built destinations) and the team/org disclosure (which must not advertise a
     destination that resolves to nothing), so the two cannot drift apart.
     """
+    from litellm.integrations.otel.presets.destinations import build_destination
+
     backend = (credential.credential_info or {}).get("description")
     if not backend:
         return None
