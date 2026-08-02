@@ -183,6 +183,24 @@ class TestSingulrBuildPayloadRequestData:
         payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
         assert payload["request_data"]["litellm_metadata"] == {"user_api_key_hash": "abc123"}
 
+    def test_model_response_handles_dict_response_from_agent_path(self, singulr_guardrail):
+        """Regression: unlike the chat completions path (request_data["response"]
+        is a ModelResponse pydantic object), the A2A guardrail translation
+        handler stores request_data["response"] as a plain dict (it already
+        calls .model_dump()/uses a raw dict before stashing it). Calling
+        .model_dump() unconditionally on that dict crashed with AttributeError
+        ('dict' object has no attribute 'model_dump'), turning every A2A
+        post-call guardrail check into a 500."""
+        request_data = {
+            "model": "a2a_agent/demo-agent",
+            "response": {"result": {"parts": [{"kind": "text", "text": "Go to settings."}]}},
+        }
+        payload = singulr_guardrail._build_payload(request_data, {"texts": ["Go to settings."]}, "response")
+
+        assert payload["request_data"]["model_response"] == {
+            "result": {"parts": [{"kind": "text", "text": "Go to settings."}]}
+        }
+
     def test_internal_logging_object_is_not_forwarded(self, singulr_guardrail):
         """Regression: request_data can carry internal proxy objects (e.g. the
         Logging instance) that aren't JSON-serializable at all. _build_payload
@@ -203,6 +221,75 @@ class TestSingulrBuildPayloadRequestData:
         # Must not raise.
         _json.dumps(payload)
         assert "litellm_logging_obj" not in payload["request_data"]
+
+
+# ---------------------------------------------------------------------------
+# _build_payload: A2A agent requests (JSON-RPC 2.0 shape)
+# ---------------------------------------------------------------------------
+
+
+class TestSingulrBuildPayloadA2A:
+    def test_a2a_request_is_detected_and_flagged_as_agent_call_type(self, singulr_guardrail):
+        """An A2A JSON-RPC request has no chat-completions "messages" field -
+        the text lives at params.message. Without detecting the A2A shape via
+        _is_a2a_call, call_type stayed "model" and the guardrail request
+        wouldn't carry the agent-specific messages shape Singulr expects."""
+        request_data = {
+            "jsonrpc": "2.0",
+            "params": {
+                "message": {
+                    "parts": [{"kind": "text", "text": "What's the weather in Boston?"}],
+                }
+            },
+        }
+        payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
+        assert payload["request_data"]["call_type"] == "agent"
+        assert payload["request_data"]["messages"] == [request_data["params"]["message"]]
+
+    def test_non_a2a_request_is_flagged_as_model_call_type(self, singulr_guardrail):
+        request_data = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+        payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
+        assert payload["request_data"]["call_type"] == "model"
+
+    def test_a2a_request_missing_message_yields_none_messages(self, singulr_guardrail):
+        """A2A shape detected (jsonrpc + params present) but no message under
+        params - must not raise, and must forward None rather than a
+        fabricated placeholder."""
+        request_data = {"jsonrpc": "2.0", "params": {}}
+        payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
+        assert payload["request_data"]["call_type"] == "agent"
+        assert payload["request_data"]["messages"] is None
+
+    def test_a2a_response_model_response_uses_joined_guardrailed_texts(self, singulr_guardrail):
+        """Regression: the raw A2A JSON-RPC result dict nests text in several
+        different shapes (parts/message.parts/artifact.parts/status.message.parts/...).
+        Dumping it wholesale as model_response would push that parsing burden
+        onto Singulr's backend. For A2A calls, model_response must instead be
+        the already-extracted, guardrail-normalized text from
+        inputs["texts"] - not request_data["response"]."""
+        request_data = {
+            "jsonrpc": "2.0",
+            "params": {"message": {"parts": [{"kind": "text", "text": "What's the weather?"}]}},
+            "response": {"result": {"parts": [{"kind": "text", "text": "It's sunny."}]}},
+        }
+        payload = singulr_guardrail._build_payload(request_data, {"texts": ["It's sunny."]}, "response")
+        assert payload["request_data"]["call_type"] == "agent"
+        assert payload["request_data"]["model_response"] == "It's sunny."
+
+    def test_a2a_response_with_no_texts_yields_none_model_response(self, singulr_guardrail):
+        request_data = {"jsonrpc": "2.0", "params": {"message": {"parts": []}}}
+        payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "response")
+        assert payload["request_data"]["model_response"] is None
+
+    def test_a2a_request_side_does_not_populate_model_response(self, singulr_guardrail):
+        """model_response must stay None on the request side even for A2A
+        calls - the response hasn't happened yet."""
+        request_data = {
+            "jsonrpc": "2.0",
+            "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+        }
+        payload = singulr_guardrail._build_payload(request_data, {"texts": ["hi"]}, "request")
+        assert payload["request_data"]["model_response"] is None
 
 
 # ---------------------------------------------------------------------------

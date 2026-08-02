@@ -1,16 +1,19 @@
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
+
+SingulrCallType = Literal["model", "agent"]
 
 
 class SingulrGuardrailRequest(BaseModel):
     model: Optional[str] = None
     messages: Optional[list[dict[str, Any]]] = None
     tools: Optional[list[dict[str, Any]]] = None
-    model_response: Optional[dict[str, Any]] = None
+    model_response: Optional[dict[str, Any] | str] = None
     litellm_metadata: Optional[dict[str, Any]] = None
+    call_type: SingulrCallType = "model"
 
 
 class SingulrGuardrailPayload(BaseModel):

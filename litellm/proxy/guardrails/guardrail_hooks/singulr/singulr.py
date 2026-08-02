@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import urlparse
 
 import httpx
@@ -92,35 +92,83 @@ class SingulrGuardrail(CustomGuardrail):
 
         return SingulrGuardrailConfigModel
 
+    @classmethod
+    def _is_a2a_call(cls, request_data: Mapping[str, Any]) -> bool:
+        if "params" in request_data and "jsonrpc" in request_data:
+            return True
+        return False
+
+    @classmethod
+    def _agent_request_messages(cls, request_data: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+        if "params" not in request_data:
+            return []  # mutable-ok: SingulrGuardrailRequest.messages is a pydantic list field
+
+        message = request_data["params"].get("message")
+        return [message] if message else None  # mutable-ok: pydantic list field, see above
+
+    @staticmethod
+    def _model_response_for_a2a(inputs: GenericGuardrailAPIInputs) -> str | None:
+        return "".join(inputs.get("texts", ())) or None
+
+    @staticmethod
+    def _model_response_for_chat(response: Any) -> dict[str, Any] | None:  # mutable-ok: SingulrGuardrailRequest.model_response is a pydantic dict field
+        if response is None:
+            return None
+        return response.model_dump(mode="json") if hasattr(response, "model_dump") else response
+
+    def _build_playground_payload(self, inputs: GenericGuardrailAPIInputs, input_type: str) -> SingulrGuardrailPayload:
+        texts = inputs.get("texts", ())
+        return SingulrGuardrailPayload(
+            input_type=input_type,
+            is_playground_request=True,
+            playground_text=texts[0] if texts else None,
+        )
+
+    def _build_request_payload(
+        self,
+        request_data: Mapping[str, Any],
+        inputs: GenericGuardrailAPIInputs,
+        input_type: str,
+    ) -> SingulrGuardrailPayload:
+        is_a2a_call = self._is_a2a_call(request_data)
+
+        model_response: dict[str, Any] | str | None = None  # mutable-ok: pydantic dict field, see _model_response_for_chat
+        if input_type == "response":
+            if is_a2a_call:
+                model_response = self._model_response_for_a2a(inputs)
+            else:
+                model_response = self._model_response_for_chat(request_data.get("response"))
+
+        if is_a2a_call:
+            messages = self._agent_request_messages(request_data)
+        else:
+            messages = request_data.get("messages")
+
+        singulr_req_object = SingulrGuardrailRequest(
+            model=request_data.get("model"),
+            messages=messages,
+            tools=request_data.get("tools"),
+            model_response=model_response,
+            litellm_metadata=request_data.get("litellm_metadata"),
+            call_type="agent" if is_a2a_call else "model",
+        )
+        return SingulrGuardrailPayload(
+            litellm_call_id=request_data.get("litellm_call_id"),
+            request_data=singulr_req_object,
+            input_type=input_type,
+        )
+
     def _build_payload(
         self,
         request_data: dict[str, Any],
         inputs: GenericGuardrailAPIInputs,
         input_type: str,
     ) -> dict[str, Any]:
-        if not request_data:
-            texts = inputs.get("texts", [])
-
-            payload = SingulrGuardrailPayload(
-                input_type=input_type,
-                is_playground_request=True,
-                playground_text=texts[0] if texts else None,
-            )
-        else:
-            response = request_data.get("response")
-            singulr_req_object = SingulrGuardrailRequest(
-                model=request_data.get("model"),
-                messages=request_data.get("messages"),
-                tools=request_data.get("tools"),
-                model_response=response.model_dump(mode="json") if input_type == "response" and response else None,
-                litellm_metadata=request_data.get("litellm_metadata"),
-            )
-            payload = SingulrGuardrailPayload(
-                litellm_call_id=request_data.get("litellm_call_id"),
-                request_data=singulr_req_object,
-                input_type=input_type,
-            )
-
+        payload = (
+            self._build_playground_payload(inputs, input_type)
+            if not request_data
+            else self._build_request_payload(request_data, inputs, input_type)
+        )
         return payload.model_dump(mode="json")
 
     def _build_headers(self) -> dict[str, str]:
@@ -163,7 +211,7 @@ class SingulrGuardrail(CustomGuardrail):
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
-                    message=(f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}"),
+                    message=f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}",
                 ) from exc
             return None
 
