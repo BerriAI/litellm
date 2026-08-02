@@ -7,7 +7,7 @@ Provides:
 """
 
 import base64
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -107,9 +107,9 @@ async def _authorize_nested_vector_store_ids(
 
 def _build_file_metadata_entry(
     response: Any,
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file_url: Optional[str] = None,
-) -> Dict[str, Any]:
+    file_data: tuple[str, bytes, str] | None = None,
+    file_url: str | None = None,
+) -> dict[str, Any]:
     """
     Build a file metadata entry for storing in vector_store_metadata.
 
@@ -159,11 +159,11 @@ def _build_file_metadata_entry(
 
 async def _save_vector_store_to_db_from_rag_ingest(
     response: Any,
-    ingest_options: Dict[str, Any],
+    ingest_options: dict[str, Any],
     prisma_client,
     user_api_key_dict: UserAPIKeyAuth,
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file_url: Optional[str] = None,
+    file_data: tuple[str, bytes, str] | None = None,
+    file_url: str | None = None,
 ) -> None:
     """
     Helper function to save a newly created vector store from RAG ingest to the database.
@@ -283,7 +283,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
 
 async def parse_rag_ingest_request(
     request: Request,
-) -> Tuple[Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]]:
+) -> tuple[dict[str, Any], tuple[str, bytes, str] | None, str | None, str | None]:
     """
     Parse RAG ingest request.
 
@@ -300,7 +300,7 @@ async def parse_rag_ingest_request(
     file_data = None
     file_url = None
     file_id = None
-    ingest_options: Dict[str, Any] = {}
+    ingest_options: dict[str, Any] = {}
 
     if "multipart/form-data" in content_type:
         # Form upload
@@ -485,7 +485,7 @@ async def rag_ingest(
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
         # Add litellm data
-        request_data: Dict[str, Any] = {}
+        request_data: dict[str, Any] = {}
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,
@@ -653,7 +653,7 @@ async def rag_query(
         )
 
         # Add litellm data
-        request_data: Dict[str, Any] = {}
+        request_data: dict[str, Any] = {}
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,

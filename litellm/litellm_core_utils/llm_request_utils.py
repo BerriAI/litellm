@@ -1,9 +1,7 @@
-from typing import Dict, Optional
-
 import litellm
 
 
-def _ensure_extra_body_is_safe(extra_body: Optional[Dict]) -> Optional[Dict]:
+def _ensure_extra_body_is_safe(extra_body: dict | None) -> dict | None:
     """
     Ensure that the extra_body sent in the request is safe,  otherwise users will see this error
 
@@ -64,7 +62,7 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     return [model for model, _ in model_costs[:n]]
 
 
-def get_proxy_server_request_headers(litellm_params: Optional[dict]) -> dict:
+def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:
     """
     Get the `proxy_server_request` headers from the litellm_params.\
 

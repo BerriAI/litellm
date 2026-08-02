@@ -14021,6 +14021,12 @@ export interface paths {
          *
          *     This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709
          *
+         *     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI as well as
+         *     teams still on the deprecated callback_settings shape, resolved from the team's stored metadata
+         *     with the same precedence used at request time. A key-level logging config overrides the team's
+         *     at request time and is not reflected here. Credential-bearing callback_vars are returned masked
+         *     as `***REDACTED***`
+         *
          *     Returns {
          *             "status": "success",
          *             "data": {
@@ -23580,7 +23586,7 @@ export interface components {
              * @description Default role assigned to new users created
              * @default internal_user_viewer
              */
-            user_role: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+            user_role: ("internal_user" | "internal_user_viewer" | "proxy_admin" | "proxy_admin_viewer") | null;
         };
         /**
          * DefaultTeamSSOParams

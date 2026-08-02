@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections import OrderedDict
 from threading import RLock
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class BoundedPrometheusSeriesTracker:
@@ -15,18 +15,18 @@ class BoundedPrometheusSeriesTracker:
     """
 
     def __init__(self) -> None:
-        self._series: Dict[str, OrderedDict[tuple[Optional[str], ...], float]] = {}
-        self._last_ttl_cleanup: Dict[str, float] = {}
+        self._series: dict[str, OrderedDict[tuple[str | None, ...], float]] = {}
+        self._last_ttl_cleanup: dict[str, float] = {}
         self.lock = RLock()
 
     def track_series(
         self,
         metric: Any,
         metric_name: str,
-        label_values: tuple[Optional[str], ...],
-        max_series: Optional[int],
-        ttl_seconds: Optional[float],
-        cleanup_interval_seconds: Optional[float],
+        label_values: tuple[str | None, ...],
+        max_series: int | None,
+        ttl_seconds: float | None,
+        cleanup_interval_seconds: float | None,
     ) -> None:
         if max_series is None and ttl_seconds is None:
             return
@@ -64,7 +64,7 @@ class BoundedPrometheusSeriesTracker:
         self,
         metric_name: str,
         now: float,
-        cleanup_interval_seconds: Optional[float],
+        cleanup_interval_seconds: float | None,
     ) -> bool:
         if cleanup_interval_seconds is None or cleanup_interval_seconds <= 0:
             self._last_ttl_cleanup[metric_name] = now
@@ -79,14 +79,14 @@ class BoundedPrometheusSeriesTracker:
     def _remove_metric_series(
         self,
         metric: Any,
-        series: OrderedDict[tuple[Optional[str], ...], float],
-        label_values: tuple[Optional[str], ...],
+        series: OrderedDict[tuple[str | None, ...], float],
+        label_values: tuple[str | None, ...],
     ) -> None:
         if self._remove_metric_child(metric, label_values):
             series.pop(label_values, None)
 
     @staticmethod
-    def _remove_metric_child(metric: Any, label_values: tuple[Optional[str], ...]) -> bool:
+    def _remove_metric_child(metric: Any, label_values: tuple[str | None, ...]) -> bool:
         """
         Remove the Prometheus child for ``label_values`` and report whether the
         tracker should commit the matching state change.

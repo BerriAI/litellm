@@ -1,8 +1,9 @@
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, Mapping, Optional, Set
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import TypeAdapter
@@ -43,7 +44,7 @@ router = APIRouter()
 _AUDIT_REDACTED = "***REDACTED***"
 
 
-def _redact_config(config: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def _redact_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Strip values from a config snapshot before audit-log emission.
 
     Hashicorp Vault config carries ``vault_token``, ``approle_secret_id``,
@@ -67,10 +68,10 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 async def _emit_hashicorp_vault_audit_log(
     *,
     action: AUDIT_ACTIONS,
-    before_config: Optional[Mapping[str, Any]],
-    after_config: Optional[Mapping[str, Any]],
+    before_config: Mapping[str, Any] | None,
+    after_config: Mapping[str, Any] | None,
     user_api_key_dict: UserAPIKeyAuth,
-    litellm_changed_by: Optional[str],
+    litellm_changed_by: str | None,
 ) -> None:
     """Emit an audit-log row for a /config_overrides/hashicorp_vault mutation.
 
@@ -109,7 +110,7 @@ async def _emit_hashicorp_vault_audit_log(
 
 # --- Hashicorp Vault constants ---
 
-HASHICORP_ENV_VAR_MAPPING: Dict[str, str] = {
+HASHICORP_ENV_VAR_MAPPING: dict[str, str] = {
     "vault_addr": "HCP_VAULT_ADDR",
     "vault_token": "HCP_VAULT_TOKEN",
     "approle_role_id": "HCP_VAULT_APPROLE_ROLE_ID",
@@ -123,7 +124,7 @@ HASHICORP_ENV_VAR_MAPPING: Dict[str, str] = {
     "vault_path_prefix": "HCP_VAULT_PATH_PREFIX",
 }
 
-HASHICORP_SENSITIVE_FIELDS: Set[str] = {
+HASHICORP_SENSITIVE_FIELDS: set[str] = {
     "vault_token",
     "approle_secret_id",
     "client_key",
@@ -135,7 +136,7 @@ _sensitive_masker = SensitiveDataMasker()
 # --- Shared helpers ---
 
 
-def _mask_sensitive_fields(data: Dict[str, Any], sensitive_fields: Set[str]) -> Dict[str, Any]:
+def _mask_sensitive_fields(data: dict[str, Any], sensitive_fields: set[str]) -> dict[str, Any]:
     """Mask sensitive fields for API responses. Non-sensitive fields are left as-is."""
     masked = {}
     for key, value in data.items():
@@ -146,7 +147,7 @@ def _mask_sensitive_fields(data: Dict[str, Any], sensitive_fields: Set[str]) -> 
     return masked
 
 
-def _get_current_env_values(env_var_mapping: Dict[str, str]) -> Dict[str, Any]:
+def _get_current_env_values(env_var_mapping: dict[str, str]) -> dict[str, Any]:
     """Read current env var values as fallback when no DB record exists."""
     values = {}
     for field_name, env_var_name in env_var_mapping.items():
@@ -155,7 +156,7 @@ def _get_current_env_values(env_var_mapping: Dict[str, str]) -> Dict[str, Any]:
     return values
 
 
-def _extract_field_type(field_info: Dict[str, Any]) -> str:
+def _extract_field_type(field_info: dict[str, Any]) -> str:
     """Extract the non-null type from a Pydantic v2 JSON schema field."""
     if "type" in field_info:
         return field_info["type"]
@@ -165,7 +166,7 @@ def _extract_field_type(field_info: Dict[str, Any]) -> str:
     return "string"
 
 
-def _build_field_schema(model_class: type) -> Dict[str, Any]:
+def _build_field_schema(model_class: type) -> dict[str, Any]:
     """Build field_schema dict from a Pydantic model for UI rendering."""
     schema = TypeAdapter(model_class).json_schema(by_alias=True)
     properties = {}
@@ -180,14 +181,14 @@ def _build_field_schema(model_class: type) -> Dict[str, Any]:
     }
 
 
-def _parse_config_value(raw: Any) -> Dict[str, Any]:
+def _parse_config_value(raw: Any) -> dict[str, Any]:
     """Parse a config_value from DB (may be JSON string or dict)."""
     if isinstance(raw, str):
         return safe_json_loads(raw, default={})
     return dict(raw)
 
 
-def _set_env_vars(config_data: Dict[str, Any]) -> None:
+def _set_env_vars(config_data: dict[str, Any]) -> None:
     """Set HCP_VAULT_* env vars from config data. Unsets vars for missing/None/empty fields."""
     for field_name, env_var_name in HASHICORP_ENV_VAR_MAPPING.items():
         value = config_data.get(field_name)
@@ -217,7 +218,7 @@ def _clear_hashicorp_vault_state(proxy_config: Any) -> None:
 async def update_hashicorp_vault_config(
     config: HashicorpVaultConfig,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
@@ -248,8 +249,8 @@ async def update_hashicorp_vault_config(
     existing_record = await ConfigOverridesRepository(prisma_client).table.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
-    existing_decrypted: Optional[Dict[str, Any]] = None
-    env_values: Dict[str, Any] = {}
+    existing_decrypted: dict[str, Any] | None = None
+    env_values: dict[str, Any] = {}
     if existing_record is not None and existing_record.config_value is not None:
         existing_data = _parse_config_value(existing_record.config_value)
         existing_decrypted = proxy_config._decrypt_db_variables(existing_data)
@@ -411,7 +412,7 @@ async def get_hashicorp_vault_config(
 )
 async def delete_hashicorp_vault_config(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
@@ -436,7 +437,7 @@ async def delete_hashicorp_vault_config(
     existing_record = await ConfigOverridesRepository(prisma_client).table.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
-    before_config: Optional[Dict[str, Any]] = None
+    before_config: dict[str, Any] | None = None
     if existing_record is not None and existing_record.config_value is not None:
         try:
             before_config = proxy_config._decrypt_db_variables(_parse_config_value(existing_record.config_value))

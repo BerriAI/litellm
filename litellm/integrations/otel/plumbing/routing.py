@@ -9,18 +9,19 @@ logger fan requests out to many tenants without needing a logger per tenant.
 """
 
 from collections import OrderedDict
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
-from litellm.integrations.otel.presets import dynamic_otlp_headers
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
     get_tracer,
 )
+from litellm.integrations.otel.presets import dynamic_otlp_headers
 
 # Exporter kinds that ignore headers — never rewritten with dynamic credentials.
 _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
@@ -60,7 +61,7 @@ class TenantTracerCache:
         self._config = config
         self._callback_name = callback_name
         self._tracer_name = tracer_name
-        self._providers: "OrderedDict[tuple[tuple[str, str], ...], TracerProvider]" = OrderedDict()
+        self._providers: OrderedDict[tuple[tuple[str, str], ...], TracerProvider] = OrderedDict()
 
     def tracer_for(self, default: Tracer, dynamic_params: Any) -> Tracer:
         """Return the tracer for this request.

@@ -1,5 +1,4 @@
 # stdlib imports
-from typing import Optional
 
 # third party imports
 import click
@@ -26,7 +25,7 @@ from .commands.users import users
 from .interface import interactive_shell
 
 
-def print_version(base_url: str, api_key: Optional[str]):
+def print_version(base_url: str, api_key: str | None):
     """Print CLI and server version info."""
     click.echo(f"LiteLLM Proxy CLI Version: {litellm_version}")
     if base_url:
@@ -65,7 +64,7 @@ def print_version(base_url: str, api_key: Optional[str]):
     help="API key for authentication",
 )
 @click.pass_context
-def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: Optional[str]) -> None:
+def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: str | None) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
 

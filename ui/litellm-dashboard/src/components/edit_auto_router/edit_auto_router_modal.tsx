@@ -35,6 +35,7 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_llm_config",
   "classifier_context_window_size",
   "classifier_context_per_turn_chars",
+  "classifier_context_include_assistant_turns",
   "adaptive",
   "adaptive_weights",
   "tier_distance_penalty",
@@ -95,6 +96,10 @@ export const buildUpdatedComplexityRouterConfig = (
     ...(value.classifier_type === "llm" &&
       value.classifier_context_per_turn_chars !== undefined && {
         classifier_context_per_turn_chars: value.classifier_context_per_turn_chars,
+      }),
+    ...(value.classifier_type === "llm" &&
+      value.classifier_context_include_assistant_turns !== undefined && {
+        classifier_context_include_assistant_turns: value.classifier_context_include_assistant_turns,
       }),
     ...(customTechnicalKeywords &&
       customTechnicalKeywords.length > 0 && {
@@ -208,6 +213,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           classifier_context_per_turn_chars:
             typeof parsedConfig.classifier_context_per_turn_chars === "number"
               ? parsedConfig.classifier_context_per_turn_chars
+              : undefined,
+          classifier_context_include_assistant_turns:
+            typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
+              ? parsedConfig.classifier_context_include_assistant_turns
               : undefined,
           adaptive: parsedConfig.adaptive || false,
           adaptive_weights: parsedConfig.adaptive_weights,

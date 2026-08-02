@@ -18,7 +18,7 @@ Scoping:
 """
 
 import json
-from typing import Any, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -61,14 +61,14 @@ def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
-def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
+def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> dict | None:
     """
     Prisma `where` fragment restricting rows to those the caller can see.
     Returns None for admins (no restriction).
     """
     if _is_admin(user_api_key_dict):
         return None
-    ors: List[dict] = []
+    ors: list[dict] = []
     if user_api_key_dict.user_id:
         ors.append({"user_id": user_api_key_dict.user_id})
     if user_api_key_dict.team_id:
@@ -206,9 +206,9 @@ def _is_unique_violation(exc: Exception) -> bool:
 
 def _resolve_scope(
     user_api_key_dict: UserAPIKeyAuth,
-    requested_user_id: Optional[str],
-    requested_team_id: Optional[str],
-) -> tuple[Optional[str], Optional[str]]:
+    requested_user_id: str | None,
+    requested_team_id: str | None,
+) -> tuple[str | None, str | None]:
     """
     Resolve the (user_id, team_id) to stamp on a new row.
 
@@ -304,8 +304,8 @@ async def create_memory(
     response_model=MemoryListResponse,
 )
 async def list_memory(
-    key: Optional[str] = Query(None, description="Filter by exact key match."),
-    key_prefix: Optional[str] = Query(
+    key: str | None = Query(None, description="Filter by exact key match."),
+    key_prefix: str | None = Query(
         None,
         description=(
             "Filter by key prefix (Redis-style namespace scan). "

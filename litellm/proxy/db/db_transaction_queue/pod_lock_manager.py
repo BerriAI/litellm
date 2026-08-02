@@ -1,9 +1,9 @@
 import asyncio
 import json
-from litellm._uuid import uuid
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
@@ -30,10 +30,10 @@ else
 end
 """
 
-    def __init__(self, redis_cache: Optional[RedisCache] = None):
+    def __init__(self, redis_cache: RedisCache | None = None):
         self.pod_id = str(uuid.uuid4())
         self.redis_cache = redis_cache
-        self._release_lock_script: Optional[Any] = None
+        self._release_lock_script: Any | None = None
 
     @staticmethod
     def get_redis_lock_key(cronjob_id: str) -> str:
@@ -42,8 +42,8 @@ end
     async def acquire_lock(
         self,
         cronjob_id: str,
-        ttl: Optional[int] = None,
-    ) -> Optional[bool]:
+        ttl: int | None = None,
+    ) -> bool | None:
         """
         Attempt to acquire the lock for a specific cron job using Redis.
         Uses the SET command with NX and EX options to ensure atomicity.
