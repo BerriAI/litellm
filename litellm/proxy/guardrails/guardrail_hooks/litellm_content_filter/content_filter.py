@@ -750,7 +750,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         except FileNotFoundError:
             raise FileNotFoundError(f"Blocked words file not found: {file_path}")
         except Exception as e:
-            raise Exception(f"Error loading blocked words file {file_path}: {e!s}")
+            raise Exception(f"Error loading blocked words file {file_path}: {e}")
 
     def _find_pattern_spans(self, text: str, pattern_entry: dict[str, Any]) -> list[tuple[int, int]]:
         """Return all match spans for a pattern, applying contextual rules if required."""

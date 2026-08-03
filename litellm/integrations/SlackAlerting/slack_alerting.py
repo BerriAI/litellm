@@ -1467,7 +1467,7 @@ Model Info:
             try:
                 await self._flush_digest_buckets()
             except Exception as e:
-                verbose_proxy_logger.debug(f"Error flushing digest buckets: {e!s}")
+                verbose_proxy_logger.debug(f"Error flushing digest buckets: {e}")
             await self.flush_queue()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -1502,7 +1502,7 @@ Model Info:
                 )
         except Exception as e:
             verbose_proxy_logger.error(
-                f"[Non-Blocking Error] Slack Alerting: Got error in logging LLM deployment latency: {e!s}"
+                f"[Non-Blocking Error] Slack Alerting: Got error in logging LLM deployment latency: {e}"
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -1522,7 +1522,7 @@ Model Info:
                         )
                     )
                 except Exception as e:
-                    verbose_logger.debug(f"Exception raises -{e!s}")
+                    verbose_logger.debug(f"Exception raises -{e}")
 
             if isinstance(kwargs.get("exception", ""), APIError):
                 if "outage_alerts" in self.alert_types:

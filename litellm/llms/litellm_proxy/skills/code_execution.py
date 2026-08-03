@@ -239,7 +239,7 @@ class CodeExecutionHandler:
                             tool_result += f"\n\nError:\n{exec_result['error']}"
 
                     except Exception as e:
-                        tool_result = f"Code execution failed: {e!s}"
+                        tool_result = f"Code execution failed: {e}"
                         execution_results.append(
                             {
                                 "iteration": iteration,

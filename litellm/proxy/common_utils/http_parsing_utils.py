@@ -98,9 +98,9 @@ async def _read_request_body(request: Request | None) -> dict:
                     # Above the configured size, skip the repair and raise the 400 now.
                     repair_limit_bytes = MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB * 1024 * 1024
                     if repair_limit_bytes > 0 and len(body) > repair_limit_bytes:
-                        verbose_proxy_logger.error(f"Invalid JSON payload received: {e!s}")
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {e}")
                         raise ProxyException(
-                            message=f"Invalid JSON payload: {e!s}",
+                            message=f"Invalid JSON payload: {e}",
                             type="invalid_request_error",
                             param="request_body",
                             code=status.HTTP_400_BAD_REQUEST,
@@ -120,9 +120,9 @@ async def _read_request_body(request: Request | None) -> dict:
                         parsed_body = json.loads(body_str)
                     except json.JSONDecodeError:
                         # If both orjson and json.loads fail, throw a proper error
-                        verbose_proxy_logger.error(f"Invalid JSON payload received: {e!s}")
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {e}")
                         raise ProxyException(
-                            message=f"Invalid JSON payload: {e!s}",
+                            message=f"Invalid JSON payload: {e}",
                             type="invalid_request_error",
                             param="request_body",
                             code=status.HTTP_400_BAD_REQUEST,
@@ -134,7 +134,7 @@ async def _read_request_body(request: Request | None) -> dict:
 
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
         # Re-raise ProxyException as-is
-        verbose_proxy_logger.error(f"Invalid JSON payload received: {e!s}")
+        verbose_proxy_logger.error(f"Invalid JSON payload received: {e}")
         raise
     except Exception as e:
         # Catch unexpected errors to avoid crashes
@@ -426,7 +426,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
                     verbose_proxy_logger.warning(f"Cannot set value - parent is not a dict for key: {key}")
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error parsing metadata key '{key}': {e!s}")
+            verbose_proxy_logger.error(f"Error parsing metadata key '{key}': {e}")
             continue
 
     return metadata

@@ -2197,7 +2197,7 @@ async def cli_sso_callback(
         raise
     except Exception as e:
         verbose_proxy_logger.error(f"Error with CLI SSO callback: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process CLI SSO: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Failed to process CLI SSO: {e}")
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
@@ -2320,7 +2320,7 @@ async def cli_poll_key(
         raise
     except Exception as e:
         verbose_proxy_logger.error(f"Error polling for CLI JWT: {e}")
-        raise HTTPException(status_code=500, detail=f"Error checking session status: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error checking session status: {e}")
 
 
 async def insert_sso_user(
@@ -4479,7 +4479,7 @@ async def debug_sso_callback(request: Request):
                     # Try to convert to string or another JSON serializable format
                     filtered_result[key] = str(value)
                 except Exception as e:
-                    filtered_result[key] = f"Complex value (not displayable): {e!s}"
+                    filtered_result[key] = f"Complex value (not displayable): {e}"
 
     # Defense-in-depth: ensure no bearer tokens leak into the rendered HTML even if
     # a non-conforming IdP places them in its userinfo response.

@@ -125,7 +125,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             BaseAWSLLM.__init__(self)
 
         except Exception as e:
-            print_verbose(f"Got exception on init s3 client {e!s}")
+            print_verbose(f"Got exception on init s3 client {e}")
             raise e
 
     def _init_s3_params(
@@ -284,7 +284,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 self.batch_size,
             )
         except Exception as e:
-            verbose_logger.exception(f"s3 Layer Error - {e!s}")
+            verbose_logger.exception(f"s3 Layer Error - {e}")
             self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
@@ -383,7 +383,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 response.raise_for_status()
                 break
         except Exception as e:
-            verbose_logger.exception(f"Error uploading to s3: {e!s}")
+            verbose_logger.exception(f"Error uploading to s3: {e}")
             self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_send_batch(self):
@@ -557,7 +557,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 response.raise_for_status()
                 break
         except Exception as e:
-            verbose_logger.exception(f"Error uploading to s3: {e!s}")
+            verbose_logger.exception(f"Error uploading to s3: {e}")
             self.handle_callback_failure(callback_name="S3Logger")
 
     async def _download_object_from_s3(self, s3_object_key: str) -> dict | None:
@@ -642,7 +642,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             return response.json()
 
         except Exception as e:
-            verbose_logger.exception(f"Error downloading from S3: {e!s}")
+            verbose_logger.exception(f"Error downloading from S3: {e}")
             return None
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
@@ -666,5 +666,5 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             downloaded_object = await self._download_object_from_s3(object_key)
             return downloaded_object
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving object {object_key} from cold storage: {e!s}")
+            verbose_logger.exception(f"Error retrieving object {object_key} from cold storage: {e}")
             return None

@@ -247,7 +247,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
 
         except Exception as e:
             # If we can't determine the cost, assume it has cost (conservative approach)
-            verbose_proxy_logger.debug(f"Error checking cost for model {model_name}: {e!s}, assuming it has cost")
+            verbose_proxy_logger.debug(f"Error checking cost for model {model_name}: {e}, assuming it has cost")
             return False
 
     # All models checked have zero cost
@@ -979,7 +979,7 @@ async def get_default_end_user_budget(
         return _budget_obj
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching default end user budget: {e!s}")
+        verbose_proxy_logger.error(f"Error fetching default end user budget: {e}")
         return None
 
 
@@ -1626,6 +1626,34 @@ async def _get_fuzzy_user_object(
     return response
 
 
+async def _backfill_null_user_email(
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    user_row: LiteLLM_UserTable,
+    user_email: str | None,
+) -> LiteLLM_UserTable:
+    if user_email is None or user_row.user_email is not None or prisma_client is None:
+        return user_row
+
+    user_repo = UserRepository(prisma_client)
+    await user_repo.backfill_null_user_email(
+        user_id=user_row.user_id,
+        user_email=user_email,
+    )
+    db_row = await user_repo.find_by_id(user_row.user_id)
+    if db_row is None:
+        return user_row
+    email_update = {"user_email": db_row.user_email}  # mutable-ok: model_copy update payload is dict-shaped
+    updated_row = user_row.model_copy(update=email_update)
+    await user_api_key_cache.async_set_cache(
+        key=user_row.user_id,
+        value=updated_row,
+        model_type=LiteLLM_UserTable,
+        ttl=get_management_object_ttl(user_api_key_cache),
+    )
+    return updated_row
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: str | None,
@@ -1654,7 +1682,12 @@ async def get_user_object(
             model_type=LiteLLM_UserTable,
         )
         if cached_user_obj is not None:
-            return cached_user_obj
+            return await _backfill_null_user_email(
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_row=cached_user_obj,
+                user_email=user_email,
+            )
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
@@ -1738,6 +1771,12 @@ async def get_user_object(
             response.organization_memberships = _dumped_memberships
 
         _response = LiteLLM_UserTable.model_validate(dict(response))
+        _response = await _backfill_null_user_email(
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_row=_response,
+            user_email=user_email,
+        )
         response_dict = _response.model_dump()
 
         # save the user object to cache
@@ -2244,7 +2283,7 @@ async def get_team_object_by_alias(
         verbose_proxy_logger.exception("Error looking up team by alias: %s", team_alias)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Error looking up team by alias '{team_alias}': {e!s}"},
+            detail={"error": f"Error looking up team by alias '{team_alias}': {e}"},
         )
 
 
@@ -2330,7 +2369,7 @@ async def get_org_object_by_alias(
         verbose_proxy_logger.exception("Error looking up organization by alias: %s", org_alias)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Error looking up organization by alias '{org_alias}': {e!s}"},
+            detail={"error": f"Error looking up organization by alias '{org_alias}': {e}"},
         )
 
 

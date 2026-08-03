@@ -211,7 +211,7 @@ def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> d
                     )
                     return embedding_config
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error resolving embedding config from router for model {model_name}: {e!s}")
+            verbose_proxy_logger.debug(f"Error resolving embedding config from router for model {model_name}: {e}")
             continue
 
     return None
@@ -299,7 +299,7 @@ async def _resolve_embedding_config_from_db(embedding_model: str, prisma_client)
                     )
                     return embedding_config
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error resolving embedding config for model {model_name}: {e!s}")
+            verbose_proxy_logger.debug(f"Error resolving embedding config for model {model_name}: {e}")
             continue
 
     return None
@@ -542,7 +542,7 @@ async def new_vector_store(
             "vector_store": response_vs,
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating vector store: {e!s}")
+        verbose_proxy_logger.exception(f"Error creating vector store: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -647,7 +647,7 @@ async def list_vector_stores(
 
         return response
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing vector stores: {e!s}")
+        verbose_proxy_logger.exception(f"Error listing vector stores: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -727,7 +727,7 @@ async def delete_vector_store(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting vector store: {e!s}")
+        verbose_proxy_logger.exception(f"Error deleting vector store: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -799,7 +799,7 @@ async def get_vector_store_info(
         # the catch-all below would otherwise rewrite them as 500.
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting vector store info: {e!s}")
+        verbose_proxy_logger.exception(f"Error getting vector store info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -888,5 +888,5 @@ async def update_vector_store(
         # as 500 with the original status code embedded in the detail.
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating vector store: {e!s}")
+        verbose_proxy_logger.exception(f"Error updating vector store: {e}")
         raise HTTPException(status_code=500, detail=str(e))

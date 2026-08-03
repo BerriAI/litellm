@@ -1232,6 +1232,26 @@ async def _user_api_key_auth_builder(
                         valid_token.jwt_claims = jwt_claims
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
+                        if valid_token.user_id is not None and valid_token.user_email is None:
+                            mapped_claims = jwt_claims or {}  # mutable-ok: empty-dict fallback for the None-claims case
+                            mapped_user_email = jwt_handler.get_user_email(token=mapped_claims, default_value=None)
+                            mapped_jwt_user_id = jwt_handler.get_user_id(token=mapped_claims, default_value=None)
+                            if mapped_user_email is not None and mapped_jwt_user_id == valid_token.user_id:
+                                try:
+                                    mapped_user_obj = await get_user_object(
+                                        user_id=valid_token.user_id,
+                                        prisma_client=prisma_client,
+                                        user_api_key_cache=user_api_key_cache,
+                                        user_id_upsert=False,
+                                        parent_otel_span=parent_otel_span,
+                                        proxy_logging_obj=proxy_logging_obj,
+                                        user_email=mapped_user_email,
+                                    )
+                                except Exception as e:
+                                    verbose_proxy_logger.debug(f"JWT mapped-key user_email backfill skipped: {e}")
+                                else:
+                                    if mapped_user_obj is not None:
+                                        valid_token.user_email = mapped_user_obj.user_email
                     elif isinstance(resolve_result, _PendingAutoRegister):
                         # Run full JWT policy (RBAC, scope, custom_validate,
                         # email-domain) via auth_builder, then create the key
@@ -1481,7 +1501,7 @@ async def _user_api_key_auth_builder(
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
-                verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e!s}")
+                verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e}")
 
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
@@ -1729,7 +1749,7 @@ async def _user_api_key_auth_builder(
                         )
                 except Exception as e:
                     verbose_logger.debug(
-                        f"litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {e!s}"
+                        f"litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {e}"
                     )
                     user_obj = None
 
@@ -2757,7 +2777,7 @@ async def _lookup_end_user_and_apply_budget(
     except Exception as e:
         if isinstance(e, litellm.BudgetExceededError):
             raise e
-        verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e!s}")
+        verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e}")
     return valid_token, end_user_object
 
 
