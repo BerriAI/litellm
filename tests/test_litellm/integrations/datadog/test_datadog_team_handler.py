@@ -6,6 +6,7 @@ Verifies that DataDogLogger can be instantiated with per-team credentials
 and that the DataDogHandler correctly resolves and caches per-team loggers.
 """
 
+import copy
 from unittest.mock import patch
 
 import pytest
@@ -263,7 +264,7 @@ class TestStandardCallbackDynamicParamsIncludesDatadog:
         assert "dd_agent_port" in annotations
 
 
-def _build_logging_obj(kwargs: dict):
+def _build_logging_obj(kwargs: dict, *, with_datadog_callback: bool = True):
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     with patch("asyncio.create_task"):
@@ -275,7 +276,7 @@ def _build_logging_obj(kwargs: dict):
             start_time="2026-01-01",
             litellm_call_id="test-call-id",
             function_id="test-func",
-            dynamic_success_callbacks=["datadog"],
+            dynamic_success_callbacks=["datadog"] if with_datadog_callback else None,
             kwargs=kwargs,
         )
 
@@ -325,6 +326,19 @@ class TestTeamCallbackFlowPassesDDCredentials:
         assert dd_loggers[0].DD_API_KEY == "global_api_key"
         assert "attacker.example.com" not in dd_loggers[0].intake_url
         assert "us1.datadoghq.com" in dd_loggers[0].intake_url
+
+    def test_logging_object_stays_deepcopyable(self):
+        """The proxy deep-copies request data, and the Logging object rides along in it."""
+        logging_obj = _build_logging_obj(
+            {
+                TRUSTED_CALLBACK_VARS_FIELD: {"dd_api_key": "team-dd-key-123", "dd_site": "us5.datadoghq.com"},
+                "model": "gpt-4",
+                "litellm_params": {"metadata": {}},
+            },
+            with_datadog_callback=False,
+        )
+
+        assert copy.deepcopy(logging_obj)._trusted_callback_vars == logging_obj._trusted_callback_vars
 
     def test_caller_cannot_redirect_team_credentials(self, datadog_env):
         """The exfil shape: caller's dd_site paired with the team's dd_api_key."""

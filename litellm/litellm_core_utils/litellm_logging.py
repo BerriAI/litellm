@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
@@ -365,7 +365,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
-        self._trusted_callback_vars: Mapping[str, str] = get_trusted_callback_params(kwargs, prefix="")
+        self._trusted_callback_vars: tuple[tuple[str, str], ...] = get_trusted_callback_params(kwargs)
 
         # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
         # so team-scoped credentials are available for callback initialization)
@@ -466,9 +466,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     # dd_* params are blocked from standard_callback_dynamic_params
                     # (request-level security); only the proxy-stamped team/key
                     # callback vars are admin-configured and trusted.
-                    _custom_logger_init_args = {
-                        k: v for k, v in self._trusted_callback_vars.items() if k.startswith("dd_")
-                    }
+                    _custom_logger_init_args = {k: v for k, v in self._trusted_callback_vars if k.startswith("dd_")}
 
                 callback_class = _init_custom_logger_compatible_class(
                     callback,  # type: ignore[arg-type]
