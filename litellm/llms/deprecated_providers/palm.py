@@ -2,7 +2,7 @@ import copy
 import time
 import traceback
 import types
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import httpx
 
@@ -19,9 +19,7 @@ class PalmError(Exception):
             url="https://developers.generativeai.google/api/python/google/generativeai/chat",
         )
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 class PalmConfig:
@@ -45,23 +43,23 @@ class PalmConfig:
     - `max_output_tokens` (int): Sets the maximum number of tokens to be returned in the output
     """
 
-    context: Optional[str] = None
-    examples: Optional[list] = None
-    temperature: Optional[float] = None
-    candidate_count: Optional[int] = None
-    top_k: Optional[int] = None
-    top_p: Optional[float] = None
-    max_output_tokens: Optional[int] = None
+    context: str | None = None
+    examples: list | None = None
+    temperature: float | None = None
+    candidate_count: int | None = None
+    top_k: int | None = None
+    top_p: float | None = None
+    max_output_tokens: int | None = None
 
     def __init__(
         self,
-        context: Optional[str] = None,
-        examples: Optional[list] = None,
-        temperature: Optional[float] = None,
-        candidate_count: Optional[int] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
+        context: str | None = None,
+        examples: list | None = None,
+        temperature: float | None = None,
+        candidate_count: int | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -102,9 +100,7 @@ def completion(
     try:
         import google.generativeai as palm  # type: ignore
     except Exception:
-        raise Exception(
-            "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
-        )
+        raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
     palm.configure(api_key=api_key)
 
     model = model
@@ -167,9 +163,7 @@ def completion(
             choices_list.append(choice_obj)
         model_response.choices = choices_list  # type: ignore
     except Exception:
-        raise PalmError(
-            message=traceback.format_exc(), status_code=response.status_code
-        )
+        raise PalmError(message=traceback.format_exc(), status_code=response.status_code)
 
     try:
         completion_response = model_response["choices"][0]["message"].get("content")
@@ -181,9 +175,7 @@ def completion(
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
     prompt_tokens = len(encoding.encode(prompt))
-    completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-    )
+    completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
 
     model_response.created = int(time.time())
     model_response.model = "palm/" + model

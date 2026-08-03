@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 
 import pytest
 import requests
@@ -11,7 +12,7 @@ sys.path.insert(
 
 import responses
 
-from litellm.proxy.client.exceptions import UnauthorizedError
+from litellm.proxy.client.exceptions import NotFoundError, UnauthorizedError
 from litellm.proxy.client.keys import KeysManagementClient
 
 
@@ -420,3 +421,96 @@ def test_info_server_error(client):
     )
     with pytest.raises(requests.exceptions.HTTPError):
         client.info(key="test-key")
+
+
+LEAKY_KEY = "sk-1234567890abcdefghijklmnop"
+
+
+def _render_full_traceback(exc: BaseException) -> str:
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+
+@responses.activate
+def test_info_not_found_redacts_key_everywhere(client):
+    """A 404 must not echo the raw key embedded in the request URL.
+
+    Covers str(exc) and the rendered traceback, since the chain through
+    __cause__ / __context__ is what logging.exception() and the default
+    excepthook print.
+    """
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/info?key={LEAKY_KEY}",
+        status=404,
+        json={"error": {"message": "Key not found", "code": "404"}},
+    )
+    with pytest.raises(requests.exceptions.HTTPError) as excinfo:
+        client.info(key=LEAKY_KEY)
+
+    exc = excinfo.value
+    assert LEAKY_KEY not in str(exc)
+    assert "REDACTED" in str(exc)
+    assert LEAKY_KEY not in _render_full_traceback(exc)
+    assert exc.__cause__ is None and exc.__suppress_context__
+    assert exc.response is not None
+    assert exc.response.status_code == 404
+    assert exc.request is not None
+    # Known residual: the live request URL still carries the key, since the
+    # response is preserved so callers keep status_code / text. str(exc) and the
+    # traceback are scrubbed; the URL-borne key is the root issue tracked in
+    # LIT-4013 (move the lookup key out of the query string server-side).
+    assert LEAKY_KEY in exc.response.request.url
+
+
+@responses.activate
+def test_info_unauthorized_redacts_key_everywhere(client):
+    """A 401 surfaced as UnauthorizedError must not echo the raw key in the
+    message, the retained original, or the rendered traceback chain."""
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/info?key={LEAKY_KEY}",
+        status=401,
+        json={"error": "Unauthorized"},
+    )
+    with pytest.raises(UnauthorizedError) as excinfo:
+        client.info(key=LEAKY_KEY)
+
+    exc = excinfo.value
+    assert LEAKY_KEY not in str(exc)
+    assert "REDACTED" in str(exc)
+    assert LEAKY_KEY not in str(exc.orig_exception)
+    assert LEAKY_KEY not in _render_full_traceback(exc)
+    assert exc.__cause__ is None and exc.__suppress_context__
+    assert isinstance(exc.orig_exception, requests.exceptions.HTTPError)
+    assert exc.orig_exception.response is not None
+    assert exc.orig_exception.response.status_code == 401
+
+
+def _http_error_with_key(prefix: str, status: int) -> requests.exceptions.HTTPError:
+    resp = requests.Response()
+    resp.status_code = status
+    return requests.exceptions.HTTPError(
+        f"{prefix} for url: http://x/key/info?key={LEAKY_KEY}", response=resp
+    )
+
+
+def test_unauthorized_error_redacts_wrapped_key():
+    """UnauthorizedError scrubs the key in str(exc) and in the retained
+    orig_exception, while preserving the response for structured access."""
+    wrapped = UnauthorizedError(
+        _http_error_with_key("401 Client Error: Unauthorized", 401)
+    )
+    assert LEAKY_KEY not in str(wrapped)
+    assert "REDACTED" in str(wrapped)
+    assert LEAKY_KEY not in str(wrapped.orig_exception)
+    assert wrapped.orig_exception.response.status_code == 401
+
+
+def test_not_found_error_redacts_wrapped_key():
+    """NotFoundError scrubs the key in str(exc) and in the retained
+    orig_exception, while preserving the response for structured access."""
+    wrapped = NotFoundError(_http_error_with_key("404 Client Error: Not Found", 404))
+    assert LEAKY_KEY not in str(wrapped)
+    assert "REDACTED" in str(wrapped)
+    assert LEAKY_KEY not in str(wrapped.orig_exception)
+    assert wrapped.orig_exception.response.status_code == 404

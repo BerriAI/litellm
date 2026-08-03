@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import AsyncIterator, Iterator, Optional
+from collections.abc import AsyncIterator, Iterator
 
 import httpx
 
@@ -46,7 +46,7 @@ class _StreamParser:
     """Normalize orchestration streaming events into OpenAI-like chunks."""
 
     @staticmethod
-    def _from_orchestration_result(evt: dict) -> Optional[OpenAIChatCompletionChunk]:
+    def _from_orchestration_result(evt: dict) -> OpenAIChatCompletionChunk | None:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
         """
@@ -72,7 +72,7 @@ class _StreamParser:
         )
 
     @staticmethod
-    def to_openai_chunk(event_obj: dict) -> Optional[OpenAIChatCompletionChunk]:
+    def to_openai_chunk(event_obj: dict) -> OpenAIChatCompletionChunk | None:
         """
         Accepts:
           - {"final_result": <openai-style CHUNK>}   (IMPORTANT: this is just another chunk, NOT terminal)
@@ -139,9 +139,7 @@ class SAPStreamIterator:
             if not line:
                 continue
 
-            payload = (
-                line[len(self._prefix) :] if line.startswith(self._prefix) else line
-            )
+            payload = line.removeprefix(self._prefix)
             if payload == self._final:
                 self._safe_close()
                 raise StopIteration
@@ -213,9 +211,7 @@ class AsyncSAPStreamIterator:
                 continue
 
             # now = lambda: int(time.time() * 1000)
-            payload = (
-                line[len(self._prefix) :] if line.startswith(self._prefix) else line
-            )
+            payload = line.removeprefix(self._prefix)
             if payload == self._final:
                 await self._aclose()
                 raise StopAsyncIteration
@@ -250,9 +246,7 @@ class AsyncSAPStreamIterator:
 # LLM handler
 # -------------------------------
 class GenAIHubOrchestration(BaseLLMHTTPHandler):
-    def _add_stream_param_to_request_body(
-        self, data: dict, provider_config: BaseConfig, fake_stream: bool
-    ):
+    def _add_stream_param_to_request_body(self, data: dict, provider_config: BaseConfig, fake_stream: bool):
         if data.get("config", {}).get("stream", None) is not None:
             data["config"]["stream"]["enabled"] = True
         else:

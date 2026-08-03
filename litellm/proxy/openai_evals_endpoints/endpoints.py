@@ -2,8 +2,6 @@
 OpenAI Evals API endpoints - /v1/evals
 """
 
-from typing import Optional
-
 import orjson
 from fastapi import APIRouter, Depends, Request, Response
 
@@ -33,7 +31,7 @@ router = APIRouter()
 async def create_eval(
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "openai",
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -78,11 +76,7 @@ async def create_eval(
 
     # Extract model for routing (header > query > body)
     # When using extra_body={"model": "..."}, the OpenAI SDK merges it into the body
-    model = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -128,12 +122,12 @@ async def create_eval(
 async def list_evals(
     fastapi_response: Response,
     request: Request,
-    limit: Optional[int] = 20,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    order: Optional[str] = None,
-    order_by: Optional[str] = None,
-    custom_llm_provider: Optional[str] = "openai",
+    limit: int | None = 20,
+    after: str | None = None,
+    before: str | None = None,
+    order: str | None = None,
+    order_by: str | None = None,
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -183,11 +177,7 @@ async def list_evals(
         data["order_by"] = order_by
 
     # Extract model for routing (header > query > body)
-    model = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -234,7 +224,7 @@ async def get_eval(
     eval_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "openai",
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -275,11 +265,7 @@ async def get_eval(
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -326,7 +312,7 @@ async def update_eval(
     eval_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "openai",
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -369,11 +355,7 @@ async def update_eval(
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -420,7 +402,7 @@ async def delete_eval(
     eval_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "openai",
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -461,11 +443,7 @@ async def delete_eval(
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -512,7 +490,7 @@ async def cancel_eval(
     eval_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "openai",
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -553,11 +531,7 @@ async def cancel_eval(
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -609,7 +583,7 @@ async def create_run(
     eval_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "openai",
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -660,11 +634,7 @@ async def create_run(
         request.headers.get("x-litellm-model")
         or request.query_params.get("model")
         or data.get("model")
-        or (
-            data.get("completion", {}).get("model")
-            if isinstance(data.get("completion"), dict)
-            else None
-        )
+        or (data.get("completion", {}).get("model") if isinstance(data.get("completion"), dict) else None)
     )
     if model:
         data["model"] = model
@@ -712,11 +682,11 @@ async def list_runs(
     eval_id: str,
     fastapi_response: Response,
     request: Request,
-    limit: Optional[int] = 20,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    order: Optional[str] = None,
-    custom_llm_provider: Optional[str] = "openai",
+    limit: int | None = 20,
+    after: str | None = None,
+    before: str | None = None,
+    order: str | None = None,
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -806,7 +776,7 @@ async def get_run(
     run_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "openai",
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -893,7 +863,7 @@ async def cancel_run(
     run_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "openai",
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -934,11 +904,7 @@ async def cancel_run(
     data["run_id"] = run_id
 
     # Extract model for routing (header > query > body)
-    model = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -986,7 +952,7 @@ async def delete_run(
     run_id: str,
     fastapi_response: Response,
     request: Request,
-    custom_llm_provider: Optional[str] = "openai",
+    custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1027,11 +993,7 @@ async def delete_run(
     data["run_id"] = run_id
 
     # Extract model for routing (header > query > body)
-    model = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 

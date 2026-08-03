@@ -19,12 +19,16 @@ to the in-memory aggregator). Flush is async and batched.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from litellm._logging import verbose_router_logger
+from litellm.repositories.table_repositories import (
+    AdaptiveRouterSessionRepository,
+    AdaptiveRouterStateRepository,
+)
 
-StateKey = Tuple[str, str, str]  # (router_name, request_type, model_name)
-SessionKey = Tuple[str, str, str]  # (session_id, router_name, model_name)
+StateKey = tuple[str, str, str]  # (router_name, request_type, model_name)
+SessionKey = tuple[str, str, str]  # (session_id, router_name, model_name)
 
 
 class AdaptiveRouterUpdateQueue:
@@ -34,8 +38,8 @@ class AdaptiveRouterUpdateQueue:
     """
 
     def __init__(self) -> None:
-        self._state_agg: Dict[StateKey, Dict[str, float]] = {}
-        self._session_agg: Dict[SessionKey, Dict[str, Any]] = {}
+        self._state_agg: dict[StateKey, dict[str, float]] = {}
+        self._session_agg: dict[SessionKey, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self._max_state_size_seen = 0
         self._max_session_size_seen = 0
@@ -64,8 +68,7 @@ class AdaptiveRouterUpdateQueue:
                 current["delta_alpha"] += delta_alpha
                 current["delta_beta"] += delta_beta
                 current["samples_added"] += 1
-            if len(self._state_agg) > self._max_state_size_seen:
-                self._max_state_size_seen = len(self._state_agg)
+            self._max_state_size_seen = max(self._max_state_size_seen, len(self._state_agg))
 
     # ---- Hot-path: session snapshot --------------------------------------
 
@@ -74,7 +77,7 @@ class AdaptiveRouterUpdateQueue:
         session_id: str,
         router_name: str,
         model_name: str,
-        state_dict: Dict[str, Any],
+        state_dict: dict[str, Any],
     ) -> None:
         """
         Last-write-wins per session row. The state_dict is a snapshot of the
@@ -84,8 +87,7 @@ class AdaptiveRouterUpdateQueue:
         key: SessionKey = (session_id, router_name, model_name)
         async with self._lock:
             self._session_agg[key] = state_dict
-            if len(self._session_agg) > self._max_session_size_seen:
-                self._max_session_size_seen = len(self._session_agg)
+            self._max_session_size_seen = max(self._max_session_size_seen, len(self._session_agg))
 
     # ---- Flushers (called by background task) ----------------------------
 
@@ -112,7 +114,7 @@ class AdaptiveRouterUpdateQueue:
                 # other. The upsert creates the row with the delta as the
                 # initial value on first write, then increments on subsequent
                 # writes — no read-modify-write race.
-                await prisma_client.db.litellm_adaptiverouterstate.upsert(
+                await AdaptiveRouterStateRepository(prisma_client).table.upsert(
                     where={
                         "router_name_request_type_model_name": {
                             "router_name": router,
@@ -132,9 +134,7 @@ class AdaptiveRouterUpdateQueue:
                         "update": {
                             "alpha": {"increment": payload["delta_alpha"]},
                             "beta": {"increment": payload["delta_beta"]},
-                            "total_samples": {
-                                "increment": int(payload["samples_added"])
-                            },
+                            "total_samples": {"increment": int(payload["samples_added"])},
                         },
                     },
                 )
@@ -170,11 +170,9 @@ class AdaptiveRouterUpdateQueue:
                 # writes to fields that are part of the @@id. asdict(state)
                 # always carries them, so build a separate update dict.
                 update_payload = {
-                    k: v
-                    for k, v in payload.items()
-                    if k not in ("session_id", "router_name", "model_name")
+                    k: v for k, v in payload.items() if k not in ("session_id", "router_name", "model_name")
                 }
-                await prisma_client.db.litellm_adaptiveroutersession.upsert(
+                await AdaptiveRouterSessionRepository(prisma_client).table.upsert(
                     where={
                         "session_id_router_name_model_name": {
                             "session_id": session_id,
@@ -203,7 +201,7 @@ class AdaptiveRouterUpdateQueue:
 
     # ---- Observability ---------------------------------------------------
 
-    async def queue_size(self) -> Dict[str, int]:
+    async def queue_size(self) -> dict[str, int]:
         async with self._lock:
             return {
                 "state_pending": len(self._state_agg),

@@ -35,6 +35,57 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{/*
+Enterprise billable-request metering. Wired into gateway and backend, not the
+migrations job. The gateway serves nearly all billable traffic, but the backend
+keeps the named-server MCP transport (/{mcp_server_name}/mcp), which writes a
+SpendLogs row, so metering only the gateway would silently drop that traffic.
+The client certificate identifies the deployment to LiteLLM's collector, so it is
+mounted read-only from an existing Secret rather than passed through the
+environment.
+*/}}
+{{- define "litellm.billingMetrics.certDir" -}}/etc/litellm/billing-mtls{{- end -}}
+{{- define "litellm.billingMetrics.caDir" -}}/etc/litellm/billing-mtls-ca{{- end -}}
+
+{{- define "litellm.billingMetricsEnv" -}}
+- name: LITELLM_BILLING_METRICS_ENDPOINT
+  value: {{ required "billingMetrics.endpoint is required when billingMetrics.enabled is true" .Values.billingMetrics.endpoint | quote }}
+- name: LITELLM_BILLING_METRICS_CLIENT_CERT
+  value: {{ printf "%s/tls.crt" (include "litellm.billingMetrics.certDir" .) | quote }}
+- name: LITELLM_BILLING_METRICS_CLIENT_KEY
+  value: {{ printf "%s/tls.key" (include "litellm.billingMetrics.certDir" .) | quote }}
+{{- if .Values.billingMetrics.caSecretName }}
+- name: LITELLM_BILLING_METRICS_CA_CERT
+  value: {{ printf "%s/ca.crt" (include "litellm.billingMetrics.caDir" .) | quote }}
+{{- end }}
+{{- with .Values.billingMetrics.exportIntervalMs }}
+- name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
+  value: {{ . | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.billingMetricsVolumes" -}}
+- name: billing-metrics-mtls
+  secret:
+    secretName: {{ required "billingMetrics.secretName is required when billingMetrics.enabled is true (an existing Secret with tls.crt and tls.key)" .Values.billingMetrics.secretName }}
+{{- if .Values.billingMetrics.caSecretName }}
+- name: billing-metrics-mtls-ca
+  secret:
+    secretName: {{ .Values.billingMetrics.caSecretName }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.billingMetricsVolumeMounts" -}}
+- name: billing-metrics-mtls
+  mountPath: {{ include "litellm.billingMetrics.certDir" . }}
+  readOnly: true
+{{- if .Values.billingMetrics.caSecretName }}
+- name: billing-metrics-mtls-ca
+  mountPath: {{ include "litellm.billingMetrics.caDir" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{/*
 Per-component selector labels — used in both Service selectors and Deployment matchLabels.
 */}}
 {{- define "litellm.gateway.selectorLabels" -}}
@@ -56,17 +107,88 @@ app.kubernetes.io/component: ui
 {{- end -}}
 
 {{/*
-Shared ServiceAccount name used by all three component Deployments. When
-`serviceAccount.create` is true and `serviceAccount.name` is empty, default
-to the chart fullname. When `create` is false, fall back to the provided
-name or the namespace's `default` SA.
+Per-component ServiceAccount name helpers.
+
+Each component (gateway, backend, ui) has its own SA config under
+.Values.serviceAccounts.<component>. When `create` is true and `name` is
+empty the chart defaults to "<release>-litellm-<component>". When `create`
+is false the chart uses the provided name, or the namespace `default` SA.
 */}}
-{{- define "litellm.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create -}}
-{{ default (include "litellm.fullname" .) .Values.serviceAccount.name }}
+{{- define "litellm.gateway.serviceAccountName" -}}
+{{- if .Values.serviceAccounts.gateway.create -}}
+{{ default (include "litellm.gateway.fullname" .) .Values.serviceAccounts.gateway.name }}
 {{- else -}}
-{{ default "default" .Values.serviceAccount.name }}
+{{ default "default" .Values.serviceAccounts.gateway.name }}
 {{- end -}}
+{{- end -}}
+
+{{- define "litellm.backend.serviceAccountName" -}}
+{{- if .Values.serviceAccounts.backend.create -}}
+{{ default (include "litellm.backend.fullname" .) .Values.serviceAccounts.backend.name }}
+{{- else -}}
+{{ default "default" .Values.serviceAccounts.backend.name }}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.ui.serviceAccountName" -}}
+{{- if .Values.serviceAccounts.ui.create -}}
+{{ default (include "litellm.ui.fullname" .) .Values.serviceAccounts.ui.name }}
+{{- else -}}
+{{ default "default" .Values.serviceAccounts.ui.name }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+ServiceAccount name for the migrations Job.
+
+The Job is a pre-install / pre-upgrade hook, so it is created before the
+chart's ordinary resources. A ServiceAccount the chart creates is one of
+those ordinary resources, which makes borrowing the backend name a cycle:
+the hook pod is rejected because the account does not exist yet. So when
+`serviceAccounts.backend.create` is true the Job falls back to the namespace
+`default` account unless the operator names one that already exists. With
+`create` false the backend name is either an operator-supplied existing
+account or `default`, both of which are safe for the hook, so the Job keeps
+sharing it.
+
+`migrationJob.serviceAccountName` always wins when set, which is how a Job
+that needs credentials of its own (IRSA / Workload Identity for IAM database
+auth) gets them.
+*/}}
+{{- define "litellm.migrations.serviceAccountName" -}}
+{{- if .Values.migrationJob.serviceAccountName -}}
+{{ .Values.migrationJob.serviceAccountName }}
+{{- else if .Values.serviceAccounts.backend.create -}}
+default
+{{- else -}}
+{{ include "litellm.backend.serviceAccountName" . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Extra pod labels for a component's Deployment, validated against its selector.
+
+Invoke with a dict:
+  (dict "podLabels" .Values.gateway.podLabels "componentName" "gateway")
+
+The three selector keys are also emitted on the pod template, so a podLabels
+entry reusing one renders a duplicate YAML key whose later value wins. That
+leaves the pod template no longer matching the (immutable) selector and the
+apiserver rejects the Deployment. Fail at template time naming the key
+instead, so the operator gets the reason here rather than an opaque
+`selector does not match template labels` from the apiserver.
+
+The migrations Job takes podLabels unvalidated: a Job's selector is generated
+by the controller rather than declared, so nothing there can collide.
+*/}}
+{{- define "litellm.podLabels" -}}
+{{- $componentName := .componentName -}}
+{{- range $key, $value := .podLabels }}
+{{- if has $key (list "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component") }}
+{{- fail (printf "%s.podLabels cannot set %s: it is part of the Deployment's immutable selector" $componentName $key) }}
+{{- end }}
+{{- end }}
+{{- toYaml .podLabels }}
 {{- end -}}
 
 {{/*
@@ -195,6 +317,10 @@ harmless no-op for the Job and authoritative for the app pods.
 */}}
 - name: DISABLE_SCHEMA_UPDATE
   value: "true"
+{{/* These feed the proxy's coordination Redis (cross-pod rate limits, spend
+     tracking, pod lock manager) via its REDIS_* env fallback. An explicit
+     `general_settings.coordination_redis` block in proxy_config takes
+     precedence over anything emitted here. */}}
 {{- if $root.Values.redis.host }}
 - name: REDIS_HOST
   value: {{ $root.Values.redis.host | quote }}
@@ -208,16 +334,63 @@ harmless no-op for the Job and authoritative for the app pods.
       key: {{ $root.Values.redis.passwordSecret.passwordKey | default "password" }}
 {{- end }}
 {{- if $root.Values.redis.cluster }}
-{{/* The proxy's Cache() reads REDIS_CLUSTER_NODES as JSON and constructs a
-     RedisClusterCache when it's set (litellm/caching/caching.py:169-192).
-     We seed with the single configured endpoint — the cluster client
-     discovers the remaining nodes from CLUSTER SLOTS at startup. */}}
+{{/* The proxy falls back to REDIS_CLUSTER_NODES (JSON) to build a cluster-mode
+     coordination client when `general_settings.coordination_redis` is absent
+     and no plain-Redis response cache is configured. We seed with the single
+     configured endpoint; the cluster client discovers the remaining nodes from
+     CLUSTER SLOTS at startup. */}}
 - name: REDIS_CLUSTER_NODES
   value: {{ printf "[{\"host\":%q,\"port\":%v}]" $root.Values.redis.host (int $root.Values.redis.port) | quote }}
 {{- end }}
 {{- end }}
 {{- with $component.extraEnv }}
 {{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
+PodDisruptionBudget shared by gateway, backend, and ui.
+
+Invoke with a dict:
+  (dict "root" $ "component" .Values.gateway "componentName" "gateway"
+        "fullname" (include "litellm.gateway.fullname" .)
+        "selectorLabels" (include "litellm.gateway.selectorLabels" .))
+
+Renders nothing unless both the component and its `pdb.enabled` are on.
+Only one of minAvailable / maxUnavailable should be set; if both are,
+minAvailable wins. If neither is set, falls back to `maxUnavailable: 1` so
+an enabled-but-unconfigured PDB still permits node drains.
+
+"Set" means non-nil and non-empty-string, so an explicit 0 (e.g.
+`maxUnavailable: 0` to forbid all voluntary disruptions) is honored rather
+than silently replaced by the fallback.
+*/}}
+{{- define "litellm.pdb" -}}
+{{- $root := .root -}}
+{{- $component := .component -}}
+{{- $min := $component.pdb.minAvailable -}}
+{{- $max := $component.pdb.maxUnavailable -}}
+{{- $minSet := not (or (kindIs "invalid" $min) (eq (printf "%v" $min) "")) -}}
+{{- $maxSet := not (or (kindIs "invalid" $max) (eq (printf "%v" $max) "")) -}}
+{{- if and $component.enabled $component.pdb $component.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .fullname }}
+  labels:
+    {{- include "litellm.commonLabels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ .componentName }}
+spec:
+  selector:
+    matchLabels:
+      {{- .selectorLabels | nindent 6 }}
+  {{- if $minSet }}
+  minAvailable: {{ $min }}
+  {{- else if $maxSet }}
+  maxUnavailable: {{ $max }}
+  {{- else }}
+  maxUnavailable: 1
+  {{- end }}
 {{- end }}
 {{- end -}}
 

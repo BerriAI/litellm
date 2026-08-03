@@ -18,7 +18,7 @@ A2A Streaming Events:
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
@@ -30,7 +30,7 @@ class A2AStreamingContext:
     Tracks task_id, context_id, and message accumulation.
     """
 
-    def __init__(self, request_id: str, input_message: Dict[str, Any]):
+    def __init__(self, request_id: str, input_message: dict[str, Any]):
         self.request_id = request_id
         self.task_id = str(uuid4())
         self.context_id = str(uuid4())
@@ -46,9 +46,75 @@ class A2ACompletionBridgeTransformation:
     """
 
     @staticmethod
+    def _extract_text_from_a2a_parts(parts: list[dict[str, Any]]) -> str:
+        """Extract text from A2A parts (with or without explicit ``kind``)."""
+        content_parts: list[str] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            kind = part.get("kind")
+            text = part.get("text")
+            if text is None:
+                continue
+            if kind in (None, "", "text"):
+                content_parts.append(str(text))
+        return "\n".join(content_parts)
+
+    @staticmethod
+    def get_forward_metadata(
+        a2a_message: dict[str, Any],
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Merge A2A metadata from MessageSendParams and the message for downstream providers.
+
+        Forwarded once on the LangGraph run payload (``metadata``), not duplicated on
+        each input message — see ``apply_forward_metadata_to_completion_params``.
+        """
+        merged: dict[str, Any] = {}
+        if params and isinstance(params.get("metadata"), dict):
+            merged.update(params["metadata"])
+        message_metadata = a2a_message.get("metadata")
+        if isinstance(message_metadata, dict):
+            merged.update(message_metadata)
+        return merged or None
+
+    @staticmethod
+    def apply_forward_metadata_to_completion_params(
+        completion_params: dict[str, Any],
+        a2a_message: dict[str, Any],
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Attach A2A metadata to completion kwargs for provider bridges (e.g. LangGraph).
+
+        Uses ``extra_body`` so we do not collide with LiteLLM's spend-log ``metadata`` kwarg.
+        """
+        forward_metadata = A2ACompletionBridgeTransformation.get_forward_metadata(
+            a2a_message=a2a_message,
+            params=params,
+        )
+        if not forward_metadata:
+            return
+
+        extra_body = completion_params.get("extra_body")
+        if not isinstance(extra_body, dict):
+            extra_body = {}
+        # Layer client-supplied A2A metadata under any agent-owner-configured
+        # ``extra_body.metadata`` so the configured keys remain authoritative
+        # and an A2A caller cannot overwrite server-set run metadata.
+        existing_metadata = extra_body.get("metadata")
+        existing_dict: dict[str, Any] = existing_metadata if isinstance(existing_metadata, dict) else {}
+        merged_metadata: dict[str, Any] = {**forward_metadata, **existing_dict}
+        extra_body = {**extra_body, "metadata": merged_metadata}
+        completion_params["extra_body"] = extra_body
+
+        verbose_logger.debug(f"A2A -> completion forward metadata keys={list(forward_metadata.keys())}")
+
+    @staticmethod
     def a2a_message_to_openai_messages(
-        a2a_message: Dict[str, Any],
-    ) -> List[Dict[str, str]]:
+        a2a_message: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         """
         Transform an A2A message to OpenAI message format.
 
@@ -70,27 +136,24 @@ class A2ACompletionBridgeTransformation:
         elif role == "system":
             openai_role = "system"
 
-        # Extract text content from parts
-        content_parts = []
-        for part in parts:
-            kind = part.get("kind", "")
-            if kind == "text":
-                text = part.get("text", "")
-                content_parts.append(text)
+        if not isinstance(parts, list):
+            parts = []
 
-        content = "\n".join(content_parts) if content_parts else ""
+        content = A2ACompletionBridgeTransformation._extract_text_from_a2a_parts(parts)
 
-        verbose_logger.debug(
-            f"A2A -> OpenAI transform: role={role} -> {openai_role}, content_length={len(content)}"
-        )
+        # Do not attach A2A message.metadata here — the completion bridge forwards it
+        # once at run level via extra_body.metadata (LangGraph POST /runs/wait shape).
+        openai_message: dict[str, Any] = {"role": openai_role, "content": content}
 
-        return [{"role": openai_role, "content": content}]
+        verbose_logger.debug(f"A2A -> OpenAI transform: role={role} -> {openai_role}, content_length={len(content)}")
+
+        return [openai_message]
 
     @staticmethod
     def openai_response_to_a2a_response(
         response: Any,
-        request_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Transform a LiteLLM ModelResponse to A2A SendMessageResponse format.
 
@@ -110,6 +173,7 @@ class A2ACompletionBridgeTransformation:
 
         # Build A2A message
         a2a_message = {
+            "kind": "message",
             "role": "agent",
             "parts": [{"kind": "text", "text": content}],
             "messageId": uuid4().hex,
@@ -119,9 +183,7 @@ class A2ACompletionBridgeTransformation:
         a2a_response = {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {
-                "message": a2a_message,
-            },
+            "result": a2a_message,
         }
 
         verbose_logger.debug(f"OpenAI -> A2A transform: content_length={len(content)}")
@@ -136,7 +198,7 @@ class A2ACompletionBridgeTransformation:
     @staticmethod
     def create_task_event(
         ctx: A2AStreamingContext,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create the initial task event with status 'submitted'.
 
@@ -170,8 +232,8 @@ class A2ACompletionBridgeTransformation:
         ctx: A2AStreamingContext,
         state: str,
         final: bool = False,
-        message_text: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        message_text: str | None = None,
+    ) -> dict[str, Any]:
         """
         Create a status update event.
 
@@ -181,7 +243,7 @@ class A2ACompletionBridgeTransformation:
             final: Whether this is the final event
             message_text: Optional message text for 'working' status
         """
-        status: Dict[str, Any] = {
+        status: dict[str, Any] = {
             "state": state,
             "timestamp": A2ACompletionBridgeTransformation._get_timestamp(),
         }
@@ -213,7 +275,7 @@ class A2ACompletionBridgeTransformation:
     def create_artifact_update_event(
         ctx: A2AStreamingContext,
         text: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create an artifact update event with content.
 
@@ -235,50 +297,3 @@ class A2ACompletionBridgeTransformation:
                 "taskId": ctx.task_id,
             },
         }
-
-    @staticmethod
-    def openai_chunk_to_a2a_chunk(
-        chunk: Any,
-        request_id: Optional[str] = None,
-        is_final: bool = False,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Transform a LiteLLM streaming chunk to A2A streaming format.
-
-        NOTE: This method is deprecated for streaming. Use the event-based
-        methods (create_task_event, create_status_update_event,
-        create_artifact_update_event) instead for proper A2A streaming.
-
-        Args:
-            chunk: LiteLLM ModelResponse chunk
-            request_id: Original A2A request ID
-            is_final: Whether this is the final chunk
-
-        Returns:
-            A2A streaming chunk dict or None if no content
-        """
-        # Extract delta content
-        content = ""
-        if chunk is not None and hasattr(chunk, "choices") and chunk.choices:
-            choice = chunk.choices[0]
-            if hasattr(choice, "delta") and choice.delta:
-                content = choice.delta.content or ""
-
-        if not content and not is_final:
-            return None
-
-        # Build A2A streaming chunk (legacy format)
-        a2a_chunk = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "message": {
-                    "role": "agent",
-                    "parts": [{"kind": "text", "text": content}],
-                    "messageId": uuid4().hex,
-                },
-                "final": is_final,
-            },
-        }
-
-        return a2a_chunk

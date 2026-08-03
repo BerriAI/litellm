@@ -1,4 +1,4 @@
-from typing import Dict, List, Mapping, Optional, Union
+from collections.abc import Mapping
 from urllib.parse import parse_qs
 
 import httpx
@@ -28,17 +28,15 @@ class BasePassthroughUtils:
     @staticmethod
     def get_merged_query_parameters(
         existing_url: httpx.URL,
-        request_query_params: Mapping[str, Union[str, list]],
-        default_query_params: Optional[Dict[str, Union[str, list]]] = None,
-    ) -> Dict[str, Union[str, List[str]]]:
+        request_query_params: Mapping[str, str | list],
+        default_query_params: dict[str, str | list] | None = None,
+    ) -> dict[str, str | list[str]]:
         # Get the existing query params from the target URL
         existing_query_string = existing_url.query.decode("utf-8")
         existing_query_params = parse_qs(existing_query_string)
 
         # parse_qs returns a dict where each value is a list, so let's flatten it
-        updated_existing_query_params = {
-            k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()
-        }
+        updated_existing_query_params = {k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()}
 
         # Start with default query params (lowest priority)
         merged_params = {}
@@ -57,7 +55,7 @@ class BasePassthroughUtils:
     def forward_headers_from_request(
         request_headers: dict,
         headers: dict,
-        forward_headers: Optional[bool] = False,
+        forward_headers: bool | None = False,
     ):
         """
         Helper to forward headers from original request.
@@ -71,6 +69,11 @@ class BasePassthroughUtils:
             request_headers.pop("content-length", None)
             request_headers.pop("host", None)
 
+            custom_header_names = {header_name.lower() for header_name in headers}
+            for header_name in list(request_headers.keys()):
+                if header_name.lower() in custom_header_names:
+                    request_headers.pop(header_name, None)
+
             # Combine request headers with custom headers
             headers = {**request_headers, **headers}
 
@@ -79,12 +82,9 @@ class BasePassthroughUtils:
         for header_name, header_value in request_headers.items():
             if header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
                 # Strip the 'x-pass-' prefix and normalize to lowercase
-                actual_header_name = header_name[
-                    len(PASS_THROUGH_HEADER_PREFIX) :
-                ].lower()
+                actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :].lower()
                 if actual_header_name in _PASS_THROUGH_PROTECTED_HEADERS or any(
-                    actual_header_name.startswith(p)
-                    for p in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
+                    actual_header_name.startswith(p) for p in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
                 ):
                     verbose_logger.debug(
                         "x-pass- header %s maps to a protected header name; skipping",

@@ -4,11 +4,11 @@ import os
 import sys
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Dict, Optional
+from typing import Any
 
-from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 set_verbose = False
 
@@ -17,9 +17,7 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-_ENABLE_SECRET_REDACTION = (
-    os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
-)
+_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 
 def _redact_string(value: str) -> str:
@@ -64,9 +62,7 @@ class SecretRedactionFilter(logging.Filter):
         # Redact exception tracebacks
         if record.exc_info and record.exc_info[1] is not None:
             try:
-                record.exc_text = _redact_string(
-                    self._formatter.formatException(record.exc_info)
-                )
+                record.exc_text = _redact_string(self._formatter.formatException(record.exc_info))
             except Exception:
                 pass
 
@@ -90,7 +86,7 @@ handler.setLevel(numeric_level)
 handler.addFilter(_secret_filter)
 
 
-def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
+def _try_parse_json_message(message: str) -> dict[str, Any] | None:
     """
     Try to parse a log message as JSON. Returns parsed dict if valid, else None.
     Handles messages that are entirely valid JSON (e.g. json.dumps output).
@@ -107,7 +103,7 @@ def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
     return parsed
 
 
-def _try_parse_embedded_python_dict(message: str) -> Optional[Dict[str, Any]]:
+def _try_parse_embedded_python_dict(message: str) -> dict[str, Any] | None:
     """
     Try to find and parse a Python dict repr (e.g. str(d) or repr(d)) embedded in
     the message. Handles patterns like:
@@ -153,7 +149,7 @@ _STANDARD_RECORD_ATTRS = _get_standard_record_attrs()
 
 class JsonFormatter(Formatter):
     def __init__(self):
-        super(JsonFormatter, self).__init__()
+        super().__init__()
 
     def formatTime(self, record, datefmt=None):
         # Use datetime to format the timestamp in ISO 8601 format
@@ -162,7 +158,7 @@ class JsonFormatter(Formatter):
 
     def format(self, record):
         message_str = record.getMessage()
-        json_record: Dict[str, Any] = {
+        json_record: dict[str, Any] = {
             "message": message_str,
             "level": record.levelname,
             "timestamp": self.formatTime(record),
@@ -189,9 +185,7 @@ class JsonFormatter(Formatter):
             json_record["logger"] = f"{record.filename}:{record.lineno}"
 
         if record.exc_info:
-            json_record["stacktrace"] = record.exc_text or self.formatException(
-                record.exc_info
-            )
+            json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
         return safe_dumps(json_record)
 
@@ -419,7 +413,7 @@ def _enable_debugging():
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa
+            print(redact_secrets(str(print_statement)))  # noqa: T201
     except Exception:
         pass
 

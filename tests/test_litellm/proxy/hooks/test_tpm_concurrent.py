@@ -23,12 +23,12 @@ import pytest
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    RATE_LIMIT_DESCRIPTORS_KEY,
-    TPM_RESERVATION_RELEASED_KEY,
-    TPM_RESERVED_MODEL_KEY,
-    TPM_RESERVED_SCOPES_KEY,
-    TPM_RESERVED_TOKENS_KEY,
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _request_stash,
+    get_or_create_request_stash,
+    get_request_stash,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import ModelResponse, Usage
@@ -39,6 +39,13 @@ def rate_limiter():
     cache = DualCache()
     handler = RateLimitHandler(internal_usage_cache=InternalUsageCache(cache))
     return handler, cache
+
+
+@pytest.fixture(autouse=True)
+def _isolated_request_stash():
+    token = _request_stash.set(None)
+    yield
+    _request_stash.reset(token)
 
 
 @pytest.mark.asyncio
@@ -79,7 +86,7 @@ async def test_token_reservation_prevents_concurrent_bypass(rate_limiter):
             return {
                 "request_id": request_id,
                 "success": True,
-                "reserved_tokens": data.get(TPM_RESERVED_TOKENS_KEY, 0),
+                "reserved_tokens": get_request_stash().reserved_tokens,
             }
         except Exception as e:
             return {
@@ -167,12 +174,14 @@ async def test_token_adjustment_on_success(rate_limiter):
 
     api_key = hash_token("sk-test-adjust")
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["api_key", api_key]],
             }
         },
         "model": "gpt-3.5-turbo",
@@ -227,12 +236,14 @@ async def test_token_release_on_failure(rate_limiter):
 
     api_key = hash_token("sk-test-fail")
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["api_key", api_key]],
             }
         },
     }
@@ -285,6 +296,11 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
     team_id = "team-abc"
     reserved_model = "gpt-4o-mini"
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_model = reserved_model
+    stash.reserved_scopes = frozenset({("model_per_team", f"{team_id}:{reserved_model}")})
+
     mock_kwargs = {
         # NOTE: no litellm_params.metadata.model_group — get_model_group_from_litellm_kwargs
         # returns None on this kwargs dict.
@@ -292,11 +308,6 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_team_id": team_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_MODEL_KEY: reserved_model,
-                TPM_RESERVED_SCOPES_KEY: [
-                    ["model_per_team", f"{team_id}:{reserved_model}"]
-                ],
             }
         },
     }
@@ -446,13 +457,15 @@ async def test_org_scope_refund_on_failure(rate_limiter):
     api_key = hash_token("sk-org-refund")
     org_id = "org-acme"
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("organization", org_id)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_org_id": org_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["organization", org_id]],
             }
         },
     }
@@ -498,13 +511,15 @@ async def test_org_scope_reconciled_on_success(rate_limiter):
     api_key = hash_token("sk-org-success")
     org_id = "org-acme"
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("organization", org_id)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_org_id": org_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["organization", org_id]],
             }
         },
         "model": "gpt-3.5-turbo",
@@ -607,9 +622,9 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
             data=data,
             call_type="",
         )
-        assert (data.get("metadata") or {}).get(
-            TPM_RESERVED_TOKENS_KEY
-        ) == 1, "Contentless request should reserve the floor of 1 token"
+        assert (
+            get_request_stash().reserved_tokens == 1
+        ), "Contentless request should reserve the floor of 1 token"
 
     counter_after_two = int(
         await cache.async_get_cache(key=counter_key, local_only=True) or 0
@@ -702,7 +717,7 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
         data=data,
         call_type="",
     )
-    reserved = (data.get("metadata") or {})[TPM_RESERVED_TOKENS_KEY]
+    reserved = get_request_stash().reserved_tokens
     assert reserved > 0
 
     counter_key = handler.create_rate_limit_keys(
@@ -727,8 +742,8 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
         f"Reservation leaked: counter={counter_after_release} after "
         f"proxy-level rejection refund (expected 0)."
     )
-    assert (data.get("metadata") or {}).get(TPM_RESERVATION_RELEASED_KEY) is True, (
-        "Released marker must be stamped to prevent "
+    assert get_request_stash().reservation_released is True, (
+        "Released flag must be set to prevent "
         "async_log_failure_event from double-refunding."
     )
 
@@ -754,28 +769,15 @@ async def test_reservation_release_idempotent(rate_limiter):
         mock_increment
     )
 
-    # Shared metadata dict simulates the propagation between
-    # request_data["metadata"] and kwargs["litellm_params"]["metadata"] —
-    # the post-call-failure-hook stamps the released marker there, and the
-    # log-failure-event reads it.
-    shared_metadata = {
-        "user_api_key_hash": api_key,
-        TPM_RESERVED_TOKENS_KEY: 100,
-        RATE_LIMIT_DESCRIPTORS_KEY: [
-            {
-                "key": "api_key",
-                "value": api_key,
-                "rate_limit": {"tokens_per_unit": 10000, "window_size": 60},
-            }
-        ],
-    }
-
-    request_data = {
-        "metadata": shared_metadata,
-    }
+    # Both hooks read the same per-request ContextVar stash: the
+    # post-call-failure-hook flips reservation_released on it, and the
+    # log-failure-event observes the flip.
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
 
     await handler.async_post_call_failure_hook(
-        request_data=request_data,
+        request_data={},
         original_exception=Exception("rejected"),
         user_api_key_dict=UserAPIKeyAuth(api_key=api_key),
     )
@@ -784,11 +786,10 @@ async def test_reservation_release_idempotent(rate_limiter):
     assert first_refund_count > 0, "First refund should have applied"
 
     # Now simulate async_log_failure_event firing afterwards. It must see
-    # the released marker (via shared metadata) and not double-refund.
+    # the released flag on the stash and not double-refund.
     await handler.async_log_failure_event(
         kwargs={
-            "litellm_params": {"metadata": shared_metadata},
-            "standard_logging_object": {"metadata": shared_metadata},
+            "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
         },
         response_obj=None,
         start_time=datetime.now(),
@@ -818,13 +819,15 @@ async def test_unreserved_scopes_charged_actual_not_delta_on_success(rate_limite
     team_id = "team-no-tpm-limit"
 
     # Reservation ONLY hit api_key — team had no TPM limit configured.
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_team_id": team_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["api_key", api_key]],
             }
         },
         "model": "gpt-3.5-turbo",
@@ -888,13 +891,15 @@ async def test_unreserved_scopes_not_refunded_on_failure(rate_limiter):
     api_key = hash_token("sk-mixed-fail")
     team_id = "team-no-tpm"
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_team_id": team_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["api_key", api_key]],
             }
         },
     }
@@ -939,10 +944,10 @@ async def test_unreserved_scopes_not_refunded_on_failure(rate_limiter):
 async def test_token_rate_limit_headers_present_in_stored_response(rate_limiter):
     """
     With `skip_tpm_check=True` on the RPM sliding-window pass, token statuses
-    only come from `reserve_tpm_tokens`. They must be merged into
-    `data["litellm_proxy_rate_limit_response"]` so the post-call hook can
-    emit `x-ratelimit-{key}-remaining-tokens` / `-limit-tokens` headers to
-    the client.
+    only come from `reserve_tpm_tokens`. They must be merged into the stashed
+    rate-limit response so the post-call hook can emit
+    `x-ratelimit-{key}-remaining-tokens` / `-limit-tokens` headers to the
+    client.
     """
     handler, cache = rate_limiter
 
@@ -966,10 +971,10 @@ async def test_token_rate_limit_headers_present_in_stored_response(rate_limiter)
         call_type="",
     )
 
-    response = data.get("litellm_proxy_rate_limit_response")
+    response = get_request_stash().rate_limit_response
     assert isinstance(
         response, dict
-    ), "Expected litellm_proxy_rate_limit_response to be set after pre-call"
+    ), "Expected the stashed rate-limit response to be set after pre-call"
 
     statuses = response.get("statuses") or []
     token_statuses = [s for s in statuses if s.get("rate_limit_type") == "tokens"]
@@ -993,6 +998,203 @@ async def test_token_rate_limit_headers_present_in_stored_response(rate_limiter)
     assert api_key_tokens is not None, f"api_key token status absent: {token_statuses}"
     assert api_key_tokens["current_limit"] == 10_000
     assert api_key_tokens["limit_remaining"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_estimate_tokens_floor_caps_at_smallest_configured_tpm(rate_limiter):
+    """
+    Regression: with a small configured TPM cap and no max_tokens, the
+    output-budget floor must be capped at a fraction of that limit so the
+    reservation alone can't trip the limit.
+    """
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={"messages": [{"role": "user", "content": "hello"}]},
+        min_configured_tpm_limit=1000,
+    )
+    # input ~= 5//4 = 1 token; output floor capped at 1000//4 = 250;
+    # total ~= 251 (well under 1000).
+    assert (
+        estimate <= 1000 // 2
+    ), f"With TPM=1000, reservation must stay well under the limit; got {estimate}"
+    assert estimate >= 1, "Estimate must be at least the call-site floor of 1"
+
+
+@pytest.mark.asyncio
+async def test_estimate_tokens_floor_unchanged_for_large_tpm(rate_limiter):
+    """
+    Large TPM budgets must keep the 1024-token floor so a stream of small
+    concurrent requests can't collectively bypass the limit.
+    """
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={"messages": [{"role": "user", "content": "hello"}]},
+        min_configured_tpm_limit=100_000,
+    )
+    # input ~= 1; output floor = min(1024, 100_000//4=25_000) = 1024;
+    # total ~= 1025.
+    assert estimate == 1 + 1024
+
+
+@pytest.mark.asyncio
+async def test_estimate_tokens_floor_unchanged_when_kwarg_omitted(rate_limiter):
+    """
+    Callers that don't pass min_configured_tpm_limit (legacy path, tests that
+    stub the estimator) must observe the pre-fix floor.
+    """
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={"messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert estimate == 1 + 1024
+
+
+@pytest.mark.asyncio
+async def test_small_tpm_cap_admits_no_max_tokens_request(rate_limiter):
+    """
+    Regression (end-to-end at the hook level): a project-level model_tpm_limit
+    of 1000 with a tiny no-max_tokens request must not 429 on the first call.
+    Pre-fix the 1024-token floor tripped OVER_LIMIT against the 1000-token cap
+    on every request.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-small-tpm")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-small-tpm",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 1000},
+            "model_rpm_limit": {"gpt-3.5-turbo": 60},
+        },
+    )
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    # Must not raise — pre-fix this was a 429.
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    reserved = get_request_stash().reserved_tokens
+    assert reserved > 0, "Reservation should have been stashed"
+    assert reserved <= 1000 // 2, (
+        f"Capped floor must keep the reservation well under the 1000 TPM "
+        f"cap; got {reserved}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_small_tpm_cap_injects_matching_max_tokens(rate_limiter):
+    """
+    When a small TPM cap forces the no-max_tokens floor below the baseline,
+    the hook must also write data['max_tokens'] = capped_floor so the actual
+    model output is bounded by the reservation. Without this cap, concurrent
+    no-max_tokens generations can spend past the TPM limit before post-call
+    reconciliation runs.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-small-tpm-cap"),
+        project_id="proj-small-tpm-cap",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 1000},
+        },
+    )
+
+    data: dict = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    assert data.get("max_tokens") == 1000 // 4, (
+        f"Capped floor must be written to max_tokens to bound the actual "
+        f"model output; got {data.get('max_tokens')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_large_tpm_cap_does_not_inject_max_tokens(rate_limiter):
+    """
+    A TPM cap that doesn't constrain the floor must not silently inject
+    max_tokens — that would change behaviour for tenants who already have
+    plenty of budget.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-large-tpm-cap"),
+        project_id="proj-large-tpm-cap",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 100_000},
+        },
+    )
+
+    data: dict = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    assert "max_tokens" not in data, (
+        f"Large TPM caps should leave max_tokens alone; got "
+        f"{data.get('max_tokens')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_small_tpm_cap_preserves_explicit_max_tokens(rate_limiter):
+    """
+    Explicit max_tokens from the caller must never be overwritten by the
+    bypass mitigation — the user already declared their budget.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-explicit-max-tokens"),
+        project_id="proj-explicit-max-tokens",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 1000},
+        },
+    )
+
+    data: dict = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 500,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    assert data["max_tokens"] == 500
 
 
 if __name__ == "__main__":

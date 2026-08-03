@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import polars as pl
 
@@ -23,7 +23,7 @@ class FocusExportEngine:
         provider: str,
         export_format: str,
         prefix: str,
-        destination_config: Optional[dict[str, Any]] = None,
+        destination_config: dict[str, Any] | None = None,
     ) -> None:
         self.provider = provider
         self.export_format = export_format
@@ -42,11 +42,9 @@ class FocusExportEngine:
             return FocusCsvSerializer()
         if self.export_format == "parquet":
             return FocusParquetSerializer()
-        raise NotImplementedError(
-            f"Export format '{self.export_format}' not supported. Use 'parquet' or 'csv'."
-        )
+        raise NotImplementedError(f"Export format '{self.export_format}' not supported. Use 'parquet' or 'csv'.")
 
-    async def dry_run_export_usage_data(self, limit: Optional[int]) -> Dict[str, Any]:
+    async def dry_run_export_usage_data(self, limit: int | None) -> dict[str, Any]:
         data = await self._database.get_usage_data(limit=limit)
         normalized = self._transformer.transform(data)
 
@@ -70,7 +68,7 @@ class FocusExportEngine:
     async def export_all(
         self,
         *,
-        limit: Optional[int],
+        limit: int | None,
     ) -> None:
         """Export all available data without time-window filtering."""
         data = await self._database.get_usage_data(limit=limit)
@@ -98,7 +96,7 @@ class FocusExportEngine:
         self,
         *,
         window: FocusTimeWindow,
-        limit: Optional[int],
+        limit: int | None,
     ) -> None:
         data = await self._database.get_usage_data(
             limit=limit,
@@ -111,16 +109,12 @@ class FocusExportEngine:
 
         normalized = self._transformer.transform(data)
         if normalized.is_empty():
-            verbose_logger.debug(
-                "Focus export: normalized data empty for window %s", window
-            )
+            verbose_logger.debug("Focus export: normalized data empty for window %s", window)
             return
 
         await self._serialize_and_upload(normalized, window)
 
-    async def _serialize_and_upload(
-        self, frame: pl.DataFrame, window: FocusTimeWindow
-    ) -> None:
+    async def _serialize_and_upload(self, frame: pl.DataFrame, window: FocusTimeWindow) -> None:
         payload = self._serializer.serialize(frame)
         if not payload:
             verbose_logger.debug("Focus export: serializer returned empty payload")

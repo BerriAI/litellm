@@ -1,8 +1,9 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from botocore.credentials import Credentials
 
 
 def _anthropic_response(url: str) -> httpx.Response:
@@ -310,3 +311,54 @@ async def test_anthropic_messages_routes_bedrock_claude_platform_to_messages_api
     assert requests[0]["body"]["messages"] == [{"role": "user", "content": "hello"}]
     assert requests[0]["body"]["max_tokens"] == 10
     assert requests[0]["body"]["model"] == "claude-sonnet-4-6"
+
+
+def test_sigv4_no_duplicate_content_type_when_caller_sets_lowercase():
+    """
+    Regression: get_anthropic_headers() supplies "content-type" (lowercase).
+    _sign_request() used to prepend "Content-Type" (uppercase), leaving both
+    keys in the dict.  botocore joins them into "application/json, application/json"
+    in the canonical string, while the wire request sends only one value → 401.
+
+    Fix: prepend with lowercase "content-type" so **headers overwrites it when
+    the caller already set it.
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    llm = BaseAWSLLM()
+    mock_credentials = Credentials("key", "secret", "token")
+    mock_sigv4 = MagicMock()
+    captured: list[dict] = []
+
+    def fake_aws_request(method, url, data, headers):
+        captured.append(dict(headers))
+        req = MagicMock()
+        req.headers = {"Authorization": "AWS4-HMAC-SHA256 Credential=test"}
+        req.body = data.encode() if isinstance(data, str) else data
+        return req
+
+    with (
+        patch("botocore.auth.SigV4Auth", return_value=mock_sigv4),
+        patch("botocore.awsrequest.AWSRequest", side_effect=fake_aws_request),
+        patch.object(llm, "get_credentials", return_value=mock_credentials),
+        patch.object(llm, "_get_aws_region_name", return_value="us-east-1"),
+    ):
+        llm._sign_request(
+            service_name="aws-external-anthropic",
+            headers={"content-type": "application/json"},
+            optional_params={"aws_region_name": "us-east-1"},
+            request_data={
+                "model": "claude-sonnet-4-6",
+                "messages": [],
+                "max_tokens": 10,
+            },
+            api_base="https://aws-external-anthropic.us-east-1.api.aws/v1/messages",
+        )
+
+    signed = captured[0]
+    ct_keys = [k for k in signed if k.lower() == "content-type"]
+    assert ct_keys == ["content-type"], (
+        f"Expected exactly one 'content-type' key, got {ct_keys}. "
+        "Duplicate keys produce 'application/json, application/json' in the "
+        "SigV4 canonical string and cause a 401."
+    )

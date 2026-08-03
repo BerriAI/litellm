@@ -7,8 +7,6 @@ apply to a given request based on team alias, key alias, and model.
 Policies are matched via policy_attachments which define WHERE each policy applies.
 """
 
-from typing import Dict, List, Optional
-
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext, PolicyScope
@@ -26,7 +24,7 @@ class PolicyMatcher:
     """
 
     @staticmethod
-    def matches_pattern(value: Optional[str], patterns: List[str]) -> bool:
+    def matches_pattern(value: str | None, patterns: list[str]) -> bool:
         """
         Check if a value matches any of the given patterns.
 
@@ -45,9 +43,7 @@ class PolicyMatcher:
 
         for pattern in patterns:
             # Use existing wildcard pattern matching helper
-            if RouteChecks._route_matches_wildcard_pattern(
-                route=value, pattern=pattern
-            ):
+            if RouteChecks._route_matches_wildcard_pattern(route=value, pattern=pattern):
                 return True
 
         return False
@@ -88,9 +84,7 @@ class PolicyMatcher:
             if not context.tags:
                 return False
             # Match if ANY context tag matches ANY scope tag pattern
-            if not any(
-                PolicyMatcher.matches_pattern(tag, scope_tags) for tag in context.tags
-            ):
+            if not any(PolicyMatcher.matches_pattern(tag, scope_tags) for tag in context.tags):
                 return False
 
         return True
@@ -98,7 +92,7 @@ class PolicyMatcher:
     @staticmethod
     def get_matching_policies(
         context: PolicyMatchContext,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get list of policy names that match the given context via attachments.
 
@@ -114,9 +108,7 @@ class PolicyMatcher:
 
         registry = get_attachment_registry()
         if not registry.is_initialized():
-            verbose_proxy_logger.debug(
-                "AttachmentRegistry not initialized, returning empty list"
-            )
+            verbose_proxy_logger.debug("AttachmentRegistry not initialized, returning empty list")
             return []
 
         return registry.get_attached_policies(context)
@@ -124,7 +116,7 @@ class PolicyMatcher:
     @staticmethod
     def get_matching_policies_from_registry(
         context: PolicyMatchContext,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get list of policy names that match the given context from the global registry.
 
@@ -138,10 +130,10 @@ class PolicyMatcher:
 
     @staticmethod
     def get_policies_with_matching_conditions(
-        policy_names: List[str],
+        policy_names: list[str],
         context: PolicyMatchContext,
-        policies: Optional[Dict[str, Policy]] = None,
-    ) -> List[str]:
+        policies: dict[str, Policy] | None = None,
+    ) -> list[str]:
         """
         Filter policies to only those whose conditions match the context.
 
@@ -172,9 +164,7 @@ class PolicyMatcher:
             if policy is None:
                 continue
             # Policy matches if it has no condition OR condition evaluates to True
-            if policy.condition is None or ConditionEvaluator.evaluate(
-                policy.condition, context
-            ):
+            if policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context):
                 matching_policies.append(policy_name)
 
         return matching_policies

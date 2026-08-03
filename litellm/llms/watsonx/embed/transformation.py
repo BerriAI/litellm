@@ -2,8 +2,6 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import Optional
-
 import httpx
 
 from litellm.llms.base_llm.embedding.transformation import (
@@ -43,20 +41,29 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
             api_params=watsonx_api_params,
         )
 
+        if isinstance(input, str):
+            inputs: list[str] = [input]
+        elif isinstance(input, list):
+            if len(input) > 0 and isinstance(input[0], (list, int)):
+                raise ValueError("WatsonX embeddings require a string or list of strings")
+            inputs = input
+        else:
+            inputs = [input]
+
         return {
-            "inputs": input,
+            "inputs": inputs,
             "parameters": optional_params,
             **watsonx_auth_payload,
         }
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
         endpoint = WatsonXAIEndpoint.EMBEDDINGS.value
@@ -66,9 +73,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         url = url.rstrip("/") + endpoint
 
         ## add api version
-        url = self._add_api_version_to_url(
-            url=url, api_version=optional_params.pop("api_version", None)
-        )
+        url = self._add_api_version_to_url(url=url, api_version=optional_params.pop("api_version", None))
         return url
 
     def transform_embedding_response(
@@ -77,7 +82,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,

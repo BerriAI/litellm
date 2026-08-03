@@ -7,26 +7,24 @@ Upload -> (OCR) -> Chunk -> Embed -> Vector Store
 
 from __future__ import annotations
 
-__all__ = ["ingest", "aingest", "query", "aquery"]
+__all__ = ["aingest", "aquery", "ingest", "query"]
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine, Iterator
+from contextlib import contextmanager
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Coroutine,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Type,
-    Union,
 )
 
 import httpx
 
 import litellm
+from litellm._internal_context import is_internal_call
+from litellm.cost_calculator import vector_store_search_cost
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
 from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
@@ -46,7 +44,7 @@ if TYPE_CHECKING:
 
 
 # Registry of provider-specific ingestion classes
-INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
+INGESTION_REGISTRY: dict[str, type[BaseRAGIngestion]] = {
     "openai": OpenAIRAGIngestion,
     "bedrock": BedrockRAGIngestion,
     "gemini": GeminiRAGIngestion,
@@ -55,7 +53,7 @@ INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
 }
 
 
-def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
+def get_ingestion_class(provider: str) -> type[BaseRAGIngestion]:
     """
     Get the ingestion class for a given provider.
 
@@ -71,19 +69,16 @@ def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
     ingestion_class = INGESTION_REGISTRY.get(provider)
     if ingestion_class is None:
         supported = ", ".join(INGESTION_REGISTRY.keys())
-        raise ValueError(
-            f"Provider '{provider}' is not supported for RAG ingestion. "
-            f"Supported providers: {supported}"
-        )
+        raise ValueError(f"Provider '{provider}' is not supported for RAG ingestion. Supported providers: {supported}")
     return ingestion_class
 
 
 async def _execute_ingest_pipeline(
     ingest_options: RAGIngestOptions,
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file_url: Optional[str] = None,
-    file_id: Optional[str] = None,
-    router: Optional["Router"] = None,
+    file_data: tuple[str, bytes, str] | None = None,
+    file_url: str | None = None,
+    file_id: str | None = None,
+    router: Router | None = None,
 ) -> RAGIngestResponse:
     """
     Execute the RAG ingest pipeline using provider-specific implementation.
@@ -124,12 +119,12 @@ async def _execute_ingest_pipeline(
 
 @client
 async def aingest(
-    ingest_options: Dict[str, Any],
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file: Optional[Dict[str, str]] = None,
-    file_url: Optional[str] = None,
-    file_id: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ingest_options: dict[str, Any],
+    file_data: tuple[str, bytes, str] | None = None,
+    file: dict[str, str] | None = None,
+    file_url: str | None = None,
+    file_id: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> RAGIngestResponse:
     """
@@ -184,20 +179,37 @@ async def aingest(
     except Exception as e:
         raise litellm.exception_type(
             model=None,
-            custom_llm_provider=ingest_options.get("vector_store", {}).get(
-                "custom_llm_provider"
-            ),
+            custom_llm_provider=ingest_options.get("vector_store", {}).get("custom_llm_provider"),
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
 
 
+@contextmanager
+def _suppressed_sub_call_billing() -> Iterator[None]:
+    """
+    Suppress a sub-call's own billing event so the parent aquery event bills it.
+
+    Every suppressed sub-call's cost must be folded into the parent event:
+    into the response's hidden response_cost on the non-streaming path, or via
+    the logging object's additional_response_cost on the streaming path (the
+    streamed cost is computed from assembled chunks after this pipeline
+    returns, so there is no response object to fold into here).
+    """
+    previous = is_internal_call.get()
+    is_internal_call.set(True)
+    try:
+        yield
+    finally:
+        is_internal_call.set(previous)
+
+
 async def _execute_query_pipeline(
     model: str,
-    messages: List[Any],
-    retrieval_config: Dict[str, Any],
-    rerank: Optional[Dict[str, Any]] = None,
+    messages: list[Any],
+    retrieval_config: dict[str, Any],
+    rerank: dict[str, Any] | None = None,
     stream: bool = False,
     **kwargs,
 ) -> ModelResponse:
@@ -206,7 +218,7 @@ async def _execute_query_pipeline(
     """
     # Extract router from kwargs - use it for completion if available
     # to properly resolve virtual model names
-    router: Optional["Router"] = kwargs.pop("router", None)
+    router: Router | None = kwargs.pop("router", None)
 
     # 1. Extract query from last user message
     query_text = RAGQuery.extract_query_from_messages(messages)
@@ -214,58 +226,87 @@ async def _execute_query_pipeline(
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
-    search_response = await litellm.vector_stores.asearch(
-        vector_store_id=retrieval_config["vector_store_id"],
-        query=query_text,
-        max_num_results=retrieval_config.get("top_k", 10),
-        custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
-        **kwargs,
-    )
+    with _suppressed_sub_call_billing():
+        search_response = await litellm.vector_stores.asearch(
+            vector_store_id=retrieval_config["vector_store_id"],
+            query=query_text,
+            max_num_results=retrieval_config.get("top_k", 10),
+            custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
+            **kwargs,
+        )
+
+    search_provider = retrieval_config.get("custom_llm_provider", "openai")
+    try:
+        search_cost = sum(
+            vector_store_search_cost(
+                model=search_provider if "/" in search_provider else None,
+                custom_llm_provider=search_provider,
+                response=search_response,
+            )
+        )
+    except Exception:  # noqa: BLE001 - cost accounting must never break the query path
+        search_cost = 0.0
 
     rerank_response = None
+    rerank_cost = 0.0
     context_chunks = search_response.get("data", [])
 
     # 3. Optional rerank
     if rerank and rerank.get("enabled"):
         documents = RAGQuery.extract_documents_from_search(search_response)
         if documents:
-            rerank_response = await litellm.arerank(
-                model=rerank["model"],
-                query=query_text,
-                documents=documents,
-                top_n=rerank.get("top_n", 5),
-            )
-            context_chunks = RAGQuery.get_top_chunks_from_rerank(
-                search_response, rerank_response
-            )
+            with _suppressed_sub_call_billing():
+                rerank_response = await litellm.arerank(
+                    model=rerank["model"],
+                    query=query_text,
+                    documents=documents,
+                    top_n=rerank.get("top_n", 5),
+                )
+            rerank_hidden_params = getattr(rerank_response, "_hidden_params", None)
+            if isinstance(rerank_hidden_params, dict):
+                rerank_response_cost: float | None = rerank_hidden_params.get("response_cost")
+                rerank_cost = rerank_response_cost or 0.0
+            context_chunks = RAGQuery.get_top_chunks_from_rerank(search_response, rerank_response)
 
     # 4. Build context message and call completion
     context_message = RAGQuery.build_context_message(context_chunks)
     modified_messages = messages[:-1] + [context_message] + [messages[-1]]
 
     # Use router if available to properly resolve virtual model names
-    if router is not None:
-        response = await router.acompletion(
-            model=model,
-            messages=modified_messages,
-            stream=stream,
-            **kwargs,
-        )
-    else:
-        response = await litellm.acompletion(
-            model=model,
-            messages=modified_messages,
-            stream=stream,
-            **kwargs,
-        )
+    with _suppressed_sub_call_billing():
+        if router is not None:
+            response = await router.acompletion(
+                model=model,
+                messages=modified_messages,
+                stream=stream,
+                **kwargs,
+            )
+        else:
+            response = await litellm.acompletion(
+                model=model,
+                messages=modified_messages,
+                stream=stream,
+                **kwargs,
+            )
 
     # 5. Attach search results to response
+    sub_call_cost = search_cost + rerank_cost
     if not stream and isinstance(response, ModelResponse):
         response = RAGQuery.add_search_results_to_response(
             response=response,
             search_results=search_response,
             rerank_results=rerank_response,
         )
+        if sub_call_cost > 0:
+            hidden_params = getattr(response, "_hidden_params", None)
+            if isinstance(hidden_params, dict):
+                completion_response_cost: float | None = hidden_params.get("response_cost")
+                if completion_response_cost is not None:
+                    hidden_params["response_cost"] = completion_response_cost + sub_call_cost
+    elif sub_call_cost > 0:
+        logging_obj: object = kwargs.get("litellm_logging_obj")
+        if isinstance(logging_obj, LiteLLMLoggingObj):
+            logging_obj.model_call_details["additional_response_cost"] = sub_call_cost
 
     return response  # type: ignore[return-value]
 
@@ -273,9 +314,9 @@ async def _execute_query_pipeline(
 @client
 async def aquery(
     model: str,
-    messages: List[Any],
-    retrieval_config: Dict[str, Any],
-    rerank: Optional[Dict[str, Any]] = None,
+    messages: list[Any],
+    retrieval_config: dict[str, Any],
+    rerank: dict[str, Any] | None = None,
     stream: bool = False,
     **kwargs,
 ) -> ModelResponse:
@@ -320,12 +361,12 @@ async def aquery(
 @client
 def query(
     model: str,
-    messages: List[Any],
-    retrieval_config: Dict[str, Any],
-    rerank: Optional[Dict[str, Any]] = None,
+    messages: list[Any],
+    retrieval_config: dict[str, Any],
+    rerank: dict[str, Any] | None = None,
     stream: bool = False,
     **kwargs,
-) -> Union[ModelResponse, Coroutine[Any, Any, ModelResponse]]:
+) -> ModelResponse | Coroutine[Any, Any, ModelResponse]:
     """
     Query a RAG pipeline.
     """
@@ -365,14 +406,14 @@ def query(
 
 @client
 def ingest(
-    ingest_options: Dict[str, Any],
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file: Optional[Dict[str, str]] = None,
-    file_url: Optional[str] = None,
-    file_id: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ingest_options: dict[str, Any],
+    file_data: tuple[str, bytes, str] | None = None,
+    file: dict[str, str] | None = None,
+    file_url: str | None = None,
+    file_id: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[RAGIngestResponse, Coroutine[Any, Any, RAGIngestResponse]]:
+) -> RAGIngestResponse | Coroutine[Any, Any, RAGIngestResponse]:
     """
     Ingest a document into a vector store.
 
@@ -401,7 +442,7 @@ def ingest(
     local_vars = locals()
     try:
         _is_async = kwargs.pop("aingest", False) is True
-        router: Optional["Router"] = kwargs.get("router")
+        router: Router | None = kwargs.get("router")
 
         # Convert file dict to file_data tuple if provided
         if file is not None and file_data is None:
@@ -432,9 +473,7 @@ def ingest(
     except Exception as e:
         raise litellm.exception_type(
             model=None,
-            custom_llm_provider=ingest_options.get("vector_store", {}).get(
-                "custom_llm_provider"
-            ),
+            custom_llm_provider=ingest_options.get("vector_store", {}).get("custom_llm_provider"),
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,

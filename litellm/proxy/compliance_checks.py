@@ -5,8 +5,6 @@ Provides guardrail-agnostic compliance validation based on guardrail modes
 and execution results rather than specific guardrail names.
 """
 
-from typing import Dict, List
-
 from litellm.types.proxy.compliance_endpoints import (
     ComplianceCheckRequest,
     ComplianceCheckResult,
@@ -28,24 +26,58 @@ class ComplianceChecker:
         self.data = data
         self.guardrails = data.guardrail_information or []
 
-    def _get_guardrails_by_mode(self, mode: str) -> List[Dict]:
+    def _get_guardrails_by_mode(self, mode: str) -> list[dict]:
         """
         Get all guardrails that ran in a specific mode.
 
         If a guardrail doesn't have a mode specified, it's treated as pre-call
         (the most common case).
         """
-        result = []
-        for g in self.guardrails:
-            g_mode = g.get("guardrail_mode")
-            # If no mode specified, default to pre_call
-            if g_mode is None and mode == "pre_call":
-                result.append(g)
-            elif g_mode == mode:
-                result.append(g)
-        return result
+        return [g for g in self.guardrails if self._mode_matches(g.get("guardrail_mode"), mode)]
 
-    def _has_guardrail_intervention(self, guardrails: List[Dict]) -> bool:
+    @staticmethod
+    def _mode_matches(g_mode: object, mode: str) -> bool:
+        """
+        Return True only when a guardrail with logged ``guardrail_mode`` of
+        ``g_mode`` is guaranteed to have run in ``mode`` for the audited request.
+
+        ``guardrail_mode`` in a spend log can take several shapes because
+        ``LitellmParams.mode`` is typed ``Union[str, List[str], Mode]``, and
+        when the event type cannot be inferred at write time the raw config is
+        logged verbatim. The spend log records the configured mode(s), not the
+        concrete hook that fired for a given request; a match reports a mode
+        satisfied only when every configured branch runs in that mode, so True
+        never claims a hook the guardrail may not have actually executed.
+
+        Fails safe: if the guarantee cannot be established (missing default,
+        divergent per-tag override, or a list that runs in more than one mode),
+        the guardrail counts for no mode. The precise fix is to log the
+        resolved event mode and match on it; this is the safe interim.
+        """
+        if g_mode is None:
+            return mode == "pre_call"
+        if isinstance(g_mode, str):
+            return g_mode == mode
+        if isinstance(g_mode, (list, tuple)):
+            return bool(g_mode) and all(m == mode for m in g_mode)
+        if isinstance(g_mode, dict):
+            default = g_mode.get("default")
+            if default is None:
+                return False
+            tags = g_mode.get("tags")
+            tag_branches = list(tags.values()) if isinstance(tags, dict) else []
+
+            def _branch_runs_in_mode(branch: object) -> bool:
+                if isinstance(branch, str):
+                    return branch == mode
+                if isinstance(branch, (list, tuple)):
+                    return bool(branch) and all(m == mode for m in branch)
+                return False
+
+            return all(_branch_runs_in_mode(branch) for branch in [default, *tag_branches])
+        return False
+
+    def _has_guardrail_intervention(self, guardrails: list[dict]) -> bool:
         """Check if any guardrail intervened (blocked/masked content)."""
         for g in guardrails:
             status = g.get("guardrail_status", "")
@@ -53,7 +85,7 @@ class ComplianceChecker:
                 return True
         return False
 
-    def _all_guardrails_passed(self, guardrails: List[Dict]) -> bool:
+    def _all_guardrails_passed(self, guardrails: list[dict]) -> bool:
         """Check if all guardrails passed (no issues detected)."""
         if not guardrails:
             return False
@@ -68,11 +100,7 @@ class ComplianceChecker:
             check_name="Guardrails applied",
             article="Art. 9",
             passed=has_guardrails,
-            detail=(
-                f"{len(self.guardrails)} guardrail(s) applied"
-                if has_guardrails
-                else "No guardrails applied"
-            ),
+            detail=(f"{len(self.guardrails)} guardrail(s) applied" if has_guardrails else "No guardrails applied"),
         )
 
     def _check_art_5_content_screened(self) -> ComplianceCheckResult:
@@ -112,11 +140,7 @@ class ComplianceChecker:
             check_name="Audit record complete",
             article="Art. 12",
             passed=audit_complete,
-            detail=(
-                "All required audit fields present"
-                if audit_complete
-                else f"Missing: {', '.join(missing)}"
-            ),
+            detail=("All required audit fields present" if audit_complete else f"Missing: {', '.join(missing)}"),
         )
 
     # ── GDPR Helper Methods ──────────────────────────────────────────────────
@@ -179,16 +203,12 @@ class ComplianceChecker:
             check_name="Audit record complete",
             article="Art. 30",
             passed=audit_complete,
-            detail=(
-                "All required audit fields present"
-                if audit_complete
-                else f"Missing: {', '.join(missing)}"
-            ),
+            detail=("All required audit fields present" if audit_complete else f"Missing: {', '.join(missing)}"),
         )
 
     # ── Main Compliance Check Methods ────────────────────────────────────────
 
-    def check_eu_ai_act(self) -> List[ComplianceCheckResult]:
+    def check_eu_ai_act(self) -> list[ComplianceCheckResult]:
         """
         Check EU AI Act compliance.
 
@@ -204,7 +224,7 @@ class ComplianceChecker:
             self._check_art_12_audit_complete(),
         ]
 
-    def check_gdpr(self) -> List[ComplianceCheckResult]:
+    def check_gdpr(self) -> list[ComplianceCheckResult]:
         """
         Check GDPR compliance.
 

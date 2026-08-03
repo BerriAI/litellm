@@ -1,4 +1,4 @@
-from typing import Literal, Optional, Union
+from typing import Literal
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -38,7 +38,7 @@ class myCustomGuardrail(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -55,9 +55,7 @@ class myCustomGuardrail(CustomGuardrail):
                         _content = _content.replace("litellm", "********")
                         message["content"] = _content
 
-        verbose_proxy_logger.debug(
-            "async_pre_call_hook: Message after masking %s", _messages
-        )
+        verbose_proxy_logger.debug("async_pre_call_hook: Message after masking %s", _messages)
 
         return data
 

@@ -3,13 +3,13 @@
  * Datadog-style: header with icon/metrics, content below
  */
 
-import { useState } from 'react';
+import { useState } from "react";
 import MessageManager from "@/components/molecules/message_manager";
-import { ParsedMessage } from './prettyMessagesTypes';
-import { SectionHeader } from './SectionHeader';
-import { CollapsibleMessage } from './CollapsibleMessage';
-import { HistoryTree } from './HistoryTree';
-import { SimpleMessageBlock } from './SimpleMessageBlock';
+import { ParsedMessage } from "./prettyMessagesTypes";
+import { SectionHeader } from "./SectionHeader";
+import { CollapsibleMessage } from "./CollapsibleMessage";
+import { HistoryTree } from "./HistoryTree";
+import { SimpleMessageBlock } from "./SimpleMessageBlock";
 
 interface InputCardProps {
   messages: ParsedMessage[];
@@ -25,24 +25,24 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
   }
 
   // Separate system, history, and last message
-  const systemMessage = messages.find((m) => m.role === 'system');
-  const nonSystemMessages = messages.filter((m) => m.role !== 'system');
+  const systemMessage = messages.find((m) => m.role === "system");
+  const nonSystemMessages = messages.filter((m) => m.role !== "system");
   const lastMessage = nonSystemMessages.length > 0 ? nonSystemMessages[nonSystemMessages.length - 1] : null;
   const historyMessages = nonSystemMessages.slice(0, -1);
 
   const handleCopy = () => {
-    const content = lastMessage?.content || '';
+    const content = lastMessage?.content || "";
     navigator.clipboard.writeText(content);
-    MessageManager.success('Input copied');
+    MessageManager.success("Input copied");
   };
 
   return (
     <div
       style={{
-        border: '1px solid #f0f0f0',
+        border: "1px solid #f0f0f0",
         borderRadius: 6,
         marginBottom: 8,
-        overflow: 'hidden',
+        overflow: "hidden",
       }}
     >
       {/* Datadog-style Header */}
@@ -58,13 +58,13 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
       {/* Content */}
       <div
         style={{
-          maxHeight: isCollapsed ? '0px' : '10000px',
-          overflow: 'hidden',
-          transition: 'max-height 0.3s ease-out, opacity 0.3s ease-out',
+          maxHeight: isCollapsed ? "0px" : "10000px",
+          overflow: "hidden",
+          transition: "max-height 0.3s ease-out, opacity 0.3s ease-out",
           opacity: isCollapsed ? 0 : 1,
         }}
       >
-        <div style={{ padding: '12px 16px' }}>
+        <div style={{ padding: "12px 16px" }}>
           {/* System Message - Collapsible with arrow */}
           {systemMessage && (
             <CollapsibleMessage

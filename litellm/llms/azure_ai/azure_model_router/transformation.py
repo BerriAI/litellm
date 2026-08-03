@@ -5,7 +5,7 @@ The Model Router is a special Azure AI deployment that automatically routes requ
 to the best available model. It has specific cost tracking requirements.
 """
 
-from typing import Any, List, Optional
+from typing import Any
 
 from httpx import Response
 
@@ -28,7 +28,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -44,9 +44,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         # Get base model name (strips routing prefixes like model_router/)
         base_model: str = AzureFoundryModelInfo.get_base_model(model)
 
-        return super().transform_request(
-            base_model, messages, optional_params, litellm_params, headers
-        )
+        return super().transform_request(base_model, messages, optional_params, litellm_params, headers)
 
     def transform_response(
         self,
@@ -55,12 +53,12 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform response for Model Router.
@@ -90,9 +88,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         )
         return model_response
 
-    def calculate_additional_costs(
-        self, model: str, prompt_tokens: int, completion_tokens: int
-    ) -> Optional[dict]:
+    def calculate_additional_costs(self, model: str, prompt_tokens: int, completion_tokens: int) -> dict | None:
         """
         Calculate additional costs for Azure Model Router.
 
@@ -110,9 +106,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
             calculate_azure_model_router_flat_cost,
         )
 
-        flat_cost = calculate_azure_model_router_flat_cost(
-            model=model, prompt_tokens=prompt_tokens
-        )
+        flat_cost = calculate_azure_model_router_flat_cost(model=model, prompt_tokens=prompt_tokens)
 
         if flat_cost > 0:
             return {"Azure Model Router Flat Cost": flat_cost}

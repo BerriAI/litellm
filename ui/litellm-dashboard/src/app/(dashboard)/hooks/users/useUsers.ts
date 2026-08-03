@@ -8,10 +8,7 @@ const infiniteUsersKeys = createQueryKeys("infiniteUsers");
 
 const DEFAULT_PAGE_SIZE = 50;
 
-export const useInfiniteUsers = (
-  pageSize: number = DEFAULT_PAGE_SIZE,
-  searchEmail?: string,
-) => {
+export const useInfiniteUsers = (pageSize: number = DEFAULT_PAGE_SIZE, searchEmail?: string) => {
   const { accessToken, userRole } = useAuthorized();
   return useInfiniteQuery<UserListResponse>({
     queryKey: infiniteUsersKeys.list({
@@ -23,10 +20,10 @@ export const useInfiniteUsers = (
     queryFn: async ({ pageParam }) => {
       return await userListCall(
         accessToken!,
-        null,                       // userIDs
-        pageParam as number,        // page
-        pageSize,                   // page_size
-        searchEmail || null,        // userEmail
+        null, // userIDs
+        pageParam as number, // page
+        pageSize, // page_size
+        searchEmail || null, // userEmail
       );
     },
     initialPageParam: 1,

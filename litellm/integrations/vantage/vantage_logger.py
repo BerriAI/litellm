@@ -7,7 +7,7 @@ so users can simply set ``success_callback: ["vantage"]`` in their proxy config.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -36,24 +36,20 @@ class VantageLogger(FocusLogger):
     def __init__(
         self,
         *,
-        api_key: Optional[str] = None,
-        integration_token: Optional[str] = None,
-        base_url: Optional[str] = None,
-        frequency: Optional[str] = None,
-        interval_seconds: Optional[int] = None,
+        api_key: str | None = None,
+        integration_token: str | None = None,
+        base_url: str | None = None,
+        frequency: str | None = None,
+        interval_seconds: int | None = None,
         **kwargs: Any,
     ) -> None:
         resolved_api_key = api_key or os.getenv("VANTAGE_API_KEY")
         resolved_token = integration_token or os.getenv("VANTAGE_INTEGRATION_TOKEN")
-        resolved_base_url = base_url or os.getenv(
-            "VANTAGE_BASE_URL", "https://api.vantage.sh"
-        )
-        resolved_frequency = (
-            frequency or os.getenv("VANTAGE_EXPORT_FREQUENCY") or "hourly"
-        ).lower()
+        resolved_base_url = base_url or os.getenv("VANTAGE_BASE_URL", "https://api.vantage.sh")
+        resolved_frequency = (frequency or os.getenv("VANTAGE_EXPORT_FREQUENCY") or "hourly").lower()
 
         raw_interval = interval_seconds or os.getenv("VANTAGE_EXPORT_INTERVAL_SECONDS")
-        resolved_interval: Optional[int] = None
+        resolved_interval: int | None = None
         if raw_interval is not None:
             try:
                 resolved_interval = int(raw_interval)
@@ -63,7 +59,7 @@ class VantageLogger(FocusLogger):
                     raw_interval,
                 )
 
-        destination_config: Dict[str, Any] = {}
+        destination_config: dict[str, Any] = {}
         if resolved_api_key:
             destination_config["api_key"] = resolved_api_key
         if resolved_token:
@@ -83,11 +79,7 @@ class VantageLogger(FocusLogger):
 
         verbose_logger.debug(
             "VantageLogger initialized (integration_token=%s)",
-            (
-                resolved_token[:4] + "***"
-                if resolved_token and len(resolved_token) > 4
-                else "***"
-            ),
+            (resolved_token[:4] + "***" if resolved_token and len(resolved_token) > 4 else "***"),
         )
 
     async def initialize_focus_export_job(self) -> None:
@@ -106,18 +98,14 @@ class VantageLogger(FocusLogger):
                 pod_lock_manager = getattr(writer, "pod_lock_manager", None)
 
         if pod_lock_manager and pod_lock_manager.redis_cache:
-            acquired = await pod_lock_manager.acquire_lock(
-                cronjob_id=VANTAGE_USAGE_DATA_JOB_NAME
-            )
+            acquired = await pod_lock_manager.acquire_lock(cronjob_id=VANTAGE_USAGE_DATA_JOB_NAME)
             if not acquired:
                 verbose_logger.debug("Vantage export: unable to acquire pod lock")
                 return
             try:
                 await self._run_scheduled_export()
             finally:
-                await pod_lock_manager.release_lock(
-                    cronjob_id=VANTAGE_USAGE_DATA_JOB_NAME
-                )
+                await pod_lock_manager.release_lock(cronjob_id=VANTAGE_USAGE_DATA_JOB_NAME)
         else:
             await self._run_scheduled_export()
 
@@ -126,10 +114,8 @@ class VantageLogger(FocusLogger):
         scheduler: AsyncIOScheduler,
     ) -> None:
         """Register the Vantage export job with the provided scheduler."""
-        vantage_loggers: List[CustomLogger] = (
-            litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=VantageLogger
-            )
+        vantage_loggers: list[CustomLogger] = litellm.logging_callback_manager.get_custom_loggers_for_type(
+            callback_type=VantageLogger
         )
         if not vantage_loggers:
             verbose_logger.debug("No Vantage logger registered; skipping scheduler")

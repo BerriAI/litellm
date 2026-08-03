@@ -3,13 +3,13 @@
 
 import json
 import os
-from litellm._uuid import uuid
-from typing import Literal, Optional
+from typing import Literal
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
@@ -32,9 +32,7 @@ class LagoLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.validate_environment()
-        self.async_http_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.sync_http_handler = HTTPHandler()
 
     def validate_environment(self):
@@ -60,7 +58,7 @@ class LagoLogger(CustomLogger):
             missing_keys.append("LAGO_API_EVENT_CODE")
 
         if len(missing_keys) > 0:
-            raise Exception("Missing keys={} in environment.".format(missing_keys))
+            raise Exception(f"Missing keys={missing_keys} in environment.")
 
     def _common_logic(self, kwargs: dict, response_obj) -> dict:
         response_obj.get("id", kwargs.get("litellm_call_id"))
@@ -70,8 +68,7 @@ class LagoLogger(CustomLogger):
         usage = {}
 
         if (
-            isinstance(response_obj, litellm.ModelResponse)
-            or isinstance(response_obj, litellm.EmbeddingResponse)
+            isinstance(response_obj, litellm.ModelResponse) or isinstance(response_obj, litellm.EmbeddingResponse)
         ) and hasattr(response_obj, "usage"):
             usage = {
                 "prompt_tokens": response_obj["usage"].get("prompt_tokens", 0),
@@ -87,11 +84,9 @@ class LagoLogger(CustomLogger):
         litellm_params["metadata"].get("user_api_key_org_id", None)
 
         charge_by: Literal["end_user_id", "team_id", "user_id"] = "end_user_id"
-        external_customer_id: Optional[str] = None
+        external_customer_id: str | None = None
 
-        if os.getenv("LAGO_API_CHARGE_BY", None) is not None and isinstance(
-            os.environ["LAGO_API_CHARGE_BY"], str
-        ):
+        if os.getenv("LAGO_API_CHARGE_BY", None) is not None and isinstance(os.environ["LAGO_API_CHARGE_BY"], str):
             if os.environ["LAGO_API_CHARGE_BY"] in [
                 "end_user_id",
                 "user_id",
@@ -110,9 +105,7 @@ class LagoLogger(CustomLogger):
 
         if external_customer_id is None:
             raise Exception(
-                "External Customer ID is not set. Charge_by={}. User_id={}. End_user_id={}. Team_id={}".format(
-                    charge_by, user_id, end_user_id, team_id
-                )
+                f"External Customer ID is not set. Charge_by={charge_by}. User_id={user_id}. End_user_id={end_user_id}. Team_id={team_id}"
             )
 
         returned_val = {
@@ -124,16 +117,14 @@ class LagoLogger(CustomLogger):
             }
         }
 
-        verbose_logger.debug(
-            "\033[91mLogged Lago Object:\n{}\033[0m\n".format(returned_val)
-        )
+        verbose_logger.debug(f"\033[91mLogged Lago Object:\n{returned_val}\033[0m\n")
         return returned_val
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         _url = os.getenv("LAGO_API_BASE")
-        assert _url is not None and isinstance(
-            _url, str
-        ), "LAGO_API_BASE missing or not set correctly. LAGO_API_BASE={}".format(_url)
+        assert _url is not None and isinstance(_url, str), (
+            f"LAGO_API_BASE missing or not set correctly. LAGO_API_BASE={_url}"
+        )
         if _url.endswith("/"):
             _url += "api/v1/events"
         else:
@@ -144,7 +135,7 @@ class LagoLogger(CustomLogger):
         _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
         _headers = {
             "Content-Type": "application/json",
-            "Authorization": "Bearer {}".format(api_key),
+            "Authorization": f"Bearer {api_key}",
         }
 
         try:
@@ -165,10 +156,8 @@ class LagoLogger(CustomLogger):
         try:
             verbose_logger.debug("ENTERS LAGO CALLBACK")
             _url = os.getenv("LAGO_API_BASE")
-            assert _url is not None and isinstance(
-                _url, str
-            ), "LAGO_API_BASE missing or not set correctly. LAGO_API_BASE={}".format(
-                _url
+            assert _url is not None and isinstance(_url, str), (
+                f"LAGO_API_BASE missing or not set correctly. LAGO_API_BASE={_url}"
             )
             if _url.endswith("/"):
                 _url += "api/v1/events"
@@ -180,12 +169,12 @@ class LagoLogger(CustomLogger):
             _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
             _headers = {
                 "Content-Type": "application/json",
-                "Authorization": "Bearer {}".format(api_key),
+                "Authorization": f"Bearer {api_key}",
             }
         except Exception as e:
             raise e
 
-        response: Optional[httpx.Response] = None
+        response: httpx.Response | None = None
         try:
             response = await self.async_http_handler.post(
                 url=_url,

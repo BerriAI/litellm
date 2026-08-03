@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import Literal, Required, TypedDict
+from typing_extensions import Literal, NotRequired, Required, TypedDict
 
 from .openai import (
     ChatCompletionCachedContent,
@@ -39,7 +39,8 @@ class AnthropicOutputSchema(TypedDict, total=False):
 class AnthropicOutputConfig(TypedDict, total=False):
     """Configuration for controlling Claude's output behavior."""
 
-    effort: Literal["high", "medium", "low"]
+    effort: Literal["high", "medium", "low", "xhigh", "max"]
+    format: AnthropicOutputSchema
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
@@ -364,9 +365,7 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-AllAnthropicMessageValues = Union[
-    AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam
-]
+AllAnthropicMessageValues = Union[AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam]
 
 
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
@@ -384,14 +383,10 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
-    container: Optional[
-        Dict[str, Any]
-    ]  # Container config with skills for code execution
+    container: Optional[Dict[str, Any]]  # Container config with skills for code execution
     output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
     speed: Optional[str]  # Fast mode support for Opus models
-    output_config: Optional[
-        AnthropicOutputConfig
-    ]  # Configuration for Claude's output behavior
+    output_config: Optional[AnthropicOutputConfig]  # Configuration for Claude's output behavior
     cache_control: Optional[Dict[str, Any]]  # Automatic prompt caching
     reasoning_effort: Optional[str]
 
@@ -442,6 +437,9 @@ class ContentThinkingSignatureBlockDelta(TypedDict):
 
     type: Literal["signature_delta"]
     signature: str
+
+
+StreamingContentBlockDeltaType = Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"]
 
 
 class ContentBlockDelta(TypedDict):
@@ -496,9 +494,7 @@ class ContentBlockStartText(TypedDict):
     content_block: TextBlock
 
 
-ContentBlockContentBlockDict = Union[
-    ToolUseBlock, TextBlock, ChatCompletionThinkingBlock
-]
+ContentBlockContentBlockDict = Union[ToolUseBlock, TextBlock, ChatCompletionThinkingBlock]
 
 ContentBlockStart = Union[ContentBlockStartToolUse, ContentBlockStartText]
 
@@ -514,6 +510,41 @@ class UsageDelta(TypedDict, total=False):
     cache_read_input_tokens: int
 
 
+class AppliedEdit(TypedDict, total=False):
+    """One applied context_management edit (Anthropic response shape)."""
+
+    type: str
+    cleared_input_tokens: int
+    cleared_tool_uses: int
+    cleared_thinking_turns: int
+    # compact_20260112 fields
+    summary_input_tokens: int
+    summary_output_tokens: int
+    error: str
+    warnings: List[str]
+
+
+class ContextManagementResponse(TypedDict, total=False):
+    """Response ``context_management`` with ``applied_edits``."""
+
+    applied_edits: List[AppliedEdit]
+
+
+class CompactionBlock(TypedDict, total=False):
+    """Synthesized ``compaction`` content block (compact_20260112)."""
+
+    type: Required[Literal["compaction"]]
+    content: Optional[str]
+
+
+class UsageIteration(TypedDict, total=False):
+    """One sampling iteration's token usage (compact_20260112)."""
+
+    type: Required[Literal["compaction", "message"]]
+    input_tokens: int
+    output_tokens: int
+
+
 class MessageBlockDelta(TypedDict):
     """
     Anthropic
@@ -523,6 +554,7 @@ class MessageBlockDelta(TypedDict):
     type: Literal["message_delta"]
     delta: MessageDelta
     usage: UsageDelta
+    context_management: NotRequired[ContextManagementResponse]
 
 
 class MessageChunk(TypedDict, total=False):
@@ -588,6 +620,8 @@ class AnthropicResponseContentBlockRedactedThinking(BaseModel):
 
 
 class AnthropicResponseUsageBlock(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     input_tokens: int
     output_tokens: int
 

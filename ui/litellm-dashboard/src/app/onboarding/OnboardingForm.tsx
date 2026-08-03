@@ -26,9 +26,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
 
   const { mutate: claimToken, isPending } = useClaimOnboardingToken();
 
-  const decoded = credentialsData?.token
-    ? (jwtDecode(credentialsData.token) as { [key: string]: any })
-    : null;
+  const decoded = credentialsData?.token ? (jwtDecode(credentialsData.token) as { [key: string]: any }) : null;
   const userEmail: string = decoded?.user_email ?? "";
   const userId: string | null = decoded?.user_id ?? null;
   const accessToken: string | null = decoded?.key ?? null;
@@ -53,14 +51,12 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
           clearTokenCookies();
           storeLoginToken(data.token);
           const proxyBaseUrl = getProxyBaseUrl();
-          window.location.href = proxyBaseUrl
-            ? `${proxyBaseUrl}/ui/?login=success`
-            : "/ui/?login=success";
+          window.location.href = proxyBaseUrl ? `${proxyBaseUrl}/ui/?login=success` : "/ui/?login=success";
         },
         onError: (error: Error) => {
           setClaimError(error.message || "Failed to submit. Please try again.");
         },
-      }
+      },
     );
   };
 

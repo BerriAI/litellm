@@ -1,16 +1,16 @@
 """
 This is a cache for LangfuseLoggers.
 
-Langfuse Python SDK initializes a thread for each client. 
+Langfuse Python SDK initializes a thread for each client.
 
-This ensures we do 
+This ensures we do
 1. Proper cleanup of Langfuse initialized clients.
 2. Re-use created langfuse clients.
 """
 
 import hashlib
 import json
-from typing import Any, Optional
+from typing import Any
 
 import litellm
 from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
@@ -67,16 +67,11 @@ class DynamicLoggingCache:
         cache_key = hashlib.sha256(args_str.encode("utf-8")).hexdigest()
         return cache_key
 
-    def get_cache(self, credentials: dict, service_name: str) -> Optional[Any]:
-        key_name = self.get_cache_key(
-            args={**credentials, "service_name": service_name}
-        )
+    def get_cache(self, credentials: dict, service_name: str) -> Any | None:
+        key_name = self.get_cache_key(args={**credentials, "service_name": service_name})
         response = self.cache.get_cache(key=key_name)
         return response
 
     def set_cache(self, credentials: dict, service_name: str, logging_obj: Any) -> None:
-        key_name = self.get_cache_key(
-            args={**credentials, "service_name": service_name}
-        )
+        key_name = self.get_cache_key(args={**credentials, "service_name": service_name})
         self.cache.set_cache(key=key_name, value=logging_obj)
-        return None

@@ -31,9 +31,6 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# print contents of ui_colors.json
-echo "Contents of ui_colors.json:"
-cat ui_colors.json
 
 # Run npm build
 npm run build

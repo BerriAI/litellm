@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -18,9 +18,7 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
     OpenAI gpt-image image generation config
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         return [
             "background",
             "moderation",
@@ -40,8 +38,8 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         drop_params: bool,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     optional_params[k] = non_default_params[k]
                 elif drop_params:
@@ -63,8 +61,8 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         response = raw_response.json()
 
@@ -83,14 +81,8 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         # set optional params
-        image_response.size = optional_params.get(
-            "size", "1024x1024"
-        )  # default is always 1024x1024
-        image_response.quality = optional_params.get(
-            "quality", "high"
-        )  # always hd for dall-e-3
-        image_response.output_format = optional_params.get(
-            "response_format", "png"
-        )  # always png for dall-e-3
+        image_response.size = optional_params.get("size", "1024x1024")  # default is always 1024x1024
+        image_response.quality = optional_params.get("quality", "high")  # always hd for dall-e-3
+        image_response.output_format = optional_params.get("response_format", "png")  # always png for dall-e-3
 
         return image_response

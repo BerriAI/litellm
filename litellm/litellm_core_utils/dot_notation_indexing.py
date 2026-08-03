@@ -23,14 +23,12 @@ Used by JWT Auth to get the user role from the token, and by
 additional_drop_params to remove nested fields from optional parameters.
 """
 
-from typing import Any, Dict, List, Optional, TypeVar, Union
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
 
-def get_nested_value(
-    data: Dict[str, Any], key_path: str, default: Optional[T] = None
-) -> Optional[T]:
+def get_nested_value(data: dict[str, Any], key_path: str, default: T | None = None) -> T | None:
     """
     Retrieves a value from a nested dictionary using dot notation.
 
@@ -56,11 +54,7 @@ def get_nested_value(
         return default
 
     # Remove metadata. prefix if it exists
-    key_path = (
-        key_path.replace("metadata.", "", 1)
-        if key_path.startswith("metadata.")
-        else key_path
-    )
+    key_path = key_path.replace("metadata.", "", 1) if key_path.startswith("metadata.") else key_path
 
     # Split the key path into parts, respecting escaped dots (\.)
     # Use a temporary placeholder, split on unescaped dots, then restore
@@ -113,7 +107,7 @@ def _parse_path_segments(path: str) -> list:
 
 
 def _delete_nested_value_custom(
-    data: Union[Dict[str, Any], List[Any]],
+    data: dict[str, Any] | list[Any],
     segments: list,
     segment_index: int = 0,
 ) -> None:
@@ -158,9 +152,7 @@ def _delete_nested_value_custom(
                     # Only recurse if element is a dict or list (nested structure)
                     element = data[index]
                     if isinstance(element, (dict, list)):
-                        _delete_nested_value_custom(
-                            element, segments, segment_index + 1
-                        )
+                        _delete_nested_value_custom(element, segments, segment_index + 1)
         except (ValueError, IndexError):
             # Invalid index, skip
             pass
@@ -174,31 +166,23 @@ def _delete_nested_value_custom(
         else:
             # Navigate deeper
             if segment in data:
-                next_segment = (
-                    segments[segment_index + 1]
-                    if segment_index + 1 < len(segments)
-                    else None
-                )
+                next_segment = segments[segment_index + 1] if segment_index + 1 < len(segments) else None
 
                 # If next segment is array notation, current field should be list
                 if next_segment and (next_segment.startswith("[")):
                     if isinstance(data[segment], list):
-                        _delete_nested_value_custom(
-                            data[segment], segments, segment_index + 1
-                        )
+                        _delete_nested_value_custom(data[segment], segments, segment_index + 1)
                 # Otherwise navigate into dict
                 elif isinstance(data[segment], dict):
-                    _delete_nested_value_custom(
-                        data[segment], segments, segment_index + 1
-                    )
+                    _delete_nested_value_custom(data[segment], segments, segment_index + 1)
 
 
 def delete_nested_value(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     path: str,
     depth: int = 0,
     max_depth: int = 20,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Delete a field from nested data using JSONPath notation.
 

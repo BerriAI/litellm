@@ -29,9 +29,7 @@ class OpenMeterLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.validate_environment()
-        self.async_http_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.sync_http_handler = HTTPHandler()
 
     def validate_environment(self):
@@ -47,7 +45,7 @@ class OpenMeterLogger(CustomLogger):
             missing_keys.append("OPENMETER_API_KEY")
 
         if len(missing_keys) > 0:
-            raise Exception("Missing keys={} in environment.".format(missing_keys))
+            raise Exception(f"Missing keys={missing_keys} in environment.")
 
     def _common_logic(self, kwargs: dict, response_obj):
         call_id = response_obj.get("id", kwargs.get("litellm_call_id"))
@@ -56,8 +54,7 @@ class OpenMeterLogger(CustomLogger):
         model = kwargs.get("model")
         usage = {}
         if (
-            isinstance(response_obj, litellm.ModelResponse)
-            or isinstance(response_obj, litellm.EmbeddingResponse)
+            isinstance(response_obj, litellm.ModelResponse) or isinstance(response_obj, litellm.EmbeddingResponse)
         ) and hasattr(response_obj, "usage"):
             usage = {
                 "prompt_tokens": response_obj["usage"].get("prompt_tokens", 0),
@@ -65,7 +62,13 @@ class OpenMeterLogger(CustomLogger):
                 "total_tokens": response_obj["usage"].get("total_tokens"),
             }
 
-        user_param = kwargs.get("user", None)  # end-user passed in via 'user' param
+        # OPENMETER_TRUST_REQUEST_USER (default "true"): when set to "false",
+        # the request-supplied `user` field is ignored and the subject is
+        # resolved solely from the key-bound user_api_key_user_id. Proxies
+        # serving multi-tenant traffic enable this to prevent clients from
+        # forging attribution by setting `user` in the request body.
+        trust_request_user = os.getenv("OPENMETER_TRUST_REQUEST_USER", "true").lower() != "false"
+        user_param = kwargs.get("user", None) if trust_request_user else None
 
         # If no user provided directly, try to get it from token user_id
         if user_param is None:
@@ -104,7 +107,7 @@ class OpenMeterLogger(CustomLogger):
         _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
         _headers = {
             "Content-Type": "application/cloudevents+json",
-            "Authorization": "Bearer {}".format(api_key),
+            "Authorization": f"Bearer {api_key}",
         }
 
         try:
@@ -130,7 +133,7 @@ class OpenMeterLogger(CustomLogger):
         _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
         _headers = {
             "Content-Type": "application/cloudevents+json",
-            "Authorization": "Bearer {}".format(api_key),
+            "Authorization": f"Bearer {api_key}",
         }
 
         try:

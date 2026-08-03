@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -37,7 +37,7 @@ _IDENTITY_FIELDS = (
 )
 
 
-def _resolve_session_key(kwargs: Dict[str, Any]) -> Optional[str]:
+def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
     """Pick a stable per-conversation key for owner-cache attribution.
 
     Order:
@@ -68,10 +68,7 @@ def _resolve_session_key(kwargs: Dict[str, Any]) -> Optional[str]:
         # crediting the bandit for conversations that are too short to signal.
         return None
 
-    identity = ":".join(
-        str(metadata.get(f) or "") if isinstance(metadata, dict) else ""
-        for f in _IDENTITY_FIELDS
-    )
+    identity = ":".join(str(metadata.get(f) or "") if isinstance(metadata, dict) else "" for f in _IDENTITY_FIELDS)
     anchor = messages[:SIGNAL_GATE_MIN_MESSAGES]
     payload = (
         identity
@@ -85,7 +82,7 @@ def _resolve_session_key(kwargs: Dict[str, Any]) -> Optional[str]:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _last_user_content(messages: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+def _last_user_content(messages: list[dict[str, Any]] | None) -> str | None:
     if not messages:
         return None
     for msg in reversed(messages):
@@ -103,8 +100,8 @@ def _last_user_content(messages: Optional[List[Dict[str, Any]]]) -> Optional[str
 
 
 def _recent_tool_results(
-    messages: Optional[List[Dict[str, Any]]]
-) -> List[Dict[str, Any]]:
+    messages: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
     """Extract the current turn's tool result payloads from the request messages.
 
     Tool results are `role == "tool"` messages that sit at the tail of the
@@ -118,7 +115,7 @@ def _recent_tool_results(
     """
     if not messages:
         return []
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for msg in reversed(messages):
         if not isinstance(msg, dict):
             break
@@ -146,9 +143,7 @@ def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
         return None, []
 
     msg = choices[0]
-    msg = getattr(msg, "message", None) or (
-        msg.get("message") if isinstance(msg, dict) else None
-    )
+    msg = getattr(msg, "message", None) or (msg.get("message") if isinstance(msg, dict) else None)
     if msg is None:
         return None, []
 
@@ -159,7 +154,7 @@ def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
     raw_tool_calls = getattr(msg, "tool_calls", None)
     if raw_tool_calls is None and isinstance(msg, dict):
         raw_tool_calls = msg.get("tool_calls")
-    tool_calls: List[Dict[str, Any]] = []
+    tool_calls: list[dict[str, Any]] = []
     for tc in raw_tool_calls or []:
         if isinstance(tc, dict):
             tool_calls.append(tc)
@@ -179,12 +174,12 @@ class AdaptiveRouterPostCallHook(CustomLogger):
 
     async def async_post_call_response_headers_hook(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         user_api_key_dict: Any,
         response: Any,
-        request_headers: Optional[Dict[str, str]] = None,
-        litellm_call_info: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, str]]:
+        request_headers: dict[str, str] | None = None,
+        litellm_call_info: dict[str, Any] | None = None,
+    ) -> dict[str, str] | None:
         """
         Surface the chosen logical model as the `x-litellm-adaptive-router-model`
         response header for both streaming and non-streaming responses.
@@ -196,11 +191,7 @@ class AdaptiveRouterPostCallHook(CustomLogger):
         the header is included for both paths.
         """
         metadata = data.get("metadata") or {}
-        chosen = (
-            metadata.get(ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY)
-            if isinstance(metadata, dict)
-            else None
-        )
+        chosen = metadata.get(ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY) if isinstance(metadata, dict) else None
         if not chosen:
             return None
         return {ADAPTIVE_ROUTER_RESPONSE_HEADER: chosen}
@@ -217,16 +208,12 @@ class AdaptiveRouterPostCallHook(CustomLogger):
 
     async def _record(
         self,
-        kwargs: Dict[str, Any],
+        kwargs: dict[str, Any],
         response_obj: Any,
         response_status: int,
     ) -> None:
         try:
             messages = kwargs.get("messages") or []
-            if len(messages) < SIGNAL_GATE_MIN_MESSAGES:
-                # Too few turns for any signal to be meaningful — skip.
-                return
-
             session_key = _resolve_session_key(kwargs)
             if not session_key:
                 return
@@ -238,18 +225,8 @@ class AdaptiveRouterPostCallHook(CustomLogger):
             # The pre-routing hook stashes the logical pick under this key.
             litellm_params = kwargs.get("litellm_params") or {}
             metadata = litellm_params.get("metadata") or {}
-            current_model = (
-                metadata.get(ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY)
-                if isinstance(metadata, dict)
-                else None
-            )
+            current_model = metadata.get(ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY) if isinstance(metadata, dict) else None
             if not current_model:
-                return
-
-            if not self.adaptive_router.claim_or_check_owner(
-                session_key, current_model
-            ):
-                # A different model owns this conversation — skip attribution.
                 return
 
             user_text = _last_user_content(messages)
@@ -259,9 +236,7 @@ class AdaptiveRouterPostCallHook(CustomLogger):
             request_type = classify_prompt(user_text or "")
             turn = Turn(
                 user_content=user_text,
-                assistant_content=(
-                    assistant_text if isinstance(assistant_text, str) else None
-                ),
+                assistant_content=(assistant_text if isinstance(assistant_text, str) else None),
                 tool_calls=tool_calls,
                 tool_results=tool_results,
                 response_status=response_status,
@@ -273,6 +248,4 @@ class AdaptiveRouterPostCallHook(CustomLogger):
                 turn=turn,
             )
         except Exception as e:
-            verbose_router_logger.exception(
-                "AdaptiveRouterPostCallHook: failed to record turn: %s", e
-            )
+            verbose_router_logger.exception("AdaptiveRouterPostCallHook: failed to record turn: %s", e)

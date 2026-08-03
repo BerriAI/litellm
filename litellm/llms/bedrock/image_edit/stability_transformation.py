@@ -22,7 +22,7 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 """
 
 import base64
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -51,7 +51,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
     """
 
     @classmethod
-    def _is_stability_edit_model(cls, model: Optional[str] = None) -> bool:
+    def _is_stability_edit_model(cls, model: str | None = None) -> bool:
         """
         Returns True if the model is a Bedrock Stability edit model.
 
@@ -100,7 +100,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """
         Map OpenAI parameters to Bedrock Stability parameters.
 
@@ -116,7 +116,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         }
 
         # Create a copy to not mutate original - convert TypedDict to regular dict
-        mapped_params: Dict[str, Any] = dict(image_edit_optional_params)
+        mapped_params: dict[str, Any] = dict(image_edit_optional_params)
 
         for k, v in image_edit_optional_params.items():
             if k in param_mapping:
@@ -144,27 +144,26 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
 
         # Remove OpenAI params that have been mapped unless they're in stability
         for mapped in ["size", "n", "response_format"]:
-            if mapped in mapped_params:
-                del mapped_params[mapped]
+            mapped_params.pop(mapped, None)
 
         return mapped_params
 
-    def transform_image_edit_request(  # noqa: PLR0915
+    def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, Any]:
+    ) -> tuple[dict, Any]:
         """
         Transform OpenAI-style request to Bedrock Stability request format.
 
         Returns the request body dict that will be JSON-encoded by the handler.
         """
         # Build Bedrock Stability request
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "output_format": "png",  # Default to PNG
         }
 
@@ -209,9 +208,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 if isinstance(value, list) and len(value) > 0:
                     file_value = value[0]
 
-                if hasattr(file_value, "read") and callable(
-                    getattr(file_value, "read", None)
-                ):
+                if hasattr(file_value, "read") and callable(getattr(file_value, "read", None)):
                     file_bytes = file_value.read()  # type: ignore
                 elif isinstance(file_value, bytes):
                     file_bytes = file_value
@@ -275,8 +272,8 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Bedrock Stability response to OpenAI-compatible ImageResponse.
@@ -336,9 +333,9 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         model_info = get_model_info(model, custom_llm_provider="bedrock")
         cost_per_image = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            model_response._hidden_params["additional_headers"][
-                "llm_provider-x-litellm-response-cost"
-            ] = float(cost_per_image)
+            model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+                cost_per_image
+            )
 
         return model_response
 
@@ -351,7 +348,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -371,9 +368,9 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment for Bedrock Stability image edit.

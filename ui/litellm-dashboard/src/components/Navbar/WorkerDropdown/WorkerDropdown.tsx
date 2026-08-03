@@ -17,9 +17,7 @@ const WorkerDropdown: React.FC<WorkerDropdownProps> = ({ onWorkerSwitch }) => {
   return (
     <Select
       showSearch
-      filterOption={(input, option) =>
-        (option?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
-      }
+      filterOption={(input, option) => ((option?.label as string) ?? "").toLowerCase().includes(input.toLowerCase())}
       value={selectedWorker.worker_id}
       style={{ minWidth: 180 }}
       suffixIcon={<CloudServerOutlined />}

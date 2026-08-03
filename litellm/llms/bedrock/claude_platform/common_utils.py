@@ -1,13 +1,10 @@
-from typing import Literal, Optional, Tuple
+from typing import Literal
 
 import litellm
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.secret_managers.main import get_secret_str
 
-
-CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
-    "aws-external-anthropic"
-)
+CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = "aws-external-anthropic"
 CLAUDE_PLATFORM_BEDROCK_ROUTE = "claude_platform/"
 
 
@@ -19,7 +16,7 @@ def strip_claude_platform_route(model: str) -> str:
 
 class BedrockClaudePlatformMixin(BaseAWSLLM):
     @staticmethod
-    def _get_workspace_id(optional_params: dict, litellm_params: dict) -> Optional[str]:
+    def _get_workspace_id(optional_params: dict, litellm_params: dict) -> str | None:
         workspace_id = (
             optional_params.get("workspace_id")
             or litellm_params.get("workspace_id")
@@ -29,14 +26,10 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
             or litellm_params.get("anthropic-workspace-id")
         )
         if workspace_id is None:
-            workspace_id = optional_params.get(
-                "anthropic_workspace_id"
-            ) or litellm_params.get("anthropic_workspace_id")
+            workspace_id = optional_params.get("anthropic_workspace_id") or litellm_params.get("anthropic_workspace_id")
         if workspace_id is not None:
             return str(workspace_id)
-        return get_secret_str("ANTHROPIC_AWS_WORKSPACE_ID") or get_secret_str(
-            "ANTHROPIC_WORKSPACE_ID"
-        )
+        return get_secret_str("ANTHROPIC_AWS_WORKSPACE_ID") or get_secret_str("ANTHROPIC_WORKSPACE_ID")
 
     def _get_required_aws_region_name(self, optional_params: dict) -> str:
         aws_region_name = (
@@ -59,12 +52,12 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = (
             api_base
@@ -74,9 +67,7 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         )
         if api_base is None:
             aws_region_name = self._get_required_aws_region_name(optional_params)
-            api_base = (
-                f"https://{CLAUDE_PLATFORM_SERVICE_NAME}.{aws_region_name}.api.aws"
-            )
+            api_base = f"https://{CLAUDE_PLATFORM_SERVICE_NAME}.{aws_region_name}.api.aws"
         if not api_base.endswith("/v1/messages"):
             api_base = f"{api_base.rstrip('/')}/v1/messages"
         return api_base
@@ -87,11 +78,11 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
         if api_key or get_secret_str("ANTHROPIC_AWS_API_KEY"):
             return headers, None
 

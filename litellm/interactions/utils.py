@@ -2,7 +2,7 @@
 Utility functions for Interactions API.
 """
 
-from typing import Any, Dict, Optional, cast
+from typing import Any, cast
 
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.types.interactions import InteractionsAPIOptionalRequestParams
@@ -15,6 +15,7 @@ INTERACTIONS_API_OPTIONAL_PARAMS = {
     "stream",
     "store",
     "background",
+    "environment",
     "response_modalities",
     "response_format",
     "response_mime_type",
@@ -25,8 +26,8 @@ INTERACTIONS_API_OPTIONAL_PARAMS = {
 
 def get_provider_interactions_api_config(
     provider: str,
-    model: Optional[str] = None,
-) -> Optional[BaseInteractionsAPIConfig]:
+    model: str | None = None,
+) -> BaseInteractionsAPIConfig | None:
     """
     Get the interactions API config for the given provider.
 
@@ -54,7 +55,7 @@ class InteractionsAPIRequestUtils:
 
     @staticmethod
     def get_requested_interactions_api_optional_params(
-        params: Dict[str, Any],
+        params: dict[str, Any],
     ) -> InteractionsAPIOptionalRequestParams:
         """
         Filter parameters to only include valid optional params per OpenAPI spec.
@@ -71,17 +72,13 @@ class InteractionsAPIRequestUtils:
         special_params = params.pop("kwargs", {})
         additional_drop_params = params.pop("additional_drop_params", None)
 
-        non_default_params = (
-            PreProcessNonDefaultParams.base_pre_process_non_default_params(
-                passed_params=params,
-                special_params=special_params,
-                custom_llm_provider=custom_llm_provider,
-                additional_drop_params=additional_drop_params,
-                default_param_values={
-                    k: None for k in INTERACTIONS_API_OPTIONAL_PARAMS
-                },
-                additional_endpoint_specific_params=["input", "model", "agent"],
-            )
+        non_default_params = PreProcessNonDefaultParams.base_pre_process_non_default_params(
+            passed_params=params,
+            special_params=special_params,
+            custom_llm_provider=custom_llm_provider,
+            additional_drop_params=additional_drop_params,
+            default_param_values={k: None for k in INTERACTIONS_API_OPTIONAL_PARAMS},
+            additional_endpoint_specific_params=["input", "model", "agent"],
         )
 
         return cast(InteractionsAPIOptionalRequestParams, non_default_params)

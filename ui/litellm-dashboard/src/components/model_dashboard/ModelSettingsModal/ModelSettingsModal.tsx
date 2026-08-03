@@ -33,7 +33,7 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
       };
     }
 
-    const storeModelField = proxyConfigData.find(field => field.field_name === 'store_model_in_db');
+    const storeModelField = proxyConfigData.find((field) => field.field_name === "store_model_in_db");
 
     return {
       store_model_in_db: storeModelField?.field_value ?? false,
@@ -79,7 +79,7 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
       onCancel={handleCancel}
     >
       <Form
-        key={proxyConfigData ? JSON.stringify(initialValues) : 'loading'}
+        key={proxyConfigData ? JSON.stringify(initialValues) : "loading"}
         form={form}
         layout="horizontal"
         onFinish={handleFormSubmit}
@@ -89,7 +89,7 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
           label="Store Model in DB"
           name="store_model_in_db"
           tooltip={
-            proxyConfigData?.find(f => f.field_name === 'store_model_in_db')?.field_description ||
+            proxyConfigData?.find((f) => f.field_name === "store_model_in_db")?.field_description ||
             "If enabled, models and config are stored in and loaded from the database."
           }
           valuePropName="checked"

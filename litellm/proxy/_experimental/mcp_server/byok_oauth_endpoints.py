@@ -18,7 +18,7 @@ import hashlib
 import html as _html_module
 import time
 import uuid
-from typing import Dict, Optional, cast
+from typing import cast
 from urllib.parse import urlencode
 
 import jwt
@@ -40,7 +40,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 # In-memory store for pending authorization codes.
 # Each entry: {code: {api_key, server_id, code_challenge, redirect_uri, user_id, expires_at}}
 # ---------------------------------------------------------------------------
-_byok_auth_codes: Dict[str, dict] = {}
+_byok_auth_codes: dict[str, dict] = {}
 
 # Authorization codes expire after 5 minutes.
 _AUTH_CODE_TTL_SECONDS = 300
@@ -79,12 +79,10 @@ def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
     FastAPI's default ``HTTPException`` renders ``{"detail": ...}`` which
     spec-compliant OAuth clients parsing the ``error`` field won't recognize.
     """
-    return JSONResponse(
-        status_code=status, content={"error": code}, headers=TOKEN_NO_CACHE_HEADERS
-    )
+    return JSONResponse(status_code=status, content={"error": code}, headers=TOKEN_NO_CACHE_HEADERS)
 
 
-def _user_id_from_session_cookie(request: Request) -> Optional[str]:
+def _user_id_from_session_cookie(request: Request) -> str | None:
     """Return user_id from the UI ``token`` cookie (HS256-signed with
     ``master_key``), or None if missing/invalid.
 
@@ -160,8 +158,7 @@ def _build_authorize_html(
 
     # Build access checklist rows
     access_rows = "".join(
-        f'<div class="access-item"><span class="check">&#10003;</span>{e(item)}</div>'
-        for item in access_items
+        f'<div class="access-item"><span class="check">&#10003;</span>{e(item)}</div>' for item in access_items
     )
     access_section = ""
     if access_rows:
@@ -177,7 +174,9 @@ def _build_authorize_html(
     # Help link for step 2
     help_link_html = ""
     if help_url:
-        help_link_html = f'<a class="help-link" href="{e(help_url)}" target="_blank">Where do I find my API key? &#8599;</a>'
+        help_link_html = (
+            f'<a class="help-link" href="{e(help_url)}" target="_blank">Where do I find my API key? &#8599;</a>'
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -633,13 +632,13 @@ async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
 @router.get("/v1/mcp/oauth/authorize", include_in_schema=False)
 async def byok_authorize_get(
     request: Request,
-    client_id: Optional[str] = None,
-    redirect_uri: Optional[str] = None,
-    response_type: Optional[str] = None,
-    code_challenge: Optional[str] = None,
-    code_challenge_method: Optional[str] = None,
-    state: Optional[str] = None,
-    server_id: Optional[str] = None,
+    client_id: str | None = None,
+    redirect_uri: str | None = None,
+    response_type: str | None = None,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+    state: str | None = None,
+    server_id: str | None = None,
 ) -> HTMLResponse:
     """
     Show the BYOK API-key entry form.
@@ -722,14 +721,10 @@ async def byok_authorize_post(
     # Reject new codes if the store is at capacity (prevents memory exhaustion
     # from a burst of abandoned OAuth flows).
     if len(_byok_auth_codes) >= _AUTH_CODES_MAX_SIZE:
-        raise HTTPException(
-            status_code=503, detail="Too many pending authorization flows"
-        )
+        raise HTTPException(status_code=503, detail="Too many pending authorization flows")
 
     if code_challenge_method != "S256":
-        raise HTTPException(
-            status_code=400, detail="Only S256 code_challenge_method is supported"
-        )
+        raise HTTPException(status_code=400, detail="Only S256 code_challenge_method is supported")
 
     # Identity comes from the authenticated session, not the OAuth client_id
     # form field (RFC 6749 §2.2: client_id identifies the client application,
@@ -806,11 +801,7 @@ async def byok_token(
     # actually submitted a value, so we stay RFC 6749-backward-compatible
     # without breaking OAuth 2.1 clients. PKCE + client_id binding
     # (checked below) cover the security role redirect_uri played.
-    if (
-        record.get("redirect_uri")
-        and redirect_uri
-        and redirect_uri != record["redirect_uri"]
-    ):
+    if record.get("redirect_uri") and redirect_uri and redirect_uri != record["redirect_uri"]:
         return _oauth_token_error("invalid_grant")
 
     # RFC 6749 §4.1.3: if the client was identified at /authorize, the
@@ -865,9 +856,7 @@ async def byok_token(
             )
             return _oauth_token_error("server_error", status=500)
     else:
-        verbose_proxy_logger.warning(
-            "byok_token: prisma_client is None — credential not persisted"
-        )
+        verbose_proxy_logger.warning("byok_token: prisma_client is None — credential not persisted")
 
     now = int(time.time())
     payload = {

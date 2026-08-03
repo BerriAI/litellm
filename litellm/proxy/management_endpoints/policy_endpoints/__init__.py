@@ -7,7 +7,7 @@ continue to work. Patch targets also resolve correctly since names
 are imported directly into this namespace.
 """
 
-from litellm.proxy.management_endpoints.policy_endpoints.endpoints import *  # noqa: F401, F403
+from litellm.proxy.management_endpoints.policy_endpoints.endpoints import *  # noqa: F403
 from litellm.proxy.management_endpoints.policy_endpoints.endpoints import (  # noqa: F401
     _build_all_names_per_competitor,
     _build_comparison_blocked_words,

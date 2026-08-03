@@ -2,7 +2,7 @@
 Anthropic Skills API configuration and transformations
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import httpx
 
@@ -30,22 +30,20 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.ANTHROPIC
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """Add Anthropic-specific headers"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         # Get API key from litellm_params if available
         api_key = None
+        api_base = None
         if litellm_params is not None:
             api_key = litellm_params.api_key
+            api_base = litellm_params.api_base
 
-        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if auth_header is None:
-            raise ValueError(
-                "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for Skills API"
-            )
+            raise ValueError("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for Skills API")
 
         headers.update(auth_header)
         headers["anthropic-version"] = "2023-06-01"
@@ -71,9 +69,9 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         endpoint: str,
-        skill_id: Optional[str] = None,
+        skill_id: str | None = None,
     ) -> str:
         """Get complete URL for Anthropic Skills API"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -91,7 +89,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         create_request: CreateSkillRequest,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """Transform create skill request for Anthropic"""
         verbose_logger.debug("Transforming create skill request: %s", create_request)
 
@@ -116,17 +114,15 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         list_params: ListSkillsParams,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Transform list skills request for Anthropic"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        api_base = AnthropicModelInfo.get_api_base(
-            litellm_params.api_base if litellm_params else None
-        )
+        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base if litellm_params else None)
         url = self.get_complete_url(api_base=api_base, endpoint="skills")
 
         # Build query parameters
-        query_params: Dict[str, Any] = {}
+        query_params: dict[str, Any] = {}
         if "limit" in list_params and list_params["limit"]:
             query_params["limit"] = list_params["limit"]
         if "page" in list_params and list_params["page"]:
@@ -158,11 +154,9 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Transform get skill request for Anthropic"""
-        url = self.get_complete_url(
-            api_base=api_base, endpoint="skills", skill_id=skill_id
-        )
+        url = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
 
         verbose_logger.debug("Get skill request - URL: %s", url)
 
@@ -185,11 +179,9 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Transform delete skill request for Anthropic"""
-        url = self.get_complete_url(
-            api_base=api_base, endpoint="skills", skill_id=skill_id
-        )
+        url = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
 
         verbose_logger.debug("Delete skill request - URL: %s", url)
 

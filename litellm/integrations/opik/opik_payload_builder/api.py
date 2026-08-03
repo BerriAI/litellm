@@ -1,7 +1,7 @@
 """Public API for Opik payload building."""
 
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from litellm.integrations.opik import utils
 
@@ -9,12 +9,12 @@ from . import extractors, payload_builders, types
 
 
 def build_opik_payload(
-    kwargs: Dict[str, Any],
-    response_obj: Dict[str, Any],
+    kwargs: dict[str, Any],
+    response_obj: dict[str, Any],
     start_time: datetime,
     end_time: datetime,
     project_name: str,
-) -> Tuple[Optional[types.TracePayload], types.SpanPayload]:
+) -> tuple[types.TracePayload | None, types.SpanPayload]:
     """
     Build Opik trace and span payloads from LiteLLM completion data.
 
@@ -44,9 +44,7 @@ def build_opik_payload(
     standard_logging_metadata = standard_logging_object.get("metadata", {}) or {}
 
     # Extract and merge Opik metadata
-    opik_metadata = extractors.extract_opik_metadata(
-        litellm_metadata, standard_logging_metadata
-    )
+    opik_metadata = extractors.extract_opik_metadata(litellm_metadata, standard_logging_metadata)
 
     # Extract project name
     current_project_name = opik_metadata.get("project_name", project_name)
@@ -79,7 +77,7 @@ def build_opik_payload(
     output_data = standard_logging_object.get("response", {})
 
     # Decide whether to create a new trace or attach to existing
-    trace_payload: Optional[types.TracePayload] = None
+    trace_payload: types.TracePayload | None = None
     if trace_id is None:
         trace_id = utils.create_uuid7()
         trace_payload = payload_builders.build_trace_payload(

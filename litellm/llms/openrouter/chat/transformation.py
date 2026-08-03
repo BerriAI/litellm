@@ -6,12 +6,13 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
+from collections.abc import AsyncIterator, Iterator
 from enum import Enum
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union, cast
+from typing import Any, cast
 
 import httpx
-import litellm
 
+import litellm
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -39,9 +40,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         """
         supported_params = super().get_supported_openai_params(model=model)
         try:
-            if litellm.supports_reasoning(
-                model=model, custom_llm_provider="openrouter"
-            ) or litellm.supports_reasoning(model=model):
+            if litellm.supports_reasoning(model=model, custom_llm_provider="openrouter") or litellm.supports_reasoning(
+                model=model
+            ):
                 supported_params.append("reasoning_effort")
                 supported_params.append("thinking")
         except Exception:
@@ -50,14 +51,16 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        # OpenRouter expects "xhigh" instead of "max" for reasoning_effort.
+        if non_default_params.get("reasoning_effort") == "max":
+            non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
+
+        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # OpenRouter-only parameters
         extra_body = {}
@@ -70,9 +73,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
-        mapped_openai_params["extra_body"] = (
-            extra_body  # openai client supports `extra_body` param
-        )
+        mapped_openai_params["extra_body"] = extra_body  # openai client supports `extra_body` param
         return mapped_openai_params
 
     def _supports_cache_control_in_content(self, model: str) -> bool:
@@ -83,27 +84,20 @@ class OpenrouterConfig(OpenAIGPTConfig):
             bool: True if model supports cache_control (Claude or Gemini models)
         """
         model_lower = model.lower()
-        return any(
-            supported_model.value in model_lower
-            for supported_model in CacheControlSupportedModels
-        )
+        return any(supported_model.value in model_lower for supported_model in CacheControlSupportedModels)
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
-        messages: List[AllMessageValues],
-        tools: Optional[List["ChatCompletionToolParam"]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        messages: list[AllMessageValues],
+        tools: list["ChatCompletionToolParam"] | None = None,
+    ) -> tuple[list[AllMessageValues], list["ChatCompletionToolParam"] | None]:
         if self._supports_cache_control_in_content(model):
             return messages, tools
         else:
-            return super().remove_cache_control_flag_from_messages_and_tools(
-                model, messages, tools
-            )
+            return super().remove_cache_control_flag_from_messages_and_tools(model, messages, tools)
 
-    def _move_cache_control_to_content(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
+    def _move_cache_control_to_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
         Move cache_control from message level to content blocks.
         OpenRouter requires cache_control to be inside content blocks, not at message level.
@@ -111,7 +105,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         To avoid exceeding Anthropic's limit of 4 cache breakpoints, cache_control is only
         added to the LAST content block in each message.
         """
-        transformed_messages: List[AllMessageValues] = []
+        transformed_messages: list[AllMessageValues] = []
         for message in messages:
             message_dict = dict(message)
             cache_control = message_dict.pop("cache_control", None)
@@ -148,7 +142,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -163,9 +157,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
             messages = self._move_cache_control_to_content(messages)
 
         extra_body = optional_params.pop("extra_body", {})
-        response = super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
 
         # ALWAYS add usage parameter to get cost data from OpenRouter
@@ -182,12 +174,12 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: Any,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform the response from OpenRouter API.
@@ -224,18 +216,16 @@ class OpenrouterConfig(OpenAIGPTConfig):
                         model_response._hidden_params = {}
                     if "additional_headers" not in model_response._hidden_params:
                         model_response._hidden_params["additional_headers"] = {}
-                    model_response._hidden_params["additional_headers"][
-                        "llm_provider-x-litellm-response-cost"
-                    ] = float(response_cost)
+                    model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+                        response_cost
+                    )
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass
 
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OpenRouterException(
             message=error_message,
             status_code=status_code,
@@ -244,9 +234,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         return OpenRouterChatCompletionStreamingHandler(
             streaming_response=streaming_response,

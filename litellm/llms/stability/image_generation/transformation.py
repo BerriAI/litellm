@@ -6,7 +6,7 @@ Handles transformation between OpenAI-compatible format and Stability AI API for
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -45,9 +45,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
 
     DEFAULT_BASE_URL: str = "https://api.stability.ai"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Return list of OpenAI params supported by Stability AI.
 
@@ -80,9 +78,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
                 if k in supported_params:
                     # Map size to aspect_ratio
                     if k == "size" and v in OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO:
-                        optional_params["aspect_ratio"] = (
-                            OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
-                        )
+                        optional_params["aspect_ratio"] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
                     elif k == "n":
                         # Store n for later, but don't pass to Stability
                         optional_params["_n"] = v
@@ -108,8 +104,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         """
         # Remove "stability/" prefix if present
         model_name = model.lower()
-        if model_name.startswith("stability/"):
-            model_name = model_name[10:]  # Remove "stability/" prefix
+        model_name = model_name.removeprefix("stability/")  # Remove "stability/" prefix
 
         # Check if model is in our mapping
         for key, endpoint in STABILITY_GENERATION_MODELS.items():
@@ -121,19 +116,17 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the Stability AI API request.
         """
-        base_url: str = (
-            api_base or get_secret_str("STABILITY_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        base_url: str = api_base or get_secret_str("STABILITY_API_BASE") or self.DEFAULT_BASE_URL
         base_url = base_url.rstrip("/")
 
         endpoint = self._get_model_endpoint(model)
@@ -143,21 +136,20 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for Stability AI.
         """
-        final_api_key: Optional[str] = api_key or get_secret_str("STABILITY_API_KEY")
+        final_api_key: str | None = api_key or get_secret_str("STABILITY_API_KEY")
 
         if not final_api_key:
             raise ValueError(
-                "STABILITY_API_KEY is not set. "
-                "Please set it via environment variable or pass api_key parameter."
+                "STABILITY_API_KEY is not set. Please set it via environment variable or pass api_key parameter."
             )
 
         headers["Authorization"] = f"Bearer {final_api_key}"
@@ -214,8 +206,8 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Stability AI response to OpenAI-compatible ImageResponse.

@@ -5,7 +5,7 @@ Supports dynamic cost parameters that allow platform owners
 to define custom costs per agent query or per token.
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -18,7 +18,7 @@ else:
 class A2ACostCalculator:
     @staticmethod
     def calculate_a2a_cost(
-        litellm_logging_obj: Optional[LitellmLoggingObject],
+        litellm_logging_obj: LitellmLoggingObject | None,
     ) -> float:
         """
         Calculate the cost of an A2A send_message call.
@@ -73,8 +73,8 @@ class A2ACostCalculator:
     @staticmethod
     def _calculate_token_based_cost(
         model_call_details: dict,
-        input_cost_per_token: Optional[float],
-        output_cost_per_token: Optional[float],
+        input_cost_per_token: float | None,
+        output_cost_per_token: float | None,
     ) -> float:
         """
         Calculate cost based on token usage and per-token pricing.
@@ -97,11 +97,7 @@ class A2ACostCalculator:
         completion_tokens = getattr(usage, "completion_tokens", 0) or 0
 
         # Calculate costs
-        input_cost = prompt_tokens * (
-            float(input_cost_per_token) if input_cost_per_token else 0.0
-        )
-        output_cost = completion_tokens * (
-            float(output_cost_per_token) if output_cost_per_token else 0.0
-        )
+        input_cost = prompt_tokens * (float(input_cost_per_token) if input_cost_per_token else 0.0)
+        output_cost = completion_tokens * (float(output_cost_per_token) if output_cost_per_token else 0.0)
 
         return input_cost + output_cost

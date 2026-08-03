@@ -1,7 +1,7 @@
 import importlib
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -24,7 +24,7 @@ def get_prompt_initializer_from_integrations():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_initializers: Dict[str, Callable] = {}
+    discovered_initializers: dict[str, Callable] = {}
 
     try:
         # Get the path to the prompt_integrations directory
@@ -51,9 +51,7 @@ def get_prompt_initializer_from_integrations():
             module_path = f"litellm.integrations.{item}"
             try:
                 # Import the module
-                verbose_proxy_logger.debug(
-                    f"Discovering prompt integrations in: {module_path}"
-                )
+                verbose_proxy_logger.debug(f"Discovering prompt integrations in: {module_path}")
 
                 module = importlib.import_module(module_path)
 
@@ -92,14 +90,12 @@ class InMemoryPromptRegistry:
     """
 
     def __init__(self):
-        self.IN_MEMORY_PROMPTS: Dict[str, PromptSpec] = {}
+        self.IN_MEMORY_PROMPTS: dict[str, PromptSpec] = {}
         """
         Prompt id to Prompt object mapping
         """
 
-        self.prompt_id_to_custom_prompt: Dict[str, Optional[CustomPromptManagement]] = (
-            {}
-        )
+        self.prompt_id_to_custom_prompt: dict[str, CustomPromptManagement | None] = {}
         """
         Guardrail id to CustomGuardrail object mapping
         """
@@ -107,8 +103,8 @@ class InMemoryPromptRegistry:
     def initialize_prompt(
         self,
         prompt: PromptSpec,
-        config_file_path: Optional[str] = None,
-    ) -> Optional[PromptSpec]:
+        config_file_path: str | None = None,
+    ) -> PromptSpec | None:
         """
         Initialize a guardrail from a dictionary and add it to the litellm callback manager
 
@@ -121,7 +117,7 @@ class InMemoryPromptRegistry:
             verbose_proxy_logger.debug("prompt_id already exists in IN_MEMORY_PROMPTS")
             return self.IN_MEMORY_PROMPTS[prompt_id]
 
-        custom_prompt_callback: Optional[CustomPromptManagement] = None
+        custom_prompt_callback: CustomPromptManagement | None = None
         litellm_params_data = prompt.litellm_params
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
@@ -139,9 +135,7 @@ class InMemoryPromptRegistry:
         if initializer:
             custom_prompt_callback = initializer(litellm_params, prompt)
             if not isinstance(custom_prompt_callback, CustomPromptManagement):
-                raise ValueError(
-                    f"CustomPromptManagement is required, got {type(custom_prompt_callback)}"
-                )
+                raise ValueError(f"CustomPromptManagement is required, got {type(custom_prompt_callback)}")
             litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)  # type: ignore
         else:
             raise ValueError(f"Unsupported prompt: {prompt_integration}")
@@ -160,15 +154,13 @@ class InMemoryPromptRegistry:
 
         return parsed_prompt
 
-    def get_prompt_by_id(self, prompt_id: str) -> Optional[PromptSpec]:
+    def get_prompt_by_id(self, prompt_id: str) -> PromptSpec | None:
         """
         Get a prompt by its ID from memory
         """
         return self.IN_MEMORY_PROMPTS.get(prompt_id)
 
-    def get_prompt_callback_by_id(
-        self, prompt_id: str
-    ) -> Optional[CustomPromptManagement]:
+    def get_prompt_callback_by_id(self, prompt_id: str) -> CustomPromptManagement | None:
         """
         Get a prompt callback by its ID from memory
         """
@@ -187,9 +179,7 @@ class InMemoryPromptRegistry:
         from litellm.proxy.prompts.prompt_endpoints import get_base_prompt_id
 
         prompts_to_delete = [
-            pid
-            for pid in self.IN_MEMORY_PROMPTS.keys()
-            if get_base_prompt_id(prompt_id=pid) == base_prompt_id
+            pid for pid in self.IN_MEMORY_PROMPTS.keys() if get_base_prompt_id(prompt_id=pid) == base_prompt_id
         ]
 
         for pid in prompts_to_delete:

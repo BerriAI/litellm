@@ -8,11 +8,11 @@ Order matters: we check more specific types first, falling back to GENERAL.
 """
 
 import re
-from typing import List, Pattern, Tuple
+from re import Pattern
 
 from litellm.types.router import RequestType
 
-_RULES: List[Tuple[Pattern[str], RequestType]] = [
+_RULES: list[tuple[Pattern[str], RequestType]] = [
     (
         re.compile(
             r"\b(write|create|generate|implement|build)\s+(?:a |an |the |me )?(?:python|javascript|typescript|java|rust|go|c\+\+|sql|bash|shell)\b",
@@ -102,9 +102,7 @@ _RULES: List[Tuple[Pattern[str], RequestType]] = [
         RequestType.WRITING,
     ),
     (
-        re.compile(
-            r"^\s*(who|what|when|where|which)\s+(?:is|was|were|are)\b", re.IGNORECASE
-        ),
+        re.compile(r"^\s*(who|what|when|where|which)\s+(?:is|was|were|are)\b", re.IGNORECASE),
         RequestType.FACTUAL_LOOKUP,
     ),
     (

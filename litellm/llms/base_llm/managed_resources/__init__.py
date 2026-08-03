@@ -24,18 +24,20 @@ from .utils import (
     generate_unified_id_string,
     is_base64_encoded_unified_id,
     parse_unified_id,
+    resolve_passthrough_managed_id_provider,
 )
 
 __all__ = [
     "BaseManagedResource",
-    "is_base64_encoded_unified_id",
-    "extract_target_model_names_from_unified_id",
-    "extract_resource_type_from_unified_id",
-    "extract_unified_uuid_from_unified_id",
+    "decode_unified_id",
+    "encode_unified_id",
     "extract_model_id_from_unified_id",
     "extract_provider_resource_id_from_unified_id",
+    "extract_resource_type_from_unified_id",
+    "extract_target_model_names_from_unified_id",
+    "extract_unified_uuid_from_unified_id",
     "generate_unified_id_string",
-    "encode_unified_id",
-    "decode_unified_id",
+    "is_base64_encoded_unified_id",
     "parse_unified_id",
+    "resolve_passthrough_managed_id_provider",
 ]

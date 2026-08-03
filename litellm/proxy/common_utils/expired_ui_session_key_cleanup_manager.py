@@ -5,10 +5,9 @@ Deletes expired virtual keys created for LiteLLM dashboard sessions.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
     LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE,
@@ -16,11 +15,15 @@ from litellm.constants import (
     UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.proxy._types import KeyRequest, LiteLLM_VerificationToken, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 
 class ExpiredUISessionKeyCleanupManager:
@@ -89,34 +92,27 @@ class ExpiredUISessionKeyCleanupManager:
                 tokens=tokens,
                 response=response,
             )
-            verbose_proxy_logger.info(
-                "Deleted %s expired UI session key(s)", deleted_count
-            )
+            verbose_proxy_logger.info("Deleted %s expired UI session key(s)", deleted_count)
             return deleted_count
         except Exception as e:
             if getattr(e, "status_code", None) == 404:
                 verbose_proxy_logger.debug(
-                    "Expired UI session key cleanup skipped because selected keys "
-                    "were already deleted: %s",
+                    "Expired UI session key cleanup skipped because selected keys were already deleted: %s",
                     e,
                 )
                 return 0
             verbose_proxy_logger.error(f"Expired UI session key cleanup failed: {e}")
             return 0
         finally:
-            if (
-                lock_acquired
-                and self.pod_lock_manager
-                and self.pod_lock_manager.redis_cache
-            ):
+            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
                 )
 
     @staticmethod
     def _get_deleted_token_count(
-        tokens: List[str],
-        response: Optional[Dict[str, Any]],
+        tokens: list[str],
+        response: dict[str, Any] | None,
     ) -> int:
         """
         Return the number of tokens actually deleted from the delete helper response.
@@ -142,12 +138,12 @@ class ExpiredUISessionKeyCleanupManager:
 
         return len(tokens)
 
-    async def _find_expired_ui_session_keys(self) -> List[LiteLLM_VerificationToken]:
+    async def _find_expired_ui_session_keys(self) -> list[LiteLLM_VerificationToken]:
         """
         Find expired LiteLLM dashboard session keys.
         """
         now = datetime.now(timezone.utc)
-        return await self.prisma_client.db.litellm_verificationtoken.find_many(
+        return await VerificationTokenRepository(self.prisma_client).table.find_many(
             where={
                 "team_id": UI_SESSION_TOKEN_TEAM_ID,
                 "expires": {"lt": now},

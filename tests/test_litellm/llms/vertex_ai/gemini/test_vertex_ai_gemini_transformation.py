@@ -285,6 +285,80 @@ def test_extra_body_tags_not_forwarded_to_vertex_ai():
     assert result["custom_param"] == "allowed"
 
 
+def test_extra_body_google_maps_rewrites_json_response_format():
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "response_mime_type": "application/json",
+        "response_schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        },
+        "extra_body": {
+            "tools": [{"googleMaps": {}}],
+        },
+    }
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    generation_config = result["generationConfig"]
+    assert "response_mime_type" not in generation_config
+    assert generation_config["responseFormat"] == {
+        "text": {
+            "mimeType": "APPLICATION_JSON",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+            },
+        }
+    }
+
+
+def test_extra_body_generation_config_cannot_restore_google_maps_json_mime_type():
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "tools": [{"googleMaps": {}}],
+        "response_mime_type": "application/json",
+        "extra_body": {
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "response_json_schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                },
+            },
+        },
+    }
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    generation_config = result["generationConfig"]
+    assert "response_mime_type" not in generation_config
+    assert "response_json_schema" not in generation_config
+    assert generation_config["responseFormat"] == {
+        "text": {
+            "mimeType": "APPLICATION_JSON",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+            },
+        }
+    }
+
+
 def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
     messages = [{"role": "user", "content": "test"}]
@@ -1154,42 +1228,80 @@ def test_convert_tool_response_with_base64_image():
         ]
     }
 
-    # Convert tool response (returns list when image is present)
+    # Convert tool response with nested multimodal functionResponse.parts.
     result = convert_to_gemini_tool_call_result(
         tool_message, last_message_with_tool_calls
     )
 
-    # Verify results - should be a list with 2 parts (function_response + inline_data)
-    assert isinstance(
-        result, list
-    ), f"Expected list when image present, got {type(result)}"
-    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-    # Find function_response part and inline_data part
-    function_response_part = None
-    inline_data_part = None
-    for part in result:
-        if "function_response" in part:
-            function_response_part = part
-        elif "inline_data" in part:
-            inline_data_part = part
-
-    # Check function_response exists
-    assert function_response_part is not None, "Missing function_response part"
-    function_response = function_response_part["function_response"]
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    result_part = result[0]
+    assert "function_response" in result_part
+    assert "inline_data" not in result_part
+    function_response = result_part["function_response"]
     assert function_response["name"] == "click_at"
     assert "response" in function_response
     # Verify JSON response is parsed correctly
     assert "url" in function_response["response"]
     assert function_response["response"]["url"] == "https://example.com"
 
-    # Check inline_data exists
-    assert inline_data_part is not None, "Missing inline_data part"
-    inline_data: BlobType = inline_data_part["inline_data"]
+    # Check inline_data is nested under functionResponse.parts.
+    assert "parts" in function_response
+    assert len(function_response["parts"]) == 1
+    inline_data: BlobType = function_response["parts"][0]["inline_data"]
     assert "data" in inline_data
     assert "mime_type" in inline_data
     assert inline_data["mime_type"] == "image/png"
     assert inline_data["data"] == test_image_base64
+
+
+def test_gemini_history_nests_multimodal_tool_response_parts():
+    """Full history conversion should not emit sibling inline_data tool result parts."""
+    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages = [
+        {"role": "user", "content": "Get me an image"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_get_image",
+                    "type": "function",
+                    "function": {"name": "get_image", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_get_image",
+            "content": [
+                {"type": "text", "text": '{"image_ref": "inline"}'},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": test_image_base64,
+                    },
+                },
+            ],
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    tool_response_parts = contents[-1]["parts"]
+    assert len(tool_response_parts) == 1
+    assert "inline_data" not in tool_response_parts[0]
+    function_response = tool_response_parts[0]["function_response"]
+    assert function_response["parts"] == [
+        {
+            "inline_data": {
+                "data": test_image_base64,
+                "mime_type": "image/png",
+            }
+        }
+    ]
 
 
 def test_convert_tool_response_with_url_image():
@@ -1225,24 +1337,20 @@ def test_convert_tool_response_with_url_image():
             tool_message, last_message_with_tool_calls
         )
 
-        # Should be a list with 2 parts when image is present
         assert isinstance(
             result, list
-        ), f"Expected list when image present, got {type(result)}"
-        assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-        # Find parts
-        function_response_part = next(p for p in result if "function_response" in p)
-        inline_data_part = next(p for p in result if "inline_data" in p)
-
-        # Check function_response exists
-        assert function_response_part is not None, "Missing function_response part"
-        function_response = function_response_part["function_response"]
+        ), "Should return a parts list when media is present"
+        assert len(result) == 1, "Should return one function_response part"
+        result_part = result[0]
+        assert "function_response" in result_part
+        assert "inline_data" not in result_part
+        function_response = result_part["function_response"]
         assert function_response["name"] == "type_text_at"
 
-        # Check inline_data exists (URL should be downloaded and converted)
-        assert inline_data_part is not None, "Missing inline_data part"
-        inline_data: BlobType = inline_data_part["inline_data"]
+        # Check inline_data is nested under functionResponse.parts.
+        assert "parts" in function_response
+        assert len(function_response["parts"]) == 1
+        inline_data: BlobType = function_response["parts"][0]["inline_data"]
         assert "data" in inline_data
         assert "mime_type" in inline_data
     except Exception as e:
@@ -1558,38 +1666,27 @@ def test_convert_tool_response_with_pdf_file():
         ]
     }
 
-    # Convert tool response (returns list when file is present)
+    # Convert tool response with nested multimodal functionResponse.parts.
     result = convert_to_gemini_tool_call_result(
         tool_message, last_message_with_tool_calls
     )
 
-    # Verify results - should be a list with 2 parts (function_response + inline_data)
-    assert isinstance(
-        result, list
-    ), f"Expected list when file present, got {type(result)}"
-    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-    # Find function_response part and inline_data part
-    function_response_part = None
-    inline_data_part = None
-    for part in result:
-        if "function_response" in part:
-            function_response_part = part
-        elif "inline_data" in part:
-            inline_data_part = part
-
-    # Check function_response exists
-    assert function_response_part is not None, "Missing function_response part"
-    function_response = function_response_part["function_response"]
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    result_part = result[0]
+    assert "function_response" in result_part
+    assert "inline_data" not in result_part
+    function_response = result_part["function_response"]
     assert function_response["name"] == "analyze_document"
     assert "response" in function_response
     # Verify JSON response is parsed correctly
     assert "status" in function_response["response"]
     assert function_response["response"]["status"] == "success"
 
-    # Check inline_data exists
-    assert inline_data_part is not None, "Missing inline_data part"
-    inline_data: BlobType = inline_data_part["inline_data"]
+    # Check inline_data is nested under functionResponse.parts.
+    assert "parts" in function_response
+    assert len(function_response["parts"]) == 1
+    inline_data: BlobType = function_response["parts"][0]["inline_data"]
     assert "data" in inline_data
     assert "mime_type" in inline_data
     assert inline_data["mime_type"] == "application/pdf"
@@ -1624,21 +1721,13 @@ def test_convert_tool_response_with_input_file_type():
         tool_message, last_message_with_tool_calls
     )
 
-    # Verify results
-    assert isinstance(
-        result, list
-    ), f"Expected list when file present, got {type(result)}"
-    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-    # Find inline_data part
-    inline_data_part = None
-    for part in result:
-        if "inline_data" in part:
-            inline_data_part = part
-
-    # Check inline_data exists
-    assert inline_data_part is not None, "Missing inline_data part"
-    assert inline_data_part["inline_data"]["mime_type"] == "application/pdf"
+    # Check inline_data is nested under functionResponse.parts.
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    function_response = result[0]["function_response"]
+    assert (
+        function_response["parts"][0]["inline_data"]["mime_type"] == "application/pdf"
+    )
 
 
 def test_convert_tool_response_with_nested_file_object():
@@ -1669,21 +1758,11 @@ def test_convert_tool_response_with_nested_file_object():
         tool_message, last_message_with_tool_calls
     )
 
-    # Verify results - should be a list with 2 parts
-    assert isinstance(
-        result, list
-    ), f"Expected list when file present, got {type(result)}"
-    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
-
-    # Find inline_data part
-    inline_data_part = None
-    for part in result:
-        if "inline_data" in part:
-            inline_data_part = part
-
-    # Check inline_data exists
-    assert inline_data_part is not None, "Missing inline_data part"
-    inline_data: BlobType = inline_data_part["inline_data"]
+    # Check inline_data is nested under functionResponse.parts.
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    function_response = result[0]["function_response"]
+    inline_data: BlobType = function_response["parts"][0]["inline_data"]
     assert "data" in inline_data
     assert "mime_type" in inline_data
     assert inline_data["mime_type"] == "application/pdf"
@@ -2018,3 +2097,319 @@ def test_multi_turn_function_calling_roles():
                 assert (
                     content["role"] == "user"
                 ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+
+
+def test_gemini_thought_signature_preservation_real_response():
+    """Test that thought signatures are preserved on the text part if originally there, without dropping or duplicating (real response case)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    real_candidate = {
+        "content": {
+            "parts": [
+                {
+                    "text": "I will explain and then list files.",
+                    "thoughtSignature": "mock_signature_from_text_part",
+                },
+                {
+                    "functionCall": {
+                        "name": "list_files",
+                        "args": {},
+                    }
+                },
+            ]
+        }
+    }
+
+    parts = real_candidate["content"]["parts"]
+
+    content, reasoning_content = (
+        VertexGeminiConfig().get_assistant_content_message(parts=parts)
+    )
+    thought_signatures = (
+        VertexGeminiConfig()._extract_thought_signatures_from_parts(
+            parts=parts
+        )
+    )
+    functions, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
+
+    msg: dict = {"role": "assistant"}
+    if content is not None:
+        msg["content"] = content
+    if tools:
+        msg["tool_calls"] = tools
+    if functions is not None:
+        msg["function_call"] = functions
+    if thought_signatures is not None:
+        msg["provider_specific_fields"] = {
+            "thought_signatures": thought_signatures
+        }
+
+    converted_real = _gemini_convert_messages_with_history(
+        messages=[msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted_real) == 1
+    assert "parts" in converted_real[0]
+    parts_out = converted_real[0]["parts"]
+    assert len(parts_out) == 2
+    assert "text" in parts_out[0]
+    assert (
+        parts_out[0]["thoughtSignature"] == "mock_signature_from_text_part"
+    )
+    assert "function_call" in parts_out[1]
+    assert "thoughtSignature" not in parts_out[1]
+
+
+def test_gemini_thought_signature_deduplication_assumed_response():
+    """Test that thought signatures are deduplicated and not attached to the text part if already present in the tool call (assumed response case)."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    pr_assumed_msg = {
+        "role": "assistant",
+        "content": "I will list the directory.",
+        "provider_specific_fields": {
+            "thought_signatures": ["mock_signature_63k"]
+        },
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+                "provider_specific_fields": {
+                    "thought_signature": "mock_signature_63k"
+                },
+            }
+        ],
+    }
+
+    converted_pr = _gemini_convert_messages_with_history(
+        messages=[pr_assumed_msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted_pr) == 1
+    assert "parts" in converted_pr[0]
+    parts_out = converted_pr[0]["parts"]
+    assert len(parts_out) == 2
+    assert "text" in parts_out[0]
+    assert "thoughtSignature" not in parts_out[0]
+    assert "function_call" in parts_out[1]
+    assert parts_out[1]["thoughtSignature"] == "mock_signature_63k"
+
+
+def test_gemini_thought_signature_pure_text():
+    """Test that thought signatures are preserved on the text part for responses with no tool calls."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "Hello, I am a model.",
+        "provider_specific_fields": {
+            "thought_signatures": ["pure_text_signature"]
+        },
+    }
+
+    converted = _gemini_convert_messages_with_history(
+        messages=[msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted) == 1
+    assert "parts" in converted[0]
+    parts_out = converted[0]["parts"]
+    assert len(parts_out) == 1
+    assert "text" in parts_out[0]
+    assert parts_out[0]["thoughtSignature"] == "pure_text_signature"
+
+
+def test_gemini_thought_signature_pure_tool_call():
+    """Test that thought signatures are preserved on the tool call for responses with no intermediate text."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": None,
+        "provider_specific_fields": {
+            "thought_signatures": ["pure_tool_signature"]
+        },
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+                "provider_specific_fields": {
+                    "thought_signature": "pure_tool_signature"
+                },
+            }
+        ],
+    }
+
+    converted = _gemini_convert_messages_with_history(
+        messages=[msg],
+        model="gemini-2.5-pro",
+    )
+
+    assert len(converted) == 1
+    assert "parts" in converted[0]
+    parts_out = converted[0]["parts"]
+    assert len(parts_out) == 1
+    assert "function_call" in parts_out[0]
+    assert parts_out[0]["thoughtSignature"] == "pure_tool_signature"
+
+
+def test_gemini_distinct_text_and_tool_signatures_are_both_preserved():
+    """A text-part signature that differs from the tool-call signature must stay on the text part."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "Some analysis.",
+        "provider_specific_fields": {
+            "thought_signatures": ["text_signature", "tool_signature"]
+        },
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+                "provider_specific_fields": {"thought_signature": "tool_signature"},
+            }
+        ],
+    }
+
+    parts = _gemini_convert_messages_with_history(
+        messages=[msg], model="gemini-2.5-pro"
+    )[0]["parts"]
+
+    assert parts[0]["text"] == "Some analysis."
+    assert parts[0]["thoughtSignature"] == "text_signature"
+    assert "function_call" in parts[1]
+    assert parts[1]["thoughtSignature"] == "tool_signature"
+
+
+def test_gemini_25_text_signature_survives_replay_to_gemini_3():
+    """gemini-2.5 history (signed text, unsigned tool call) replayed to gemini-3 keeps the real
+    text signature; the dummy signature synthesized for the unsigned tool call must not suppress it."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _get_dummy_thought_signature,
+    )
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "I will list the directory.",
+        "provider_specific_fields": {"thought_signatures": ["real_25_signature"]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_files", "arguments": "{}"},
+            }
+        ],
+    }
+
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
+        0
+    ]["parts"]
+
+    assert parts[0]["text"] == "I will list the directory."
+    assert parts[0]["thoughtSignature"] == "real_25_signature"
+    assert "function_call" in parts[1]
+    assert parts[1]["thoughtSignature"] == _get_dummy_thought_signature()
+
+
+def test_gemini_function_call_signature_round_trip_no_duplicate():
+    """End to end: a gemini-3-style response (unsigned text + signed functionCall) parsed and
+    re-serialized sends the signature exactly once, on the function-call part."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    response_parts = [
+        {"text": "I will calculate the result for you."},
+        {
+            "functionCall": {"name": "add_numbers", "args": {"a": 17, "b": 25}},
+            "thoughtSignature": "signature_from_function_call",
+        },
+    ]
+
+    config = VertexGeminiConfig()
+    content, _ = config.get_assistant_content_message(parts=response_parts)
+    thought_signatures = config._extract_thought_signatures_from_parts(
+        parts=response_parts
+    )
+    _, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=response_parts, cumulative_tool_call_idx=0, is_function_call=False
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": tools,
+        "provider_specific_fields": {"thought_signatures": thought_signatures},
+    }
+
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
+        0
+    ]["parts"]
+
+    signatures = [p["thoughtSignature"] for p in parts if "thoughtSignature" in p]
+    assert signatures == ["signature_from_function_call"]
+    assert "thoughtSignature" not in parts[0]
+    assert "function_call" in parts[1]
+
+
+def test_gemini_server_side_tool_signature_not_duplicated_on_text():
+    """A signature already re-injected on a server-side toolCall part is not attached to the text part again."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "The weather in Buenos Aires is sunny.",
+        "provider_specific_fields": {
+            "thought_signatures": ["server_side_signature"],
+            "server_side_tool_invocations": [
+                {
+                    "tool_type": "GOOGLE_SEARCH_WEB",
+                    "id": "abc123",
+                    "args": {"queries": ["weather Buenos Aires"]},
+                    "response": {"weather": "Sunny"},
+                    "thought_signature": "server_side_signature",
+                }
+            ],
+        },
+    }
+
+    parts = _gemini_convert_messages_with_history(
+        messages=[msg], model="gemini-2.5-pro"
+    )[0]["parts"]
+
+    text_part = next(p for p in parts if "text" in p)
+    assert "thoughtSignature" not in text_part
+    tool_call_part = next(p for p in parts if "toolCall" in p)
+    assert tool_call_part["thoughtSignature"] == "server_side_signature"

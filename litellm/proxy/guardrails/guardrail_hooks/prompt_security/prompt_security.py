@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import os
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -14,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -26,32 +27,35 @@ class PromptSecurityGuardrailMissingSecrets(Exception):
 
 
 class PromptSecurityGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        user: Optional[str] = None,
-        system_prompt: Optional[str] = None,
-        check_tool_results: Optional[bool] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        user: str | None = None,
+        system_prompt: str | None = None,
+        check_tool_results: bool | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("PROMPT_SECURITY_API_KEY")
         self.api_base = api_base or os.environ.get("PROMPT_SECURITY_API_BASE")
         self.user = user or os.environ.get("PROMPT_SECURITY_USER")
-        self.system_prompt = system_prompt or os.environ.get(
-            "PROMPT_SECURITY_SYSTEM_PROMPT"
-        )
+        self.system_prompt = system_prompt or os.environ.get("PROMPT_SECURITY_SYSTEM_PROMPT")
 
         # Configure whether to check tool/function results for indirect prompt injection
         # Default: False (Filter out tool/function messages)
         # True: Transform to "other" role and send to API
         if check_tool_results is None:
-            check_tool_results_env = os.environ.get(
-                "PROMPT_SECURITY_CHECK_TOOL_RESULTS", "false"
-            ).lower()
+            check_tool_results_env = os.environ.get("PROMPT_SECURITY_CHECK_TOOL_RESULTS", "false").lower()
             self.check_tool_results = check_tool_results_env in ("true", "1", "yes")
         else:
             self.check_tool_results = check_tool_results
@@ -143,11 +147,11 @@ class PromptSecurityGuardrail(CustomGuardrail):
     async def _apply_guardrail_on_request(
         self,
         inputs: GenericGuardrailAPIInputs,
-        texts: List[str],
-        images: List[str],
+        texts: list[str],
+        images: list[str],
         structured_messages: list,
         request_data: dict,
-        user_api_key_alias: Optional[str],
+        user_api_key_alias: str | None,
     ) -> GenericGuardrailAPIInputs:
         """Handle request-side guardrail checks."""
         # If we have structured messages, use them (they contain role information)
@@ -158,9 +162,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             messages = [{"role": "user", "content": text} for text in texts]
 
         # Process any embedded files/images in messages
-        messages = await self.process_message_files(
-            messages, user_api_key_alias=user_api_key_alias
-        )
+        messages = await self.process_message_files(messages, user_api_key_alias=user_api_key_alias)
 
         # Also process standalone images from inputs
         if images:
@@ -170,9 +172,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         filtered_messages = self.filter_messages_by_role(messages)
 
         if not filtered_messages:
-            verbose_proxy_logger.debug(
-                "Prompt Security Guardrail: No messages to check after filtering"
-            )
+            verbose_proxy_logger.debug("Prompt Security Guardrail: No messages to check after filtering")
             return inputs
 
         # Call Prompt Security API
@@ -214,8 +214,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         if action == "block":
             raise HTTPException(
                 status_code=400,
-                detail="Blocked by Prompt Security, Violations: "
-                + ", ".join(violations),
+                detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
             )
         elif action == "modify":
             # Extract modified texts from modified_messages
@@ -229,8 +228,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
     async def _apply_guardrail_on_response(
         self,
         inputs: GenericGuardrailAPIInputs,
-        texts: List[str],
-        user_api_key_alias: Optional[str],
+        texts: list[str],
+        user_api_key_alias: str | None,
     ) -> GenericGuardrailAPIInputs:
         """Handle response-side guardrail checks."""
         if not texts:
@@ -277,8 +276,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         if action == "block":
             raise HTTPException(
                 status_code=400,
-                detail="Blocked by Prompt Security, Violations: "
-                + ", ".join(violations),
+                detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
             )
         elif action == "modify":
             modified_text = result.get("modified_text")
@@ -289,7 +287,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return inputs
 
-    def _extract_texts_from_messages(self, messages: list) -> List[str]:
+    def _extract_texts_from_messages(self, messages: list) -> list[str]:
         """Extract text content from messages."""
         texts = []
         for message in messages:
@@ -304,9 +302,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                             texts.append(text)
         return texts
 
-    async def _process_standalone_images(
-        self, images: List[str], user_api_key_alias: Optional[str]
-    ) -> None:
+    async def _process_standalone_images(self, images: list[str], user_api_key_alias: str | None) -> None:
         """Process standalone images from inputs (data URLs)."""
         for image_url in images:
             if image_url.startswith("data:"):
@@ -330,10 +326,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 except HTTPException:
                     raise
                 except Exception as e:
-                    verbose_proxy_logger.error(f"Error processing image: {str(e)}")
+                    verbose_proxy_logger.error(f"Error processing image: {e}")
 
     @staticmethod
-    def _resolve_key_alias_from_request_data(request_data: dict) -> Optional[str]:
+    def _resolve_key_alias_from_request_data(request_data: dict) -> str | None:
         """Resolve user API key alias from request_data metadata."""
         # Check litellm_metadata first (set by guardrail framework)
         litellm_metadata = request_data.get("litellm_metadata", {})
@@ -355,7 +351,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         self,
         file_data: bytes,
         filename: str,
-        user_api_key_alias: Optional[str] = None,
+        user_api_key_alias: str | None = None,
     ) -> dict:
         """
         Sanitize file content using Prompt Security API.
@@ -390,13 +386,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
 
         if not job_id:
-            raise HTTPException(
-                status_code=500, detail="Failed to get jobId from Prompt Security"
-            )
+            raise HTTPException(status_code=500, detail="Failed to get jobId from Prompt Security")
 
-        verbose_proxy_logger.debug(
-            "Prompt Security Guardrail: File sanitization started with jobId=%s", job_id
-        )
+        verbose_proxy_logger.debug("Prompt Security Guardrail: File sanitization started with jobId=%s", job_id)
 
         # Step 2: Poll for results
         for attempt in range(self.max_poll_attempts):
@@ -443,22 +435,14 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 )
                 continue
             else:
-                raise HTTPException(
-                    status_code=500, detail=f"Unexpected sanitization status: {status}"
-                )
+                raise HTTPException(status_code=500, detail=f"Unexpected sanitization status: {status}")
 
         raise HTTPException(status_code=408, detail="File sanitization timeout")
 
-    async def _process_image_url_item(
-        self, item: dict, user_api_key_alias: Optional[str]
-    ) -> dict:
+    async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict:
         """Process and sanitize image_url items."""
         image_url_data = item.get("image_url", {})
-        url = (
-            image_url_data.get("url", "")
-            if isinstance(image_url_data, dict)
-            else image_url_data
-        )
+        url = image_url_data.get("url", "") if isinstance(image_url_data, dict) else image_url_data
 
         if not url.startswith("data:"):
             return item
@@ -485,30 +469,22 @@ class PromptSecurityGuardrail(CustomGuardrail):
             if action == "modify":
                 sanitized_content = sanitization_result.get("content", "")
                 if sanitized_content:
-                    sanitized_encoded = base64.b64encode(
-                        sanitized_content.encode()
-                    ).decode()
+                    sanitized_encoded = base64.b64encode(sanitized_content.encode()).decode()
                     sanitized_url = f"{header},{sanitized_encoded}"
                     if isinstance(image_url_data, dict):
                         image_url_data["url"] = sanitized_url
                     else:
                         item["image_url"] = sanitized_url
-                    verbose_proxy_logger.info(
-                        "File content modified by Prompt Security"
-                    )
+                    verbose_proxy_logger.info("File content modified by Prompt Security")
 
             return item
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error sanitizing image file: {str(e)}")
-            raise HTTPException(
-                status_code=500, detail=f"File sanitization failed: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error sanitizing image file: {e}")
+            raise HTTPException(status_code=500, detail=f"File sanitization failed: {e}")
 
-    async def _process_document_item(
-        self, item: dict, user_api_key_alias: Optional[str]
-    ) -> dict:
+    async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict:
         """Process and sanitize document/file items."""
         doc_data = item.get("document") or item.get("file") or item
 
@@ -531,9 +507,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             else:
                 file_data = base64.b64decode(doc_content)
                 mime_type = (
-                    doc_data.get("mime_type", "application/pdf")
-                    if isinstance(doc_data, dict)
-                    else "application/pdf"
+                    doc_data.get("mime_type", "application/pdf") if isinstance(doc_data, dict) else "application/pdf"
                 )
 
             if "pdf" in mime_type:
@@ -564,9 +538,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 sanitized_content = sanitization_result.get("content", "")
                 if sanitized_content:
                     sanitized_encoded = base64.b64encode(
-                        sanitized_content
-                        if isinstance(sanitized_content, bytes)
-                        else sanitized_content.encode()
+                        sanitized_content if isinstance(sanitized_content, bytes) else sanitized_content.encode()
                     ).decode()
 
                     if url.startswith("data:") and header:
@@ -576,22 +548,16 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     elif isinstance(doc_data, dict):
                         doc_data["data"] = sanitized_encoded
 
-                    verbose_proxy_logger.info(
-                        "Document content modified by Prompt Security"
-                    )
+                    verbose_proxy_logger.info("Document content modified by Prompt Security")
 
             return item
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error sanitizing document: {str(e)}")
-            raise HTTPException(
-                status_code=500, detail=f"Document sanitization failed: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error sanitizing document: {e}")
+            raise HTTPException(status_code=500, detail=f"Document sanitization failed: {e}")
 
-    async def process_message_files(
-        self, messages: list, user_api_key_alias: Optional[str] = None
-    ) -> list:
+    async def process_message_files(self, messages: list, user_api_key_alias: str | None = None) -> list:
         """Process messages and sanitize any file content (images, documents, PDFs, etc.)."""
         processed_messages = []
 
@@ -607,13 +573,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 if isinstance(item, dict):
                     item_type = item.get("type")
                     if item_type == "image_url":
-                        item = await self._process_image_url_item(
-                            item, user_api_key_alias
-                        )
+                        item = await self._process_image_url_item(item, user_api_key_alias)
                     elif item_type in ["document", "file"]:
-                        item = await self._process_document_item(
-                            item, user_api_key_alias
-                        )
+                        item = await self._process_document_item(item, user_api_key_alias)
 
                 processed_content.append(item)
 
@@ -645,11 +607,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 if self.check_tool_results:
                     transformed_message = {
                         "role": "other",
-                        **{
-                            key: value
-                            for key, value in message.items()
-                            if key != "role"
-                        },
+                        **{key: value for key, value in message.items() if key != "role"},
                     }
                     filtered_messages.append(transformed_message)
                     transformed_count += 1
@@ -680,7 +638,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return filtered_messages
 
-    def _build_headers(self, user_api_key_alias: Optional[str] = None) -> dict:
+    def _build_headers(self, user_api_key_alias: str | None = None) -> dict:
         headers = {"APP-ID": self.api_key, "Content-Type": "application/json"}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
@@ -688,10 +646,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
     @staticmethod
     def _redact_headers(headers: dict) -> dict:
-        return {
-            name: ("REDACTED" if name.lower() == "app-id" else value)
-            for name, value in headers.items()
-        }
+        return {name: ("REDACTED" if name.lower() == "app-id" else value) for name, value in headers.items()}
 
     def _log_api_request(
         self,
@@ -722,7 +677,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import (
             PromptSecurityGuardrailConfigModel,
         )

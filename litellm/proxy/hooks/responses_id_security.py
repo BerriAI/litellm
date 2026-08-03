@@ -5,7 +5,8 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Tuple, Union, cast
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import HTTPException
 
@@ -37,47 +38,38 @@ class ResponsesIDSecurity(CustomLogger):
         cache: "DualCache",
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         # MAP all the responses api response ids to the encrypted response ids
         responses_api_call_types = {
             "aresponses",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
+            "alist_input_items",
         }
         if call_type not in responses_api_call_types:
             return None
         if call_type == "aresponses":
             # check 'previous_response_id' if present in the data
             previous_response_id = data.get("previous_response_id")
-            if previous_response_id and self._is_encrypted_response_id(
-                previous_response_id
-            ):
-                original_response_id, user_id, team_id = self._decrypt_response_id(
-                    previous_response_id
-                )
-                self.check_user_access_to_response_id(
-                    user_id, team_id, user_api_key_dict
-                )
+            if previous_response_id and self._is_encrypted_response_id(previous_response_id):
+                original_response_id, user_id, team_id = self._decrypt_response_id(previous_response_id)
+                self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
                 data["previous_response_id"] = original_response_id
-        elif call_type in {"aget_responses", "adelete_responses", "acancel_responses"}:
+        elif call_type in {"aget_responses", "adelete_responses", "acancel_responses", "alist_input_items"}:
             response_id = data.get("response_id")
 
             if response_id and self._is_encrypted_response_id(response_id):
-                original_response_id, user_id, team_id = self._decrypt_response_id(
-                    response_id
-                )
+                original_response_id, user_id, team_id = self._decrypt_response_id(response_id)
 
-                self.check_user_access_to_response_id(
-                    user_id, team_id, user_api_key_dict
-                )
+                self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
                 data["response_id"] = original_response_id
         return data
 
     def check_user_access_to_response_id(
         self,
-        response_id_user_id: Optional[str],
-        response_id_team_id: Optional[str],
+        response_id_user_id: str | None,
+        response_id_team_id: str | None,
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> bool:
         from litellm.proxy.proxy_server import general_settings
@@ -118,9 +110,7 @@ class ResponsesIDSecurity(CustomLogger):
             return False
 
         remaining_string = split_result[1]
-        decrypted_value = decrypt_value_helper(
-            value=remaining_string, key="response_id", return_original_value=True
-        )
+        decrypted_value = decrypt_value_helper(value=remaining_string, key="response_id", return_original_value=True)
 
         if decrypted_value is None:
             return False
@@ -129,9 +119,7 @@ class ResponsesIDSecurity(CustomLogger):
             return True
         return False
 
-    def _decrypt_response_id(
-        self, response_id: str
-    ) -> Tuple[str, Optional[str], Optional[str]]:
+    def _decrypt_response_id(self, response_id: str) -> tuple[str, str | None, str | None]:
         """
         Returns:
          - original_response_id: the original response id
@@ -143,9 +131,7 @@ class ResponsesIDSecurity(CustomLogger):
             return response_id, None, None
 
         remaining_string = split_result[1]
-        decrypted_value = decrypt_value_helper(
-            value=remaining_string, key="response_id", return_original_value=True
-        )
+        decrypted_value = decrypt_value_helper(value=remaining_string, key="response_id", return_original_value=True)
 
         if decrypted_value is None:
             return response_id, None, None
@@ -173,7 +159,7 @@ class ResponsesIDSecurity(CustomLogger):
                 return response_id, None, None
         return response_id, None, None
 
-    def _get_signing_key(self) -> Optional[str]:
+    def _get_signing_key(self) -> str | None:
         """Get the signing key for encryption/decryption."""
         import os
 
@@ -188,7 +174,7 @@ class ResponsesIDSecurity(CustomLogger):
         self,
         response: BaseLiteLLMOpenAIResponseObject,
         user_api_key_dict: "UserAPIKeyAuth",
-        request_cache: Optional[dict[str, str]] = None,
+        request_cache: dict[str, str] | None = None,
     ) -> BaseLiteLLMOpenAIResponseObject:
         # encrypt the response id using the symmetric key
         # encrypt the response id, and encode the user id and response id in base64
@@ -207,11 +193,7 @@ class ResponsesIDSecurity(CustomLogger):
         response_id = getattr(response, "id", None)
         response_obj = getattr(response, "response", None)
 
-        if (
-            response_id
-            and isinstance(response_id, str)
-            and response_id.startswith("resp_")
-        ):
+        if response_id and isinstance(response_id, str) and response_id.startswith("resp_"):
             # Check request-scoped cache first (for streaming consistency)
             if request_cache is not None and response_id in request_cache:
                 setattr(response, "id", request_cache[response_id])
@@ -222,9 +204,7 @@ class ResponsesIDSecurity(CustomLogger):
                     user_api_key_dict.team_id or "",
                 )
 
-                encoded_user_id_and_response_id = encrypt_value_helper(
-                    value=encrypted_response_id
-                )
+                encoded_user_id_and_response_id = encrypt_value_helper(value=encrypted_response_id)
                 encrypted_id = f"resp_{encoded_user_id_and_response_id}"
                 if request_cache is not None:
                     request_cache[response_id] = encrypted_id
@@ -240,9 +220,7 @@ class ResponsesIDSecurity(CustomLogger):
                     user_api_key_dict.user_id or "",
                     user_api_key_dict.team_id or "",
                 )
-                encoded_user_id_and_response_id = encrypt_value_helper(
-                    value=encrypted_response_id
-                )
+                encoded_user_id_and_response_id = encrypt_value_helper(value=encrypted_response_id)
                 encrypted_id = f"resp_{encoded_user_id_and_response_id}"
                 if request_cache is not None:
                     request_cache[response_obj.id] = encrypted_id
@@ -269,9 +247,7 @@ class ResponsesIDSecurity(CustomLogger):
         if isinstance(response, ResponsesAPIResponse):
             response = cast(
                 ResponsesAPIResponse,
-                self._encrypt_response_id(
-                    response, user_api_key_dict, request_cache=None
-                ),
+                self._encrypt_response_id(response, user_api_key_dict, request_cache=None),
             )
         return response
 
@@ -290,7 +266,5 @@ class ResponsesIDSecurity(CustomLogger):
                 == "/v1/responses"  # only encrypt the response id for the responses api
                 and not general_settings.get("disable_responses_id_security", False)
             ):
-                chunk = self._encrypt_response_id(
-                    chunk, user_api_key_dict, request_encryption_cache
-                )
+                chunk = self._encrypt_response_id(chunk, user_api_key_dict, request_encryption_cache)
             yield chunk

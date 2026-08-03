@@ -5,7 +5,7 @@ Key differences:
 - RedisClient NEEDs to be re-used across requests, adds 3000ms latency if it's re-created
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from litellm.caching.redis_cache import RedisCache
 
@@ -26,8 +26,8 @@ else:
 class RedisClusterCache(RedisCache):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.redis_async_redis_cluster_client: Optional[RedisCluster] = None
-        self.redis_sync_redis_cluster_client: Optional[RedisCluster] = None
+        self.redis_async_redis_cluster_client: RedisCluster | None = None
+        self.redis_sync_redis_cluster_client: RedisCluster | None = None
 
     def init_async_client(self):
         from redis.asyncio import RedisCluster
@@ -37,21 +37,19 @@ class RedisClusterCache(RedisCache):
         if self.redis_async_redis_cluster_client:
             return self.redis_async_redis_cluster_client
 
-        _redis_client = get_redis_async_client(
-            connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
-        )
+        _redis_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
         if isinstance(_redis_client, RedisCluster):
             self.redis_async_redis_cluster_client = _redis_client
 
         return _redis_client
 
-    def _run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
+    def _run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
         """
         Overrides `_run_redis_mget_operation` in redis_cache.py
         """
         return self.redis_client.mget_nonatomic(keys=keys)  # type: ignore
 
-    async def _async_run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
+    async def _async_run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
         """
         Overrides `_async_run_redis_mget_operation` in redis_cache.py
         """
@@ -73,13 +71,14 @@ class RedisClusterCache(RedisCache):
             cluster_kwargs = self.redis_kwargs.copy()
             startup_nodes = cluster_kwargs.pop("startup_nodes", [])
 
-            new_startup_nodes: List[ClusterNode] = []
+            new_startup_nodes: list[ClusterNode] = []
             for item in startup_nodes:
                 new_startup_nodes.append(ClusterNode(**item))
 
             # Create a fresh Redis Cluster client with current settings
             redis_client = redis_async.RedisCluster(
-                startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
+                startup_nodes=new_startup_nodes,
+                **cluster_kwargs,  # type: ignore
             )
 
             # Test the connection
@@ -101,9 +100,9 @@ class RedisClusterCache(RedisCache):
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.error(f"Redis Cluster connection test failed: {str(e)}")
+            verbose_logger.error(f"Redis Cluster connection test failed: {e}")
             return {
                 "status": "failed",
-                "message": f"Redis Cluster connection failed: {str(e)}",
+                "message": f"Redis Cluster connection failed: {e}",
                 "error": str(e),
             }

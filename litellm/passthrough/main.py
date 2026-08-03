@@ -4,23 +4,18 @@ This module is used to pass through requests to the LLM APIs.
 
 import asyncio
 import contextvars
+from collections.abc import AsyncGenerator, Coroutine, Generator
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Coroutine,
-    Generator,
-    List,
     Optional,
-    Union,
     cast,
 )
 
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -42,20 +37,20 @@ async def allm_passthrough_route(
     method: str,
     endpoint: str,
     model: str,
-    custom_llm_provider: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    request_query_params: Optional[dict] = None,
-    request_headers: Optional[dict] = None,
-    content: Optional[Any] = None,
-    data: Optional[dict] = None,
-    files: Optional[RequestFiles] = None,
-    json: Optional[Any] = None,
-    params: Optional[QueryParamTypes] = None,
-    cookies: Optional[CookieTypes] = None,
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    request_query_params: dict | None = None,
+    request_headers: dict | None = None,
+    content: Any | None = None,
+    data: dict | None = None,
+    files: RequestFiles | None = None,
+    json: Any | None = None,
+    params: QueryParamTypes | None = None,
+    cookies: CookieTypes | None = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
     **kwargs,
-) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
+) -> httpx.Response | AsyncGenerator[Any, Any]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
@@ -167,27 +162,26 @@ def llm_passthrough_route(
     method: str,
     endpoint: str,
     model: str,
-    custom_llm_provider: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    request_query_params: Optional[dict] = None,
-    request_headers: Optional[dict] = None,
-    allm_passthrough_route: bool = False,
-    content: Optional[Any] = None,
-    data: Optional[dict] = None,
-    files: Optional[RequestFiles] = None,
-    json: Optional[Any] = None,
-    params: Optional[QueryParamTypes] = None,
-    cookies: Optional[CookieTypes] = None,
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    request_query_params: dict | None = None,
+    request_headers: dict | None = None,
+    content: Any | None = None,
+    data: dict | None = None,
+    files: RequestFiles | None = None,
+    json: Any | None = None,
+    params: QueryParamTypes | None = None,
+    cookies: CookieTypes | None = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
     **kwargs,
-) -> Union[
-    httpx.Response,
-    Coroutine[Any, Any, httpx.Response],
-    Coroutine[Any, Any, Union[httpx.Response, AsyncGenerator[Any, Any]]],
-    Generator[Any, Any, Any],
-    AsyncGenerator[Any, Any],
-]:
+) -> (
+    httpx.Response
+    | Coroutine[Any, Any, httpx.Response]
+    | Coroutine[Any, Any, httpx.Response | AsyncGenerator[Any, Any]]
+    | Generator[Any, Any, Any]
+    | AsyncGenerator[Any, Any]
+):
     """
     Pass through requests to the LLM APIs.
 
@@ -199,13 +193,7 @@ def llm_passthrough_route(
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
-    _is_async = allm_passthrough_route
-
-    if client is None:
-        if _is_async:
-            client = litellm.module_level_aclient
-        else:
-            client = litellm.module_level_client
+    _is_async = bool(kwargs.get("allm_passthrough_route", False))
 
     litellm_logging_obj = cast("LiteLLMLoggingObj", kwargs.get("litellm_logging_obj"))
 
@@ -217,6 +205,26 @@ def llm_passthrough_route(
     )
 
     litellm_params_dict = get_litellm_params(**kwargs)
+
+    if client is None:
+        from litellm.llms.custom_httpx.http_handler import (
+            _get_httpx_client,
+            get_async_httpx_client,
+        )
+        from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        resolved_timeout = resolve_llm_passthrough_timeout(
+            kwargs=kwargs,
+            litellm_params=litellm_params_dict,
+        )
+        if _is_async:
+            client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+                params={"timeout": resolved_timeout},
+            )
+        else:
+            client = _get_httpx_client(params={"timeout": resolved_timeout})
 
     # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
     if "model_id" in kwargs:
@@ -251,9 +259,7 @@ def llm_passthrough_route(
 
     # [TODO: Refactor to bedrockpassthroughconfig] need to encode the id of application-inference-profile for bedrock
     if custom_llm_provider == "bedrock" and "application-inference-profile" in endpoint:
-        encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(
-            str(updated_url)
-        )
+        encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(str(updated_url))
         updated_url = httpx.URL(encoded_url_str)
 
     # Add or update query parameters
@@ -352,12 +358,12 @@ def llm_passthrough_route(
 
 
 async def _async_passthrough_request(
-    client: Union[HTTPHandler, AsyncHTTPHandler],
+    client: HTTPHandler | AsyncHTTPHandler,
     request: httpx.Request,
     is_streaming_request: bool,
     litellm_logging_obj: "LiteLLMLoggingObj",
     provider_config: "BasePassthroughConfig",
-) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
+) -> httpx.Response | AsyncGenerator[Any, Any]:
     """
     Handle async passthrough requests.
     Uses async client to send request and properly handles streaming.
@@ -391,7 +397,7 @@ def _sync_streaming(
 ):
     from litellm.utils import executor
 
-    raw_bytes: List[bytes] = []
+    raw_bytes: list[bytes] = []
     flush_scheduled = False
     try:
         for chunk in response.iter_bytes():  # type: ignore
@@ -431,7 +437,7 @@ async def _async_streaming(
             pass
         raise
 
-    raw_bytes: List[bytes] = []
+    raw_bytes: list[bytes] = []
     flush_scheduled = False
     try:
         async for chunk in iter_response.aiter_bytes():  # type: ignore

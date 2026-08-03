@@ -48,6 +48,39 @@ def test_output_format_supported_and_transforms_correctly():
     assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
 
 
+def test_output_config_format_supported_and_transforms_correctly():
+    """Test that output_config.format is preserved and adds the structured-output beta."""
+    config = AnthropicMessagesConfig()
+
+    supported_params = config.get_supported_anthropic_messages_params("claude-opus-4-7")
+    assert "output_config" in supported_params
+
+    output_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+    }
+    optional_params = {
+        "max_tokens": 1024,
+        "output_config": {"format": output_format, "effort": "xhigh"},
+    }
+    headers = {}
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "test"}],
+        anthropic_messages_optional_request_params=optional_params.copy(),
+        litellm_params={},
+        headers=headers,
+    )
+
+    headers = config._update_headers_with_anthropic_beta(headers, optional_params)
+
+    assert result["output_config"]["format"] == output_format
+    assert result["output_config"]["effort"] == "xhigh"
+    assert "anthropic-beta" in headers
+    assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
+
+
 def test_output_format_works_with_bedrock_and_azure():
     """Test that output_format works with Bedrock and Azure Foundry models."""
     config = AnthropicMessagesConfig()

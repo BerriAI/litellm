@@ -1,19 +1,28 @@
+import arizeLogo from "../../public/assets/logos/arize.png";
+import awsLogo from "../../public/assets/logos/aws.svg";
+import braintrustLogo from "../../public/assets/logos/braintrust.png";
+import datadogLogo from "../../public/assets/logos/datadog.png";
+import galileoLogo from "../../public/assets/logos/galileo.ico";
+import lagoLogo from "../../public/assets/logos/lago.svg";
+import langfuseLogo from "../../public/assets/logos/langfuse.png";
+import langsmithLogo from "../../public/assets/logos/langsmith.png";
+import openmeterLogo from "../../public/assets/logos/openmeter.png";
+import otelLogo from "../../public/assets/logos/otel.png";
+
 interface CallbackConfig {
   id: string;
   displayName: string;
-  logo: string;
+  logo?: string;
   supports_key_team_logging: boolean;
   dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
   description: string;
 }
 
-const asset_logos_folder = "../ui/assets/logos/";
-
 export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "arize",
     displayName: "Arize",
-    logo: `${asset_logos_folder}arize.png`,
+    logo: arizeLogo.src,
     supports_key_team_logging: true,
     dynamic_params: {
       arize_api_key: "password",
@@ -24,7 +33,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "braintrust",
     displayName: "Braintrust",
-    logo: `${asset_logos_folder}braintrust.png`,
+    logo: braintrustLogo.src,
     supports_key_team_logging: false,
     dynamic_params: {
       braintrust_api_key: "password",
@@ -35,7 +44,6 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "custom_callback_api",
     displayName: "Custom Callback API",
-    logo: `${asset_logos_folder}custom.svg`,
     supports_key_team_logging: true,
     dynamic_params: {
       custom_callback_api_url: "text",
@@ -44,9 +52,24 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     description: "Custom Callback API Logging Integration",
   },
   {
+    id: "galileo",
+    displayName: "Galileo",
+    logo: galileoLogo.src,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      GALILEO_API_KEY: "password",
+      GALILEO_PROJECT_ID: "text",
+      GALILEO_LOG_STREAM_ID: "text",
+      GALILEO_BASE_URL: "text",
+      GALILEO_USERNAME: "text",
+      GALILEO_PASSWORD: "password",
+    },
+    description: "Galileo AI Observability Integration",
+  },
+  {
     id: "datadog",
     displayName: "Datadog",
-    logo: `${asset_logos_folder}datadog.png`,
+    logo: datadogLogo.src,
     supports_key_team_logging: false,
     dynamic_params: {
       dd_api_key: "password",
@@ -57,7 +80,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "lago",
     displayName: "Lago",
-    logo: `${asset_logos_folder}lago.svg`,
+    logo: lagoLogo.src,
     supports_key_team_logging: false,
     dynamic_params: {
       lago_api_url: "text",
@@ -68,7 +91,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "langfuse",
     displayName: "Langfuse",
-    logo: `${asset_logos_folder}langfuse.png`,
+    logo: langfuseLogo.src,
     supports_key_team_logging: true,
     dynamic_params: {
       langfuse_public_key: "text",
@@ -80,7 +103,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "langfuse_otel",
     displayName: "Langfuse OTEL",
-    logo: `${asset_logos_folder}langfuse.png`,
+    logo: langfuseLogo.src,
     supports_key_team_logging: true,
     dynamic_params: {
       langfuse_public_key: "text",
@@ -92,7 +115,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "langsmith",
     displayName: "LangSmith",
-    logo: `${asset_logos_folder}langsmith.png`,
+    logo: langsmithLogo.src,
     supports_key_team_logging: true,
     dynamic_params: {
       langsmith_api_key: "password",
@@ -105,7 +128,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "openmeter",
     displayName: "OpenMeter",
-    logo: `${asset_logos_folder}openmeter.png`,
+    logo: openmeterLogo.src,
     supports_key_team_logging: false,
     dynamic_params: {
       openmeter_api_key: "password",
@@ -116,7 +139,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "otel",
     displayName: "Open Telemetry",
-    logo: `${asset_logos_folder}otel.png`,
+    logo: otelLogo.src,
     supports_key_team_logging: false,
     dynamic_params: {
       otel_endpoint: "text",
@@ -127,7 +150,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "s3",
     displayName: "S3",
-    logo: `${asset_logos_folder}aws.svg`,
+    logo: awsLogo.src,
     supports_key_team_logging: false,
     dynamic_params: {
       s3_bucket_name: "text",
@@ -140,7 +163,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "SQS",
     displayName: "SQS",
-    logo: `${asset_logos_folder}aws.svg`,
+    logo: awsLogo.src,
     supports_key_team_logging: false,
     dynamic_params: {
       sqs_queue_url: "text",

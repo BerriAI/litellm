@@ -1,8 +1,9 @@
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, Mapping, Optional, Set
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import TypeAdapter
@@ -30,6 +31,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import ConfigOverridesRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.config_overrides import (
     ConfigOverrideSettingsResponse,
@@ -42,7 +44,7 @@ router = APIRouter()
 _AUDIT_REDACTED = "***REDACTED***"
 
 
-def _redact_config(config: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def _redact_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Strip values from a config snapshot before audit-log emission.
 
     Hashicorp Vault config carries ``vault_token``, ``approle_secret_id``,
@@ -60,18 +62,16 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
         return
     exc = task.exception()
     if exc is not None:
-        verbose_proxy_logger.warning(
-            "Failed to write hashicorp-vault config audit log: %s", exc
-        )
+        verbose_proxy_logger.warning("Failed to write hashicorp-vault config audit log: %s", exc)
 
 
 async def _emit_hashicorp_vault_audit_log(
     *,
     action: AUDIT_ACTIONS,
-    before_config: Optional[Mapping[str, Any]],
-    after_config: Optional[Mapping[str, Any]],
+    before_config: Mapping[str, Any] | None,
+    after_config: Mapping[str, Any] | None,
     user_api_key_dict: UserAPIKeyAuth,
-    litellm_changed_by: Optional[str],
+    litellm_changed_by: str | None,
 ) -> None:
     """Emit an audit-log row for a /config_overrides/hashicorp_vault mutation.
 
@@ -95,19 +95,13 @@ async def _emit_hashicorp_vault_audit_log(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
                 updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by
-                or user_api_key_dict.user_id
-                or litellm_proxy_admin_name,
+                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
                 changed_by_api_key=user_api_key_dict.api_key,
                 table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
                 object_id="hashicorp_vault",
                 action=action,
-                updated_values=json.dumps(
-                    {"config": _redact_config(after_config)}, default=str
-                ),
-                before_value=json.dumps(
-                    {"config": _redact_config(before_config)}, default=str
-                ),
+                updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
+                before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
             )
         )
     )
@@ -116,7 +110,7 @@ async def _emit_hashicorp_vault_audit_log(
 
 # --- Hashicorp Vault constants ---
 
-HASHICORP_ENV_VAR_MAPPING: Dict[str, str] = {
+HASHICORP_ENV_VAR_MAPPING: dict[str, str] = {
     "vault_addr": "HCP_VAULT_ADDR",
     "vault_token": "HCP_VAULT_TOKEN",
     "approle_role_id": "HCP_VAULT_APPROLE_ROLE_ID",
@@ -130,7 +124,7 @@ HASHICORP_ENV_VAR_MAPPING: Dict[str, str] = {
     "vault_path_prefix": "HCP_VAULT_PATH_PREFIX",
 }
 
-HASHICORP_SENSITIVE_FIELDS: Set[str] = {
+HASHICORP_SENSITIVE_FIELDS: set[str] = {
     "vault_token",
     "approle_secret_id",
     "client_key",
@@ -142,9 +136,7 @@ _sensitive_masker = SensitiveDataMasker()
 # --- Shared helpers ---
 
 
-def _mask_sensitive_fields(
-    data: Dict[str, Any], sensitive_fields: Set[str]
-) -> Dict[str, Any]:
+def _mask_sensitive_fields(data: dict[str, Any], sensitive_fields: set[str]) -> dict[str, Any]:
     """Mask sensitive fields for API responses. Non-sensitive fields are left as-is."""
     masked = {}
     for key, value in data.items():
@@ -155,7 +147,7 @@ def _mask_sensitive_fields(
     return masked
 
 
-def _get_current_env_values(env_var_mapping: Dict[str, str]) -> Dict[str, Any]:
+def _get_current_env_values(env_var_mapping: dict[str, str]) -> dict[str, Any]:
     """Read current env var values as fallback when no DB record exists."""
     values = {}
     for field_name, env_var_name in env_var_mapping.items():
@@ -164,7 +156,7 @@ def _get_current_env_values(env_var_mapping: Dict[str, str]) -> Dict[str, Any]:
     return values
 
 
-def _extract_field_type(field_info: Dict[str, Any]) -> str:
+def _extract_field_type(field_info: dict[str, Any]) -> str:
     """Extract the non-null type from a Pydantic v2 JSON schema field."""
     if "type" in field_info:
         return field_info["type"]
@@ -174,7 +166,7 @@ def _extract_field_type(field_info: Dict[str, Any]) -> str:
     return "string"
 
 
-def _build_field_schema(model_class: type) -> Dict[str, Any]:
+def _build_field_schema(model_class: type) -> dict[str, Any]:
     """Build field_schema dict from a Pydantic model for UI rendering."""
     schema = TypeAdapter(model_class).json_schema(by_alias=True)
     properties = {}
@@ -189,14 +181,14 @@ def _build_field_schema(model_class: type) -> Dict[str, Any]:
     }
 
 
-def _parse_config_value(raw: Any) -> Dict[str, Any]:
+def _parse_config_value(raw: Any) -> dict[str, Any]:
     """Parse a config_value from DB (may be JSON string or dict)."""
     if isinstance(raw, str):
         return safe_json_loads(raw, default={})
     return dict(raw)
 
 
-def _set_env_vars(config_data: Dict[str, Any]) -> None:
+def _set_env_vars(config_data: dict[str, Any]) -> None:
     """Set HCP_VAULT_* env vars from config data. Unsets vars for missing/None/empty fields."""
     for field_name, env_var_name in HASHICORP_ENV_VAR_MAPPING.items():
         value = config_data.get(field_name)
@@ -226,7 +218,7 @@ def _clear_hashicorp_vault_state(proxy_config: Any) -> None:
 async def update_hashicorp_vault_config(
     config: HashicorpVaultConfig,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
@@ -254,11 +246,11 @@ async def update_hashicorp_vault_config(
 
     # Merge ALL fields the user didn't send: try DB first, fall back to env vars.
     # Omitted field = keep existing; empty string = clear/remove the field.
-    existing_record = await prisma_client.db.litellm_configoverrides.find_unique(
+    existing_record = await ConfigOverridesRepository(prisma_client).table.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
-    existing_decrypted: Optional[Dict[str, Any]] = None
-    env_values: Dict[str, Any] = {}
+    existing_decrypted: dict[str, Any] | None = None
+    env_values: dict[str, Any] = {}
     if existing_record is not None and existing_record.config_value is not None:
         existing_data = _parse_config_value(existing_record.config_value)
         existing_decrypted = proxy_config._decrypt_db_variables(existing_data)
@@ -279,12 +271,8 @@ async def update_hashicorp_vault_config(
     # Validate that the config has enough fields to initialize
     has_vault_addr = bool(config_data.get("vault_addr"))
     has_token_auth = bool(config_data.get("vault_token"))
-    has_approle_auth = bool(
-        config_data.get("approle_role_id") and config_data.get("approle_secret_id")
-    )
-    has_tls_cert_auth = bool(
-        config_data.get("client_cert") and config_data.get("client_key")
-    )
+    has_approle_auth = bool(config_data.get("approle_role_id") and config_data.get("approle_secret_id"))
+    has_tls_cert_auth = bool(config_data.get("client_cert") and config_data.get("client_key"))
 
     if not has_vault_addr:
         raise HTTPException(
@@ -310,9 +298,7 @@ async def update_hashicorp_vault_config(
         proxy_config.initialize_secret_manager(key_management_system="hashicorp_vault")
     except Exception as e:
         _set_env_vars(previous_env)
-        verbose_proxy_logger.exception(
-            "Error reinitializing Hashicorp Vault secret manager: %s", str(e)
-        )
+        verbose_proxy_logger.exception("Error reinitializing Hashicorp Vault secret manager: %s", str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Failed to initialize secret manager: {e}",
@@ -321,7 +307,7 @@ async def update_hashicorp_vault_config(
     # Only persist to DB after successful init
     encrypted_data = proxy_config._encrypt_env_variables(config_data)
     config_value = safe_dumps(encrypted_data)
-    await prisma_client.db.litellm_configoverrides.upsert(
+    await ConfigOverridesRepository(prisma_client).table.upsert(
         where={"config_type": "hashicorp_vault"},
         data={
             "create": {
@@ -391,7 +377,7 @@ async def get_hashicorp_vault_config(
     field_schema = _build_field_schema(HashicorpVaultConfig)
 
     # Try to load from DB
-    db_record = await prisma_client.db.litellm_configoverrides.find_unique(
+    db_record = await ConfigOverridesRepository(prisma_client).table.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
 
@@ -426,7 +412,7 @@ async def get_hashicorp_vault_config(
 )
 async def delete_hashicorp_vault_config(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
@@ -448,29 +434,23 @@ async def delete_hashicorp_vault_config(
 
     # Capture the prior config before delete so the audit-log row can
     # show *what* was removed (keys only — values get redacted).
-    existing_record = await prisma_client.db.litellm_configoverrides.find_unique(
+    existing_record = await ConfigOverridesRepository(prisma_client).table.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
-    before_config: Optional[Dict[str, Any]] = None
+    before_config: dict[str, Any] | None = None
     if existing_record is not None and existing_record.config_value is not None:
         try:
-            before_config = proxy_config._decrypt_db_variables(
-                _parse_config_value(existing_record.config_value)
-            )
+            before_config = proxy_config._decrypt_db_variables(_parse_config_value(existing_record.config_value))
         except Exception:
             before_config = None
 
     # Delete DB record if it exists — ignore if not found
     deleted = False
     try:
-        await prisma_client.db.litellm_configoverrides.delete(
-            where={"config_type": "hashicorp_vault"}
-        )
+        await ConfigOverridesRepository(prisma_client).table.delete(where={"config_type": "hashicorp_vault"})
         deleted = True
     except RecordNotFoundError:
-        verbose_proxy_logger.debug(
-            "No existing Hashicorp Vault config record to delete"
-        )
+        verbose_proxy_logger.debug("No existing Hashicorp Vault config record to delete")
 
     _clear_hashicorp_vault_state(proxy_config)
 
@@ -531,9 +511,7 @@ async def test_hashicorp_vault_connection(
 
     # Step 2: Verify the token is valid via token/lookup-self
     try:
-        async_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.SecretManager
-        )
+        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.SecretManager)
         lookup_url = f"{client.vault_addr}/v1/auth/token/lookup-self"
         if client.vault_namespace:
             headers["X-Vault-Namespace"] = client.vault_namespace

@@ -8,14 +8,13 @@ then we poll until the result is ready.
 
 import asyncio
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -29,6 +28,7 @@ from ..common_utils import (
     DEFAULT_MAX_POLLING_TIME,
     DEFAULT_POLLING_INTERVAL,
     BlackForestLabsError,
+    assert_bfl_polling_url,
 )
 from .transformation import BlackForestLabsImageGenerationConfig
 
@@ -49,14 +49,14 @@ class BlackForestLabsImageGeneration:
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        optional_params: dict,
+        litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: dict[str, Any] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         aimg_generation: bool = False,
-    ) -> Union[ImageResponse, Any]:
+    ) -> ImageResponse | Any:
         """
         Main entry point for image generation requests.
 
@@ -156,7 +156,7 @@ class BlackForestLabsImageGeneration:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result
@@ -172,6 +172,10 @@ class BlackForestLabsImageGeneration:
             raw_response=final_response,
             model_response=model_response,
             logging_obj=logging_obj,
+            request_data=data,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            encoding=None,
         )
 
     async def async_image_generation(
@@ -179,12 +183,12 @@ class BlackForestLabsImageGeneration:
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        optional_params: dict,
+        litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: dict[str, Any] | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:
         """
         Async version of image generation.
@@ -258,7 +262,7 @@ class BlackForestLabsImageGeneration:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result
@@ -274,6 +278,10 @@ class BlackForestLabsImageGeneration:
             raw_response=final_response,
             model_response=model_response,
             logging_obj=logging_obj,
+            request_data=data,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            encoding=None,
         )
 
     def _poll_for_result_sync(
@@ -283,7 +291,7 @@ class BlackForestLabsImageGeneration:
         sync_client: HTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         """
         Poll BFL API until result is ready (sync version).
@@ -318,16 +326,11 @@ class BlackForestLabsImageGeneration:
                 message="No polling_url in BFL response",
             )
 
-        # Reject cross-origin polling URLs — the ``x-key`` auth header
-        # would otherwise leak to whatever URL the upstream returns.
-        # VERIA-51.
-        try:
-            assert_same_origin(polling_url, str(initial_response.request.url))
-        except SSRFError as ssrf_err:
-            raise BlackForestLabsError(
-                status_code=502,
-                message=f"Rejected polling URL: {ssrf_err}",
-            )
+        # Reject polling URLs that don't belong to BFL-controlled infrastructure.
+        # BFL uses regional subdomains (e.g. gateway.bfl.ai) that differ from the
+        # submission host (api.bfl.ai), so we validate against the registered
+        # domain rather than doing a strict same-origin check. VERIA-51.
+        assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
         polling_headers = {"x-key": headers.get("x-key", "")}
@@ -379,7 +382,7 @@ class BlackForestLabsImageGeneration:
         async_client: AsyncHTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         """
         Poll BFL API until result is ready (async version).
@@ -414,16 +417,11 @@ class BlackForestLabsImageGeneration:
                 message="No polling_url in BFL response",
             )
 
-        # Reject cross-origin polling URLs — the ``x-key`` auth header
-        # would otherwise leak to whatever URL the upstream returns.
-        # VERIA-51.
-        try:
-            assert_same_origin(polling_url, str(initial_response.request.url))
-        except SSRFError as ssrf_err:
-            raise BlackForestLabsError(
-                status_code=502,
-                message=f"Rejected polling URL: {ssrf_err}",
-            )
+        # Reject polling URLs that don't belong to BFL-controlled infrastructure.
+        # BFL uses regional subdomains (e.g. gateway.bfl.ai) that differ from the
+        # submission host (api.bfl.ai), so we validate against the registered
+        # domain rather than doing a strict same-origin check. VERIA-51.
+        assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
         polling_headers = {"x-key": headers.get("x-key", "")}

@@ -1,10 +1,11 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from typing_extensions import TypeAlias, TypedDict
+from typing_extensions import NotRequired, TypeAlias, TypedDict
 
 from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
+    ContextManagementResponse,
 )
 
 
@@ -88,9 +89,8 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     id: str
     model: Optional[str]  # This represents the Model type from Anthropic
     role: Optional[Literal["assistant"]]
-    stop_reason: Optional[
-        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
-    ]
+    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]]
     stop_sequence: Optional[str]
     type: Optional[Literal["message"]]
     usage: Optional[AnthropicUsage]
+    context_management: NotRequired[ContextManagementResponse]

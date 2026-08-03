@@ -5,7 +5,7 @@ Implements the transformation between LiteLLM's unified vector store API
 and Google Gemini's File Search API.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -43,11 +43,9 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
     def __init__(self) -> None:
         super().__init__()
         self.model_info = GeminiModelInfo()
-        self._cached_api_key: Optional[str] = None
+        self._cached_api_key: str | None = None
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         """Gemini uses x-goog-api-key header for authentication."""
         return {}
 
@@ -63,15 +61,11 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             "write": [("POST", "/fileSearchStores")],
         }
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+    def get_supported_openai_params(self, model: str) -> list[VECTOR_STORE_OPENAI_PARAMS]:
         """Supported parameters for Gemini File Search."""
         return ["max_num_results", "filters"]
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """Validate and set up headers for Gemini API."""
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
@@ -83,7 +77,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         return headers
 
-    def get_complete_url(self, api_base: Optional[str], litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
         """
         Get the complete base URL for Gemini API.
 
@@ -100,9 +94,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         api_version = "v1beta"
         return f"{api_base}/{api_version}"
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> GeminiError:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> GeminiError:
         """Return Gemini-specific error class."""
         return GeminiError(
             status_code=status_code,
@@ -113,13 +105,13 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """
         Transform search request to Gemini's generateContent format.
 
@@ -141,9 +133,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         url = f"{api_base}/models/{model}:generateContent"
 
         # Build file_search tool configuration (using snake_case as per Gemini docs)
-        file_search_config: Dict[str, Any] = {
-            "file_search_store_names": [vector_store_id]
-        }
+        file_search_config: dict[str, Any] = {"file_search_store_names": [vector_store_id]}
 
         # Add metadata filter if provided
         metadata_filter = vector_store_search_optional_params.get("filters")
@@ -162,7 +152,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
                 file_search_config["metadata_filter"] = metadata_filter
 
         # Build request body
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "contents": [{"parts": [{"text": query}]}],
             "tools": [{"file_search": file_search_config}],
         }
@@ -189,7 +179,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         """
         try:
             response_data = response.json()
-            results: List[VectorStoreSearchResult] = []
+            results: list[VectorStoreSearchResult] = []
 
             # Extract candidates and grounding metadata
             candidates = response_data.get("candidates", [])
@@ -214,9 +204,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
                         results.append(
                             VectorStoreSearchResult(
                                 score=None,  # Gemini doesn't provide explicit scores
-                                content=[
-                                    VectorStoreResultContent(text=text, type="text")
-                                ],
+                                content=[VectorStoreResultContent(text=text, type="text")],
                                 file_id=file_id,
                                 filename=title if title else None,
                                 attributes={
@@ -251,9 +239,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
                         results.append(
                             VectorStoreSearchResult(
                                 score=score,
-                                content=[
-                                    VectorStoreResultContent(text=text, type="text")
-                                ],
+                                content=[VectorStoreResultContent(text=text, type="text")],
                                 attributes={
                                     "grounding_chunk_indices": grounding_chunk_indices,
                                 },
@@ -270,7 +256,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Failed to parse Gemini response: {str(e)}",
+                error_message=f"Failed to parse Gemini response: {e}",
                 status_code=response.status_code,
                 headers=response.headers,
             )
@@ -279,7 +265,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform create request to Gemini's fileSearchStores format.
         """
@@ -287,7 +273,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         # API key is passed via x-goog-api-key header (set in validate_environment)
 
-        request_body: Dict[str, Any] = {}
+        request_body: dict[str, Any] = {}
 
         # Add display name if provided
         name = vector_store_create_optional_params.get("name")
@@ -296,9 +282,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         return url, request_body
 
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         """
         Transform Gemini's fileSearchStore response to standard format.
         """
@@ -316,9 +300,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             created_at = None
             if create_time:
                 try:
-                    dt = datetime.datetime.fromisoformat(
-                        create_time.replace("Z", "+00:00")
-                    )
+                    dt = datetime.datetime.fromisoformat(create_time.replace("Z", "+00:00"))
                     created_at = int(dt.timestamp())
                 except Exception:
                     created_at = None
@@ -345,7 +327,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Failed to parse Gemini create response: {str(e)}",
+                error_message=f"Failed to parse Gemini create response: {e}",
                 status_code=response.status_code,
                 headers=response.headers,
             )

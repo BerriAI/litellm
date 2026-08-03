@@ -18,6 +18,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/team/",
     "/v2/team/",
     "/organization/",
+    "/v2/organization/",
     "/customer/",
     "/end_user/",
     "/sso/",
@@ -46,6 +47,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/fallback",
     "/fallbacks",
     "/cache_settings",
+    "/coordination_redis/",
     "/cost_tracking",
     "/cost/",
     "/credentials",
@@ -68,6 +70,10 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/project/",
     "/memory/",
     "/mcp/",
+    # Control plane (see the List Endpoints + Tables standard). Every resource
+    # eventually moves under this prefix, so allowlist it once rather than
+    # per-resource.
+    "/management/v1/",
     # Spend / analytics
     "/spend/",
     "/analytics/",
@@ -84,6 +90,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/active/callbacks",
     "/callbacks",
     "/team_callback",
+    # Rust data-plane gateway → proxy control-plane API (logging today, auth later)
+    "/v1/rust_control_plane/",
     # Alerting / email / IP allowlist
     "/alerting/",
     "/email/",
@@ -120,6 +128,9 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/robots.txt",
     # Health (k8s probes)
     "/health",
+    # Plugin system
+    "/api/plugins",
+    "/plugin-proxy/",
 )
 
 BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
@@ -131,5 +142,11 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
         "/docs/oauth2-redirect",
         "/redoc",
         "/fallback/login",
+    }
+)
+
+BACKEND_MOUNT_PATHS: frozenset[str] = frozenset(
+    {
+        "/swagger",  # API documentation static assets belong to the backend
     }
 )

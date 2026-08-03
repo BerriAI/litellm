@@ -11,14 +11,15 @@ Follows the same pattern as parallel_request_limiter_v3.py.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Optional, Union
-
-from fastapi import HTTPException
+from typing import TYPE_CHECKING, Any
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -69,16 +70,12 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
-        self.ttl = int(
-            os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL)
-        )
+        self.ttl = int(os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL))
 
         # Register Lua script with Redis if available (same pattern as v3 limiter)
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = (
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                    MAX_ITERATIONS_INCREMENT_SCRIPT
-                )
+            self.increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                MAX_ITERATIONS_INCREMENT_SCRIPT
             )
         else:
             self.increment_script = None
@@ -89,7 +86,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Check session iteration count before making the API call.
 
@@ -116,12 +113,15 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         current_count = await self._increment_and_get(cache_key)
 
         if current_count > max_iterations:
-            raise HTTPException(
-                status_code=429,
+            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(data.get("model") if data else None)
+            raise ProxyRateLimitError(
                 detail=(
                     f"Max iterations exceeded for session {session_id}. "
                     f"Current count: {current_count}, max_iterations: {max_iterations}."
                 ),
+                rate_limit_type=RateLimitType.MAX_ITERATIONS,
+                model=resolved_model,
+                llm_provider=llm_provider,
             )
 
         verbose_proxy_logger.debug(
@@ -133,7 +133,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
         return None
 
-    def _get_session_id(self, data: dict) -> Optional[str]:
+    def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""
         metadata = data.get("metadata") or {}
         session_id = metadata.get("session_id")
@@ -148,7 +148,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
         return None
 
-    def _get_max_iterations(self, user_api_key_dict: UserAPIKeyAuth) -> Optional[int]:
+    def _get_max_iterations(self, user_api_key_dict: UserAPIKeyAuth) -> int | None:
         """Extract max_iterations from agent litellm_params, with fallback to key metadata."""
         # Try agent litellm_params first
         agent_id = user_api_key_dict.agent_id

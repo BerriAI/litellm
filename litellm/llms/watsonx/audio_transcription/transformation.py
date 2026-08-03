@@ -4,10 +4,11 @@ Translates from OpenAI's `/v1/audio/transcriptions` to IBM WatsonX's `/ml/v1/aud
 WatsonX follows the OpenAI spec for audio transcription.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+from httpx import Response
 
 import litellm
-from httpx import Response
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -25,9 +26,7 @@ from ...openai.transcriptions.whisper_transformation import (
 from ..common_utils import IBMWatsonXMixin
 
 
-class IBMWatsonXAudioTranscriptionConfig(
-    IBMWatsonXMixin, OpenAIWhisperAudioTranscriptionConfig
-):
+class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTranscriptionConfig):
     """
     IBM WatsonX Audio Transcription Config
 
@@ -38,14 +37,14 @@ class IBMWatsonXAudioTranscriptionConfig(
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Dict:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
         """
         Validate environment for audio transcription.
 
@@ -65,9 +64,7 @@ class IBMWatsonXAudioTranscriptionConfig(
         result.pop("Content-Type", None)
         return result
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         """
         Get the supported OpenAI params for WatsonX audio transcription.
         """
@@ -98,9 +95,7 @@ class IBMWatsonXAudioTranscriptionConfig(
         """
         # Use common utility to process the audio file
         processed_audio = process_audio_file(audio_file)
-        project_id = optional_params.get("project_id") or optional_params.get(
-            "watsonx_project"
-        )
+        project_id = optional_params.get("project_id") or optional_params.get("watsonx_project")
         space_id = optional_params.get("space_id")
         # api_params = _get_api_params(params=optional_params, model=model)
 
@@ -129,18 +124,18 @@ class IBMWatsonXAudioTranscriptionConfig(
         }
 
         # Convert TypedDict to regular dict for AudioTranscriptionRequestData
-        form_data_dict: Dict[str, Any] = dict(form_data)
+        form_data_dict: dict[str, Any] = dict(form_data)
 
         return AudioTranscriptionRequestData(data=form_data_dict, files=files)
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Construct the complete URL for WatsonX audio transcription.
@@ -157,10 +152,7 @@ class IBMWatsonXAudioTranscriptionConfig(
         url = f"{url}/ml/v1/audio/transcriptions"
 
         # Add version parameter (only version in query string, not project_id)
-        api_version = (
-            optional_params.get("api_version", None)
-            or litellm.WATSONX_DEFAULT_API_VERSION
-        )
+        api_version = optional_params.get("api_version", None) or litellm.WATSONX_DEFAULT_API_VERSION
         url = f"{url}?version={api_version}"
 
         return url
@@ -178,9 +170,7 @@ class IBMWatsonXAudioTranscriptionConfig(
         try:
             raw_response_json = raw_response.json()
         except Exception as e:
-            raise ValueError(
-                f"Error transforming response to json: {str(e)}\nResponse: {raw_response.text}"
-            )
+            raise ValueError(f"Error transforming response to json: {e}\nResponse: {raw_response.text}")
 
         # Extract only valid fields for TranscriptionResponse.__init__()
         # TranscriptionResponse only accepts 'text' and 'usage' in __init__()

@@ -1,4 +1,4 @@
-from typing import Optional, cast
+from typing import cast
 
 import httpx
 
@@ -28,9 +28,9 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure environment and set up authentication headers.
@@ -65,14 +65,12 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         params = GenericLiteLLMParams(**(litellm_params or {}))
         if api_key is not None and params.api_key is None:
             params.api_key = api_key
-        return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=params
-        )
+        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=params)
 
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -97,8 +95,15 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             )
         original_url = httpx.URL(api_base)
 
-        # Extract api_version or use default
-        api_version = cast(Optional[str], litellm_params.get("api_version"))
+        # Resolve api_version: litellm_params > litellm.api_version > AZURE_API_VERSION env > default.
+        # Mirrors the fallback chain used by the Azure chat path in common_utils.py,
+        # so callers that set a global / env api_version don't get an unversioned URL.
+        api_version = (
+            cast(str | None, litellm_params.get("api_version"))
+            or litellm.api_version
+            or get_secret_str("AZURE_API_VERSION")
+            or litellm.AZURE_DEFAULT_API_VERSION
+        )
 
         # Create a new dictionary with existing params
         query_params = dict(original_url.params)
@@ -121,7 +126,5 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
         return str(final_url)
 
-    def finalize_image_edit_request_data(
-        self, data: dict, resolved_request_url: str
-    ) -> dict:
+    def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:
         return self.azure_deployment_image_edit_form_data(data, resolved_request_url)

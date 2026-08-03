@@ -10,13 +10,8 @@ import os
 from typing import (
     TYPE_CHECKING,
     Any,
-    List,
     Literal,
-    Optional,
-    Tuple,
-    Type,
     TypedDict,
-    Union,
 )
 
 from fastapi import HTTPException
@@ -46,22 +41,22 @@ class GuardrailsAIResponse(TypedDict):
 
 class InferenceData(TypedDict):
     name: str
-    shape: List[int]
-    data: List
+    shape: list[int]
+    data: list
     datatype: str
 
 
 class GuardrailsAIResponsePreCall(TypedDict):
     modelname: str
     modelversion: str
-    outputs: List[InferenceData]
+    outputs: list[InferenceData]
 
 
 class GuardrailsAI(CustomGuardrail):
     def __init__(
         self,
         guard_name: str,
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
         guardrails_ai_api_input_format: Literal["inputs", "llmOutput"] = "llmOutput",
         **kwargs,
     ):
@@ -70,22 +65,13 @@ class GuardrailsAI(CustomGuardrail):
                 "GuardrailsAIException - Please pass the Guardrails AI guard name via 'litellm_params::guard_name'"
             )
         # store kwargs as optional_params
-        self.guardrails_ai_api_base = (
-            api_base or os.getenv("GUARDRAILS_AI_API_BASE") or "http://0.0.0.0:8000"
-        )
+        self.guardrails_ai_api_base = api_base or os.getenv("GUARDRAILS_AI_API_BASE") or "http://0.0.0.0:8000"
         self.guardrails_ai_guard_name = guard_name
         self.optional_params = kwargs
         self.guardrails_ai_api_input_format = guardrails_ai_api_input_format
-        supported_event_hooks = [
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.logging_only,
-        ]
-        super().__init__(supported_event_hooks=supported_event_hooks, **kwargs)
+        super().__init__(supported_event_hooks=list(self.get_supported_event_hooks()), **kwargs)
 
-    async def make_guardrails_ai_api_request(
-        self, llm_output: str, request_data: dict
-    ) -> GuardrailsAIResponse:
+    async def make_guardrails_ai_api_request(self, llm_output: str, request_data: dict) -> GuardrailsAIResponse:
         from httpx import URL
 
         data = {
@@ -94,11 +80,7 @@ class GuardrailsAI(CustomGuardrail):
         }
         _json_data = json.dumps(data)
         response = await litellm.module_level_aclient.post(
-            url=str(
-                URL(self.guardrails_ai_api_base).join(
-                    f"guards/{self.guardrails_ai_guard_name}/validate"
-                )
-            ),
+            url=str(URL(self.guardrails_ai_api_base).join(f"guards/{self.guardrails_ai_guard_name}/validate")),
             data=_json_data,
             headers={
                 "Content-Type": "application/json",
@@ -116,9 +98,7 @@ class GuardrailsAI(CustomGuardrail):
             )
         return _json_response
 
-    async def make_guardrails_ai_api_request_pre_call_request(
-        self, text_input: str, request_data: dict
-    ) -> str:
+    async def make_guardrails_ai_api_request_pre_call_request(self, text_input: str, request_data: dict) -> str:
         from httpx import URL
 
         # This branch of code does not work with current version of GuardrailsAI API (as of July 2025), and it is unclear if it ever worked.
@@ -137,11 +117,7 @@ class GuardrailsAI(CustomGuardrail):
         }
         _json_data = json.dumps(data)
         response = await litellm.module_level_aclient.post(
-            url=str(
-                URL(self.guardrails_ai_api_base).join(
-                    f"guards/{self.guardrails_ai_guard_name}/validate"
-                )
-            ),
+            url=str(URL(self.guardrails_ai_api_base).join(f"guards/{self.guardrails_ai_guard_name}/validate")),
             data=_json_data,
             headers={
                 "Content-Type": "application/json",
@@ -182,12 +158,8 @@ class GuardrailsAI(CustomGuardrail):
                 text_input=text, request_data=data
             )
         else:
-            _result = await self.make_guardrails_ai_api_request(
-                llm_output=text, request_data=data
-            )
-            updated_text = (
-                _result.get("validatedOutput") or _result.get("rawLlmOutput") or text
-            )
+            _result = await self.make_guardrails_ai_api_request(llm_output=text, request_data=data)
+            updated_text = _result.get("validatedOutput") or _result.get("rawLlmOutput") or text
         data["messages"] = set_last_user_message(data["messages"], updated_text)
 
         return data
@@ -209,14 +181,12 @@ class GuardrailsAI(CustomGuardrail):
             "rerank",
             "mcp_call",
         ],
-    ) -> Optional[
-        Union[Exception, str, dict]
-    ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
+    ) -> (
+        Exception | str | dict | None
+    ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         return await self.process_input(data=data, call_type=call_type)
 
-    async def async_logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
         if call_type == "acompletion" or call_type == "completion":
             kwargs = await self.process_input(data=kwargs, call_type=call_type)
 
@@ -247,20 +217,24 @@ class GuardrailsAI(CustomGuardrail):
 
         response_str: str = get_content_from_model_response(response)
         if response_str is not None and len(response_str) > 0:
-            await self.make_guardrails_ai_api_request(
-                llm_output=response_str, request_data=data
-            )
+            await self.make_guardrails_ai_api_request(llm_output=response_str, request_data=data)
 
-            add_guardrail_to_applied_guardrails_header(
-                request_data=data, guardrail_name=self.guardrail_name
-            )
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.guardrails_ai import (
             GuardrailsAIGuardrailConfigModel,
         )
 
         return GuardrailsAIGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.logging_only,
+        ]

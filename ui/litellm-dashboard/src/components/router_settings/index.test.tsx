@@ -9,19 +9,13 @@ vi.mock("antd", async (importOriginal) => {
     ...actual,
     Select: Object.assign(
       ({ value, onChange, children }: any) => (
-        <select
-          data-testid="strategy-select"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
+        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
           {children}
         </select>
       ),
       {
-        Option: ({ value, children }: any) => (
-          <option value={value}>{children}</option>
-        ),
-      }
+        Option: ({ value, children }: any) => <option value={value}>{children}</option>,
+      },
     ),
   };
 });
@@ -32,11 +26,7 @@ vi.mock("@/components/networking", () => ({
   setCallbacksCall: vi.fn(),
 }));
 
-import {
-  getCallbacksCall,
-  getRouterSettingsCall,
-  setCallbacksCall,
-} from "@/components/networking";
+import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 
 const mockCallbacksResponse = {
@@ -86,9 +76,7 @@ describe("RouterSettings", () => {
   });
 
   it("should render nothing when accessToken is null", () => {
-    const { container } = renderWithProviders(
-      <RouterSettings {...defaultProps} accessToken={null} />
-    );
+    const { container } = renderWithProviders(<RouterSettings {...defaultProps} accessToken={null} />);
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -108,9 +96,7 @@ describe("RouterSettings", () => {
   });
 
   it("should not fetch data when any required prop is missing", () => {
-    renderWithProviders(
-      <RouterSettings {...defaultProps} userRole={null} />
-    );
+    renderWithProviders(<RouterSettings {...defaultProps} userRole={null} />);
     expect(getCallbacksCall).not.toHaveBeenCalled();
   });
 
@@ -144,7 +130,7 @@ describe("RouterSettings", () => {
         router_settings: expect.objectContaining({
           routing_strategy: "simple-shuffle",
         }),
-      })
+      }),
     );
   });
 
@@ -158,8 +144,47 @@ describe("RouterSettings", () => {
     });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    expect(NotificationsManager.success).toHaveBeenCalledWith(
-      "router settings updated successfully"
+    expect(NotificationsManager.success).toHaveBeenCalledWith("router settings updated successfully");
+  });
+
+  it("should not render or save routing_groups (owned by the Routing Groups tab)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        routing_strategy: "simple-shuffle",
+        num_retries: 3,
+        routing_groups: [{ group_name: "g1", models: ["gpt-4"], routing_strategy: "simple-shuffle" }],
+      },
+    });
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+    expect(document.querySelector('input[name="routing_groups"]')).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith("test-token", {
+        router_settings: expect.not.objectContaining({ routing_groups: expect.anything() }),
+      }),
     );
+  });
+
+  it("should surface an error and not claim success when saving fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(setCallbacksCall).mockRejectedValue(new Error("422 Unprocessable Entity"));
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(NotificationsManager.fromBackend).toHaveBeenCalled();
+    });
+    expect(NotificationsManager.success).not.toHaveBeenCalled();
   });
 });

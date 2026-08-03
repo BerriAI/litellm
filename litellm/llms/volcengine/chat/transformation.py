@@ -1,5 +1,3 @@
-from typing import Optional, Union
-
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
@@ -8,31 +6,31 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
     Reference: https://www.volcengine.com/docs/82379/1494384
     """
 
-    frequency_penalty: Optional[int] = None
-    function_call: Optional[Union[str, dict]] = None
-    functions: Optional[list] = None
-    logit_bias: Optional[dict] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    response_format: Optional[dict] = None
+    frequency_penalty: int | None = None
+    function_call: str | dict | None = None
+    functions: list | None = None
+    logit_bias: dict | None = None
+    max_tokens: int | None = None
+    n: int | None = None
+    presence_penalty: int | None = None
+    stop: str | list | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    response_format: dict | None = None
 
     def __init__(
         self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        response_format: Optional[dict] = None,
+        frequency_penalty: int | None = None,
+        function_call: str | dict | None = None,
+        functions: list | None = None,
+        logit_bias: dict | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: int | None = None,
+        stop: str | list | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        response_format: dict | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -96,13 +94,10 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             if (
                 thinking_value is not None
                 and isinstance(thinking_value, dict)
-                and thinking_value.get("type", None)
-                in ["enabled", "disabled", "auto"]  # legal values, see docs
+                and thinking_value.get("type", None) in ["enabled", "disabled", "auto"]  # legal values, see docs
             ):
                 # Add thinking parameter to extra_body for all legal cases
-                optional_params.setdefault("extra_body", {})[
-                    "thinking"
-                ] = thinking_value
+                optional_params.setdefault("extra_body", {})["thinking"] = thinking_value
             else:
                 # Skip adding thinking parameter when it's not set or has invalid value
                 pass

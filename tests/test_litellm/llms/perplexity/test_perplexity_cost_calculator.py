@@ -1,7 +1,7 @@
 """
 Test file for Perplexity cost calculator functionality.
 
-Tests the cost calculation for Perplexity models including citation tokens, 
+Tests the cost calculation for Perplexity models including citation tokens,
 search queries, and reasoning tokens.
 """
 
@@ -9,7 +9,7 @@ import json
 import math
 import os
 import sys
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -21,7 +21,11 @@ from litellm.cost_calculator import completion_cost, cost_per_token
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
-from litellm.types.utils import Usage, PromptTokensDetailsWrapper
+from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
+    Usage,
+    PromptTokensDetailsWrapper,
+)
 from litellm.utils import get_model_info
 
 
@@ -116,10 +120,10 @@ class TestPerplexityCostCalculator:
         # Expected costs:
         # Input: 100 tokens * $2e-6 = $0.0002
         # Output: 50 tokens * $8e-6 = $0.0004
-        # Search: 3 queries * ($0.005 / 1000) = $0.000015
-        # Total completion cost: $0.000415
+        # Search: 3 queries * $0.005 per request = $0.015
+        # Total completion cost: $0.0154
         expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = (50 * 8e-6) + (3 / 1000 * 0.005)
+        expected_completion_cost = (50 * 8e-6) + (3 * 0.005)
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
@@ -135,13 +139,14 @@ class TestPerplexityCostCalculator:
             model="sonar-deep-research", usage=usage
         )
 
-        # Expected costs:
-        # Input: 100 tokens * $2e-6 = $0.0002
-        # Output: 50 tokens * $8e-6 = $0.0004
-        # Reasoning: 20 tokens * $3e-6 = $0.00006
-        # Total completion cost: $0.00046
+        # `completion_tokens` includes `reasoning_tokens` per the OpenAI/Perplexity
+        # convention codified in PR #18607. Non-reasoning portion = 50 - 20 = 30.
+        # Input:        100 tokens         * $2e-6 = $0.0002
+        # Output (text): 30 tokens         * $8e-6 = $0.00024
+        # Reasoning:    20 tokens          * $3e-6 = $0.00006
+        # Total completion cost                    = $0.0003
         expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = (50 * 8e-6) + (20 * 3e-6)
+        expected_completion_cost = ((50 - 20) * 8e-6) + (20 * 3e-6)
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
@@ -159,13 +164,10 @@ class TestPerplexityCostCalculator:
             model="sonar-deep-research", usage=usage
         )
 
-        # Expected costs:
-        # Input: 100 tokens * $2e-6 = $0.0002
-        # Output: 50 tokens * $8e-6 = $0.0004
-        # Reasoning: 20 tokens * $3e-6 = $0.00006
-        # Total completion cost: $0.00046
+        # Same convention as the direct-attribute case above; reasoning is a subset of
+        # completion_tokens, so non-reasoning portion = 50 - 20 = 30.
         expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = (50 * 8e-6) + (20 * 3e-6)
+        expected_completion_cost = ((50 - 20) * 8e-6) + (20 * 3e-6)
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
@@ -187,16 +189,16 @@ class TestPerplexityCostCalculator:
             model="sonar-deep-research", usage=usage
         )
 
-        # Expected costs:
-        # Input: 100 tokens * $2e-6 = $0.0002
-        # Citation: 30 tokens * $2e-6 = $0.00006
-        # Total prompt cost: $0.00026
-        # Output: 50 tokens * $8e-6 = $0.0004
-        # Reasoning: 15 tokens * $3e-6 = $0.000045
-        # Search: 2 queries * ($0.005 / 1000) = $0.00001
-        # Total completion cost: $0.000455
+        # Expected costs (reasoning is a subset of completion_tokens):
+        # Input:         100 tokens        * $2e-6 = $0.0002
+        # Citation:       30 tokens        * $2e-6 = $0.00006
+        # Total prompt cost                        = $0.00026
+        # Output (text): (50 - 15) tokens  * $8e-6 = $0.00028
+        # Reasoning:      15 tokens        * $3e-6 = $0.000045
+        # Search:          2 queries * $0.005 per request = $0.01
+        # Total completion cost                    = $0.010325
         expected_prompt_cost = (100 * 2e-6) + (30 * 2e-6)
-        expected_completion_cost = (50 * 8e-6) + (15 * 3e-6) + (2 / 1000 * 0.005)
+        expected_completion_cost = ((50 - 15) * 8e-6) + (15 * 3e-6) + (2 * 0.005)
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
@@ -306,11 +308,11 @@ class TestPerplexityCostCalculator:
             completion_response=response, custom_llm_provider="perplexity"
         )
 
-        # Calculate expected total cost
+        # Calculate expected total cost (reasoning is a subset of completion_tokens)
         expected_prompt_cost = (100 * 2e-6) + (15 * 2e-6)  # Input + citation
         expected_completion_cost = (
-            (50 * 8e-6) + (10 * 3e-6) + (1 / 1000 * 0.005)
-        )  # Output + reasoning + search
+            ((50 - 10) * 8e-6) + (10 * 3e-6) + (1 * 0.005)
+        )  # Output (text) + reasoning + search
         expected_total = expected_prompt_cost + expected_completion_cost
 
         assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
@@ -353,10 +355,13 @@ class TestPerplexityCostCalculator:
             model="sonar-deep-research", usage=usage
         )
 
-        # Calculate expected costs
+        # Calculate expected costs. `completion_tokens` includes `reasoning_tokens`,
+        # so non-reasoning portion = 50 - reasoning_tokens.
         expected_prompt_cost = (100 * 2e-6) + (citation_tokens * 2e-6)
         expected_completion_cost = (
-            (50 * 8e-6) + (reasoning_tokens * 3e-6) + (search_queries / 1000 * 0.005)
+            ((50 - reasoning_tokens) * 8e-6)
+            + (reasoning_tokens * 3e-6)
+            + (search_queries * 0.005)
         )
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
@@ -413,3 +418,36 @@ class TestPerplexityCostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion, rel_tol=1e-6)
+
+    def test_reasoning_tokens_not_double_billed(self):
+        """
+        Regression: `completion_tokens` includes `reasoning_tokens` per the
+        OpenAI/Perplexity usage convention (codified for the central path in PR #18607).
+        When `output_cost_per_reasoning_token` is configured the manual fallback must
+        subtract reasoning from completion before applying the output rate so the
+        reasoning tokens are not billed at BOTH the output rate and the reasoning rate.
+
+        Uses the exact usage shape produced by the live response fixture in
+        `tests/llm_translation/test_perplexity_reasoning.py`.
+        """
+        usage = Usage(
+            prompt_tokens=9,
+            completion_tokens=20,
+            total_tokens=29,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=15
+            ),
+        )
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model="sonar-deep-research", usage=usage
+        )
+
+        # sonar-deep-research rates: input 2e-6, output 8e-6, reasoning 3e-6.
+        # Non-reasoning portion of the 20 completion tokens = 20 - 15 = 5.
+        # Pre-fix this asserted 20 * 8e-6 + 15 * 3e-6 = 2.05e-4 (a 2.16x overcharge).
+        expected_prompt = 9 * 2e-6
+        expected_completion = (20 - 15) * 8e-6 + 15 * 3e-6
+
+        assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-9)
+        assert math.isclose(completion_cost, expected_completion, rel_tol=1e-9)

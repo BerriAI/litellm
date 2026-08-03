@@ -697,6 +697,336 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_uses_loaded_deployment_team_id():
+    """
+    /health/test_connection must authorize using the team_id of the
+    deployment it actually loaded (by model_info.id), not the team_id
+    supplied in the request body. Requesting team A's deployment while
+    authenticated as an admin of team B must be denied.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    mock_request = MagicMock()
+
+    requester_team_id = "team-b"
+    deployment_owner_team_id = "team-a"
+    deployment_id = "team-a-deployment-id"
+
+    requester_user_api_key_dict = UserAPIKeyAuth(
+        token="requester-token",
+        user_id="team-b-admin-user",
+        team_id=requester_team_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_prisma_client = MagicMock()
+
+    other_team_deployment = Deployment(
+        model_name="team-a-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o",
+            api_base="https://team-a-api.invalid/v1",
+            api_key="TEAM-A-API-KEY",
+        ),
+        model_info=ModelInfo(id=deployment_id, team_id=deployment_owner_team_id),
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = other_team_deployment
+
+    async def fake_find_unique(*, where):
+        team_id = where["team_id"]
+        if team_id == requester_team_id:
+            return SimpleNamespace(
+                model_dump=lambda: LiteLLM_TeamTable(
+                    team_id=requester_team_id,
+                    members_with_roles=[
+                        {
+                            "user_id": "team-b-admin-user",
+                            "role": "admin",
+                        }
+                    ],
+                ).model_dump()
+            )
+        if team_id == deployment_owner_team_id:
+            return SimpleNamespace(
+                model_dump=lambda: LiteLLM_TeamTable(
+                    team_id=deployment_owner_team_id,
+                    members_with_roles=[],
+                ).model_dump()
+            )
+        return None
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            ModelManagementAuthChecks,
+            "can_user_make_model_call",
+            wraps=ModelManagementAuthChecks.can_user_make_model_call,
+        ) as spy_auth_check,
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
+        ) as MockTeamRepo,
+    ):
+        mock_team_repo_instance = MagicMock()
+        mock_team_repo_instance.table.find_unique = AsyncMock(
+            side_effect=fake_find_unique
+        )
+        MockTeamRepo.return_value = mock_team_repo_instance
+
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=mock_request,
+                mode="chat",
+                litellm_params={
+                    "model": "openai/gpt-4o",
+                    "api_base": "https://swapped-base.invalid/v1",
+                },
+                model_info={
+                    "id": deployment_id,
+                    "team_id": requester_team_id,
+                },
+                user_api_key_dict=requester_user_api_key_dict,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert spy_auth_check.called
+        passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
+        assert passed_model_params.model_info.team_id == deployment_owner_team_id, (
+            "Auth check must run against the loaded deployment's team_id "
+            f"({deployment_owner_team_id!r}); got "
+            f"{passed_model_params.model_info.team_id!r}."
+        )
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_name_fallback():
+    """
+    Companion to the id-lookup case: when the caller provides only a model
+    name (no `model_info.id`) and that name resolves via the router's
+    `model_name` fallback to a deployment owned by a different team, the
+    auth check must still run against the loaded deployment's `team_id`,
+    not the caller-supplied one in the request body.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+
+    mock_request = MagicMock()
+
+    requester_team_id = "team-b-2"
+    deployment_owner_team_id = "team-a-2"
+
+    requester_user_api_key_dict = UserAPIKeyAuth(
+        token="requester-token-2",
+        user_id="team-b-admin-user-2",
+        team_id=requester_team_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_prisma_client = MagicMock()
+
+    other_team_deployment_dict = {
+        "model_name": "shared-model-name",
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "api_base": "https://team-a-api-2.invalid/v1",
+            "api_key": "TEAM-A-API-KEY-2",
+        },
+        "model_info": {
+            "id": "team-a-deployment-id-2",
+            "team_id": deployment_owner_team_id,
+        },
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_model_list.return_value = [other_team_deployment_dict]
+
+    async def fake_find_unique(*, where):
+        return SimpleNamespace(
+            model_dump=lambda: LiteLLM_TeamTable(
+                team_id=where["team_id"],
+                members_with_roles=(
+                    [{"user_id": "team-b-admin-user-2", "role": "admin"}]
+                    if where["team_id"] == requester_team_id
+                    else []
+                ),
+            ).model_dump()
+        )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            ModelManagementAuthChecks,
+            "can_user_make_model_call",
+            wraps=ModelManagementAuthChecks.can_user_make_model_call,
+        ) as spy_auth_check,
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
+        ) as MockTeamRepo,
+    ):
+        mock_team_repo_instance = MagicMock()
+        mock_team_repo_instance.table.find_unique = AsyncMock(
+            side_effect=fake_find_unique
+        )
+        MockTeamRepo.return_value = mock_team_repo_instance
+
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=mock_request,
+                mode="chat",
+                litellm_params={
+                    "model": "shared-model-name",
+                    "api_base": "https://swapped-base-2.invalid/v1",
+                },
+                model_info={"team_id": requester_team_id},
+                user_api_key_dict=requester_user_api_key_dict,
+            )
+
+        assert exc_info.value.status_code == 403
+
+        passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
+        assert passed_model_params.model_info.team_id == deployment_owner_team_id
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_authorized_team_admin_passes_real_auth():
+    """
+    Positive-path companion to the deny tests above. When the caller is a
+    genuine admin of the team that owns the loaded deployment, the real
+    (unmocked) auth check must pass and the endpoint must reach the outbound
+    health probe. Guards against a regression that swaps the auth `team_id`
+    for something deny-all on the legit path.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    mock_request = MagicMock()
+
+    owner_team_id = "team-owner"
+    owner_admin_user_id = "team-owner-admin"
+    owned_deployment_id = "owned-deployment-id"
+
+    owner_admin_api_key_dict = UserAPIKeyAuth(
+        token="owner-admin-token",
+        user_id=owner_admin_user_id,
+        team_id=owner_team_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_prisma_client = MagicMock()
+
+    owned_deployment = Deployment(
+        model_name="owner-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_base="https://owner-real-api.invalid/v1",
+            api_key="owner-team-api-key",
+        ),
+        model_info=ModelInfo(id=owned_deployment_id, team_id=owner_team_id),
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = owned_deployment
+
+    async def fake_find_unique(*, where):
+        if where["team_id"] == owner_team_id:
+            return SimpleNamespace(
+                model_dump=lambda: LiteLLM_TeamTable(
+                    team_id=owner_team_id,
+                    members_with_roles=[
+                        {"user_id": owner_admin_user_id, "role": "admin"}
+                    ],
+                ).model_dump()
+            )
+        return None
+
+    health_result = {"status": "healthy", "response_time_ms": 50}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            ModelManagementAuthChecks,
+            "can_user_make_model_call",
+            wraps=ModelManagementAuthChecks.can_user_make_model_call,
+        ) as spy_auth_check,
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
+        ) as MockTeamRepo,
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            AsyncMock(return_value=health_result),
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            AsyncMock(return_value=health_result),
+        ),
+    ):
+        mock_team_repo_instance = MagicMock()
+        mock_team_repo_instance.table.find_unique = AsyncMock(
+            side_effect=fake_find_unique
+        )
+        MockTeamRepo.return_value = mock_team_repo_instance
+
+        result = await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "openai/gpt-4o-mini"},
+            model_info={"id": owned_deployment_id, "team_id": owner_team_id},
+            user_api_key_dict=owner_admin_api_key_dict,
+        )
+
+        assert result["status"] == "success"
+        passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
+        assert passed_model_params.model_info.team_id == owner_team_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,error_message",
+    [
+        ("healthy", ""),
+        ("unhealthy", "Galileo authentication failed"),
+    ],
+)
+async def test_health_services_endpoint_galileo(status, error_message):
+    with patch("litellm.integrations.galileo.GalileoObserve") as MockGalileoObserve:
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(
+            return_value={"status": status, "error_message": error_message}
+        )
+        MockGalileoObserve.return_value = mock_instance
+
+        result = await health_services_endpoint(service="galileo")
+
+        if status == "healthy":
+            assert result["status"] == "healthy"
+            assert result["message"] == "Galileo is healthy"
+        else:
+            assert result["status"] == "unhealthy"
+            assert result["message"] == error_message
+        mock_instance.async_health_check.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service
@@ -727,6 +1057,85 @@ async def test_health_services_endpoint_rejects_unknown_service():
 
     with pytest.raises(ProxyException):
         await health_services_endpoint(service="totally_unknown_service_xyz")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [
+        None,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ],
+)
+async def test_health_services_endpoint_newrelic_blocks_non_admin(role):
+    """
+    /health/services?service=newrelic emits a real LiteLLMConnectionTest event
+    to the configured New Relic account. Only proxy admins (full or view-only)
+    should be able to trigger it; every other caller must be rejected before
+    the external event is recorded.
+    """
+    from litellm.proxy._types import ProxyException
+
+    user_api_key_dict = UserAPIKeyAuth(
+        token="non-admin-token",
+        user_id="non-admin-user",
+        user_role=role,
+    )
+
+    with patch(
+        "litellm.integrations.newrelic.newrelic.NewRelicLogger"
+    ) as MockNewRelicLogger:
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(
+            return_value={"status": "healthy", "error_message": ""}
+        )
+        MockNewRelicLogger.return_value = mock_instance
+
+        with pytest.raises(ProxyException) as exc_info:
+            await health_services_endpoint(
+                user_api_key_dict=user_api_key_dict,
+                service="newrelic",
+            )
+
+        assert str(exc_info.value.code) == "403"
+        mock_instance.async_health_check.assert_not_awaited()
+        MockNewRelicLogger.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admin_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+)
+async def test_health_services_endpoint_newrelic_allows_proxy_admin(admin_role):
+    """
+    Proxy admins (full and view-only) can trigger the New Relic test event.
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        token="admin-token",
+        user_id="admin-user",
+        user_role=admin_role,
+    )
+
+    with patch(
+        "litellm.integrations.newrelic.newrelic.NewRelicLogger"
+    ) as MockNewRelicLogger:
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(
+            return_value={"status": "healthy", "error_message": ""}
+        )
+        MockNewRelicLogger.return_value = mock_instance
+
+        result = await health_services_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            service="newrelic",
+        )
+
+        assert result["status"] == "healthy"
+        mock_instance.async_health_check.assert_awaited_once()
 
 
 @pytest.fixture(scope="function")
@@ -1113,6 +1522,138 @@ async def test_health_endpoint_filters_model_list_by_user_access():
     assert returned_names == {
         "model-a"
     }, f"health_endpoint did not scope model_list to caller access: {returned_names}"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_full_model_list_for_all_proxy_models():
+    """
+    A key granted all model permissions carries the literal
+    "all-proxy-models" entry in user_api_key_dict.models. It matches no real
+    model_name, so the access filter must be skipped entirely; otherwise the
+    model list filters down to nothing and /health reports 0/0 counts.
+    """
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=[SpecialModelNames.all_proxy_models.value],
+    )
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [],
+            "healthy_count": 0,
+            "unhealthy_count": 0,
+        }
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", False),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", {}),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        from fastapi import Response
+
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+
+    returned_names = {m["model_name"] for m in captured["model_list"]}
+    assert returned_names == {
+        "model-a",
+        "model-b",
+    }, f"all-proxy-models key should health-check every model: {returned_names}"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_resolves_all_team_models_to_team_allowlist():
+    """
+    A key granted "all-team-models" carries the literal sentinel in
+    user_api_key_dict.models, which matches no real model_name. With a
+    team_id the sentinel must resolve to the team's allowlist (same
+    semantics as get_key_models); otherwise the filter would zero out the
+    model list just like the all-proxy-models case.
+    """
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=[SpecialModelNames.all_team_models.value],
+        team_id="team-1",
+        team_models=["model-b"],
+    )
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [],
+            "healthy_count": 0,
+            "unhealthy_count": 0,
+        }
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", False),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", {}),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        from fastapi import Response
+
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+
+    returned_names = {m["model_name"] for m in captured["model_list"]}
+    assert returned_names == {
+        "model-b"
+    }, f"all-team-models key should health-check the team's models: {returned_names}"
 
 
 @pytest.mark.asyncio

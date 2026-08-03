@@ -24,11 +24,13 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     get_vertex_base_url,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
+    mistral_proxy_route,
     openai_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -1092,9 +1094,9 @@ class TestVertexAIPassThroughHandler:
 
         assert result is not None
         assert result["result"] is not None
-        assert result["kwargs"].get("custom_llm_provider") == "gemini", (
-            "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
-        )
+        assert (
+            result["kwargs"].get("custom_llm_provider") == "gemini"
+        ), "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
 
@@ -1259,6 +1261,78 @@ async def test_is_streaming_request_fn():
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.form = AsyncMock(return_value={"stream": "true"})
     assert await is_streaming_request_fn(mock_request) is True
+
+
+@pytest.mark.asyncio
+async def test_mistral_passthrough_accepts_multipart_without_json_parsing():
+    boundary = "----litellm-test-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="purpose"\r\n\r\n'
+        "ocr\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="document.pdf"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+        "%PDF-1.4 test\r\n"
+        f"--{boundary}--\r\n"
+    ).encode("utf-8")
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": body,
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mistral/v1/files",
+            "headers": [
+                (
+                    b"content-type",
+                    f"multipart/form-data; boundary={boundary}".encode("utf-8"),
+                )
+            ],
+            "query_string": b"",
+        },
+        receive=receive,
+    )
+
+    captured_kwargs = {}
+
+    async def fake_endpoint(request, fastapi_response, user_api_key_dict):
+        return {"ok": True}
+
+    def fake_create_pass_through_route(**kwargs):
+        captured_kwargs.update(kwargs)
+        return fake_endpoint
+
+    user_api_key_dict = UserAPIKeyAuth(token="test-key")
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="mistral-test-key",
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            side_effect=fake_create_pass_through_route,
+        ),
+    ):
+        response = await mistral_proxy_route(
+            endpoint="v1/files",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert response == {"ok": True}
+    assert captured_kwargs["is_streaming_request"] is False
+    assert captured_kwargs["custom_headers"] == {
+        "Authorization": "Bearer mistral-test-key"
+    }
 
 
 class TestBedrockLLMProxyRoute:
@@ -1600,6 +1674,56 @@ class TestBedrockLLMProxyRoute:
                 # and they're available in the router's deployment
                 assert mock_process.called
 
+    @pytest.mark.asyncio
+    async def test_key_guardrail_blocks_bedrock_converse_passthrough(self):
+        """
+        Regression: key/team guardrails must fire for /bedrock/model/.../converse requests.
+        Before the fix, CallTypes.allm_passthrough_route was not in the guardrail
+        translation registry, so UnifiedLLMGuardrails silently skipped all guardrails.
+        """
+        from fastapi import HTTPException
+
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.llms.pass_through.guardrail_translation import (
+            guardrail_translation_mappings,
+        )
+        from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+
+        assert CallTypes.allm_passthrough_route in guardrail_translation_mappings, (
+            "allm_passthrough_route missing from guardrail_translation_mappings; "
+            "this is the regression that lets guardrails bypass bedrock passthrough"
+        )
+
+        class _BlockingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: str,
+                logging_obj=None,
+            ) -> GenericGuardrailAPIInputs:
+                raise HTTPException(status_code=400, detail="Blocked by guardrail")
+
+        handler_cls = guardrail_translation_mappings[CallTypes.allm_passthrough_route]
+        handler = handler_cls()
+
+        guardrail = _BlockingGuardrail(guardrail_name="block-all")
+
+        data = {
+            "custom_llm_provider": "bedrock",
+            "endpoint": "model/anthropic.claude-3-sonnet-20240229-v1:0/converse",
+            "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+            "data": {
+                "messages": [{"role": "user", "content": [{"text": "Hello"}]}],
+            },
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert exc_info.value.status_code == 400
+        assert "Blocked by guardrail" in str(exc_info.value.detail)
+
 
 class TestLLMPassthroughFactoryProxyRoute:
     @pytest.mark.asyncio
@@ -1794,7 +1918,8 @@ class TestForwardHeaders:
         ):
             # Setup mock httpx client
             mock_client = MagicMock()
-            mock_client.request = AsyncMock(return_value=mock_httpx_response)
+            mock_client.build_request = MagicMock(return_value=MagicMock())
+            mock_client.send = AsyncMock(return_value=mock_httpx_response)
             mock_client_obj = MagicMock()
             mock_client_obj.client = mock_client
             mock_get_client.return_value = mock_client_obj
@@ -1803,6 +1928,9 @@ class TestForwardHeaders:
             mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
             mock_logging_obj.post_call_success_hook = AsyncMock()
             mock_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(
+                return_value={}
+            )
 
             # Call pass_through_request with forward_headers=True
             result = await pass_through_request(
@@ -1815,10 +1943,10 @@ class TestForwardHeaders:
             )
 
             # Verify the httpx client was called
-            assert mock_client.request.called
+            assert mock_client.send.called
 
             # Get the headers that were sent to the target
-            call_args = mock_client.request.call_args
+            call_args = mock_client.build_request.call_args
             sent_headers = call_args[1]["headers"]
 
             # Verify user headers were forwarded (except content-length and host)
@@ -1892,7 +2020,8 @@ class TestForwardHeaders:
         ):
             # Setup mock httpx client
             mock_client = MagicMock()
-            mock_client.request = AsyncMock(return_value=mock_httpx_response)
+            mock_client.build_request = MagicMock(return_value=MagicMock())
+            mock_client.send = AsyncMock(return_value=mock_httpx_response)
             mock_client_obj = MagicMock()
             mock_client_obj.client = mock_client
             mock_get_client.return_value = mock_client_obj
@@ -1901,6 +2030,9 @@ class TestForwardHeaders:
             mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
             mock_logging_obj.post_call_success_hook = AsyncMock()
             mock_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(
+                return_value={}
+            )
 
             # Call pass_through_request with forward_headers=False (default)
             result = await pass_through_request(
@@ -1913,10 +2045,10 @@ class TestForwardHeaders:
             )
 
             # Verify the httpx client was called
-            assert mock_client.request.called
+            assert mock_client.send.called
 
             # Get the headers that were sent to the target
-            call_args = mock_client.request.call_args
+            call_args = mock_client.build_request.call_args
             sent_headers = call_args[1]["headers"]
 
             # Verify only custom headers were sent
@@ -2890,3 +3022,172 @@ class TestCursorProxyRoute:
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
             assert result["id"] == "bc_abc123"
             assert result["status"] == "CREATING"
+
+
+class TestVertexRawPredictStreamingClassification:
+    """
+    Regression coverage for LIT-4761.
+
+    `_base_vertex_proxy_route` classified any target URL containing "stream" as a
+    streaming request. `:streamRawPredict` carries that substring, so a unary
+    Anthropic-on-Vertex call (no `stream` field in the body) was sent with
+    `?alt=sse` and logged through the streaming chunk collector, which parses
+    Anthropic SSE deltas and finds no usage in a complete `"type": "message"`
+    body; the spend log recorded 0 tokens and $0 cost.
+
+    Streaming for the rawPredict family is decided by the request body, per the
+    Anthropic Messages contract. The Gemini generateContent family stays
+    URL-signalled because the Gemini REST body has no `stream` field.
+    """
+
+    RAW_PREDICT_ENDPOINT = (
+        "v1/projects/test-project/locations/us-east5/publishers/anthropic/models/"
+        "claude-sonnet-4-6:streamRawPredict"
+    )
+    GENERATE_CONTENT_ENDPOINT = (
+        "v1/projects/test-project/locations/us-east5/publishers/google/models/"
+        "gemini-2.5-flash:streamGenerateContent"
+    )
+
+    async def _capture_passthrough_kwargs(self, endpoint: str, body: object) -> dict:
+        raw_body = json.dumps(body).encode("utf-8")
+
+        async def receive():
+            return {"type": "http.request", "body": raw_body, "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/vertex_ai/{endpoint}",
+                "headers": [(b"content-type", b"application/json")],
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+
+        captured: dict = {}
+
+        def fake_create_pass_through_route(**kwargs):
+            captured.update(kwargs)
+            return AsyncMock(return_value={"status": "success"})
+
+        mock_credentials = Mock()
+        mock_credentials.token = "test-token"
+
+        base_url = "https://us-east5-aiplatform.googleapis.com/"
+        mock_handler = Mock()
+        mock_handler.get_default_base_target_url.return_value = base_url
+        mock_handler.update_base_target_url_with_credential_location = Mock(return_value=base_url)
+
+        module = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        with (
+            mock.patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
+                return_value=(mock_credentials, "test-project"),
+            ),
+            mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
+            mock.patch(f"{module}.get_litellm_virtual_key", return_value="Bearer test-key"),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value={"api_key": "test-key"})),
+            mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
+        ):
+            await vertex_proxy_route(
+                endpoint=endpoint,
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(token="test-key"),
+            )
+
+        assert captured, "create_pass_through_route was never called"
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_without_stream_field_is_not_streaming(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body={
+                "anthropic_version": "vertex-2023-10-16",
+                "messages": [{"role": "user", "content": "Explain MLOps"}],
+                "max_tokens": 5000,
+            },
+        )
+
+        assert captured["is_streaming_request"] is False
+        assert "alt=sse" not in captured["target"]
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_with_stream_false_is_not_streaming(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body={
+                "anthropic_version": "vertex-2023-10-16",
+                "stream": False,
+                "messages": [{"role": "user", "content": "Explain MLOps"}],
+                "max_tokens": 5000,
+            },
+        )
+
+        assert captured["is_streaming_request"] is False
+        assert "alt=sse" not in captured["target"]
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_with_stream_true_still_streams(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body={
+                "anthropic_version": "vertex-2023-10-16",
+                "stream": True,
+                "messages": [{"role": "user", "content": "Explain MLOps"}],
+                "max_tokens": 5000,
+            },
+        )
+
+        assert captured["is_streaming_request"] is True
+        assert captured["target"].endswith("?alt=sse")
+
+    @pytest.mark.asyncio
+    async def test_gemini_stream_generate_content_stays_url_signalled(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.GENERATE_CONTENT_ENDPOINT,
+            body={"contents": [{"role": "user", "parts": [{"text": "Explain MLOps"}]}]},
+        )
+
+        assert captured["is_streaming_request"] is True
+        assert captured["target"].endswith("?alt=sse")
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_with_non_object_body_is_not_streaming(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body=[{"role": "user", "content": "Explain MLOps"}],
+        )
+
+        assert captured["is_streaming_request"] is False
+        assert "alt=sse" not in captured["target"]
+
+
+@pytest.mark.parametrize(
+    "request_body, expected",
+    [
+        ({"stream": True}, True),
+        ({"stream": "true"}, True),
+        ({"stream": False}, False),
+        ({}, False),
+        ([{"role": "user"}], False),
+        ([], False),
+        ("stream", False),
+        (7, False),
+        (None, False),
+    ],
+)
+def test_is_passthrough_request_streaming_tolerates_non_object_bodies(request_body, expected):
+    """
+    A JSON request body is not required to be an object. Every passthrough
+    streaming decision funnels through this predicate, so a list or scalar body
+    must answer False instead of raising AttributeError.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        is_passthrough_request_streaming,
+    )
+
+    assert is_passthrough_request_streaming(request_body) is expected

@@ -4,7 +4,7 @@ BitBucket API client for fetching .prompt files from BitBucket repositories.
 
 import base64
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -12,15 +12,11 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 def _sanitize_file_path(file_path: str) -> str:
     """Reject path traversal and URL-encode each path segment."""
     if "#" in file_path or "?" in file_path:
-        raise ValueError(
-            f"Invalid file path {file_path!r}: contains URL special characters"
-        )
+        raise ValueError(f"Invalid file path {file_path!r}: contains URL special characters")
     parts = file_path.split("/")
     for part in parts:
         if part == "..":
-            raise ValueError(
-                f"Invalid file path {file_path!r}: path traversal detected"
-            )
+            raise ValueError(f"Invalid file path {file_path!r}: path traversal detected")
     return "/".join(urllib.parse.quote(part, safe="") for part in parts)
 
 
@@ -35,7 +31,7 @@ class BitBucketClient:
     - Branch-specific file fetching
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize the BitBucket client.
 
@@ -78,7 +74,7 @@ class BitBucketClient:
         # Initialize HTTPHandler
         self.http_handler = HTTPHandler()
 
-    def get_file_content(self, file_path: str) -> Optional[str]:
+    def get_file_content(self, file_path: str) -> str | None:
         """
         Fetch the content of a file from the BitBucket repository.
 
@@ -115,17 +111,13 @@ class BitBucketClient:
                         f"Access denied to file '{file_path}'. Check your BitBucket permissions for workspace '{self.workspace}' and repository '{self.repository}'."
                     )
                 elif e.response.status_code == 401:
-                    raise Exception(
-                        "Authentication failed. Check your BitBucket access token and permissions."
-                    )
+                    raise Exception("Authentication failed. Check your BitBucket access token and permissions.")
                 else:
                     raise Exception(f"Failed to fetch file '{file_path}': {e}")
             else:
                 raise Exception(f"Error fetching file '{file_path}': {e}")
 
-    def list_files(
-        self, directory_path: str = "", file_extension: str = ".prompt"
-    ) -> List[str]:
+    def list_files(self, directory_path: str = "", file_extension: str = ".prompt") -> list[str]:
         """
         List files in a directory with a specific extension.
 
@@ -164,15 +156,13 @@ class BitBucketClient:
                         f"Access denied to directory '{directory_path}'. Check your BitBucket permissions for workspace '{self.workspace}' and repository '{self.repository}'."
                     )
                 elif e.response.status_code == 401:
-                    raise Exception(
-                        "Authentication failed. Check your BitBucket access token and permissions."
-                    )
+                    raise Exception("Authentication failed. Check your BitBucket access token and permissions.")
                 else:
                     raise Exception(f"Failed to list files in '{directory_path}': {e}")
             else:
                 raise Exception(f"Error listing files in '{directory_path}': {e}")
 
-    def get_repository_info(self) -> Dict[str, Any]:
+    def get_repository_info(self) -> dict[str, Any]:
         """
         Get information about the repository.
 
@@ -201,7 +191,7 @@ class BitBucketClient:
         except Exception:
             return False
 
-    def get_branches(self) -> List[Dict[str, Any]]:
+    def get_branches(self) -> list[dict[str, Any]]:
         """
         Get list of branches in the repository.
 
@@ -219,7 +209,7 @@ class BitBucketClient:
         except Exception as e:
             raise Exception(f"Failed to get branches: {e}")
 
-    def get_file_metadata(self, file_path: str) -> Optional[Dict[str, Any]]:
+    def get_file_metadata(self, file_path: str) -> dict[str, Any] | None:
         """
         Get metadata about a file (size, last modified, etc.).
 

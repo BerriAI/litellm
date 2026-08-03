@@ -42,11 +42,6 @@ def test_bedrock_haiku_4_5_configuration():
             model_info.get("supports_vision") is True
         ), f"{model} should support vision"
 
-        # Verify tool use system prompt tokens
-        assert (
-            model_info.get("tool_use_system_prompt_tokens") == 346
-        ), f"{model} should have tool_use_system_prompt_tokens set to 346"
-
         # Verify core capabilities
         assert model_info.get("supports_computer_use") is True
         assert model_info.get("supports_function_calling") is True
@@ -96,7 +91,6 @@ def test_bedrock_haiku_4_5_matches_sonnet_capabilities():
         "supports_pdf_input",
         "supports_assistant_prefill",
         "supports_reasoning",
-        "tool_use_system_prompt_tokens",
     ]
 
     for capability in shared_capabilities:

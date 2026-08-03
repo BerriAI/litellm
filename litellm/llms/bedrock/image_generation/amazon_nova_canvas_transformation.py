@@ -1,8 +1,9 @@
 import types
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from openai.types.image import Image
 
+from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.llms.bedrock import (
     AmazonNovaCanvasColorGuidedGenerationParams,
     AmazonNovaCanvasColorGuidedRequest,
@@ -14,7 +15,6 @@ from litellm.types.llms.bedrock import (
     AmazonNovaCanvasTextToImageRequest,
     AmazonNovaCanvasTextToImageResponse,
 )
-from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
 
@@ -43,12 +43,12 @@ class AmazonNovaCanvasConfig:
         }
 
     @classmethod
-    def get_supported_openai_params(cls, model: Optional[str] = None) -> List:
+    def get_supported_openai_params(cls, model: str | None = None) -> list:
         """ """
         return ["n", "size", "quality"]
 
     @classmethod
-    def _is_nova_model(cls, model: Optional[str] = None) -> bool:
+    def _is_nova_model(cls, model: str | None = None) -> bool:
         """
         Returns True if the model is a Nova Canvas model
 
@@ -60,9 +60,7 @@ class AmazonNovaCanvasConfig:
         return False
 
     @classmethod
-    def transform_request_body(
-        cls, text: str, optional_params: dict
-    ) -> AmazonNovaCanvasRequestBase:
+    def transform_request_body(cls, text: str, optional_params: dict) -> AmazonNovaCanvasRequestBase:
         """
         Transform the request body for Amazon Nova Canvas model
         """
@@ -75,9 +73,7 @@ class AmazonNovaCanvasConfig:
 
         image_generation_config = {**image_generation_config, **optional_params}
         if task_type == "TEXT_IMAGE":
-            text_to_image_params: Dict[str, Any] = image_generation_config.pop(
-                "textToImageParams", {}
-            )
+            text_to_image_params: dict[str, Any] = image_generation_config.pop("textToImageParams", {})
             text_to_image_params = {"text": text, **text_to_image_params}
             try:
                 text_to_image_params_typed = AmazonNovaCanvasTextToImageParams(
@@ -89,9 +85,7 @@ class AmazonNovaCanvasConfig:
                 )
 
             try:
-                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(
-                    **image_generation_config
-                )
+                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(**image_generation_config)
             except Exception as e:
                 raise ValueError(
                     f"Error transforming image generation config: {e}. Got params: {image_generation_config}, Expected params: {AmazonNovaCanvasImageGenerationConfig.__annotations__}"
@@ -103,8 +97,8 @@ class AmazonNovaCanvasConfig:
                 imageGenerationConfig=image_generation_config_typed,
             )
         if task_type == "COLOR_GUIDED_GENERATION":
-            color_guided_generation_params: Dict[str, Any] = (
-                image_generation_config.pop("colorGuidedGenerationParams", {})
+            color_guided_generation_params: dict[str, Any] = image_generation_config.pop(
+                "colorGuidedGenerationParams", {}
             )
             color_guided_generation_params = {
                 "text": text,
@@ -120,9 +114,7 @@ class AmazonNovaCanvasConfig:
                 )
 
             try:
-                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(
-                    **image_generation_config
-                )
+                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(**image_generation_config)
             except Exception as e:
                 raise ValueError(
                     f"Error transforming image generation config: {e}. Got params: {image_generation_config}, Expected params: {AmazonNovaCanvasImageGenerationConfig.__annotations__}"
@@ -134,9 +126,7 @@ class AmazonNovaCanvasConfig:
                 imageGenerationConfig=image_generation_config_typed,
             )
         if task_type == "INPAINTING":
-            inpainting_params: Dict[str, Any] = image_generation_config.pop(
-                "inpaintingParams", {}
-            )
+            inpainting_params: dict[str, Any] = image_generation_config.pop("inpaintingParams", {})
             inpainting_params = {"text": text, **inpainting_params}
             try:
                 inpainting_params_typed = AmazonNovaCanvasInpaintingParams(
@@ -148,9 +138,7 @@ class AmazonNovaCanvasConfig:
                 )
 
             try:
-                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(
-                    **image_generation_config
-                )
+                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(**image_generation_config)
             except Exception as e:
                 raise ValueError(
                     f"Error transforming image generation config: {e}. Got params: {image_generation_config}, Expected params: {AmazonNovaCanvasImageGenerationConfig.__annotations__}"
@@ -171,8 +159,9 @@ class AmazonNovaCanvasConfig:
         _size = non_default_params.get("size")
         if _size is not None:
             width, height = _size.split("x")
-            optional_params["width"], optional_params["height"] = int(width), int(
-                height
+            optional_params["width"], optional_params["height"] = (
+                int(width),
+                int(height),
             )
         if non_default_params.get("n") is not None:
             optional_params["numberOfImages"] = non_default_params.get("n")
@@ -192,7 +181,7 @@ class AmazonNovaCanvasConfig:
         """
 
         nova_response = AmazonNovaCanvasTextToImageResponse(**response_dict)
-        openai_images: List[Image] = []
+        openai_images: list[Image] = []
         for _img in nova_response.get("images", []):
             openai_images.append(Image(b64_json=_img))
 
@@ -204,8 +193,8 @@ class AmazonNovaCanvasConfig:
         cls,
         model: str,
         image_response: ImageResponse,
-        size: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        size: str | None = None,
+        optional_params: dict | None = None,
     ) -> float:
         get_model_info = get_cached_model_info()
         model_info = get_model_info(

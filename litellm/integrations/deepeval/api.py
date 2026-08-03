@@ -1,7 +1,9 @@
 # duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/confident/api.py
 import logging
-import httpx
 from enum import Enum
+
+import httpx
+
 from litellm._logging import verbose_logger
 
 DEEPEVAL_BASE_URL = "https://deepeval.confident-ai.com"
@@ -58,13 +60,9 @@ class Api:
         # using the global non-eu variable for base url
         self.base_api_url = base_url or API_BASE_URL
         self.sync_http_handler = HTTPHandler()
-        self.async_http_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
-    def _http_request(
-        self, method: str, url: str, headers=None, json=None, params=None
-    ):
+    def _http_request(self, method: str, url: str, headers=None, json=None, params=None):
         if method != "POST":
             raise Exception("Only POST requests are supported")
         try:
@@ -79,9 +77,7 @@ class Api:
         except Exception as e:
             raise e
 
-    def send_request(
-        self, method: HttpMethods, endpoint: Endpoints, body=None, params=None
-    ):
+    def send_request(self, method: HttpMethods, endpoint: Endpoints, body=None, params=None):
         url = f"{self.base_api_url}{endpoint.value}"
         res = self._http_request(
             method=method.value,
@@ -100,9 +96,7 @@ class Api:
             verbose_logger.debug(res.json())
             raise Exception(res.json().get("error", res.text))
 
-    async def a_send_request(
-        self, method: HttpMethods, endpoint: Endpoints, body=None, params=None
-    ):
+    async def a_send_request(self, method: HttpMethods, endpoint: Endpoints, body=None, params=None):
         if method != HttpMethods.POST:
             raise Exception("Only POST requests are supported")
 

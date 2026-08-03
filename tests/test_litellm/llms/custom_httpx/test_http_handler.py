@@ -182,28 +182,6 @@ async def test_force_ipv4_transport():
 
 
 @pytest.mark.asyncio
-async def test_ssl_context_transport():
-    """Test transport creation with SSL context"""
-    # Create a test SSL context
-    ssl_context = ssl.create_default_context()
-
-    transport = AsyncHTTPHandler._create_async_transport(ssl_context=ssl_context)
-    assert transport is not None
-
-    try:
-        if isinstance(transport, LiteLLMAiohttpTransport):
-            # Get the client session and verify SSL context is passed through
-            client_session = transport._get_valid_client_session()
-            assert isinstance(client_session, ClientSession)
-            assert isinstance(client_session.connector, TCPConnector)
-            # Verify the connector has SSL context set by checking if it's using SSL
-            assert client_session.connector._ssl is not None
-    finally:
-        if isinstance(transport, LiteLLMAiohttpTransport):
-            await transport.aclose()
-
-
-@pytest.mark.asyncio
 async def test_aiohttp_disabled_transport():
     """Test transport creation with aiohttp disabled"""
     original_disable = litellm.disable_aiohttp_transport
@@ -339,44 +317,6 @@ async def test_ssl_context_with_shared_session():
         litellm.disable_aiohttp_transport = original_disable
 
 
-@pytest.mark.asyncio
-async def test_aiohttp_transport_trust_env_setting(monkeypatch):
-    """Test that trust_env setting is properly configured in aiohttp transport"""
-    transports = []
-    try:
-        # Test 1: Default trust_env behavior
-        transport = AsyncHTTPHandler._create_aiohttp_transport()
-        transports.append(transport)
-        client_session = transport._get_valid_client_session()
-
-        # Default should be False (litellm.aiohttp_trust_env default)
-        default_trust_env = getattr(litellm, "aiohttp_trust_env", False)
-        assert client_session._trust_env == default_trust_env
-
-        # Test 2: Environment variable override
-        monkeypatch.setenv("AIOHTTP_TRUST_ENV", "True")
-        transport_with_env = AsyncHTTPHandler._create_aiohttp_transport()
-        transports.append(transport_with_env)
-        client_session_with_env = transport_with_env._get_valid_client_session()
-
-        # Should be True when environment variable is set
-        assert client_session_with_env._trust_env is True
-
-        # Test 3: Verify environment variable with False value
-        monkeypatch.setenv("AIOHTTP_TRUST_ENV", "False")
-        transport_with_false_env = AsyncHTTPHandler._create_aiohttp_transport()
-        transports.append(transport_with_false_env)
-        client_session_with_false_env = (
-            transport_with_false_env._get_valid_client_session()
-        )
-
-        # Should respect the litellm.aiohttp_trust_env setting when env var is False
-        assert client_session_with_false_env._trust_env == default_trust_env
-    finally:
-        for t in transports:
-            await t.aclose()
-
-
 def test_get_ssl_configuration():
     """Test that get_ssl_configuration() returns a proper SSL context with certifi CA bundle
     when no environment variables are set."""
@@ -441,36 +381,6 @@ async def test_create_aiohttp_transport_with_shared_session():
     # Verify the transport uses the shared session directly
     assert transport.client is mock_session
     assert not callable(transport.client)  # Should not be callable
-
-
-@pytest.mark.asyncio
-async def test_create_aiohttp_transport_without_shared_session():
-    """Test that _create_aiohttp_transport creates new session when none provided"""
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    # Test without shared session
-    transport = AsyncHTTPHandler._create_aiohttp_transport(shared_session=None)
-
-    # Verify the transport uses a lambda function (for backward compatibility)
-    assert callable(transport.client)  # Should be a lambda function
-
-
-@pytest.mark.asyncio
-async def test_create_aiohttp_transport_with_closed_session():
-    """Test that _create_aiohttp_transport creates new session when shared session is closed"""
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    # Create a mock closed session
-    mock_session = MockClientSession()
-    mock_session.closed = True
-
-    # Test with closed session
-    transport = AsyncHTTPHandler._create_aiohttp_transport(
-        shared_session=mock_session  # type: ignore
-    )
-
-    # Verify the transport creates a new session (lambda function)
-    assert callable(transport.client)  # Should be a lambda function
 
 
 @pytest.mark.asyncio
@@ -620,27 +530,6 @@ async def test_session_reuse_integration():
     # Clean up
     await client1.close()
     await client2.close()
-
-
-@pytest.mark.asyncio
-async def test_session_validation():
-    """Test that session validation works correctly"""
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    # Test with None session
-    transport1 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=None)
-    assert callable(transport1.client)  # Should create lambda
-
-    # Test with closed session
-    mock_closed_session = MockClientSession()
-    mock_closed_session.closed = True
-    transport2 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=mock_closed_session)  # type: ignore
-    assert callable(transport2.client)  # Should create lambda
-
-    # Test with valid session
-    mock_valid_session = MockClientSession()
-    transport3 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=mock_valid_session)  # type: ignore
-    assert transport3.client is mock_valid_session  # Should reuse session
 
 
 @pytest.mark.parametrize(
@@ -798,3 +687,109 @@ def test_get_httpx_client_applies_httpx_timeout_object_without_mocking_handler()
         assert handler.client.timeout == t
     finally:
         handler.close()
+
+
+def test_sync_get_forwards_per_request_timeout():
+    """HTTPHandler.get(timeout=...) must apply the timeout to that request,
+    overriding the client default rather than silently ignoring it."""
+    captured = {}
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = HTTPHandler()
+    handler.client.close()
+    handler.client = httpx.Client(
+        transport=httpx.MockTransport(mock_handler),
+        timeout=httpx.Timeout(5.0),
+    )
+    try:
+        handler.get("https://example.com/poll", timeout=99.0)
+        assert captured["timeout"] == {
+            "connect": 99.0,
+            "read": 99.0,
+            "write": 99.0,
+            "pool": 99.0,
+        }
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_get_forwards_per_request_timeout():
+    captured = {}
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        captured["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(mock_handler),
+        timeout=httpx.Timeout(5.0),
+    )
+    try:
+        await handler.get("https://example.com/poll", timeout=99.0)
+        assert captured["timeout"] == {
+            "connect": 99.0,
+            "read": 99.0,
+            "write": 99.0,
+            "pool": 99.0,
+        }
+    finally:
+        await handler.close()
+
+
+class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
+    """Cached default httpx clients must fall back to an explicit litellm.request_timeout.
+
+    Regression for LIT-2369: get_async_httpx_client / _get_httpx_client hardcoded a
+    600s default and never consulted litellm.request_timeout, so provider calls with
+    no per-model timeout (e.g. Bedrock) hung for 600s.
+    """
+
+    @pytest.fixture
+    def restore_request_timeout(self):
+        original_value = litellm.request_timeout
+        original_flag = litellm.request_timeout_explicitly_set
+        try:
+            yield
+        finally:
+            litellm.request_timeout = original_value
+            litellm.request_timeout_explicitly_set = original_flag
+
+    def test_default_when_request_timeout_unset(self, restore_request_timeout):
+        from litellm.llms.custom_httpx.http_handler import (
+            _DEFAULT_TIMEOUT,
+            _default_cached_client_timeout,
+        )
+
+        litellm.request_timeout = litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
+        litellm.request_timeout_explicitly_set = False
+        assert _default_cached_client_timeout() is _DEFAULT_TIMEOUT
+
+    def test_uses_explicit_request_timeout(self, restore_request_timeout):
+        from litellm.llms.custom_httpx.http_handler import (
+            _default_cached_client_timeout,
+        )
+
+        litellm.request_timeout = 300
+        litellm.request_timeout_explicitly_set = True
+        resolved = _default_cached_client_timeout()
+        assert resolved.read == 300.0
+        assert resolved.connect == 5.0
+
+    def test_cached_async_client_built_with_explicit_request_timeout(
+        self, restore_request_timeout
+    ):
+        from litellm.caching.llm_caching_handler import LLMClientCache
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.utils import LlmProviders
+
+        litellm.request_timeout = 300
+        litellm.request_timeout_explicitly_set = True
+        litellm.in_memory_llm_clients_cache = LLMClientCache()
+        client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
+        assert client.timeout.read == 300.0

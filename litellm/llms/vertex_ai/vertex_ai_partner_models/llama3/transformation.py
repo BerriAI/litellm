@@ -1,5 +1,6 @@
 import types
-from typing import Any, AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 import httpx
 
@@ -31,11 +32,11 @@ class VertexAILlama3Config(OpenAIGPTConfig):
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
-    max_tokens: Optional[int] = None
+    max_tokens: int | None = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -78,9 +79,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         drop_params: bool,
     ):
         if "max_completion_tokens" in non_default_params:
-            non_default_params["max_tokens"] = non_default_params.pop(
-                "max_completion_tokens"
-            )
+            non_default_params["max_tokens"] = non_default_params.pop("max_completion_tokens")
         return super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -90,9 +89,9 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         return VertexAILlama3StreamingHandler(
             streaming_response=streaming_response,
@@ -107,12 +106,12 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -128,9 +127,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise VertexAIError(
-                message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), raw_response.text
-                ),
+                message=f"Unable to get json response - {e}, Original Response: {raw_response.text}",
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
@@ -164,7 +161,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.sent_role = False
-        self._pending_chunk: Optional[ModelResponseStream] = None
+        self._pending_chunk: ModelResponseStream | None = None
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         result = super().chunk_parser(chunk)
@@ -202,9 +199,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
             elif delta.role is None:
                 delta.role = "assistant"
             # If the first chunk has empty content, ensure it's still emitted
-            if (
-                delta.content == "" or delta.content is None
-            ) and delta.provider_specific_fields is None:
+            if (delta.content == "" or delta.content is None) and delta.provider_specific_fields is None:
                 delta.provider_specific_fields = {}
             self.sent_role = True
         return result

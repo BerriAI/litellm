@@ -108,9 +108,9 @@ describe("useUpdateProject", () => {
     const { result } = renderHook(() => useUpdateProject(), {
       wrapper: makeWrapper(queryClient),
     });
-    await expect(
-      result.current.mutateAsync({ projectId: "proj-1", params: {} })
-    ).rejects.toThrow("Access token is required");
+    await expect(result.current.mutateAsync({ projectId: "proj-1", params: {} })).rejects.toThrow(
+      "Access token is required",
+    );
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });

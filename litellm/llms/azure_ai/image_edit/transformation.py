@@ -1,5 +1,3 @@
-from typing import Optional
-
 import httpx
 
 import litellm
@@ -24,9 +22,9 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure AI Foundry environment and set up authentication
@@ -49,7 +47,7 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -73,11 +71,7 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
                 "Azure AI API base is required. Set AZURE_AI_API_BASE environment variable or pass api_base parameter."
             )
 
-        api_version = (
-            litellm_params.get("api_version")
-            or litellm.api_version
-            or get_secret_str("AZURE_AI_API_VERSION")
-        )
+        api_version = litellm_params.get("api_version") or litellm.api_version or get_secret_str("AZURE_AI_API_VERSION")
         if api_version is None:
             # API version is mandatory for Azure AI Foundry
             raise ValueError(

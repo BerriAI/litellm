@@ -8,8 +8,7 @@ with guardrail transformations, including tool calls.
 import json
 import os
 import sys
-from typing import Any, List, Literal, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Literal, Optional
 
 import pytest
 
@@ -82,6 +81,70 @@ class MockGuardrail(CustomGuardrail):
         if "images" in inputs:
             result["images"] = inputs["images"]  # type: ignore
         return result
+
+
+class MockCopiedToolCallGuardrail(CustomGuardrail):
+    """Mock guardrail that returns copied tool calls instead of mutating inputs."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        copied_tool_calls = []
+        for tool_call in tool_calls:
+            copied = dict(tool_call)
+            function = dict(copied["function"])
+            function["arguments"] = json.dumps({"email": "[EMAIL]"})
+            copied["function"] = function
+            copied_tool_calls.append(copied)
+
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            tool_calls=copied_tool_calls,
+        )
+
+
+class MockNonListToolCallGuardrail(CustomGuardrail):
+    """Mock guardrail that returns tool_calls as a non-list envelope on the response
+    path, as some released guardrails do when they assign a detection API JSON dict."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        result = GenericGuardrailAPIInputs(texts=inputs.get("texts", []))
+        result["tool_calls"] = {"verdict": "allow", "detections": []}  # type: ignore
+        return result
+
+
+class MockMisalignedToolCallGuardrail(CustomGuardrail):
+    """Mock guardrail that returns a tool_calls list whose length differs from the
+    input, so it cannot be applied positionally onto the response."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        shortened = []
+        if tool_calls:
+            first = dict(tool_calls[0])
+            first["function"] = {"name": "x", "arguments": json.dumps({"x": 1})}
+            shortened.append(first)
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            tool_calls=shortened,
+        )
 
 
 class TestOpenAIChatCompletionsHandlerToolsInput:
@@ -740,6 +803,131 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert response.model == "gpt-4o-mini"
         assert response.choices[0].finish_reason == "tool_calls"
 
+    @pytest.mark.asyncio
+    async def test_output_response_uses_returned_guardrailed_tool_calls(self):
+        """Test returned tool_calls are remapped even when guardrail does not mutate inputs."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockCopiedToolCallGuardrail(guardrail_name="test")
+
+        response = ModelResponse(
+            id="chatcmpl-tool-copy",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_email",
+                                type="function",
+                                function=Function(
+                                    name="send_email",
+                                    arguments=json.dumps({"email": "john@example.com"}),
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        response_tool_call = response.choices[0].message.tool_calls[0]
+        assert response_tool_call.function.name == "send_email"
+        assert json.loads(response_tool_call.function.arguments) == {"email": "[EMAIL]"}
+
+    @pytest.mark.asyncio
+    async def test_output_response_ignores_non_list_returned_tool_calls(self):
+        """A guardrail returning tool_calls as a non-list (e.g. a detection-API envelope
+        dict) must not crash the remap; the original arguments are preserved."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockNonListToolCallGuardrail(guardrail_name="test")
+        original = json.dumps({"email": "john@example.com"})
+        response = ModelResponse(
+            id="chatcmpl-nonlist",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_email",
+                                type="function",
+                                function=Function(
+                                    name="send_email", arguments=original
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        response_tool_call = response.choices[0].message.tool_calls[0]
+        assert response_tool_call.function.arguments == original
+
+    @pytest.mark.asyncio
+    async def test_output_response_ignores_misaligned_returned_tool_calls(self):
+        """A guardrail returning a tool_calls list of a different length than the input
+        cannot be applied positionally; the handler falls back and preserves the
+        original arguments instead of writing onto the wrong tool call."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockMisalignedToolCallGuardrail(guardrail_name="test")
+        first_args = json.dumps({"email": "a@example.com"})
+        second_args = json.dumps({"email": "b@example.com"})
+        response = ModelResponse(
+            id="chatcmpl-misaligned",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="send_email", arguments=first_args
+                                ),
+                            ),
+                            ChatCompletionMessageToolCall(
+                                id="call_2",
+                                type="function",
+                                function=Function(
+                                    name="send_email", arguments=second_args
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        tool_calls = response.choices[0].message.tool_calls
+        assert tool_calls[0].function.arguments == first_args
+        assert tool_calls[1].function.arguments == second_args
+
 
 class MockPassThroughGuardrail(CustomGuardrail):
     """Mock guardrail that passes through without blocking - for testing streaming fallback behavior"""
@@ -765,7 +953,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         This test verifies the fix for the bug where accessing chunk.choices[0]
         would raise IndexError when a streaming chunk has an empty choices list.
         """
-        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.types.utils import ModelResponseStream
 
         handler = OpenAIChatCompletionsHandler()
         guardrail = MockPassThroughGuardrail(guardrail_name="test")
@@ -949,3 +1137,95 @@ class TestGetStructuredMessages:
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+class TestIncrementalScanRespectsSkipFlags:
+    """PR #33278: skip_system_message_in_guardrail and skip_tool_message_in_guardrail
+    are enforced while this handler builds inputs["texts"] (_extract_inputs early
+    returns for system/tool roles), upstream of BedrockGuardrail's incremental path.
+    Bypassing _select_messages_for_apply_guardrail therefore cannot resurrect skipped
+    content on any turn, including a session's first turn where every segment is new.
+    Verified live against a real Bedrock ApplyGuardrail before being encoded here.
+    The flags are set as instance attributes, mirroring how guardrail_registry
+    applies litellm_params to the callback (they are not constructor kwargs).
+    """
+
+    def _bedrock_guardrail(self):
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+
+        guardrail = BedrockGuardrail(
+            guardrail_name="bedrock-incremental-skip-flags",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+            only_scan_new_messages=True,
+        )
+        guardrail.skip_system_message_in_guardrail = True
+        guardrail.skip_tool_message_in_guardrail = True
+        return guardrail
+
+    def _messages(self, followup=None):
+        base = [
+            {"role": "system", "content": "SYSTEM-PROMPT-must-not-be-scanned"},
+            {"role": "user", "content": "Search for the weather in Paris"},
+            {
+                "role": "assistant",
+                "content": "Let me look that up.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": '{"query": "weather"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT-must-not-be-scanned"},
+            {"role": "user", "content": "Thanks, summarize."},
+        ]
+        return base + (followup or [])
+
+    @pytest.mark.asyncio
+    async def test_first_turn_scans_no_system_or_tool_content(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        data = {"messages": self._messages(), "litellm_session_id": "skip-flags-turn1"}
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == [
+                "Search for the weather in Paris",
+                "Let me look that up.",
+                "Thanks, summarize.",
+            ]
+            assert not any("SYSTEM-PROMPT" in text for text in scanned)
+            assert not any("TOOL-RESULT" in text for text in scanned)
+
+    @pytest.mark.asyncio
+    async def test_second_turn_scans_only_new_eligible_content(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        session = "skip-flags-turn2"
+        followup = [
+            {"role": "assistant", "content": "It is sunny in Paris."},
+            {"role": "user", "content": "And tomorrow?"},
+        ]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(
+                data={"messages": self._messages(), "litellm_session_id": session},
+                guardrail_to_apply=guardrail,
+            )
+            mock_api.reset_mock()
+            await handler.process_input_messages(
+                data={"messages": self._messages(followup), "litellm_session_id": session},
+                guardrail_to_apply=guardrail,
+            )
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["It is sunny in Paris.", "And tomorrow?"]
