@@ -1,5 +1,5 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
@@ -152,7 +152,7 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         ToolPermissionGuardrail,
     )
 
-    rules: Optional[List[Dict[str, Any]]] = None
+    rules: list[dict[str, Any]] | None = None
     if litellm_params.rules:
         rules = []
         for rule in litellm_params.rules:

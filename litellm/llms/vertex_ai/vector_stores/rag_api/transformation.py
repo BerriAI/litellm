@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -60,7 +60,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             "write": [("POST", "/ragCorpora")],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """
         Validate and set up authentication for Vertex AI RAG API
         """
@@ -72,7 +72,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -91,13 +91,13 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
         """
         Transform search request for Vertex AI RAG API
         """
@@ -121,7 +121,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             full_rag_corpus = f"projects/{vertex_project}/locations/{vertex_location}/ragCorpora/{vector_store_id}"
 
         # Build the request body for Vertex AI RAG API
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "vertex_rag_store": {"rag_resources": [{"rag_corpus": full_rag_corpus}]},
             "query": {"text": query},
         }
@@ -219,14 +219,14 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any]]:
         """
         Transform create request for Vertex AI RAG Corpus
         """
         url = f"{api_base}/ragCorpora"  # Base URL for creating RAG corpus
 
         # Build the request body for Vertex AI RAG Corpus creation
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "display_name": vector_store_create_optional_params.get("name", "litellm-vector-store"),
             "description": "Vector store created via LiteLLM",
         }

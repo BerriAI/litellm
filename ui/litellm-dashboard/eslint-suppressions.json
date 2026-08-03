@@ -126,11 +126,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/budgets/_components/budget_panel.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/budgets/_components/budget_panel.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -790,6 +785,11 @@
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/EnvVarsSection.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/IdJagFormFields.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2729,7 +2729,7 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 6
+      "count": 4
     }
   },
   "src/components/chat/MCPConnectPicker.tsx": {

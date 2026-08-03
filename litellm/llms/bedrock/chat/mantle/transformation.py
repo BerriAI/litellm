@@ -7,7 +7,8 @@ The bedrock-mantle endpoint uses the Anthropic Messages API format but is served
 at a different endpoint (bedrock-mantle.{region}.api.aws) with AWS SigV4 auth.
 """
 
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
@@ -36,12 +37,12 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         region = self._get_aws_region_name(optional_params=optional_params, model=model)
         return build_mantle_messages_url(
@@ -54,11 +55,11 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = super().validate_environment(
             headers=headers,
@@ -77,7 +78,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -104,7 +105,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
     async def async_transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -138,7 +139,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         self,
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 

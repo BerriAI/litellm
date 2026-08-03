@@ -2,7 +2,6 @@
 Constants for Copilot integration
 """
 
-from typing import Optional, Union
 from uuid import uuid4
 
 import httpx
@@ -22,10 +21,10 @@ class GithubCopilotError(BaseLLMException):
         self,
         status_code,
         message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[httpx.Headers, dict]] = None,
-        body: Optional[dict] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: httpx.Headers | dict | None = None,
+        body: dict | None = None,
     ):
         super().__init__(
             status_code=status_code,

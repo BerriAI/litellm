@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Awaitable, Final, Protocol, Union, cast
+from collections.abc import Awaitable
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 
@@ -146,7 +147,7 @@ def ocr(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_ocr = load_rust_ocr()
     if rust_ocr is None:
@@ -172,7 +173,7 @@ async def aocr(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_aocr = load_rust_aocr()
     if rust_aocr is None:

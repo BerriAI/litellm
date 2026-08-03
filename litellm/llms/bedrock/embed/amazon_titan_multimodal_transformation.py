@@ -6,8 +6,6 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-mm.html
 """
 
-from typing import List, Optional
-
 from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingConfig,
     AmazonTitanMultimodalEmbeddingRequest,
@@ -30,7 +28,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return ["dimensions"]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
@@ -54,12 +52,12 @@ class AmazonTitanMultimodalEmbeddingG1Config:
 
     def _transform_response(
         self,
-        response_list: List[dict],
+        response_list: list[dict],
         model: str,
-        batch_data: Optional[List[dict]] = None,
+        batch_data: list[dict] | None = None,
     ) -> EmbeddingResponse:
         total_prompt_tokens = 0
-        transformed_responses: List[Embedding] = []
+        transformed_responses: list[Embedding] = []
         for index, response in enumerate(response_list):
             _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)  # type: ignore
             transformed_responses.append(
@@ -78,7 +76,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
                 if "inputImage" in request_data:
                     image_count += 1
 
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if image_count > 0:
             prompt_tokens_details = PromptTokensDetailsWrapper(
                 image_count=image_count,

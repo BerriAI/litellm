@@ -96,7 +96,6 @@ class _VerificationTokenTableClient(Protocol):
     async def find_many(
         self,
         where: Mapping[str, object] | None = None,
-        select: Mapping[str, object] | None = None,
     ) -> "Sequence[PrismaVerificationToken]": ...
 
 
@@ -157,7 +156,6 @@ async def _get_internal_user_api_keys(
 
     key_records = await _table(VerificationTokenRepository(prisma_client)).find_many(
         where={"user_id": user_id},
-        select={"token": True},
     )
     user_api_keys.update(key_record.token for key_record in key_records if getattr(key_record, "token", None))
 
@@ -203,7 +201,7 @@ async def _get_model_names(prisma_client: "PrismaClient", model_ids: Sequence[st
         models = await _table(ModelRepository(prisma_client)).find_many(where={"model_id": {"in": model_ids}})
         return {model.model_id: model.model_name for model in models}
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting model names: {str(e)}")
+        verbose_proxy_logger.error(f"Error getting model names: {e!s}")
         return {}
 
 
@@ -333,7 +331,7 @@ async def new_tag(
             "tag": tag_config,
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating tag: {str(e)}")
+        verbose_proxy_logger.exception(f"Error creating tag: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -374,7 +372,7 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
             data={"litellm_params": json.dumps(existing_params)},
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error adding tag to deployment: {str(e)}")
+        verbose_proxy_logger.exception(f"Error adding tag to deployment: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -463,7 +461,7 @@ async def update_tag(
             "tag": tag_config,
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating tag: {str(e)}")
+        verbose_proxy_logger.exception(f"Error updating tag: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

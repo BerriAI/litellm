@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -14,7 +14,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "bedrock"
 
     def should_strip_billing_metadata(self) -> bool:
@@ -24,12 +24,12 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Dict:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
         workspace_id = self._get_workspace_id(optional_params, litellm_params)
         if workspace_id is None:
             raise litellm.AuthenticationError(
@@ -70,7 +70,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         self,
         streaming_response: Any,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 

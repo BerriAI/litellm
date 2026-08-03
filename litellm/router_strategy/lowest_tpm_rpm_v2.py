@@ -1,7 +1,7 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import httpx
 
@@ -57,7 +57,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             default_sync_interval=0.1,
         )
 
-    def pre_call_check(self, deployment: Dict) -> Optional[Dict]:
+    def pre_call_check(self, deployment: dict) -> dict | None:
         """
         Pre-call check + update model rpm
 
@@ -90,9 +90,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
 
             if local_result is not None and local_result >= deployment_rpm:
                 raise litellm.RateLimitError(
-                    message="Deployment over defined rpm limit={}. current usage={}".format(
-                        deployment_rpm, local_result
-                    ),
+                    message=f"Deployment over defined rpm limit={deployment_rpm}. current usage={local_result}",
                     llm_provider="",
                     model=deployment.get("litellm_params", {}).get("model"),
                     response=httpx.Response(
@@ -116,16 +114,12 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 result = self.router_cache.increment_cache(key=rpm_key, value=1, ttl=self.routing_args.ttl)
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
-                        message="Deployment over defined rpm limit={}. current usage={}".format(deployment_rpm, result),
+                        message=f"Deployment over defined rpm limit={deployment_rpm}. current usage={result}",
                         llm_provider="",
                         model=deployment.get("litellm_params", {}).get("model"),
                         response=httpx.Response(
                             status_code=429,
-                            content="{} rpm limit={}. current usage={}".format(
-                                RouterErrors.user_defined_ratelimit_error.value,
-                                deployment_rpm,
-                                result,
-                            ),
+                            content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={deployment_rpm}. current usage={result}",
                             request=httpx.Request(
                                 method="tpm_rpm_limits",
                                 url="https://github.com/BerriAI/litellm",
@@ -138,7 +132,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
-    async def async_pre_call_check(self, deployment: Dict, parent_otel_span: Optional[Span]) -> Optional[Dict]:
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict | None:
         """
         Pre-call check + update model rpm
         - Used inside semaphore
@@ -175,18 +169,12 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 deployment_rpm = float("inf")
             if local_result is not None and local_result >= deployment_rpm:
                 raise litellm.RateLimitError(
-                    message="Deployment over defined rpm limit={}. current usage={}".format(
-                        deployment_rpm, local_result
-                    ),
+                    message=f"Deployment over defined rpm limit={deployment_rpm}. current usage={local_result}",
                     llm_provider="",
                     model=deployment.get("litellm_params", {}).get("model"),
                     response=httpx.Response(
                         status_code=429,
-                        content="{} rpm limit={}. current usage={}".format(
-                            RouterErrors.user_defined_ratelimit_error.value,
-                            deployment_rpm,
-                            local_result,
-                        ),
+                        content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={deployment_rpm}. current usage={local_result}",
                         headers={"retry-after": str(60)},  # type: ignore
                         request=httpx.Request(
                             method="tpm_rpm_limits",
@@ -200,16 +188,12 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 result = await self._increment_value_in_current_window(key=rpm_key, value=1, ttl=self.routing_args.ttl)
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
-                        message="Deployment over defined rpm limit={}. current usage={}".format(deployment_rpm, result),
+                        message=f"Deployment over defined rpm limit={deployment_rpm}. current usage={result}",
                         llm_provider="",
                         model=deployment.get("litellm_params", {}).get("model"),
                         response=httpx.Response(
                             status_code=429,
-                            content="{} rpm limit={}. current usage={}".format(
-                                RouterErrors.user_defined_ratelimit_error.value,
-                                deployment_rpm,
-                                result,
-                            ),
+                            content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={deployment_rpm}. current usage={result}",
                             headers={"retry-after": str(60)},  # type: ignore
                             request=httpx.Request(
                                 method="tpm_rpm_limits",
@@ -229,7 +213,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             """
             Update TPM/RPM usage on success
             """
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
@@ -261,16 +245,15 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - {}".format(str(e))
+                f"litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - {e!s}"
             )
-            pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             """
             Update TPM usage on success
             """
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
@@ -306,18 +289,15 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - {}".format(
-                    str(e)
-                )
+                f"litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - {e!s}"
             )
-            pass
 
     def _return_potential_deployments(
         self,
-        healthy_deployments: List[Dict],
-        all_deployments: Dict,
+        healthy_deployments: list[dict],
+        all_deployments: dict,
         input_tokens: int,
-        rpm_dict: Dict,
+        rpm_dict: dict,
     ):
         lowest_tpm = float("inf")
         potential_deployments = []  # if multiple deployments have the same low value
@@ -352,9 +332,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 _deployment_rpm = _deployment.get("model_info", {}).get("rpm")
             if _deployment_rpm is None:
                 _deployment_rpm = float("inf")
-            if item_tpm + input_tokens > _deployment_tpm:
-                continue
-            elif (
+            if item_tpm + input_tokens > _deployment_tpm or (
                 (rpm_dict is not None and item in rpm_dict)
                 and rpm_dict[item] is not None
                 and (rpm_dict[item] + 1 >= _deployment_rpm)
@@ -372,12 +350,12 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         model_group: str,
         healthy_deployments: list,
         tpm_keys: list,
-        tpm_values: Optional[list],
+        tpm_values: list | None,
         rpm_keys: list,
-        rpm_values: Optional[list],
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-    ) -> Optional[dict]:
+        rpm_values: list | None,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+    ) -> dict | None:
         """
         Common checks for get available deployment, across sync + async implementations
         """
@@ -432,8 +410,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         self,
         model_group: str,
         healthy_deployments: list,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
     ):
         """
         Async implementation of get deployments.
@@ -456,8 +434,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
                 deployment_name = m.get("litellm_params", {}).get("model")
-                tpm_key = "{}:{}:tpm:{}".format(id, deployment_name, current_minute)
-                rpm_key = "{}:{}:rpm:{}".format(id, deployment_name, current_minute)
+                tpm_key = f"{id}:{deployment_name}:tpm:{current_minute}"
+                rpm_key = f"{id}:{deployment_name}:rpm:{current_minute}"
 
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)
@@ -548,9 +526,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         self,
         model_group: str,
         healthy_deployments: list,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-        parent_otel_span: Optional[Span] = None,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        parent_otel_span: Span | None = None,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
@@ -570,8 +548,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
                 deployment_name = m.get("litellm_params", {}).get("model")
-                tpm_key = "{}:{}:tpm:{}".format(id, deployment_name, current_minute)
-                rpm_key = "{}:{}:rpm:{}".format(id, deployment_name, current_minute)
+                tpm_key = f"{id}:{deployment_name}:tpm:{current_minute}"
+                rpm_key = f"{id}:{deployment_name}:rpm:{current_minute}"
 
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)

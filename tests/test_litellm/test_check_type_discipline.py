@@ -152,6 +152,28 @@ def test_qualified_collections_constructors_still_count(tmp_path):
     assert "LIT002" in _codes(tmp_path, "import collections\nm = collections.defaultdict(list)\n")
 
 
+def test_value_frozen_by_wrapper_is_exempt(tmp_path):
+    assert "LIT002" not in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType({'a': 1})\n")
+    assert "LIT002" not in _codes(tmp_path, "import types\nm = types.MappingProxyType({'a': 1})\n")
+    assert "LIT002" not in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType(dict(a=1))\n")
+    assert "LIT002" not in _codes(tmp_path, "f = frozenset({1, 2})\n")
+    assert "LIT002" not in _codes(tmp_path, "t = tuple([1, 2])\n")
+
+
+def test_same_named_method_does_not_exempt_its_argument(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "t = obj.tuple([1, 2])\n")
+    assert "LIT002" in _codes(tmp_path, "f = obj.frozenset({1, 2})\n")
+    assert "LIT002" in _codes(tmp_path, "m = obj.MappingProxyType({'a': 1})\n")
+
+
+def test_mutable_nested_inside_frozen_wrapper_still_counts(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType({'a': []})\n")
+
+
+def test_unfrozen_literal_still_counts(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nd = {'a': 1}\nm = MappingProxyType(d)\n")
+
+
 def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
     codes = _codes(tmp_path, "x: dict[str, int] = {}  # mutable-ok: in-place buffer mutated hot path\n")
     assert "LIT001" not in codes

@@ -9,7 +9,7 @@ duration_in_seconds is used in diff parts of the code base, example
 import re
 import time as time_module
 from datetime import datetime, time, timedelta, timezone, tzinfo
-from typing import Final, Optional, Tuple
+from typing import Final
 from zoneinfo import ZoneInfo
 
 from litellm._logging import verbose_logger
@@ -26,7 +26,7 @@ def _normalize_duration(duration: str) -> str:
     return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
 
 
-def _extract_from_regex(duration: str) -> Tuple[int, str]:
+def _extract_from_regex(duration: str) -> tuple[int, str]:
     match = re.match(r"(\d+)(mo|[smhdw]?)", duration)
 
     if not match:
@@ -86,8 +86,7 @@ def duration_in_seconds(duration: str) -> int:
         target_day = current_time.day
         last_day_of_target_month = get_last_day_of_month(target_year, target_month)
 
-        if target_day > last_day_of_target_month:
-            target_day = last_day_of_target_month
+        target_day = min(target_day, last_day_of_target_month)
 
         next_month = datetime(
             year=target_year,
@@ -167,7 +166,7 @@ def get_next_standardized_reset_time(
         return base_midnight + timedelta(days=1)
 
 
-def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> Tuple[datetime, tzinfo]:
+def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[datetime, tzinfo]:
     """Set up timezone and normalize current time to that timezone."""
     try:
         if timezone_str is None:
@@ -190,7 +189,7 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> Tuple[
     return current_time, tz
 
 
-def _parse_duration(duration: str) -> Tuple[Optional[int], Optional[str]]:
+def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     """Parse the duration string into value and unit."""
     match = re.match(r"(\d+)([a-z]+)", duration)
     if not match:

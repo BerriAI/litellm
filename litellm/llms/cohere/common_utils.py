@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional, Literal, Tuple
+from typing import Literal
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -21,49 +21,48 @@ class CohereModelInfo(BaseLLMModelInfo):
     def get_provider_info(
         self,
         model: str,
-    ) -> Optional[ProviderSpecificModelInfo]:
+    ) -> ProviderSpecificModelInfo | None:
         """
         Default values all models of this provider support.
         """
         return None
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """
         Returns a list of models supported by this provider.
         """
         return []
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return api_key
 
     @staticmethod
     def get_api_base(
-        api_base: Optional[str] = None,
-    ) -> Optional[str]:
+        api_base: str | None = None,
+    ) -> str | None:
         return api_base
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return {}
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         """
         Returns the base model name from the given model name.
 
         Some providers like bedrock - can receive model=`invoke/anthropic.claude-3-opus-20240229-v1:0` or `converse/anthropic.claude-3-opus-20240229-v1:0`
             This function will return `anthropic.claude-3-opus-20240229-v1:0`
         """
-        pass
 
     @staticmethod
     def get_cohere_route(model: str) -> Literal["v1", "v2"]:
@@ -87,9 +86,9 @@ class CohereModelInfo(BaseLLMModelInfo):
 def validate_environment(
     headers: dict,
     model: str,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     optional_params: dict,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
 ) -> dict:
     """
     Return headers to use for cohere chat completion request
@@ -116,20 +115,20 @@ def validate_environment(
 
 
 class ModelResponseIterator:
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: List = []
+        self.content_blocks: list = []
         self.tool_index = -1
         self.json_mode = json_mode
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            tool_use: ChatCompletionToolCallChunk | None = None
             is_finished = False
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: ChatCompletionUsageBlock | None = None
             provider_specific_fields = None
 
             index = int(chunk.get("index", 0))
@@ -217,10 +216,10 @@ class ModelResponseIterator:
 class CohereV2ModelResponseIterator:
     """V2-specific response iterator for Cohere streaming"""
 
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: List = []
+        self.content_blocks: list = []
         self.tool_index = -1
         self.json_mode = json_mode
 
@@ -235,7 +234,7 @@ class CohereV2ModelResponseIterator:
             return content
         return ""
 
-    def _parse_tool_call_delta(self, chunk: dict) -> Optional[ChatCompletionToolCallChunk]:
+    def _parse_tool_call_delta(self, chunk: dict) -> ChatCompletionToolCallChunk | None:
         """Parse tool-call-delta chunks to extract tool calls."""
         delta = chunk.get("delta", {})
         tool_calls = delta.get("tool_calls", [])
@@ -250,7 +249,7 @@ class CohereV2ModelResponseIterator:
             }  # type: ignore
         return None
 
-    def _parse_tool_plan_delta(self, chunk: dict) -> Optional[dict]:
+    def _parse_tool_plan_delta(self, chunk: dict) -> dict | None:
         """Parse tool-plan-delta events to extract tool plan."""
         data = chunk.get("data", {})
         delta = data.get("delta", {})
@@ -260,7 +259,7 @@ class CohereV2ModelResponseIterator:
             return {"tool_plan": tool_plan}
         return None
 
-    def _parse_citation_start(self, chunk: dict) -> Optional[dict]:
+    def _parse_citation_start(self, chunk: dict) -> dict | None:
         """Parse citation-start events to extract citations."""
         data = chunk.get("data", {})
         delta = data.get("delta", {})
@@ -277,7 +276,7 @@ class CohereV2ModelResponseIterator:
             return {"citations": [citation_data]}
         return None
 
-    def _parse_message_end(self, chunk: dict) -> Tuple[bool, str, Optional[ChatCompletionUsageBlock]]:
+    def _parse_message_end(self, chunk: dict) -> tuple[bool, str, ChatCompletionUsageBlock | None]:
         """Parse message-end events to extract finish info and usage."""
         data = chunk.get("data", {})
         delta = data.get("delta", {})
@@ -309,10 +308,10 @@ class CohereV2ModelResponseIterator:
         """
         try:
             text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            tool_use: ChatCompletionToolCallChunk | None = None
             is_finished = False
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: ChatCompletionUsageBlock | None = None
             provider_specific_fields = None
 
             index = int(chunk.get("index", 0))

@@ -1,16 +1,17 @@
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from .prompt_manager import PromptManager, PromptTemplate
-    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    from .prompt_manager import PromptManager, PromptTemplate
 
 from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 
 from .dotprompt_manager import DotpromptManager
 
 # Global instances
-global_prompt_directory: Optional[str] = None
+global_prompt_directory: str | None = None
 global_prompt_manager: Optional["PromptManager"] = None
 
 
@@ -80,10 +81,10 @@ prompt_initializer_registry = {
 
 # Export public API
 __all__ = [
-    "PromptManager",
     "DotpromptManager",
+    "PromptManager",
     "PromptTemplate",
-    "set_global_prompt_directory",
     "global_prompt_directory",
     "global_prompt_manager",
+    "set_global_prompt_directory",
 ]
