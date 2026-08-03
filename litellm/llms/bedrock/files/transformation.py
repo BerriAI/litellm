@@ -640,6 +640,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     (key, value) for key, value in openai_request_body.items() if key not in ("model", "input")
                 )
             ),
+            metadata=openai_request_body.get("metadata"),
         )
         return _frozen_mapping((key, value) for key, value in chat_body.items() if key != "tools" or value)
 
