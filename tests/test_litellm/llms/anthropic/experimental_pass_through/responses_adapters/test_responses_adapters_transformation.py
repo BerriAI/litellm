@@ -1137,3 +1137,15 @@ class TestToolResultImages:
         outputs = [item for item in items if item.get("type") == "function_call_output"]
         assert outputs[0]["output"] == "plain result"
         assert self._input_images(items) == []
+
+    def test_image_without_source_dict_keeps_plain_text_output(self):
+        items = self._translate(
+            [
+                {"type": "text", "text": "screenshot saved"},
+                {"type": "image", "source": self.HTTP_URL},
+            ]
+        )
+
+        outputs = [item for item in items if item.get("type") == "function_call_output"]
+        assert outputs[0]["output"] == "screenshot saved"
+        assert self._input_images(items) == []

@@ -3359,12 +3359,21 @@ def test_tool_result_parallel_tool_calls_keep_tool_message_adjacency():
     assert len(_image_urls_in_user_messages(result)) == 2
 
 
-def test_tool_result_untranslatable_image_source_keeps_empty_tool_content():
+@pytest.mark.parametrize(
+    "image_block",
+    [
+        {"type": "image", "source": {"type": "unsupported"}},
+        {"type": "image"},
+        {"type": "image", "source": "https://example.com/screenshot.png"},
+    ],
+    ids=["untranslatable_source", "missing_source", "non_dict_source"],
+)
+def test_tool_result_malformed_image_source_keeps_empty_tool_content(image_block):
     adapter = LiteLLMAnthropicMessagesAdapter()
     translated = adapter.translate_anthropic_messages_to_openai(
         messages=[
             _anthropic_tool_use_turn("toolu_01"),
-            _anthropic_tool_result_turn({"toolu_01": [{"type": "image", "source": {"type": "unsupported"}}]}),
+            _anthropic_tool_result_turn({"toolu_01": [image_block]}),
         ]
     )
 
