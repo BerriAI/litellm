@@ -3,6 +3,7 @@ import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
 import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
+import { getCapabilityBadgeClassName } from "@/components/AIHub/capabilityColors";
 import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
 import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
@@ -730,14 +731,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <div className="flex flex-wrap gap-2">
                   {(() => {
                     const capabilities = getModelCapabilities(selectedModel);
-                    const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
 
                     if (capabilities.length === 0) {
                       return <p className="text-muted-foreground">No special capabilities listed</p>;
                     }
 
-                    return capabilities.map((capability, index) => (
-                      <Badge key={capability} variant="secondary">
+                    return capabilities.map((capability) => (
+                      <Badge key={capability} className={getCapabilityBadgeClassName(capability)}>
                         {formatCapabilityName(capability)}
                       </Badge>
                     ));
