@@ -210,9 +210,7 @@ class WeightsBiasesLogger:
 
             if run is not None:
                 run.finish()
-                print_verbose(
-                    f"W&B Logging - final response object: {response_obj}"
-                )
+                print_verbose(f"W&B Logging - final response object: {response_obj}")
         except Exception:
             print_verbose(f"W&B Logging Layer Error - {traceback.format_exc()}")
             pass
