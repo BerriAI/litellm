@@ -2,7 +2,8 @@
 Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from collections.abc import Coroutine
+from typing import Any, Literal, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -59,7 +60,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         return optional_params
 
-    def _fill_reasoning_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
+    def _fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
         DeepSeek thinking mode requires `reasoning_content` to be passed back on
         every assistant message in multi-turn conversations. If it is missing,
@@ -71,7 +72,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
              (LiteLLM stores provider-specific response fields there).
           2. Otherwise inject a single space — the minimum value the API accepts.
         """
-        result: List[AllMessageValues] = []
+        result: list[AllMessageValues] = []
         for msg in messages:
             if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
                 patched = dict(cast(dict, msg))
@@ -101,20 +102,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """
         DeepSeek does not support content in list format.
         """
@@ -207,7 +208,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -235,7 +236,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     async def async_transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -256,20 +257,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         )
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("DEEPSEEK_API_BASE") or "https://api.deepseek.com/beta"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         If api_base is not provided, use the default DeepSeek /chat/completions endpoint.

@@ -1,6 +1,5 @@
 import re
 import types
-from typing import List, Optional, Union
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseConfig
@@ -21,17 +20,17 @@ class AmazonTitanConfig(AmazonInvokeConfig, BaseConfig):
     - `topP` (int) top p for model
     """
 
-    maxTokenCount: Optional[int] = None
-    stopSequences: Optional[list] = None
-    temperature: Optional[float] = None
-    topP: Optional[int] = None
+    maxTokenCount: int | None = None
+    stopSequences: list | None = None
+    temperature: float | None = None
+    topP: int | None = None
 
     def __init__(
         self,
-        maxTokenCount: Optional[int] = None,
-        stopSequences: Optional[list] = None,
-        temperature: Optional[float] = None,
-        topP: Optional[int] = None,
+        maxTokenCount: int | None = None,
+        stopSequences: list | None = None,
+        temperature: float | None = None,
+        topP: int | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -64,7 +63,7 @@ class AmazonTitanConfig(AmazonInvokeConfig, BaseConfig):
         supported_params: dict,
         provider: str,
         model: str,
-        stop: Union[List[str], str],
+        stop: list[str] | str,
     ):
         """
         filter params to fit the required provider format, drop those that don't fit if user sets `litellm.drop_params = True`.
@@ -82,7 +81,7 @@ class AmazonTitanConfig(AmazonInvokeConfig, BaseConfig):
 
         return supported_params
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "max_completion_tokens",

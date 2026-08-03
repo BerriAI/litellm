@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -7,9 +7,10 @@ from litellm.proxy._types import (
     LiteLLM_DeletedTeamTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
-    LiteLLM_UserTable,
     Member,
 )
+
+TeamIdSearchMatch = Literal["exact", "prefix"]
 
 
 class GetTeamMemberPermissionsRequest(BaseModel):

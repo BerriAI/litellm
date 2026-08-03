@@ -3,7 +3,8 @@ Helper util for handling openai-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import Any, Literal, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -21,9 +22,9 @@ def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_sec
 def cost_per_token(
     model: str,
     usage: Usage,
-    service_tier: Optional[str] = None,
-    data_residency: Optional[str] = None,
-) -> Tuple[float, float]:
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -90,7 +91,7 @@ def cost_per_token(
     # return prompt_cost, completion_cost
 
 
-def cost_per_second(model: str, custom_llm_provider: Optional[str], duration: float = 0.0) -> Tuple[float, float]:
+def cost_per_second(model: str, custom_llm_provider: str | None, duration: float = 0.0) -> tuple[float, float]:
     """
     Calculates the cost per second for a given model, prompt tokens, and completion tokens.
 
@@ -125,7 +126,7 @@ def cost_per_second(model: str, custom_llm_provider: Optional[str], duration: fl
     return prompt_cost, completion_cost
 
 
-def _video_resolution_to_cost_field_suffix(resolution: str) -> Optional[str]:
+def _video_resolution_to_cost_field_suffix(resolution: str) -> str | None:
     """
     Map usage resolution to a safe suffix for ``output_cost_per_second_<suffix>`` keys.
 
@@ -145,8 +146,8 @@ def _video_resolution_to_cost_field_suffix(resolution: str) -> Optional[str]:
 
 def _video_output_cost_per_second(
     model_info: Mapping[str, Any],
-    video_resolution: Optional[str],
-) -> Optional[float]:
+    video_resolution: str | None,
+) -> float | None:
     """
     Per-second video output rate from model_info.
 
@@ -171,9 +172,9 @@ def _video_output_cost_per_second(
 def video_generation_cost(
     model: str,
     duration_seconds: float,
-    custom_llm_provider: Optional[str] = None,
-    model_info: Optional[ModelInfo] = None,
-    video_resolution: Optional[str] = None,
+    custom_llm_provider: str | None = None,
+    model_info: ModelInfo | None = None,
+    video_resolution: str | None = None,
 ) -> float:
     """
     Calculates the cost for video generation based on duration in seconds.

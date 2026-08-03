@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Union, cast
+from typing import cast
 
 import httpx
 
@@ -19,10 +19,10 @@ from litellm.constants import (
     OPEN_SANDBOX_READY_TIMEOUT,
 )
 from litellm.llms.base_llm.sandbox.transformation import (
+    SANDBOX_MAX_OUTPUT_BYTES,
     BaseSandboxConfig,
     CodeExecutionResult,
     ContainerHandle,
-    SANDBOX_MAX_OUTPUT_BYTES,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -130,7 +130,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     async def arun_code(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         code: str,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -172,7 +172,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     async def adelete_sandbox(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
@@ -198,7 +198,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     async def _ensure_handle(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         api_key: str | None,
         api_base: str | None,
         use_server_proxy: bool,
@@ -428,7 +428,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         return f"{protocol}://{normalized_endpoint}"
 
     @staticmethod
-    def _as_handle(container: Union[ContainerHandle, str], *, api_base: str | None) -> ContainerHandle:
+    def _as_handle(container: ContainerHandle | str, *, api_base: str | None) -> ContainerHandle:
         if isinstance(container, ContainerHandle):
             return container
         handle = ContainerHandle(
