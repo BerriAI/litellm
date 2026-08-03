@@ -1,5 +1,3 @@
-from typing import List, Union
-
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 
 from ...base_llm.completion.transformation import BaseTextCompletionConfig
@@ -44,7 +42,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
     def transform_text_completion_request(
         self,
         model: str,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
         optional_params: dict,
         headers: dict,
     ) -> dict:

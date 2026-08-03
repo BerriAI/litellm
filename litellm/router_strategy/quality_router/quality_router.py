@@ -16,13 +16,14 @@ then cheapest `model_info.input_cost_per_token`).
 """
 
 import math
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
 )
+from litellm.types.utils import StandardLoggingRoutingDecision
 
 from .config import QualityRouterConfig, RoutingPreferences
 
@@ -44,8 +45,8 @@ class QualityRouter(CustomLogger):
         self,
         model_name: str,
         litellm_router_instance: "Router",
-        default_model: Optional[str] = None,
-        quality_router_config: Optional[Dict[str, Any]] = None,
+        default_model: str | None = None,
+        quality_router_config: dict[str, Any] | None = None,
     ):
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
@@ -70,10 +71,10 @@ class QualityRouter(CustomLogger):
         # lowercased user message in O(total-keyword-count). `_model_quality`,
         # `_model_cost`, and `_model_order` drive tiebreaking — `_model_order`
         # is the explicit priority (lower wins, unset = +inf).
-        self._model_keywords: Dict[str, List[str]] = {}
-        self._model_quality: Dict[str, int] = {}
-        self._model_cost: Dict[str, Optional[float]] = {}
-        self._model_order: Dict[str, Optional[int]] = {}
+        self._model_keywords: dict[str, list[str]] = {}
+        self._model_quality: dict[str, int] = {}
+        self._model_cost: dict[str, float | None] = {}
+        self._model_order: dict[str, int | None] = {}
 
         # Tier → models index. Built lazily on first access so the QualityRouter
         # deployment does NOT need to appear after all its referenced models in
@@ -81,7 +82,7 @@ class QualityRouter(CustomLogger):
         # router instance's `model_list` is still being assembled incrementally
         # by `_create_deployment`, and any `available_models` defined AFTER the
         # router entry in config.yaml would silently be reported as missing.
-        self._tier_to_models_cache: Optional[Dict[int, List[str]]] = None
+        self._tier_to_models_cache: dict[int, list[str]] | None = None
 
         verbose_router_logger.debug(
             f"QualityRouter initialized for {model_name} with "
@@ -90,13 +91,13 @@ class QualityRouter(CustomLogger):
         )
 
     @property
-    def _tier_to_models(self) -> Dict[int, List[str]]:
+    def _tier_to_models(self) -> dict[int, list[str]]:
         """Lazy tier→models index; built on first access."""
         if self._tier_to_models_cache is None:
             self._tier_to_models_cache = self._build_tier_index()
         return self._tier_to_models_cache
 
-    def _get_routing_preferences(self, deployment: Any) -> Optional[Dict[str, Any]]:
+    def _get_routing_preferences(self, deployment: Any) -> dict[str, Any] | None:
         """
         Extract litellm_routing_preferences from a deployment, handling both
         dict-shaped and Pydantic-object-shaped deployments.
@@ -117,7 +118,7 @@ class QualityRouter(CustomLogger):
             return model_info.get("litellm_routing_preferences")
         return getattr(model_info, "litellm_routing_preferences", None)
 
-    def _get_deployment_input_cost(self, deployment: Any) -> Optional[float]:
+    def _get_deployment_input_cost(self, deployment: Any) -> float | None:
         """
         Extract `input_cost_per_token` from a deployment's model_info.
 
@@ -142,13 +143,13 @@ class QualityRouter(CustomLogger):
         except (TypeError, ValueError):
             return None
 
-    def _get_deployment_model_name(self, deployment: Any) -> Optional[str]:
+    def _get_deployment_model_name(self, deployment: Any) -> str | None:
         """Extract `model_name` from a dict- or object-shaped deployment."""
         if isinstance(deployment, dict):
             return deployment.get("model_name")
         return getattr(deployment, "model_name", None)
 
-    def _build_tier_index(self) -> Dict[int, List[str]]:
+    def _build_tier_index(self) -> dict[int, list[str]]:
         """
         Build {quality_tier: [model_name, ...]} for every model in
         `available_models`, plus side indices `_model_keywords`,
@@ -159,8 +160,8 @@ class QualityRouter(CustomLogger):
         available = set(self.config.available_models)
 
         # Track which available models we've matched so we can error on missing.
-        seen: Dict[str, bool] = {name: False for name in available}
-        tier_to_models: Dict[int, List[str]] = {}
+        seen: dict[str, bool] = {name: False for name in available}
+        tier_to_models: dict[int, list[str]] = {}
 
         for deployment in model_list:
             name = self._get_deployment_model_name(deployment)
@@ -225,7 +226,7 @@ class QualityRouter(CustomLogger):
         cost = self._model_cost.get(model_name)
         return float(cost) if cost is not None else math.inf
 
-    def _keyword_override(self, user_message: str) -> Optional[Tuple[str, str]]:
+    def _keyword_override(self, user_message: str) -> tuple[str, str] | None:
         """
         Find a deployment whose declared keywords appear in `user_message`.
 
@@ -243,7 +244,7 @@ class QualityRouter(CustomLogger):
 
         text = user_message.lower()
 
-        matches: List[Tuple[str, str]] = []  # (model_name, matched_keyword)
+        matches: list[tuple[str, str]] = []  # (model_name, matched_keyword)
         for model_name, keywords in self._model_keywords.items():
             for kw in keywords:
                 if kw and kw in text:
@@ -253,7 +254,7 @@ class QualityRouter(CustomLogger):
         if not matches:
             return None
 
-        def sort_key(match: Tuple[str, str]) -> Tuple[int, float, float, str]:
+        def sort_key(match: tuple[str, str]) -> tuple[int, float, float, str]:
             name = match[0]
             quality = self._model_quality.get(name, 0)
             order_val = self._order_key(name)
@@ -302,8 +303,8 @@ class QualityRouter(CustomLogger):
 
     def _stash_decision(
         self,
-        request_kwargs: Optional[Dict[str, Any]],
-        decision: Dict[str, Any],
+        request_kwargs: dict[str, Any] | None,
+        decision: dict[str, Any],
     ) -> None:
         """
         Stash the routing decision in request_kwargs.metadata so the Router can
@@ -319,10 +320,10 @@ class QualityRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: Dict,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        input: Optional[Union[str, List]] = None,
-        specific_deployment: Optional[bool] = False,
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
     ) -> Optional["PreRoutingHookResponse"]:
         """Try keyword override first; fall back to complexity-tier routing."""
         from litellm.types.router import PreRoutingHookResponse
@@ -333,8 +334,8 @@ class QualityRouter(CustomLogger):
 
         # Extract last user message and last system prompt — same rules as
         # ComplexityRouter.async_pre_routing_hook.
-        user_message: Optional[str] = None
-        system_prompt: Optional[str] = None
+        user_message: str | None = None
+        system_prompt: str | None = None
 
         for msg in reversed(messages):
             role = msg.get("role", "")
@@ -357,6 +358,12 @@ class QualityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=self.config.default_model,
                 messages=messages,
+                routing_decision=StandardLoggingRoutingDecision(
+                    router_model_name=self.model_name,
+                    router_type="quality",
+                    routed_model=self.config.default_model,
+                    cause="default_fallback",
+                ),
             )
 
         # Try keyword override first — it short-circuits complexity classification.
@@ -380,9 +387,20 @@ class QualityRouter(CustomLogger):
                     "complexity_tier": None,
                 },
             )
+            routing_decision = StandardLoggingRoutingDecision(
+                router_model_name=self.model_name,
+                router_type="quality",
+                routed_model=routed_model,
+                cause="keyword",
+                matched_keyword=matched_keyword,
+            )
+            keyword_quality_tier = self._model_quality.get(routed_model)
+            if keyword_quality_tier is not None:
+                routing_decision["tier"] = str(keyword_quality_tier)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages,
+                routing_decision=routing_decision,
             )
 
         # No keyword match → complexity classification flow.
@@ -419,4 +437,13 @@ class QualityRouter(CustomLogger):
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages,
+            routing_decision=StandardLoggingRoutingDecision(
+                router_model_name=self.model_name,
+                router_type="quality",
+                routed_model=routed_model,
+                cause="quality_tier",
+                tier=str(int(quality_tier)),
+                score=score,
+                signals=list(signals),
+            ),
         )

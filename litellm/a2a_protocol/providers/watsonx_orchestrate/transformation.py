@@ -8,7 +8,8 @@ WXO uses a REST API (not A2A/JSON-RPC) with an async-poll execution model:
 """
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
@@ -28,7 +29,7 @@ class WatsonxOrchestrateTransformation:
         return f"{cp4d_host.rstrip('/')}/orchestrate/cpd/instances/{instance_id}"
 
     @staticmethod
-    def extract_text_from_a2a_params(params: Dict[str, Any]) -> str:
+    def extract_text_from_a2a_params(params: dict[str, Any]) -> str:
         """
         Extract user message text from A2A MessageSendParams.
 
@@ -49,10 +50,10 @@ class WatsonxOrchestrateTransformation:
     def build_wxo_run_body(
         wxo_agent_id: str,
         text: str,
-        thread_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
         """Build the WXO POST /v1/orchestrate/runs request body."""
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "agent_id": wxo_agent_id,
             "message": {
                 "role": "user",
@@ -102,7 +103,7 @@ class WatsonxOrchestrateTransformation:
         return ""
 
     @staticmethod
-    def extract_text_from_a2a_message_response(a2a_response: Dict[str, Any]) -> str:
+    def extract_text_from_a2a_message_response(a2a_response: dict[str, Any]) -> str:
         result = a2a_response.get("result")
         if not isinstance(result, dict):
             verbose_logger.warning("WXO: A2A response missing result object")
@@ -118,7 +119,7 @@ class WatsonxOrchestrateTransformation:
         return ""
 
     @staticmethod
-    def build_a2a_message_response(request_id: str, text: str) -> Dict[str, Any]:
+    def build_a2a_message_response(request_id: str, text: str) -> dict[str, Any]:
         """
         Build a standard A2A non-streaming SendMessageResponse (kind=message).
         """
@@ -139,7 +140,7 @@ class WatsonxOrchestrateTransformation:
         request_id: str,
         chunk_size: int = 50,
         delay_ms: int = 10,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         Emit standard A2A streaming events from a completed text response.
 

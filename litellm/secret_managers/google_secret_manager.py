@@ -1,6 +1,5 @@
 import base64
 import os
-from typing import Optional
 
 import litellm
 from litellm._logging import verbose_logger
@@ -14,8 +13,8 @@ from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem
 class GoogleSecretManager(GCSBucketBase):
     def __init__(
         self,
-        refresh_interval: Optional[int] = SECRET_MANAGER_REFRESH_INTERVAL,
-        always_read_secret_manager: Optional[bool] = False,
+        refresh_interval: int | None = SECRET_MANAGER_REFRESH_INTERVAL,
+        always_read_secret_manager: bool | None = False,
     ) -> None:
         """
         Args:
@@ -50,7 +49,7 @@ class GoogleSecretManager(GCSBucketBase):
             # by default this should be False, we want to use in memory caching for this. It's a bad idea to fetch from secret manager for all requests
             self.always_read_secret_manager = always_read_secret_manager or False
 
-    def get_secret_from_google_secret_manager(self, secret_name: str) -> Optional[str]:
+    def get_secret_from_google_secret_manager(self, secret_name: str) -> str | None:
         """
         Retrieve a secret from Google Secret Manager or cache.
 

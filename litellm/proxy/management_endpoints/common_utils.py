@@ -1,5 +1,5 @@
 import math
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
@@ -216,7 +216,7 @@ async def _user_has_admin_privileges(
             teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_obj.teams}})
 
             for team in teams:
-                team_obj = LiteLLM_TeamTable(**team.model_dump())
+                team_obj = LiteLLM_TeamTable.model_validate(team.model_dump())
                 if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     return True
 
@@ -288,7 +288,7 @@ async def _team_admin_can_invite_user(
         for team in teams
         if _is_user_team_admin(
             user_api_key_dict=user_api_key_dict,
-            team_obj=LiteLLM_TeamTable(**team.model_dump()),
+            team_obj=LiteLLM_TeamTable.model_validate(team.model_dump()),
         )
     ]
     if not admin_team_ids:
@@ -417,7 +417,7 @@ def _is_set_budget_value(value: Any) -> bool:
     return True
 
 
-def _has_meaningful_budget_limit(budget_values: Dict[str, Any]) -> bool:
+def _has_meaningful_budget_limit(budget_values: dict[str, Any]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
@@ -428,10 +428,10 @@ async def _upsert_budget_and_membership(
     *,
     team_id: str,
     user_id: str,
-    existing_budget_id: Optional[str],
+    existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    budget_patch: Dict[str, Any],
-    team_default_budget_id: Optional[str] = None,
+    budget_patch: dict[str, Any],
+    team_default_budget_id: str | None = None,
 ):
     """
     Apply a merge-patch of per-member budget fields to a team membership.
@@ -482,7 +482,7 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    create_data: Dict[str, Any] = {
+    create_data: dict[str, Any] = {
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
     }

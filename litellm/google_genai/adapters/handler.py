@@ -1,4 +1,5 @@
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from collections.abc import AsyncIterator, Coroutine
+from typing import Any, cast
 
 import litellm
 from litellm.types.router import GenericLiteLLMParams
@@ -16,12 +17,12 @@ class GenerateContentToCompletionHandler:
     @staticmethod
     def _prepare_completion_kwargs(
         model: str,
-        contents: Union[List[Dict[str, Any]], Dict[str, Any]],
-        config: Optional[Dict[str, Any]] = None,
+        contents: list[dict[str, Any]] | dict[str, Any],
+        config: dict[str, Any] | None = None,
         stream: bool = False,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
-        extra_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        litellm_params: GenericLiteLLMParams | None = None,
+        extra_kwargs: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Prepare kwargs for litellm.completion/acompletion"""
 
         # Transform generate_content request to completion format
@@ -33,7 +34,7 @@ class GenerateContentToCompletionHandler:
             **(extra_kwargs or {}),
         )
 
-        completion_kwargs: Dict[str, Any] = dict(completion_request)
+        completion_kwargs: dict[str, Any] = dict(completion_request)
 
         # Forward extra_kwargs that should be passed to completion call
         if extra_kwargs is not None:
@@ -52,12 +53,12 @@ class GenerateContentToCompletionHandler:
     @staticmethod
     async def async_generate_content_handler(
         model: str,
-        contents: Union[List[Dict[str, Any]], Dict[str, Any]],
+        contents: list[dict[str, Any]] | dict[str, Any],
         litellm_params: GenericLiteLLMParams,
-        config: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
         stream: bool = False,
         **kwargs,
-    ) -> Union[Dict[str, Any], AsyncIterator[bytes]]:
+    ) -> dict[str, Any] | AsyncIterator[bytes]:
         """Handle generate_content call asynchronously using completion adapter"""
 
         completion_kwargs = GenerateContentToCompletionHandler._prepare_completion_kwargs(
@@ -97,22 +98,18 @@ class GenerateContentToCompletionHandler:
                 return generate_content_response
 
         except Exception as e:
-            raise ValueError(f"Error calling litellm.acompletion for generate_content: {str(e)}")
+            raise ValueError(f"Error calling litellm.acompletion for generate_content: {e!s}")
 
     @staticmethod
     def generate_content_handler(
         model: str,
-        contents: Union[List[Dict[str, Any]], Dict[str, Any]],
+        contents: list[dict[str, Any]] | dict[str, Any],
         litellm_params: GenericLiteLLMParams,
-        config: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
         stream: bool = False,
         _is_async: bool = False,
         **kwargs,
-    ) -> Union[
-        Dict[str, Any],
-        AsyncIterator[bytes],
-        Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes]]],
-    ]:
+    ) -> dict[str, Any] | AsyncIterator[bytes] | Coroutine[Any, Any, dict[str, Any] | AsyncIterator[bytes]]:
         """Handle generate_content call using completion adapter"""
 
         if _is_async:
@@ -162,4 +159,4 @@ class GenerateContentToCompletionHandler:
                 return generate_content_response
 
         except Exception as e:
-            raise ValueError(f"Error calling litellm.completion for generate_content: {str(e)}")
+            raise ValueError(f"Error calling litellm.completion for generate_content: {e!s}")

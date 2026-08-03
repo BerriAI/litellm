@@ -10,8 +10,6 @@ Model name format:
 - Agent: ragflow/agent/{agent_id}/{model_name}
 """
 
-from typing import List, Optional, Tuple
-
 import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.openai import OpenAIConfig
@@ -28,7 +26,7 @@ class RAGFlowConfig(OpenAIConfig):
     - ragflow/agent/{agent_id}/{model_name} for agent endpoints
     """
 
-    def _parse_ragflow_model(self, model: str) -> Tuple[str, str, str]:
+    def _parse_ragflow_model(self, model: str) -> tuple[str, str, str]:
         """
         Parse RAGFlow model name format: ragflow/{endpoint_type}/{id}/{model_name}
 
@@ -62,12 +60,12 @@ class RAGFlowConfig(OpenAIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the RAGFlow API call.
@@ -127,10 +125,10 @@ class RAGFlowConfig(OpenAIConfig):
     def _get_openai_compatible_provider_info(
         self,
         model: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         custom_llm_provider: str,
-    ) -> Tuple[Optional[str], Optional[str], str]:
+    ) -> tuple[str | None, str | None, str]:
         """
         Get OpenAI-compatible provider information for RAGFlow.
 
@@ -161,11 +159,11 @@ class RAGFlowConfig(OpenAIConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for RAGFlow API.
@@ -211,7 +209,7 @@ class RAGFlowConfig(OpenAIConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

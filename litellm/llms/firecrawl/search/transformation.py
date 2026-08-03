@@ -4,7 +4,7 @@ Calls Firecrawl's /search endpoint to search the web.
 Firecrawl API Reference: https://docs.firecrawl.dev/api-reference/endpoint/search
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import TypedDict
 
 import httpx
 
@@ -30,14 +30,14 @@ class FirecrawlSearchRequest(_FirecrawlSearchRequestRequired, total=False):
     """
 
     limit: int  # Optional - maximum number of results to return (default 5, max 100)
-    sources: List[str]  # Optional - sources to search ('web', 'images', 'news'), default ['web']
-    categories: List[Dict[str, str]]  # Optional - categories to filter by (github, research, pdf)
+    sources: list[str]  # Optional - sources to search ('web', 'images', 'news'), default ['web']
+    categories: list[dict[str, str]]  # Optional - categories to filter by (github, research, pdf)
     tbs: str  # Optional - time-based search parameter
     location: str  # Optional - location parameter for geo-targeting
     country: str  # Optional - ISO country code (default 'US')
     timeout: int  # Optional - timeout in milliseconds (default 60000)
     ignoreInvalidURLs: bool  # Optional - exclude invalid URLs (default false)
-    scrapeOptions: Dict  # Optional - options for scraping search results
+    scrapeOptions: dict  # Optional - options for scraping search results
 
 
 class FirecrawlSearchConfig(BaseSearchConfig):
@@ -49,11 +49,11 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
@@ -72,9 +72,9 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -90,10 +90,10 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Firecrawl API format.
 

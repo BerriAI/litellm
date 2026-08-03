@@ -41,6 +41,7 @@ const modeDescriptions = {
   logging_only: "Logging Only - Only runs on logging callbacks without affecting the LLM call",
   pre_mcp_call: "Before MCP Tool Call - Runs before MCP tool execution and validates tool calls",
   during_mcp_call: "During MCP Tool Call - Runs in parallel with MCP tool execution for monitoring",
+  post_mcp_call: "After MCP Tool Call - Runs after MCP tool execution and checks the tool result",
 };
 
 interface GuardrailPreset {

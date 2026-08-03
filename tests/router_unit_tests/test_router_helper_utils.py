@@ -2659,6 +2659,23 @@ def test_resolve_model_name_from_model_id():
     result = router.resolve_model_name_from_model_id("gpt-5-mini")
     assert result == "gpt-5-mini"
 
+    # Test case 10: model_id is a deployment ID (hash) that differs from the
+    # public model_name. Regression for #32580: managed batch/file IDs embed the
+    # deployment model_id, and it must resolve back to the public model_name so
+    # team model-access checks compare against the model group, not the hash.
+    model_list = [
+        {
+            "model_name": "bedrock-batch-model",
+            "litellm_params": {
+                "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            },
+            "model_info": {"id": "8d0eaa7e6c6f54a425dfd0062cb6b0dc"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    result = router.resolve_model_name_from_model_id("8d0eaa7e6c6f54a425dfd0062cb6b0dc")
+    assert result == "bedrock-batch-model"
+
 
 def test_get_valid_args():
     """Test get_valid_args static method returns valid Router.__init__ arguments"""

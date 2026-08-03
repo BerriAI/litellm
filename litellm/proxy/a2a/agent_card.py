@@ -8,8 +8,9 @@ and uses LiteLLM auth.
 """
 
 import re
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Dict, List, Literal, Mapping
+from typing import Any, Literal
 
 SupportedA2AVersion = Literal["0.3", "1.0"]
 
@@ -52,7 +53,7 @@ def resolve_served_protocol_version(card: Mapping[str, Any] | None) -> str:
 # Security scheme exposed by the LiteLLM-fronted agent card. Always replaces
 # whatever upstream advertised — the client must authenticate to the proxy,
 # not the upstream agent.
-LITELLM_SECURITY_SCHEMES: Dict[str, Dict[str, Any]] = {
+LITELLM_SECURITY_SCHEMES: dict[str, dict[str, Any]] = {
     "LiteLLMKey": {
         "type": "http",
         "scheme": "bearer",
@@ -60,7 +61,7 @@ LITELLM_SECURITY_SCHEMES: Dict[str, Dict[str, Any]] = {
     },
 }
 
-LITELLM_SECURITY_REQUIREMENTS: List[Dict[str, List[str]]] = [{"LiteLLMKey": []}]
+LITELLM_SECURITY_REQUIREMENTS: list[dict[str, list[str]]] = [{"LiteLLMKey": []}]
 
 # Capabilities LiteLLM can faithfully proxy today. Anything not in this set is
 # dropped during merge so we don't advertise behavior the proxy can't deliver.
@@ -111,7 +112,7 @@ _ALLOWED_TOP_LEVEL_KEYS = {
     "url",
 }
 
-_DEFAULT_SKILLS: List[Dict[str, Any]] = [
+_DEFAULT_SKILLS: list[dict[str, Any]] = [
     {
         "id": "chat",
         "name": "Chat",
@@ -120,7 +121,7 @@ _DEFAULT_SKILLS: List[Dict[str, Any]] = [
     }
 ]
 
-_DEFAULT_MODES: List[str] = ["text"]
+_DEFAULT_MODES: list[str] = ["text"]
 
 # Fallback ``version`` when the upstream card omits the field. The A2A v1.0
 # schema requires ``version`` on every card, so without this default the
@@ -128,7 +129,7 @@ _DEFAULT_MODES: List[str] = ["text"]
 _DEFAULT_AGENT_VERSION = "1.0.0"
 
 
-def _filter_capabilities(upstream_capabilities: Any) -> Dict[str, Any]:
+def _filter_capabilities(upstream_capabilities: Any) -> dict[str, Any]:
     """Return a capabilities dict containing only allowlisted, truthy keys."""
     if not isinstance(upstream_capabilities, dict):
         return {}
@@ -137,7 +138,7 @@ def _filter_capabilities(upstream_capabilities: Any) -> Dict[str, Any]:
     }
 
 
-def _default_litellm_provider(proxy_base_url: str) -> Dict[str, str]:
+def _default_litellm_provider(proxy_base_url: str) -> dict[str, str]:
     return {"organization": "LiteLLM Proxy", "url": proxy_base_url}
 
 
@@ -148,7 +149,7 @@ def merge_agent_card(
     proxy_base_url: str,
     name: str | None = None,
     description: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build the LiteLLM-fronted agent card.
 
@@ -168,7 +169,7 @@ def merge_agent_card(
         A dict suitable for serving as the proxy's agent card. Only keys in
         the v1.0 AgentCard schema (plus ``supportedInterfaces``) are emitted.
     """
-    base: Dict[str, Any] = deepcopy(dict(upstream_card)) if upstream_card else {}
+    base: dict[str, Any] = deepcopy(dict(upstream_card)) if upstream_card else {}
 
     # Keep the upstream ``url`` on the stored card: the runtime A2A
     # invocation path reads it from ``agent_card_params`` to know where to

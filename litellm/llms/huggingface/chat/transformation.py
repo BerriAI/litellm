@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -47,11 +47,11 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         default_headers = {
             "content-type": "application/json",
@@ -63,12 +63,10 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
 
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HuggingFaceError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_base_url(self, model: str, base_url: Optional[str]) -> Optional[str]:
+    def get_base_url(self, model: str, base_url: str | None) -> str | None:
         """
         Get the API base for the Huggingface API.
 
@@ -82,12 +80,12 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the API call.
@@ -125,7 +123,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

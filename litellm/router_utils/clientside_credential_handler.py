@@ -11,12 +11,10 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from typing import List
-
 clientside_credential_keys = ["api_key", "api_base", "base_url"]
 
 
-def _admin_config_fields_to_clear_on_base_override() -> List[str]:
+def _admin_config_fields_to_clear_on_base_override() -> list[str]:
     """
     Provider-specific credential / endpoint-targeting fields that must NOT
     flow through to a client-redirected upstream.

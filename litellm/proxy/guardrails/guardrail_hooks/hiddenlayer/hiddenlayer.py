@@ -1,11 +1,11 @@
 from __future__ import annotations
-from uuid import uuid4
-import httpx
 
 import os
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
+from uuid import uuid4
 
+import httpx
 import requests
 from fastapi import HTTPException
 from httpx import HTTPStatusError
@@ -65,7 +65,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
     """Custom guardrail wrapper for HiddenLayer's safety checks."""
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -73,10 +73,10 @@ class HiddenlayerGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        api_id: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        auth_url: Optional[str] = None,
+        api_id: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        auth_url: str | None = None,
         **kwargs: Any,
     ) -> None:
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -114,7 +114,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         """Validate (and optionally redact) text via HiddenLayer before/after LLM calls."""
 
@@ -265,7 +265,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
             return result
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type[GuardrailConfigModel] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
             HiddenlayerGuardrailConfigModel,
         )
@@ -278,10 +278,10 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
 
     def __init__(
         self,
-        api_id: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        auth_url: Optional[str] = None,
+        api_id: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        auth_url: str | None = None,
         **kwargs: Any,
     ) -> None:
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
@@ -318,7 +318,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         """Validate (and optionally redact) text via HiddenLayer before/after LLM calls."""
 
@@ -461,7 +461,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             return response
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type[GuardrailConfigModel] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
             HiddenlayerGuardrailConfigModel,
         )

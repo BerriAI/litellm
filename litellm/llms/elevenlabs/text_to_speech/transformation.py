@@ -4,7 +4,7 @@ Elevenlabs Text-to-Speech transformation
 Maps OpenAI TTS spec to Elevenlabs TTS API
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 import httpx
@@ -80,13 +80,13 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _resolve_voice_id(
         self,
-        voice: Optional[Union[str, Dict[str, Any]]],
-        params: Dict[str, Any],
+        voice: str | dict[str, Any] | None,
+        params: dict[str, Any],
     ) -> str:
         """
         Determine the ElevenLabs voice_id based on provided voice input or parameters.
         """
-        mapped_voice: Optional[str] = None
+        mapped_voice: str | None = None
 
         if isinstance(voice, str) and voice.strip():
             mapped_voice = self._extract_voice_id(voice)
@@ -112,20 +112,20 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: Dict,
-        voice: Optional[Union[str, Dict]] = None,
+        optional_params: dict,
+        voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Optional[str], Dict]:
+        kwargs: dict[str, Any] | None = None,
+    ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to ElevenLabs TTS parameters
         """
-        mapped_params: Dict[str, Any] = {}
-        query_params: Dict[str, Any] = {}
+        mapped_params: dict[str, Any] = {}
+        query_params: dict[str, Any] = {}
 
         # Work on a copy so we don't mutate the caller's dictionary
         params = dict(optional_params) if optional_params else {}
-        passthrough_kwargs: Dict[str, Any] = kwargs if kwargs is not None else {}
+        passthrough_kwargs: dict[str, Any] = kwargs if kwargs is not None else {}
 
         # Extract voice identifier
         mapped_voice = self._resolve_voice_id(voice, params)
@@ -140,7 +140,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         # Drop it to avoid sending unsupported keys unless caller already provided voice_settings.
         speed = params.pop("speed", None)
         if speed is not None:
-            speed_value: Optional[float]
+            speed_value: float | None
             try:
                 speed_value = float(speed)
             except (TypeError, ValueError):
@@ -167,8 +167,8 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure environment and set up authentication headers
@@ -187,16 +187,16 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return ElevenLabsException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_text_to_speech_request(
         self,
         model: str,
         input: str,
-        voice: Optional[str],
-        optional_params: Dict,
-        litellm_params: Dict,
+        voice: str | None,
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:
         """
@@ -205,7 +205,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         params = dict(optional_params) if optional_params else {}
         extra_body = params.pop("extra_body", None)
 
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "text": input,
             "model_id": model,
         }
@@ -229,10 +229,10 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
     def _add_elevenlabs_specific_params(
         self,
         mapped_voice: str,
-        query_params: Dict[str, Any],
-        mapped_params: Dict[str, Any],
-        kwargs: Optional[Dict[str, Any]],
-        remaining_params: Dict[str, Any],
+        query_params: dict[str, Any],
+        mapped_params: dict[str, Any],
+        kwargs: dict[str, Any] | None,
+        remaining_params: dict[str, Any],
     ) -> None:
         if kwargs is None:
             kwargs = {}
@@ -291,7 +291,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """

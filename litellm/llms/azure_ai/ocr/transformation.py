@@ -2,8 +2,6 @@
 Azure AI OCR transformation implementation.
 """
 
-from typing import Dict
-
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -37,13 +35,13 @@ class AzureAIOCRConfig(MistralOCRConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
         litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers for Azure AI OCR.
 

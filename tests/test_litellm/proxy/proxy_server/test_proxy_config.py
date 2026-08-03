@@ -1404,12 +1404,12 @@ def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__delete_deployment_empty_returns_zero(monkeypatch):
+async def test_ProxyConfig__delete_deployment_no_router_returns_none(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     pc = ProxyConfig()
     result = await pc._delete_deployment(db_models=[])
-    snapshot = {"deleted": result, "router_was": "none", "empty_db_models": True}
-    assert snapshot == {"deleted": 0, "router_was": "none", "empty_db_models": True}
+    snapshot = {"still_desired": result, "router_was": "none", "empty_db_models": True}
+    assert snapshot == {"still_desired": None, "router_was": "none", "empty_db_models": True}
 
 
 @pytest.mark.asyncio
@@ -2059,6 +2059,42 @@ async def test_ProxyConfig__add_router_settings_from_db_config_none_router_noop(
 
 
 # ---------------------------------------------------------------------------
+# ProxyConfig.add_deployment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    fake_router = MagicMock()
+    fake_router.get_model_list = MagicMock(return_value=[])
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_config.find_first = AsyncMock(
+        return_value=SimpleNamespace(param_value={"routing_strategy": "latency-based-routing"})
+    )
+
+    async def fake_get_config(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(pc, "get_config", fake_get_config)
+    monkeypatch.setattr(pc, "_get_models_from_db", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", AsyncMock())
+    monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
+    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "proxy_config", pc)
+
+    await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
+
+    fake_router.update_settings.assert_called_once_with(routing_strategy="latency-based-routing")
+
+
+# ---------------------------------------------------------------------------
 # ProxyConfig._add_general_settings_from_db_config
 # ---------------------------------------------------------------------------
 
@@ -2354,3 +2390,133 @@ async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plai
     assert "num_retries=7" in rendered, (
         f"non-secret num_retries value was over-redacted; expected it visible in {rendered!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ProxyConfig agents from config.yaml
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def clean_agent_registry():
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+    original_agents = list(global_agent_registry.agent_list)
+    original_config_agents = getattr(global_agent_registry, "config_agents", ())
+    global_agent_registry.agent_list = []
+    global_agent_registry.config_agents = ()
+    try:
+        yield global_agent_registry
+    finally:
+        global_agent_registry.agent_list = original_agents
+        global_agent_registry.config_agents = original_config_agents
+
+
+def _config_agent(agent_name: str) -> Dict[str, Any]:
+    return {
+        "agent_name": agent_name,
+        "agent_card_params": {
+            "name": "Config Agent",
+            "url": "http://localhost:10001",
+            "protocolVersion": "1.0",
+        },
+    }
+
+
+class _FakeAgentRow:
+    """Stand-in for a prisma agent record: supports dict() and .object_permission."""
+
+    def __init__(self, agent_id: str, agent_name: str) -> None:
+        self.agent_id = agent_id
+        self.agent_name = agent_name
+        self.object_permission = None
+        self.spend = 0.0
+
+    def __iter__(self):
+        return iter(
+            {
+                "agent_id": self.agent_id,
+                "agent_name": self.agent_name,
+                "agent_card_params": {"name": self.agent_name, "url": "http://db-agent"},
+                "litellm_params": {},
+            }.items()
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_key", ["agents", "agent_list"])
+async def test_ProxyConfig__init_non_llm_configs_registers_agents_from_config(clean_agent_registry, config_key):
+    """The documented ``agents:`` key must register agents, as must the legacy ``agent_list:``."""
+    await ProxyConfig()._init_non_llm_configs(
+        config={config_key: [_config_agent("config-agent")]},
+        config_file_path=None,
+    )
+
+    assert [agent.agent_name for agent in clean_agent_registry.get_agent_list()] == ["config-agent"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_agent_registry):
+    """A DB reload rebuilds the registry; config-defined agents must survive it alongside DB rows."""
+    await ProxyConfig()._init_non_llm_configs(
+        config={"agents": [_config_agent("config-agent")]},
+        config_file_path=None,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_agentstable.find_many = AsyncMock(return_value=[_FakeAgentRow("db-id", "db-agent")])
+
+    await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
+
+    assert sorted(agent.agent_name for agent in clean_agent_registry.get_agent_list()) == [
+        "config-agent",
+        "db-agent",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config, expected_agent_names",
+    [
+        ({"agents": [], "agent_list": [_config_agent("legacy-agent")]}, []),
+        (
+            {
+                "agents": [_config_agent("documented-agent")],
+                "agent_list": [_config_agent("legacy-agent")],
+            },
+            ["documented-agent"],
+        ),
+        ({"agent_list": [_config_agent("legacy-agent")]}, ["legacy-agent"]),
+    ],
+    ids=["empty-agents-wins", "populated-agents-wins", "agent_list-alone-still-works"],
+)
+async def test_ProxyConfig__init_non_llm_configs_prefers_agents_key_by_presence(
+    clean_agent_registry, config, expected_agent_names
+):
+    """
+    ``agents`` outranks the legacy ``agent_list`` whenever the key is present.
+
+    Selecting on truthiness instead would silently register the legacy entries
+    for a config that spells out ``agents: []``.
+    """
+    await ProxyConfig()._init_non_llm_configs(config=config, config_file_path=None)
+
+    assert [agent.agent_name for agent in clean_agent_registry.get_agent_list()] == expected_agent_names
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_non_llm_configs_empty_agents_key_clears_remembered_agents(clean_agent_registry):
+    """
+    An explicitly empty ``agents:`` must reach the registry, not be skipped as falsy.
+
+    Skipping it leaves the previously remembered agents in place, so the next DB
+    rebuild replays agents the operator deleted from config.yaml.
+    """
+    clean_agent_registry.load_agents_from_config([_config_agent("stale-agent")])
+    assert clean_agent_registry.config_agents != ()
+
+    await ProxyConfig()._init_non_llm_configs(config={"agents": []}, config_file_path=None)
+
+    assert clean_agent_registry.config_agents == ()
+    clean_agent_registry.load_agents_from_db_and_config(db_agents=None)
+    assert clean_agent_registry.get_agent_list() == []

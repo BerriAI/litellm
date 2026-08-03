@@ -54,7 +54,7 @@ class SpendCounterReseed:
     """
 
     _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
-    _registry_lock: ClassVar[Optional[asyncio.Lock]] = None
+    _registry_lock: ClassVar[asyncio.Lock | None] = None
 
     @staticmethod
     async def _get_lock(counter_key: str) -> asyncio.Lock:
@@ -72,7 +72,7 @@ class SpendCounterReseed:
             return lock
 
     @staticmethod
-    async def from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> Optional[float]:
+    async def from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:
         """
         Read the authoritative spend for a counter from the DB.
 
@@ -106,9 +106,7 @@ class SpendCounterReseed:
             elif counter_key.startswith("spend:user:"):
                 user_id = counter_key[len("spend:user:") :]
                 row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
-            elif counter_key.startswith("spend:end_user:"):
-                return None
-            elif counter_key.startswith("spend:tag:"):
+            elif counter_key.startswith("spend:end_user:") or counter_key.startswith("spend:tag:"):
                 return None
             elif counter_key.startswith("spend:org:"):
                 org_id = counter_key[len("spend:org:") :]
@@ -143,7 +141,7 @@ class SpendCounterReseed:
         spend_counter_cache: "DualCache",
         counter_key: str,
         require_cache_warm: bool = False,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Reseed a cold spend counter from the DB and warm the cache,
         coalesced via a per-counter lock so concurrent callers (read path
@@ -213,7 +211,7 @@ class SpendCounterReseed:
         entity_type: str,
         entity_id: str,
         window_start: datetime,
-    ) -> Optional[float]:
+    ) -> float | None:
         if prisma_client is None:
             return None
 
@@ -261,7 +259,7 @@ class SpendCounterReseed:
         entity_type: str,
         entity_id: str,
         window_start: datetime,
-    ) -> Optional[float]:
+    ) -> float | None:
         lock = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
             redis_clean_miss = False

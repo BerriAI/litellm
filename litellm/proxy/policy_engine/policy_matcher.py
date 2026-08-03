@@ -7,8 +7,6 @@ apply to a given request based on team alias, key alias, and model.
 Policies are matched via policy_attachments which define WHERE each policy applies.
 """
 
-from typing import Dict, List, Optional
-
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext, PolicyScope
@@ -26,7 +24,7 @@ class PolicyMatcher:
     """
 
     @staticmethod
-    def matches_pattern(value: Optional[str], patterns: List[str]) -> bool:
+    def matches_pattern(value: str | None, patterns: list[str]) -> bool:
         """
         Check if a value matches any of the given patterns.
 
@@ -94,7 +92,7 @@ class PolicyMatcher:
     @staticmethod
     def get_matching_policies(
         context: PolicyMatchContext,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get list of policy names that match the given context via attachments.
 
@@ -118,7 +116,7 @@ class PolicyMatcher:
     @staticmethod
     def get_matching_policies_from_registry(
         context: PolicyMatchContext,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get list of policy names that match the given context from the global registry.
 
@@ -132,10 +130,10 @@ class PolicyMatcher:
 
     @staticmethod
     def get_policies_with_matching_conditions(
-        policy_names: List[str],
+        policy_names: list[str],
         context: PolicyMatchContext,
-        policies: Optional[Dict[str, Policy]] = None,
-    ) -> List[str]:
+        policies: dict[str, Policy] | None = None,
+    ) -> list[str]:
         """
         Filter policies to only those whose conditions match the context.
 

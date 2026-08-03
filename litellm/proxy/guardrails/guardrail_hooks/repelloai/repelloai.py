@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import AsyncGenerator, List, Literal
-
-from pydantic import TypeAdapter, ValidationError
-from pydantic import BaseModel
-from typing_extensions import TypeGuard
+from typing import Literal, TypeGuard
 
 from fastapi import HTTPException
-from httpx import HTTPError, Response as HttpxResponse
+from httpx import HTTPError
+from httpx import Response as HttpxResponse
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -65,7 +64,7 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isin
 
 class RepelloAIGuardrail(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,

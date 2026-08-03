@@ -6,7 +6,7 @@ Handles transformation between OpenAI-compatible format and ModelScope API forma
 API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 """
 
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING
 
 import httpx
 from typing_extensions import override
@@ -75,12 +75,12 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
     @override
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the ModelScope image generation API request.
@@ -99,13 +99,13 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for ModelScope.
         """
-        final_api_key: Optional[str] = api_key or get_secret_str("MODELSCOPE_API_KEY")
+        final_api_key: str | None = api_key or get_secret_str("MODELSCOPE_API_KEY")
 
         if not final_api_key:
             raise ValueError(
@@ -158,8 +158,8 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: object,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform ModelScope response to OpenAI-compatible ImageResponse.
@@ -204,7 +204,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         """Return the appropriate error class for ModelScope."""
         from litellm.exceptions import (

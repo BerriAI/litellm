@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any
 
 from redis.credentials import CredentialProvider  # type: ignore[attr-defined]
 
@@ -14,7 +14,7 @@ _GCP_IAM_TOKEN_TTL_SECONDS = 3300
 # Module-level cache shared across all GCPIAMCredentialProvider instances for the
 # same service account, so multiple Redis connections on the same pod share one token.
 # Keyed by service_account → (token, expiry_monotonic_timestamp).
-_token_cache: Dict[str, Tuple[str, float]] = {}
+_token_cache: dict[str, tuple[str, float]] = {}
 _token_cache_lock = threading.Lock()
 
 
@@ -95,11 +95,11 @@ class GCPIAMCredentialProvider(CredentialProvider):
     def __init__(self, gcp_service_account: str) -> None:
         self._gcp_service_account = gcp_service_account
 
-    def get_credentials(self) -> Tuple[str]:
+    def get_credentials(self) -> tuple[str]:
         token = _get_cached_gcp_iam_token(self._gcp_service_account)
         return (token,)
 
-    async def get_credentials_async(self) -> Tuple[str]:
+    async def get_credentials_async(self) -> tuple[str]:
         token = await asyncio.to_thread(_get_cached_gcp_iam_token, self._gcp_service_account)
         return (token,)
 
@@ -115,17 +115,17 @@ class AzureADCredentialProvider(CredentialProvider):
     fail authentication after the initial token expired (~1 hour TTL).
     """
 
-    def __init__(self, credential: Any, username: Optional[str] = None) -> None:
+    def __init__(self, credential: Any, username: str | None = None) -> None:
         self._credential = credential
         self._username = username
 
-    def get_credentials(self) -> Union[Tuple[str], Tuple[str, str]]:
+    def get_credentials(self) -> tuple[str] | tuple[str, str]:
         token = self._credential.get_token(AZURE_REDIS_SCOPE).token
         if self._username:
             return (self._username, token)
         return (token,)
 
-    async def get_credentials_async(self) -> Union[Tuple[str], Tuple[str, str]]:
+    async def get_credentials_async(self) -> tuple[str] | tuple[str, str]:
         token_obj = await asyncio.to_thread(self._credential.get_token, AZURE_REDIS_SCOPE)
         if self._username:
             return (self._username, token_obj.token)

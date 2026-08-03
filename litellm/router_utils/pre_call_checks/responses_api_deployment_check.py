@@ -11,7 +11,6 @@ If previous_response_id is provided, route to the deployment that returned the p
 """
 
 import warnings
-from typing import List, Optional
 
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -33,11 +32,11 @@ class ResponsesApiDeploymentCheck(CustomLogger):
     async def async_filter_deployments(
         self,
         model: str,
-        healthy_deployments: List,
-        messages: Optional[List[AllMessageValues]],
-        request_kwargs: Optional[dict] = None,
-        parent_otel_span: Optional[Span] = None,
-    ) -> List[dict]:
+        healthy_deployments: list,
+        messages: list[AllMessageValues] | None,
+        request_kwargs: dict | None = None,
+        parent_otel_span: Span | None = None,
+    ) -> list[dict]:
         request_kwargs = request_kwargs or {}
         previous_response_id = request_kwargs.get("previous_response_id", None)
         if previous_response_id is None:

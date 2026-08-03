@@ -7,7 +7,7 @@
 
 import fnmatch
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Set
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
 
@@ -58,7 +58,7 @@ _HEADER_PRESENT_PLACEHOLDER = "[present]"
 
 def _header_value_allowed(
     header_name: str,
-    extra_allowlist: Set[str] | None = None,
+    extra_allowlist: set[str] | None = None,
 ) -> bool:
     """Return True if this header's value may be forwarded (allowlist, including globs and extra_headers)."""
     lower = header_name.lower()
@@ -74,8 +74,8 @@ def _header_value_allowed(
 
 def _sanitize_inbound_headers(
     headers: Any,
-    extra_allowlist: Set[str] | None = None,
-) -> Dict[str, str] | None:
+    extra_allowlist: set[str] | None = None,
+) -> dict[str, str] | None:
     """
     Sanitize inbound headers before passing them to a 3rd party guardrail service.
 
@@ -86,7 +86,7 @@ def _sanitize_inbound_headers(
     if not headers or not isinstance(headers, dict):
         return None
 
-    sanitized: Dict[str, str] = {}
+    sanitized: dict[str, str] = {}
     for k, v in headers.items():
         if k is None:
             continue
@@ -105,8 +105,8 @@ def _sanitize_inbound_headers(
 def _extract_inbound_headers(
     request_data: dict,
     logging_obj: Optional["LiteLLMLoggingObj"],
-    extra_allowlist: Set[str] | None = None,
-) -> Dict[str, str] | None:
+    extra_allowlist: set[str] | None = None,
+) -> dict[str, str] | None:
     """
     Extract inbound headers from available request context.
 
@@ -172,10 +172,10 @@ class GenericGuardrailAPI(CustomGuardrail):
 
     def __init__(
         self,
-        headers: Dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
-        additional_provider_specific_params: Dict[str, Any] | None = None,
+        additional_provider_specific_params: dict[str, Any] | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         fail_on_error: bool | None = True,
         extra_headers: list | None = None,
@@ -357,7 +357,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 **({"http_status_code": http_status_code} if http_status_code else {}),
             )
         verbose_proxy_logger.error("Generic Guardrail API: failed to make request: %s", str(error))
-        raise Exception(f"Generic Guardrail API failed: {str(error)}")
+        raise Exception(f"Generic Guardrail API failed: {error!s}")
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -497,7 +497,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         return GenericGuardrailAPIConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,

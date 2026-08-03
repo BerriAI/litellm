@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import jwt
 from pydantic import BaseModel, ConfigDict, SecretStr, TypeAdapter, ValidationError
@@ -158,6 +158,42 @@ async def fetch_sso_identity_assertion(user_id: str) -> SSOIdentityAssertion | N
         issuer=payload.issuer,
         expires_at=payload.expires_at,
     )
+
+
+class AssertionStoreUnavailable(Exception):
+    """Raised by ``fetch`` when the backing store is unreachable (e.g. the DB is down).
+
+    Distinct from returning ``None`` for "this user has no captured assertion": an outage must not
+    read as a definite absence, which would tell the user to sign in again over a transient failure,
+    and it must not escape as an unhandled error on the egress or retry path. Mirrors
+    ``TokenStoreUnavailable`` on the sibling per-user OAuth store.
+    """
+
+
+class SSOAssertionStore(Protocol):
+    """The read seam the ``id_jag`` egress arm depends on, so the arm takes a collaborator
+    rather than reaching for a module-level function and a proxy global at call time.
+
+    Returns the user's captured assertion, or ``None`` when they have never signed in. Raises
+    ``AssertionStoreUnavailable`` when the backing store is unreachable.
+    """
+
+    async def fetch(self, user_id: str) -> SSOIdentityAssertion | None: ...
+
+
+class DbSSOAssertionStore:
+    """The live store: the row the SSO callback wrote, read back by ``user_id``.
+
+    A storage failure is re-raised as ``AssertionStoreUnavailable`` so the resolver can map it to a
+    typed fail-closed result; letting the raw driver error escape would surface a DB blip as a 500
+    from credential resolution and from the upstream-401 retry.
+    """
+
+    async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
+        try:
+            return await fetch_sso_identity_assertion(user_id)
+        except Exception as exc:  # noqa: BLE001  # any driver/storage failure is an outage, not an absence
+            raise AssertionStoreUnavailable(str(exc)) from exc
 
 
 async def rotate_sso_identity_assertions_master_key(prisma_client: PrismaClient, new_master_key: str) -> None:

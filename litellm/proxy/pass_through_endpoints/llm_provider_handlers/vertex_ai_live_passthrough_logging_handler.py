@@ -6,7 +6,7 @@ Supports different modalities: text, audio, video, and web search.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
@@ -33,7 +33,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     def _build_complete_streaming_response(self, *args, **kwargs):
         """Not applicable for WebSocket passthrough."""
-        return None
+        return
 
     def get_provider_config(self, model: str):
         """Return Vertex AI provider configuration."""
@@ -50,8 +50,8 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     @staticmethod
     def _extract_usage_metadata_from_websocket_messages(
-        websocket_messages: List[Dict],
-    ) -> Optional[Dict]:
+        websocket_messages: list[dict],
+    ) -> dict | None:
         """
         Extract and aggregate usage metadata from a list of WebSocket messages.
 
@@ -76,7 +76,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return all_usage_metadata[0]
 
         # Aggregate multiple usage metadata messages
-        aggregated: Dict[str, Any] = {
+        aggregated: dict[str, Any] = {
             "promptTokenCount": 0,
             "candidatesTokenCount": 0,
             "totalTokenCount": 0,
@@ -130,7 +130,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
     @staticmethod
     def _calculate_live_api_cost(
         model: str,
-        usage_metadata: Dict,
+        usage_metadata: dict,
         custom_llm_provider: str = "vertex_ai",
     ) -> float:
         """
@@ -226,7 +226,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     @staticmethod
     def _create_usage_object_from_metadata(
-        usage_metadata: Dict,
+        usage_metadata: dict,
         model: str,
     ) -> Usage:
         """
@@ -275,7 +275,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     def vertex_ai_live_passthrough_handler(
         self,
-        websocket_messages: List[Dict],
+        websocket_messages: list[dict],
         logging_obj,
         url_route: str,
         start_time: datetime,

@@ -10,8 +10,6 @@ PATCH /config/cost_margin_config - Update cost margin configuration
 POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
-from typing import Dict, Optional, Tuple, Union
-
 from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
@@ -29,7 +27,7 @@ from litellm.types.utils import LlmProvidersSet
 router = APIRouter()
 
 
-def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
+def _resolve_model_for_cost_lookup(model: str) -> tuple[str, str | None]:
     """
     Resolve a model name (which may be a router alias/model_group) to the
     underlying litellm model name for cost lookup.
@@ -45,7 +43,7 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
     """
     from litellm.proxy.proxy_server import llm_router
 
-    custom_llm_provider: Optional[str] = None
+    custom_llm_provider: str | None = None
 
     # Try to resolve from router if available
     if llm_router is not None:
@@ -131,7 +129,7 @@ async def get_cost_discount_config(
 
         return {"values": cost_discount_config}
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching cost discount config: {str(e)}")
+        verbose_proxy_logger.error(f"Error fetching cost discount config: {e!s}")
         return {"values": {}}
 
 
@@ -141,7 +139,7 @@ async def get_cost_discount_config(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_cost_discount_config(
-    cost_discount_config: Dict[str, float],
+    cost_discount_config: dict[str, float],
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -179,7 +177,7 @@ async def update_cost_discount_config(
 
     # Validate that all providers are valid LiteLLM providers
     invalid_providers = []
-    for provider in cost_discount_config.keys():
+    for provider in cost_discount_config:
         if provider not in LlmProvidersSet:
             invalid_providers.append(provider)
 
@@ -226,10 +224,10 @@ async def update_cost_discount_config(
             "values": cost_discount_config,
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating cost discount config: {str(e)}")
+        verbose_proxy_logger.error(f"Error updating cost discount config: {e!s}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update cost discount config: {str(e)}"},
+            detail={"error": f"Failed to update cost discount config: {e!s}"},
         )
 
 
@@ -264,7 +262,7 @@ async def get_cost_margin_config(
 
         return {"values": cost_margin_config}
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching cost margin config: {str(e)}")
+        verbose_proxy_logger.error(f"Error fetching cost margin config: {e!s}")
         return {"values": {}}
 
 
@@ -274,7 +272,7 @@ async def get_cost_margin_config(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_cost_margin_config(
-    cost_margin_config: Dict[str, Union[float, Dict[str, float]]],
+    cost_margin_config: dict[str, float | dict[str, float]],
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -317,7 +315,7 @@ async def update_cost_margin_config(
 
     # Validate that all providers are valid LiteLLM providers (except "global")
     invalid_providers = []
-    for provider in cost_margin_config.keys():
+    for provider in cost_margin_config:
         if provider != "global" and provider not in LlmProvidersSet:
             invalid_providers.append(provider)
 
@@ -400,10 +398,10 @@ async def update_cost_margin_config(
             "values": cost_margin_config,
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating cost margin config: {str(e)}")
+        verbose_proxy_logger.error(f"Error updating cost margin config: {e!s}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update cost margin config: {str(e)}"},
+            detail={"error": f"Failed to update cost margin config: {e!s}"},
         )
 
 
@@ -486,7 +484,7 @@ async def estimate_cost(
         raise HTTPException(
             status_code=404,
             detail={
-                "error": f"Could not calculate cost for model '{request.model}' (resolved to '{resolved_model}'): {str(e)}"
+                "error": f"Could not calculate cost for model '{request.model}' (resolved to '{resolved_model}'): {e!s}"
             },
         )
 

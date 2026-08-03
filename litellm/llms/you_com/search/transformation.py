@@ -5,7 +5,7 @@ You.com API Reference: https://you.com/docs/api-reference/search/v1-search
 OpenAPI spec:          https://you.com/specs/openapi_search_v1.yaml
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import TypedDict
 
 import httpx
 
@@ -34,8 +34,8 @@ class YouComSearchRequest(_YouComSearchRequestRequired, total=False):
     country: str
     language: str
     freshness: str
-    include_domains: List[str]
-    exclude_domains: List[str]
+    include_domains: list[str]
+    exclude_domains: list[str]
     safesearch: str
 
 
@@ -52,11 +52,11 @@ class YouComSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Set headers for the You.com Search API.
 
@@ -83,9 +83,9 @@ class YouComSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -115,10 +115,10 @@ class YouComSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to You.com API format.
 
@@ -174,7 +174,7 @@ class YouComSearchConfig(BaseSearchConfig):
         web_results = raw_results.get("web") or []
         news_results = raw_results.get("news") or []
 
-        results: List[SearchResult] = []
+        results: list[SearchResult] = []
         for item in list(web_results) + list(news_results):
             snippets = item.get("snippets") or []
             snippet = snippets[0] if snippets else item.get("description", "")

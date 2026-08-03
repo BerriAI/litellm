@@ -1,6 +1,6 @@
 """``clear_tool_uses_20250919`` polyfill (v0: ``trigger`` and ``keep`` only)."""
 
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -14,7 +14,7 @@ from ..constants import (
 from ..placeholders import build_cleared_tool_result_content
 
 
-def _count_tool_uses(messages: List[Dict[str, Any]]) -> int:
+def _count_tool_uses(messages: list[dict[str, Any]]) -> int:
     """Return the number of tool_use content blocks across all messages.
 
     Only counts blocks with a string ``id`` to stay consistent with
@@ -32,9 +32,9 @@ def _count_tool_uses(messages: List[Dict[str, Any]]) -> int:
     return count
 
 
-def _collect_tool_use_ids_in_order(messages: List[Dict[str, Any]]) -> List[str]:
+def _collect_tool_use_ids_in_order(messages: list[dict[str, Any]]) -> list[str]:
     """Return tool_use ids in the chronological order they appear in messages."""
-    ids: List[str] = []
+    ids: list[str] = []
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, list):
@@ -47,11 +47,11 @@ def _collect_tool_use_ids_in_order(messages: List[Dict[str, Any]]) -> List[str]:
 
 
 def _trigger_met(
-    trigger: Dict[str, Any],
+    trigger: dict[str, Any],
     model: str,
-    messages: List[Dict[str, Any]],
-    tools: Optional[List[Dict[str, Any]]],
-) -> Tuple[bool, Optional[int]]:
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+) -> tuple[bool, int | None]:
     """Return (trigger_met, input_tokens if counted for reuse)."""
     trigger_type = trigger.get("type", "input_tokens")
     threshold = trigger.get("value")
@@ -73,7 +73,7 @@ def _trigger_met(
     return current_tokens > threshold, current_tokens
 
 
-def _resolve_keep_count(keep: Dict[str, Any]) -> int:
+def _resolve_keep_count(keep: dict[str, Any]) -> int:
     keep_type = keep.get("type", "tool_uses")
     if keep_type != "tool_uses":
         return DEFAULT_KEEP_TOOL_USES
@@ -84,10 +84,10 @@ def _resolve_keep_count(keep: Dict[str, Any]) -> int:
 
 
 def _last_completed_tool_use_id(
-    messages: List[Dict[str, Any]],
-) -> Optional[str]:
+    messages: list[dict[str, Any]],
+) -> str | None:
     """Latest completed tool_result id; never cleared."""
-    last_id: Optional[str] = None
+    last_id: str | None = None
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, list):
@@ -99,17 +99,17 @@ def _last_completed_tool_use_id(
     return last_id
 
 
-def _clear_tool_results(messages: List[Dict[str, Any]], ids_to_clear: set) -> Tuple[List[Dict[str, Any]], int]:
+def _clear_tool_results(messages: list[dict[str, Any]], ids_to_clear: set) -> tuple[list[dict[str, Any]], int]:
     """Clear matching tool_result content; return (messages, cleared_count)."""
     cleared = 0
-    new_messages: List[Dict[str, Any]] = []
+    new_messages: list[dict[str, Any]] = []
     for msg in messages:
         content = msg.get("content")
         if not isinstance(content, list):
             new_messages.append(msg)
             continue
 
-        new_blocks: List[Any] = []
+        new_blocks: list[Any] = []
         mutated = False
         for block in content:
             if (
@@ -138,11 +138,11 @@ def _clear_tool_results(messages: List[Dict[str, Any]], ids_to_clear: set) -> Tu
 def apply_clear_tool_uses_20250919(
     *,
     model: str,
-    messages: List[Dict[str, Any]],
-    tools: Optional[List[Dict[str, Any]]],
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
     system: Any,
-    edit_spec: Dict[str, Any],
-) -> Tuple[List[Dict[str, Any]], Optional[AppliedEdit]]:
+    edit_spec: dict[str, Any],
+) -> tuple[list[dict[str, Any]], AppliedEdit | None]:
     """Apply clear_tool_uses; return (messages, AppliedEdit or None)."""
     ignored_knobs = [knob for knob in ("clear_at_least", "exclude_tools", "clear_tool_inputs") if knob in edit_spec]
     for ignored_knob in ignored_knobs:

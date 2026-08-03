@@ -1,7 +1,7 @@
 import importlib
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -24,7 +24,7 @@ def get_prompt_initializer_from_integrations():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_initializers: Dict[str, Callable] = {}
+    discovered_initializers: dict[str, Callable] = {}
 
     try:
         # Get the path to the prompt_integrations directory
@@ -90,12 +90,12 @@ class InMemoryPromptRegistry:
     """
 
     def __init__(self):
-        self.IN_MEMORY_PROMPTS: Dict[str, PromptSpec] = {}
+        self.IN_MEMORY_PROMPTS: dict[str, PromptSpec] = {}
         """
         Prompt id to Prompt object mapping
         """
 
-        self.prompt_id_to_custom_prompt: Dict[str, Optional[CustomPromptManagement]] = {}
+        self.prompt_id_to_custom_prompt: dict[str, CustomPromptManagement | None] = {}
         """
         Guardrail id to CustomGuardrail object mapping
         """
@@ -103,8 +103,8 @@ class InMemoryPromptRegistry:
     def initialize_prompt(
         self,
         prompt: PromptSpec,
-        config_file_path: Optional[str] = None,
-    ) -> Optional[PromptSpec]:
+        config_file_path: str | None = None,
+    ) -> PromptSpec | None:
         """
         Initialize a guardrail from a dictionary and add it to the litellm callback manager
 
@@ -117,7 +117,7 @@ class InMemoryPromptRegistry:
             verbose_proxy_logger.debug("prompt_id already exists in IN_MEMORY_PROMPTS")
             return self.IN_MEMORY_PROMPTS[prompt_id]
 
-        custom_prompt_callback: Optional[CustomPromptManagement] = None
+        custom_prompt_callback: CustomPromptManagement | None = None
         litellm_params_data = prompt.litellm_params
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
@@ -154,13 +154,13 @@ class InMemoryPromptRegistry:
 
         return parsed_prompt
 
-    def get_prompt_by_id(self, prompt_id: str) -> Optional[PromptSpec]:
+    def get_prompt_by_id(self, prompt_id: str) -> PromptSpec | None:
         """
         Get a prompt by its ID from memory
         """
         return self.IN_MEMORY_PROMPTS.get(prompt_id)
 
-    def get_prompt_callback_by_id(self, prompt_id: str) -> Optional[CustomPromptManagement]:
+    def get_prompt_callback_by_id(self, prompt_id: str) -> CustomPromptManagement | None:
         """
         Get a prompt callback by its ID from memory
         """

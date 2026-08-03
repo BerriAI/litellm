@@ -1,6 +1,6 @@
 """Block Code Execution guardrail: blocks or masks fenced code blocks by language."""
 
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 
@@ -43,8 +43,8 @@ def initialize_guardrail(
     if not guardrail_name:
         raise ValueError("Block Code Execution guardrail requires a guardrail_name")
 
-    blocked_languages: Optional[List[str]] = cast(
-        Optional[List[str]],
+    blocked_languages: list[str] | None = cast(
+        list[str] | None,
         _get_param(litellm_params, guardrail, "blocked_languages"),
     )
     action = cast(
@@ -53,14 +53,14 @@ def initialize_guardrail(
     )
     confidence_threshold = float(
         cast(
-            Union[int, float, str],
+            int | float | str,
             _get_param(litellm_params, guardrail, "confidence_threshold", 0.5),
         )
     )
     detect_execution_intent = bool(_get_param(litellm_params, guardrail, "detect_execution_intent", True))
     mode = _get_param(litellm_params, guardrail, "mode")
     event_hook = cast(
-        Optional[Union[Literal["pre_call", "post_call", "during_call"], List[str]]],
+        Literal["pre_call", "post_call", "during_call"] | list[str] | None,
         mode if mode is not None else DEFAULT_EVENT_HOOKS,
     )
 

@@ -1,6 +1,6 @@
 #### Video Endpoints #####
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import orjson
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
@@ -44,7 +44,7 @@ router = APIRouter()
 async def video_generation(
     request: Request,
     fastapi_response: Response,
-    input_reference: Optional[UploadFile] = File(None),
+    input_reference: UploadFile | None = File(None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -160,7 +160,7 @@ async def video_list(
 
     # Read query parameters
     query_params = dict(request.query_params)
-    data: Dict[str, Any] = {"query_params": query_params}
+    data: dict[str, Any] = {"query_params": query_params}
 
     # Extract custom_llm_provider from headers, query params, or body
     custom_llm_provider = (
@@ -245,7 +245,7 @@ async def video_status(
     )
 
     # Create data with video_id
-    data: Dict[str, Any] = {"video_id": video_id}
+    data: dict[str, Any] = {"video_id": video_id}
 
     decoded = decode_video_id_with_provider(video_id)
     provider_from_id = decoded.get("custom_llm_provider")
@@ -344,7 +344,7 @@ async def video_content(
     )
 
     # Create data with video_id
-    data: Dict[str, Any] = {"video_id": video_id}
+    data: dict[str, Any] = {"video_id": video_id}
 
     decoded = decode_video_id_with_provider(video_id)
     provider_from_id = decoded.get("custom_llm_provider")
@@ -654,7 +654,7 @@ async def video_get_character(
     )
 
     original_requested_character_id = character_id
-    data: Dict[str, Any] = {"character_id": character_id}
+    data: dict[str, Any] = {"character_id": character_id}
 
     decoded = decode_character_id_with_provider(character_id)
     provider_from_id = decoded.get("custom_llm_provider")

@@ -10,13 +10,9 @@ import ssl
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
     Literal,
     NamedTuple,
     Optional,
-    Tuple,
-    Union,
 )
 
 import httpx
@@ -35,13 +31,13 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 
-def _get_client_init_params(cls: type) -> Tuple[str, ...]:
+def _get_client_init_params(cls: type) -> tuple[str, ...]:
     """Extract __init__ parameter names (excluding 'self') from a class."""
     return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")  # type: ignore[misc]
 
 
-_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(OpenAI)
-_AZURE_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(AzureOpenAI)
+_OPENAI_INIT_PARAMS: tuple[str, ...] = _get_client_init_params(OpenAI)
+_AZURE_OPENAI_INIT_PARAMS: tuple[str, ...] = _get_client_init_params(AzureOpenAI)
 
 
 class OpenAIError(BaseLLMException):
@@ -49,10 +45,10 @@ class OpenAIError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[dict, httpx.Headers]] = None,
-        body: Optional[dict] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: dict | httpx.Headers | None = None,
+        body: dict | None = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -78,9 +74,9 @@ class OpenAIError(BaseLLMException):
 ####### Error Handling Utils for OpenAI API #######################
 ###################################################################
 def drop_params_from_unprocessable_entity_error(
-    e: Union[openai.UnprocessableEntityError, httpx.HTTPStatusError],
-    data: Dict[str, Any],
-) -> Dict[str, Any]:
+    e: openai.UnprocessableEntityError | httpx.HTTPStatusError,
+    data: dict[str, Any],
+) -> dict[str, Any]:
     """
     Helper function to read OpenAI UnprocessableEntityError and drop the params that raised an error from the error message.
 
@@ -91,7 +87,7 @@ def drop_params_from_unprocessable_entity_error(
     Returns:
     Dict[str, Any]: A new dictionary with invalid parameters removed
     """
-    invalid_params: List[str] = []
+    invalid_params: list[str] = []
     if isinstance(e, httpx.HTTPStatusError):
         error_json = e.response.json()
         error_message = error_json.get("error", {})
@@ -107,7 +103,7 @@ def drop_params_from_unprocessable_entity_error(
                 message = {"detail": message}
         detail = message.get("detail")
 
-        if isinstance(detail, List) and len(detail) > 0 and isinstance(detail[0], dict):
+        if isinstance(detail, list) and len(detail) > 0 and isinstance(detail[0], dict):
             for error_dict in detail:
                 if (
                     error_dict.get("loc")
@@ -129,7 +125,7 @@ class BaseOpenAILLM:
     @staticmethod
     def get_cached_openai_client(
         client_initialization_params: dict, client_type: Literal["openai", "azure"]
-    ) -> Optional[Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI]]:
+    ) -> OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None:
         """Retrieves the OpenAI client from the in-memory cache based on the client initialization parameters"""
         _cache_key = BaseOpenAILLM.get_openai_client_cache_key(
             client_initialization_params=client_initialization_params,
@@ -140,7 +136,7 @@ class BaseOpenAILLM:
 
     @staticmethod
     def set_cached_openai_client(
-        openai_client: Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI],
+        openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI,
         client_type: Literal["openai", "azure"],
         client_initialization_params: dict,
     ):
@@ -190,7 +186,7 @@ class BaseOpenAILLM:
     @staticmethod
     def get_openai_client_initialization_param_fields(
         client_type: Literal["openai", "azure"],
-    ) -> Tuple[str, ...]:
+    ) -> tuple[str, ...]:
         """Returns a tuple of fields that are used to initialize the OpenAI client"""
         if client_type == "openai":
             return _OPENAI_INIT_PARAMS
@@ -200,7 +196,7 @@ class BaseOpenAILLM:
     @staticmethod
     def _get_async_http_client(
         shared_session: Optional["ClientSession"] = None,
-    ) -> Optional[httpx.AsyncClient]:
+    ) -> httpx.AsyncClient | None:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
 
@@ -223,7 +219,7 @@ class BaseOpenAILLM:
         )
 
     @staticmethod
-    def _get_sync_http_client() -> Optional[httpx.Client]:
+    def _get_sync_http_client() -> httpx.Client | None:
         if litellm.client_session is not None:
             return litellm.client_session
 
@@ -243,14 +239,14 @@ class BaseOpenAILLM:
 
 class OpenAICredentials(NamedTuple):
     api_base: str
-    api_key: Optional[str]
-    organization: Optional[str]
+    api_key: str | None
+    organization: str | None
 
 
 def get_openai_credentials(
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    organization: Optional[str] = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    organization: str | None = None,
 ) -> OpenAICredentials:
     """Resolve OpenAI credentials from params, litellm globals, and env vars."""
     resolved_api_base = (

@@ -5,7 +5,8 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import re
-from typing import List, Optional, Tuple, Literal
+from collections.abc import Sequence
+from typing import Literal
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
@@ -19,7 +20,7 @@ from ..gemini.transformation import (
 
 
 def get_first_continuous_block_idx(
-    filtered_messages: List[Tuple[int, AllMessageValues]],  # (idx, message)
+    filtered_messages: list[tuple[int, AllMessageValues]],  # (idx, message)
 ) -> int:
     """
     Find the array index that ends the first continuous sequence of message blocks.
@@ -48,7 +49,7 @@ def get_first_continuous_block_idx(
     return len(filtered_messages) - 1
 
 
-def extract_ttl_from_cached_messages(messages: List[AllMessageValues]) -> Optional[str]:
+def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | None:
     """
     Extract TTL from cached messages. Returns the first valid TTL found.
 
@@ -115,8 +116,8 @@ def _is_valid_ttl_format(ttl: str) -> bool:
 
 
 def separate_cached_messages(
-    messages: List[AllMessageValues],
-) -> Tuple[List[AllMessageValues], List[AllMessageValues]]:
+    messages: list[AllMessageValues],
+) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
     Returns separated cached and non-cached messages.
 
@@ -128,11 +129,11 @@ def separate_cached_messages(
         - cached_messages: List of cached messages.
         - non_cached_messages: List of non-cached messages.
     """
-    cached_messages: List[AllMessageValues] = []
-    non_cached_messages: List[AllMessageValues] = []
+    cached_messages: list[AllMessageValues] = []
+    non_cached_messages: list[AllMessageValues] = []
 
     # Extract cached messages and their indices
-    filtered_messages: List[Tuple[int, AllMessageValues]] = []
+    filtered_messages: list[tuple[int, AllMessageValues]] = []
     for idx, message in enumerate(messages):
         if is_cached_message(message=message):
             filtered_messages.append((idx, message))
@@ -152,13 +153,27 @@ def separate_cached_messages(
     return cached_messages, non_cached_messages
 
 
+def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageValues]) -> bool:
+    """
+    The cachedContents API rejects contents ending on a model turn, which is how it
+    classifies both assistant messages and tool results, with HTTP 400
+    "Requests ending with a model turn are not supported". System messages are
+    extracted into system_instruction before contents are built, so the terminal
+    turn is the last non-system message.
+    """
+    non_system_messages = tuple(message for message in cached_messages if message.get("role") != "system")
+    if not non_system_messages:
+        return bool(cached_messages)
+    return non_system_messages[-1].get("role") not in ("assistant", "tool", "function")
+
+
 def transform_openai_messages_to_gemini_context_caching(
     model: str,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     cache_key: str,
-    vertex_project: Optional[str],
-    vertex_location: Optional[str],
+    vertex_project: str | None,
+    vertex_location: str | None,
 ) -> CachedContentRequestBody:
     # Extract TTL from cached messages BEFORE system message transformation
     ttl = extract_ttl_from_cached_messages(messages)
@@ -175,7 +190,7 @@ def transform_openai_messages_to_gemini_context_caching(
         custom_llm_provider=custom_llm_provider,
     )
 
-    model_name = "models/{}".format(model)
+    model_name = f"models/{model}"
 
     if custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         model_name = f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/{model_name}"

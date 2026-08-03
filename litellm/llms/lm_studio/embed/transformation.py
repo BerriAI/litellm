@@ -7,7 +7,6 @@ Docs - https://lmstudio.ai/docs/basics/server
 """
 
 import types
-from typing import List
 
 
 class LmStudioEmbeddingConfig:
@@ -41,7 +40,7 @@ class LmStudioEmbeddingConfig:
             and v is not None
         }
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return []
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:

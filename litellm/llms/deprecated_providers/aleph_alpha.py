@@ -1,7 +1,7 @@
 import json
 import time
 import types
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import httpx  # type: ignore
 
@@ -73,71 +73,71 @@ class AlephAlphaConfig:
     - `control_log_additive` (boolean; default value: true): Method of applying control to attention scores.
     """
 
-    maximum_tokens: Optional[int] = litellm.max_tokens  # aleph alpha requires max tokens
-    minimum_tokens: Optional[int] = None
-    echo: Optional[bool] = None
-    temperature: Optional[int] = None
-    top_k: Optional[int] = None
-    top_p: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    frequency_penalty: Optional[int] = None
-    sequence_penalty: Optional[int] = None
-    sequence_penalty_min_length: Optional[int] = None
-    repetition_penalties_include_prompt: Optional[bool] = None
-    repetition_penalties_include_completion: Optional[bool] = None
-    use_multiplicative_presence_penalty: Optional[bool] = None
-    use_multiplicative_frequency_penalty: Optional[bool] = None
-    use_multiplicative_sequence_penalty: Optional[bool] = None
-    penalty_bias: Optional[str] = None
-    penalty_exceptions_include_stop_sequences: Optional[bool] = None
-    best_of: Optional[int] = None
-    n: Optional[int] = None
-    logit_bias: Optional[dict] = None
-    log_probs: Optional[int] = None
-    stop_sequences: Optional[list] = None
-    tokens: Optional[bool] = None
-    raw_completion: Optional[bool] = None
-    disable_optimizations: Optional[bool] = None
-    completion_bias_inclusion: Optional[list] = None
-    completion_bias_exclusion: Optional[list] = None
-    completion_bias_inclusion_first_token_only: Optional[bool] = None
-    completion_bias_exclusion_first_token_only: Optional[bool] = None
-    contextual_control_threshold: Optional[int] = None
-    control_log_additive: Optional[bool] = None
+    maximum_tokens: int | None = litellm.max_tokens  # aleph alpha requires max tokens
+    minimum_tokens: int | None = None
+    echo: bool | None = None
+    temperature: int | None = None
+    top_k: int | None = None
+    top_p: int | None = None
+    presence_penalty: int | None = None
+    frequency_penalty: int | None = None
+    sequence_penalty: int | None = None
+    sequence_penalty_min_length: int | None = None
+    repetition_penalties_include_prompt: bool | None = None
+    repetition_penalties_include_completion: bool | None = None
+    use_multiplicative_presence_penalty: bool | None = None
+    use_multiplicative_frequency_penalty: bool | None = None
+    use_multiplicative_sequence_penalty: bool | None = None
+    penalty_bias: str | None = None
+    penalty_exceptions_include_stop_sequences: bool | None = None
+    best_of: int | None = None
+    n: int | None = None
+    logit_bias: dict | None = None
+    log_probs: int | None = None
+    stop_sequences: list | None = None
+    tokens: bool | None = None
+    raw_completion: bool | None = None
+    disable_optimizations: bool | None = None
+    completion_bias_inclusion: list | None = None
+    completion_bias_exclusion: list | None = None
+    completion_bias_inclusion_first_token_only: bool | None = None
+    completion_bias_exclusion_first_token_only: bool | None = None
+    contextual_control_threshold: int | None = None
+    control_log_additive: bool | None = None
 
     def __init__(
         self,
-        maximum_tokens: Optional[int] = None,
-        minimum_tokens: Optional[int] = None,
-        echo: Optional[bool] = None,
-        temperature: Optional[int] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        frequency_penalty: Optional[int] = None,
-        sequence_penalty: Optional[int] = None,
-        sequence_penalty_min_length: Optional[int] = None,
-        repetition_penalties_include_prompt: Optional[bool] = None,
-        repetition_penalties_include_completion: Optional[bool] = None,
-        use_multiplicative_presence_penalty: Optional[bool] = None,
-        use_multiplicative_frequency_penalty: Optional[bool] = None,
-        use_multiplicative_sequence_penalty: Optional[bool] = None,
-        penalty_bias: Optional[str] = None,
-        penalty_exceptions_include_stop_sequences: Optional[bool] = None,
-        best_of: Optional[int] = None,
-        n: Optional[int] = None,
-        logit_bias: Optional[dict] = None,
-        log_probs: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-        tokens: Optional[bool] = None,
-        raw_completion: Optional[bool] = None,
-        disable_optimizations: Optional[bool] = None,
-        completion_bias_inclusion: Optional[list] = None,
-        completion_bias_exclusion: Optional[list] = None,
-        completion_bias_inclusion_first_token_only: Optional[bool] = None,
-        completion_bias_exclusion_first_token_only: Optional[bool] = None,
-        contextual_control_threshold: Optional[int] = None,
-        control_log_additive: Optional[bool] = None,
+        maximum_tokens: int | None = None,
+        minimum_tokens: int | None = None,
+        echo: bool | None = None,
+        temperature: int | None = None,
+        top_k: int | None = None,
+        top_p: int | None = None,
+        presence_penalty: int | None = None,
+        frequency_penalty: int | None = None,
+        sequence_penalty: int | None = None,
+        sequence_penalty_min_length: int | None = None,
+        repetition_penalties_include_prompt: bool | None = None,
+        repetition_penalties_include_completion: bool | None = None,
+        use_multiplicative_presence_penalty: bool | None = None,
+        use_multiplicative_frequency_penalty: bool | None = None,
+        use_multiplicative_sequence_penalty: bool | None = None,
+        penalty_bias: str | None = None,
+        penalty_exceptions_include_stop_sequences: bool | None = None,
+        best_of: int | None = None,
+        n: int | None = None,
+        logit_bias: dict | None = None,
+        log_probs: int | None = None,
+        stop_sequences: list | None = None,
+        tokens: bool | None = None,
+        raw_completion: bool | None = None,
+        disable_optimizations: bool | None = None,
+        completion_bias_inclusion: list | None = None,
+        completion_bias_exclusion: list | None = None,
+        completion_bias_inclusion_first_token_only: bool | None = None,
+        completion_bias_exclusion_first_token_only: bool | None = None,
+        contextual_control_threshold: int | None = None,
+        control_log_additive: bool | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():

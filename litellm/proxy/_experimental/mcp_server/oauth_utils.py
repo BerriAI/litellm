@@ -3,10 +3,11 @@
 
 import os
 from ipaddress import ip_address
-from typing import TYPE_CHECKING, Any, Dict, List, NoReturn, Optional
+from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
+from starlette.types import Scope
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
@@ -48,17 +49,17 @@ _TRUSTED_REDIRECT_ORIGINS_ENV = "MCP_TRUSTED_REDIRECT_ORIGINS"
 _TRUSTED_NATIVE_REDIRECT_URIS_ENV = "MCP_TRUSTED_NATIVE_REDIRECT_URIS"
 
 # Default allowlist for trusted native redirect URIs.
-_DEFAULT_NATIVE_REDIRECT_URIS: List[str] = [
+_DEFAULT_NATIVE_REDIRECT_URIS: list[str] = [
     "cursor://anysphere.cursor-mcp/oauth/callback",
 ]
 
-_warned_invalid_proxy_base_url: Optional[str] = None
+_warned_invalid_proxy_base_url: str | None = None
 
 
 def _oauth_invalid_request(
     error_description: str,
     *,
-    hint: Optional[str] = None,
+    hint: str | None = None,
     **extra: Any,
 ) -> NoReturn:
     """Raise ``invalid_request`` (RFC 6749) with a debuggable description.
@@ -67,7 +68,7 @@ def _oauth_invalid_request(
     ``invalid_request``; ``error_description`` and ``hint`` explain what
     failed and how to fix it (e.g. reverse-proxy / PROXY_BASE_URL issues).
     """
-    detail: Dict[str, Any] = {
+    detail: dict[str, Any] = {
         "error": "invalid_request",
         "error_description": error_description,
     }
@@ -82,7 +83,7 @@ def _origin_label(scheme: str, netloc: str) -> str:
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
 
 
-def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
+def _redact_mcp_resource_url(url: str | None) -> str | None:
     """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
 
     Everything else is dropped: userinfo (``user:pass@``), the query string, the
@@ -105,7 +106,7 @@ def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
     return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
-def _resolve_proxy_base_url_env() -> Optional[str]:
+def _resolve_proxy_base_url_env() -> str | None:
     global _warned_invalid_proxy_base_url
     configured = os.environ.get("PROXY_BASE_URL", "").strip()
     if not configured:
@@ -179,6 +180,37 @@ def well_known_root_suffix() -> str:
     return "" if root == "/" else root
 
 
+def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str:
+    """The per-server protected-resource metadata URL matching the spelling the request
+    arrived on, so a strict RFC 9728 client resolves the same route the proxy registered.
+    ``_original_path`` preserves the ``/{server}/mcp`` spelling through the
+    ``dynamic_mcp_route`` rewrite; the ``SERVER_ROOT_PATH`` segment is inserted exactly as
+    the route decorators insert it (see :func:`well_known_root_suffix`)."""
+    request = Request(scope)
+    base_url = get_request_base_url(request)
+    _path = scope.get("_original_path") or scope.get("path", "") or ""
+
+    if _path.startswith(f"/{server_name}/mcp"):
+        return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/{server_name}/mcp"
+    return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{server_name}"
+
+
+def get_passthrough_www_authenticate(
+    scope: Scope,
+    server_name: str,
+    invalid_token: bool = False,
+) -> str:
+    """The RFC 9728 ``WWW-Authenticate`` value advertising the per-server
+    protected-resource metadata, with the RFC 6750 ``invalid_token`` error code when the
+    caller presented a bearer that failed rather than no credential at all."""
+    resource_metadata_url = get_passthrough_resource_metadata_url(
+        scope=scope,
+        server_name=server_name,
+    )
+    error_attr = 'error="invalid_token", ' if invalid_token else ""
+    return f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"'
+
+
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
     """Require a loopback ``redirect_uri`` (OAuth 2.1 §4.1.2.1 + RFC 8252
     §7.3 native-app pattern). MCP clients are native apps that listen on
@@ -249,7 +281,7 @@ def _strip_default_port(scheme: str, netloc: str) -> str:
     return lowered
 
 
-def _parse_trusted_redirect_origins() -> List[str]:
+def _parse_trusted_redirect_origins() -> list[str]:
     """Parse ``MCP_TRUSTED_REDIRECT_ORIGINS`` into normalized entries.
     Empty / unset env var → empty list. Entries are lowercased and any
     scheme / path component the operator included is stripped. Default
@@ -261,7 +293,7 @@ def _parse_trusted_redirect_origins() -> List[str]:
     raw = os.environ.get(_TRUSTED_REDIRECT_ORIGINS_ENV, "").strip()
     if not raw:
         return []
-    entries: List[str] = []
+    entries: list[str] = []
     for token in raw.split(","):
         entry = token.strip().lower()
         if not entry:
@@ -313,9 +345,9 @@ def _normalize_native_redirect_uri(
     )
 
 
-def _parse_trusted_native_redirect_uris() -> List[str]:
+def _parse_trusted_native_redirect_uris() -> list[str]:
     """Built-in native MCP callbacks plus ``MCP_TRUSTED_NATIVE_REDIRECT_URIS``."""
-    entries: List[str] = [uri.lower() for uri in _DEFAULT_NATIVE_REDIRECT_URIS]
+    entries: list[str] = [uri.lower() for uri in _DEFAULT_NATIVE_REDIRECT_URIS]
     raw = os.environ.get(_TRUSTED_NATIVE_REDIRECT_URIS_ENV, "").strip()
     if not raw:
         return entries
@@ -435,7 +467,7 @@ def validate_redirect_uri_shape(parsed: ParseResult) -> bool:
     return False
 
 
-def _resolve_proxy_base_for_redirect(request: Request) -> Optional[str]:
+def _resolve_proxy_base_for_redirect(request: Request) -> str | None:
     try:
         return get_request_base_url(request)
     except Exception as exc:
@@ -450,7 +482,7 @@ def _resolve_proxy_base_for_redirect(request: Request) -> Optional[str]:
 def _trusted_redirect_uri_is_allowed(
     parsed: ParseResult,
     redirect_netloc: str,
-    proxy_base: Optional[str],
+    proxy_base: str | None,
 ) -> bool:
     if proxy_base:
         proxy_parsed = urlparse(proxy_base)
@@ -473,7 +505,7 @@ def _build_trusted_redirect_rejection_message(
     redirect_uri: str,
     parsed: ParseResult,
     redirect_netloc: str,
-    proxy_base: Optional[str],
+    proxy_base: str | None,
 ) -> str:
     """Build a client-facing rejection message.
 
@@ -488,7 +520,7 @@ def _build_trusted_redirect_rejection_message(
         _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc) if proxy_parsed and proxy_parsed.netloc else ""
     )
 
-    mismatch_parts: List[str] = []
+    mismatch_parts: list[str] = []
     if proxy_parsed and proxy_parsed.netloc:
         if parsed.scheme != proxy_parsed.scheme:
             mismatch_parts.append(
@@ -514,7 +546,7 @@ def _raise_trusted_redirect_uri_rejected(
     redirect_uri: str,
     parsed: ParseResult,
     redirect_netloc: str,
-    proxy_base: Optional[str],
+    proxy_base: str | None,
 ) -> NoReturn:
     description = _build_trusted_redirect_rejection_message(redirect_uri, parsed, redirect_netloc, proxy_base)
 

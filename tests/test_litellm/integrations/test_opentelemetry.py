@@ -415,6 +415,40 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
     @patch.dict(
         os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True
     )
+    def test_init_metrics_creates_instruments_under_their_published_names(self):
+        """
+        The v1 engine's instrument names are a public contract.
+
+        Every name here is what a backend queries: four are GenAI semantic
+        conventions and gen_ai.usage.cost is the name backends query for spend.
+        A rename is breaking for anyone charting them, so it has to be a
+        deliberate edit to the shared Metric constants and to this list, never
+        a silent drift between the v1 and v2 engines.
+        """
+        from opentelemetry import metrics
+
+        metrics.set_meter_provider(MeterProvider(metric_readers=[InMemoryMetricReader()]))
+        otel_integration = OpenTelemetry(config=OpenTelemetryConfig.from_env())
+
+        assert {
+            otel_integration._operation_duration_histogram.name,
+            otel_integration._token_usage_histogram.name,
+            otel_integration._cost_histogram.name,
+            otel_integration._time_to_first_token_histogram.name,
+            otel_integration._time_per_output_token_histogram.name,
+            otel_integration._response_duration_histogram.name,
+        } == {
+            "gen_ai.client.operation.duration",
+            "gen_ai.client.token.usage",
+            "gen_ai.usage.cost",
+            "gen_ai.server.time_to_first_token",
+            "gen_ai.server.time_per_output_token",
+            "gen_ai.client.response.duration",
+        }
+
+    @patch.dict(
+        os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True
+    )
     def test_init_metrics_respects_existing_meter_provider(self):
         """
         Unit test: _init_metrics() should respect existing MeterProvider.

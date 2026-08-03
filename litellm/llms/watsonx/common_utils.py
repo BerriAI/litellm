@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Union, cast
+from typing import cast
 
 import httpx
 
@@ -17,7 +17,7 @@ class WatsonXAIError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[Union[Dict, httpx.Headers]] = None,
+        headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -30,7 +30,7 @@ def get_watsonx_iam_url():
 
 
 def generate_iam_token(api_key=None, **params) -> str:
-    result: Optional[str] = iam_token_cache.get_cache(api_key)  # type: ignore
+    result: str | None = iam_token_cache.get_cache(api_key)  # type: ignore
 
     if result is None:
         headers = {}
@@ -70,14 +70,14 @@ def generate_iam_token(api_key=None, **params) -> str:
     return cast(str, result)
 
 
-def _generate_watsonx_token(api_key: Optional[str], token: Optional[str]) -> str:
+def _generate_watsonx_token(api_key: str | None, token: str | None) -> str:
     if token is not None:
         return token
     token = generate_iam_token(api_key)
     return token
 
 
-def _get_api_params(params: dict, model: Optional[str] = None) -> WatsonXAPIParams:
+def _get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
     """
     Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
     """
@@ -122,9 +122,9 @@ def _get_api_params(params: dict, model: Optional[str] = None) -> WatsonXAPIPara
 
 async def _aconvert_watsonx_messages_core(
     model: str,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: Dict,
+    custom_prompt_dict: dict,
     apply_template_fn,
 ) -> str:
     """Async core logic for converting watsonx messages to prompt"""
@@ -154,9 +154,9 @@ async def _aconvert_watsonx_messages_core(
 
 def _convert_watsonx_messages_core(
     model: str,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: Dict,
+    custom_prompt_dict: dict,
     apply_template_fn,
 ) -> str:
     """Sync core logic for converting watsonx messages to prompt"""
@@ -186,9 +186,9 @@ def _convert_watsonx_messages_core(
 
 async def aconvert_watsonx_messages_to_prompt(
     model: str,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: Dict,
+    custom_prompt_dict: dict,
 ) -> str:
     """Async version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -204,9 +204,9 @@ async def aconvert_watsonx_messages_to_prompt(
 
 def convert_watsonx_messages_to_prompt(
     model: str,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: Dict,
+    custom_prompt_dict: dict,
 ) -> str:
     """Sync version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -224,14 +224,14 @@ def convert_watsonx_messages_to_prompt(
 class IBMWatsonXMixin:
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Dict:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
         default_headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -240,11 +240,11 @@ class IBMWatsonXMixin:
         if "Authorization" in headers:
             return {**default_headers, **headers}
         token = cast(
-            Optional[str],
+            str | None,
             optional_params.get("token") or get_secret_str("WATSONX_TOKEN"),
         )
         zen_api_key = cast(
-            Optional[str],
+            str | None,
             optional_params.pop("zen_api_key", None) or get_secret_str("WATSONX_ZENAPIKEY"),
         )
         if token:
@@ -257,7 +257,7 @@ class IBMWatsonXMixin:
             headers["Authorization"] = f"Bearer {token}"
         return {**default_headers, **headers}
 
-    def _get_base_url(self, api_base: Optional[str]) -> str:
+    def _get_base_url(self, api_base: str | None) -> str:
         url = (
             api_base
             or get_secret_str("WATSONX_API_BASE")  # consistent with 'AZURE_API_BASE'
@@ -273,21 +273,17 @@ class IBMWatsonXMixin:
             )
         return url
 
-    def _add_api_version_to_url(self, url: str, api_version: Optional[str]) -> str:
+    def _add_api_version_to_url(self, url: str, api_version: str | None) -> str:
         api_version = api_version or litellm.WATSONX_DEFAULT_API_VERSION
         url = url + f"?version={api_version}"
 
         return url
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return WatsonXAIError(status_code=status_code, message=error_message, headers=headers)
 
     @staticmethod
-    def get_watsonx_credentials(
-        optional_params: dict, api_key: Optional[str], api_base: Optional[str]
-    ) -> WatsonXCredentials:
+    def get_watsonx_credentials(optional_params: dict, api_key: str | None, api_base: str | None) -> WatsonXCredentials:
         api_key = (
             api_key
             or optional_params.pop("apikey", None)
@@ -314,7 +310,7 @@ class IBMWatsonXMixin:
             optional_params.pop("watsonx_credentials", None),  # follow {provider}_credentials, same as vertex ai
         )
 
-        token: Optional[str] = None
+        token: str | None = None
 
         if wx_credentials is not None:
             api_base = wx_credentials.get("url", api_base)
@@ -335,7 +331,7 @@ class IBMWatsonXMixin:
                 status_code=401,
                 message="Error: Watsonx API base not set. Set WATSONX_API_BASE in environment variables or pass in as parameter - 'api_base='.",
             )
-        return WatsonXCredentials(api_key=api_key, api_base=api_base, token=cast(Optional[str], token))
+        return WatsonXCredentials(api_key=api_key, api_base=api_base, token=cast(str | None, token))
 
     def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
         payload: dict = {}

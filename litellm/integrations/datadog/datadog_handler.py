@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from typing import List, Optional
 
 from litellm.types.utils import StandardLoggingPayload
 
@@ -20,7 +19,7 @@ def get_datadog_hostname() -> str:
     return os.getenv("HOSTNAME", "")
 
 
-def get_datadog_base_url_from_env() -> Optional[str]:
+def get_datadog_base_url_from_env() -> str | None:
     """
     Get base URL override from common DD_BASE_URL env var.
     This is useful for testing or custom endpoints.
@@ -37,8 +36,8 @@ def get_datadog_pod_name() -> str:
 
 
 def get_datadog_tags(
-    standard_logging_object: Optional[StandardLoggingPayload] = None,
-) -> List[str]:
+    standard_logging_object: StandardLoggingPayload | None = None,
+) -> list[str]:
     """Build Datadog tags as a list of individual tag strings.
 
     Returns a list of "key:value" strings suitable for Datadog LLM Observability
@@ -54,7 +53,7 @@ def get_datadog_tags(
         "POD_NAME": get_datadog_pod_name(),
     }
 
-    tags: List[str] = [f"{k}:{v}" for k, v in base_tags.items()]
+    tags: list[str] = [f"{k}:{v}" for k, v in base_tags.items()]
 
     if standard_logging_object:
         request_tags = standard_logging_object.get("request_tags", []) or []

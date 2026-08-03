@@ -5,13 +5,12 @@ Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthrop
 """
 
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from typing import Dict, Optional
 
 from .exceptions import AnthropicErrorResponse, AnthropicErrorType
 
 # HTTP status code -> Anthropic error type
 # Source: https://docs.anthropic.com/en/api/errors
-ANTHROPIC_ERROR_TYPE_MAP: Dict[int, AnthropicErrorType] = {
+ANTHROPIC_ERROR_TYPE_MAP: dict[int, AnthropicErrorType] = {
     400: "invalid_request_error",
     401: "authentication_error",
     403: "permission_error",
@@ -39,7 +38,7 @@ class AnthropicExceptionMapping:
     def create_error_response(
         status_code: int,
         message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> AnthropicErrorResponse:
         """
         Create an Anthropic-formatted error response dict.
@@ -124,7 +123,7 @@ class AnthropicExceptionMapping:
     def transform_to_anthropic_error(
         status_code: int,
         raw_message: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> AnthropicErrorResponse:
         """
         Transform an error message to Anthropic format.
@@ -143,7 +142,7 @@ class AnthropicExceptionMapping:
             AnthropicErrorResponse dict
         """
         # Try to parse as JSON once
-        parsed: Optional[dict] = safe_json_loads(raw_message)
+        parsed: dict | None = safe_json_loads(raw_message)
         if not isinstance(parsed, dict):
             parsed = None
 

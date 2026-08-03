@@ -1,12 +1,12 @@
 """Data extraction functions for Opik payload building."""
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from litellm import _logging
 
 
-def normalize_provider_name(provider: Optional[str]) -> Optional[str]:
+def normalize_provider_name(provider: str | None) -> str | None:
     """
     Normalize LiteLLM provider names to standardized string names.
 
@@ -35,9 +35,9 @@ def normalize_provider_name(provider: Optional[str]) -> Optional[str]:
 
 
 def extract_opik_metadata(
-    litellm_metadata: Dict[str, Any],
-    standard_logging_metadata: Dict[str, Any],
-) -> Dict[str, Any]:
+    litellm_metadata: dict[str, Any],
+    standard_logging_metadata: dict[str, Any],
+) -> dict[str, Any]:
     """
     Merge Opik metadata from three sources in increasing priority order:
 
@@ -73,7 +73,7 @@ def extract_opik_metadata(
 
 def extract_span_identifiers(
     current_span_data: Any,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """
     Extract trace_id and parent_span_id from current_span_data.
 
@@ -97,9 +97,9 @@ def extract_span_identifiers(
 
 
 def extract_tags(
-    opik_metadata: Dict[str, Any],
-    custom_llm_provider: Optional[str],
-) -> List[str]:
+    opik_metadata: dict[str, Any],
+    custom_llm_provider: str | None,
+) -> list[str]:
     """
     Extract and build list of tags.
 
@@ -120,10 +120,10 @@ def extract_tags(
 
 def apply_proxy_header_overrides(
     project_name: str,
-    tags: List[str],
-    thread_id: Optional[str],
-    proxy_headers: Dict[str, Any],
-) -> Tuple[str, List[str], Optional[str]]:
+    tags: list[str],
+    thread_id: str | None,
+    proxy_headers: dict[str, Any],
+) -> tuple[str, list[str], str | None]:
     """
     Apply overrides from proxy request headers (opik_* prefix).
 
@@ -158,11 +158,11 @@ def apply_proxy_header_overrides(
 
 
 def extract_and_build_metadata(
-    opik_metadata: Dict[str, Any],
-    standard_logging_metadata: Dict[str, Any],
-    standard_logging_object: Dict[str, Any],
-    litellm_kwargs: Dict[str, Any],
-) -> Dict[str, Any]:
+    opik_metadata: dict[str, Any],
+    standard_logging_metadata: dict[str, Any],
+    standard_logging_object: dict[str, Any],
+    litellm_kwargs: dict[str, Any],
+) -> dict[str, Any]:
     """
     Build the complete metadata dictionary from all available sources.
 

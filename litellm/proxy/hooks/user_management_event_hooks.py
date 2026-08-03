@@ -4,9 +4,6 @@ Hooks that are triggered when a litellm user event occurs
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Optional
-
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -16,7 +13,6 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_AuditLogs,
     Litellm_EntityType,
-    LiteLLM_UserTable,
     LitellmTableNames,
     NewUserRequest,
     NewUserResponse,
@@ -58,25 +54,24 @@ class UserManagementEventHooks:
         try:
             if prisma_client is None:
                 raise Exception(CommonProxyErrors.db_not_connected_error.value)
-            user_row: BaseModel = await UserRepository(prisma_client).table.find_first(
-                where={"user_id": response.user_id}
-            )
-
-            user_row_litellm_typed = LiteLLM_UserTable(**user_row.model_dump(exclude_none=True))
+            if response.user_id is None:
+                raise Exception("no user_id returned for the newly created user")
+            user_row = await UserRepository(prisma_client).find_by_id(response.user_id)
+            if user_row is None:
+                raise Exception(f"no user row found for user_id={response.user_id}")
             asyncio.create_task(
                 UserManagementEventHooks.create_internal_user_audit_log(
-                    user_id=user_row_litellm_typed.user_id,
+                    user_id=user_row.user_id,
                     action="created",
                     litellm_changed_by=user_api_key_dict.user_id,
                     user_api_key_dict=user_api_key_dict,
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     before_value=None,
-                    after_value=user_row_litellm_typed.model_dump_json(exclude_none=True),
+                    after_value=user_row.model_dump_json(exclude_none=True),
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.warning("Unable to create audit log for user on `/user/new` - {}".format(str(e)))
-        pass
+            verbose_proxy_logger.warning(f"Unable to create audit log for user on `/user/new` - {e!s}")
 
     @staticmethod
     async def async_send_user_invitation_email(
@@ -166,11 +161,11 @@ class UserManagementEventHooks:
     async def create_internal_user_audit_log(
         user_id: str,
         action: AUDIT_ACTIONS,
-        litellm_changed_by: Optional[str],
+        litellm_changed_by: str | None,
         user_api_key_dict: UserAPIKeyAuth,
-        litellm_proxy_admin_name: Optional[str],
-        before_value: Optional[str] = None,
-        after_value: Optional[str] = None,
+        litellm_proxy_admin_name: str | None,
+        before_value: str | None = None,
+        after_value: str | None = None,
     ):
         """
         Create an audit log for an internal user.

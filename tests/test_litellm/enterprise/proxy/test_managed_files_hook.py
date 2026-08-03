@@ -5,6 +5,8 @@ Regression test for afile_retrieve called without credentials in
 async_post_call_success_hook when processing completed batch responses.
 """
 
+import json
+
 import pytest
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -385,3 +387,59 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
     message = str(exc_info.value)
     assert unified_file_id in message
     assert s3_uri not in message
+
+
+def _make_real_managed_files_instance():
+    """Create a _PROXY_LiteLLMManagedFiles with a real store_unified_file_id but
+    an AsyncMock prisma client, so the DB write path itself can be asserted."""
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.async_set_cache = AsyncMock()
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.upsert = AsyncMock()
+    mock_prisma.db.litellm_managedfiletable.create = AsyncMock(
+        side_effect=AssertionError(
+            "store_unified_file_id must upsert, not create, on the retrieve path"
+        )
+    )
+
+    return (
+        _PROXY_LiteLLMManagedFiles(
+            internal_usage_cache=mock_cache,
+            prisma_client=mock_prisma,
+        ),
+        mock_prisma,
+    )
+
+
+@pytest.mark.asyncio
+async def test_store_unified_file_id_is_idempotent_via_upsert():
+    """Regression test for the managed-batch retrieve 500 (UniqueViolationError on
+    unified_file_id): re-registering an already-stored output file id must upsert on
+    unified_file_id, never do an unconditional create that raises on conflict."""
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+    file_id = "litellm_proxy_unified_output_id_abc"
+    model_mappings = {"model-deploy-xyz": "file-output-abc"}
+
+    for _ in range(2):
+        await managed_files.store_unified_file_id(
+            file_id=file_id,
+            file_object=_make_file_object(),
+            litellm_parent_otel_span=None,
+            model_mappings=model_mappings,
+            user_api_key_dict=_make_user_api_key_dict(),
+        )
+
+    mock_prisma.db.litellm_managedfiletable.create.assert_not_awaited()
+    upsert_mock = mock_prisma.db.litellm_managedfiletable.upsert
+    assert upsert_mock.await_count == 2
+    for upsert_call in upsert_mock.await_args_list:
+        assert upsert_call.kwargs["where"] == {"unified_file_id": file_id}
+        upsert_data = upsert_call.kwargs["data"]
+        assert upsert_data["create"]["unified_file_id"] == file_id
+        assert json.loads(upsert_data["create"]["model_mappings"]) == model_mappings
+        assert json.loads(upsert_data["update"]["model_mappings"]) == model_mappings

@@ -7,7 +7,7 @@ so this implementation skips the embedding step and directly uploads files.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -35,16 +35,16 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         super().__init__(ingest_options=ingest_options, router=router)
         self.model_info = GeminiModelInfo()
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         Gemini handles embedding internally - skip this step.
 
@@ -56,13 +56,13 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
         existing_file_id: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Store content in Gemini File Search store.
 
@@ -83,11 +83,11 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         """
         vector_store_id = self.vector_store_config.get("vector_store_id")
 
-        vector_store_config = cast(Dict[str, Any], self.vector_store_config)
+        vector_store_config = cast(dict[str, Any], self.vector_store_config)
 
         # Get API credentials
-        api_key = cast(Optional[str], vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
-        api_base = cast(Optional[str], vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
+        api_key = cast(str | None, vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
+        api_base = cast(str | None, vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
 
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search")
@@ -172,7 +172,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         vector_store_id: str,
         filename: str,
         file_content: bytes,
-        content_type: Optional[str],
+        content_type: str | None,
     ) -> str:
         """
         Upload a file to Gemini File Search store using resumable upload.
@@ -228,7 +228,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         url = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore"
 
         # Build request body with chunking config and metadata if provided
-        request_body: Dict[str, Any] = {"displayName": filename}
+        request_body: dict[str, Any] = {"displayName": filename}
 
         # Add chunking configuration if provided
         chunking_strategy = self.chunking_strategy
@@ -244,7 +244,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         # Add custom metadata if provided in vector_store_config
         custom_metadata = cast(
-            Optional[List[Dict[str, Any]]],
+            list[dict[str, Any]] | None,
             self.vector_store_config.get("custom_metadata"),
         )
         if custom_metadata:

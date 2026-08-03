@@ -12,6 +12,11 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ModifyResponseException,
+)
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPUpstreamAuthError,
@@ -21,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     list_fault_http_status,
 )
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+    acting_user_auth,
     build_effective_auth_contexts,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -33,6 +39,8 @@ from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 if TYPE_CHECKING:
+    from mcp.types import CallToolResult
+
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.types.mcp import MCPAuth
@@ -49,6 +57,13 @@ except ImportError as e:
 router = APIRouter(
     prefix="/mcp-rest",
     tags=["mcp"],
+)
+
+_MCP_GUARDRAIL_REJECTIONS = (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ModifyResponseException,
+    HTTPException,
 )
 
 
@@ -85,9 +100,9 @@ if MCP_AVAILABLE:
         MCPServer,
         _apply_toolset_scope,
         _fire_mcp_tool_call_logging,
-        _tool_name_matches,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
+        filter_tools_by_key_team_permissions,
     )
 
     ########################################################
@@ -99,9 +114,17 @@ if MCP_AVAILABLE:
         end_time: datetime,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         request_data: Mapping[str, object] | None = None,
-    ) -> None:
+    ) -> "CallToolResult":
+        """Fire post-call logging, returning the tool result to send to the client.
+
+        ``post_mcp_call`` guardrails already ran on ``execute_mcp_tool``'s return
+        path, so the result arriving here is the guardrailed one. A guardrail
+        rejection raised by a native ``async_post_mcp_tool_call_hook`` is still
+        re-raised rather than swallowed as a logging failure, which would return
+        the unguarded result.
+        """
         if logging_obj is None:
-            return
+            return result
         logging_results = await asyncio.gather(
             _fire_mcp_tool_call_logging(
                 logging_obj,
@@ -113,11 +136,13 @@ if MCP_AVAILABLE:
             ),
             return_exceptions=True,
         )
-        logging_error = logging_results[0]
-        if isinstance(logging_error, asyncio.CancelledError):
-            raise logging_error
-        if isinstance(logging_error, BaseException):
-            verbose_logger.warning("MCP tool call logging failed (continuing): %s", logging_error)
+        outcome = logging_results[0]
+        if isinstance(outcome, (asyncio.CancelledError, *_MCP_GUARDRAIL_REJECTIONS)):
+            raise outcome
+        if isinstance(outcome, BaseException):
+            verbose_logger.warning("MCP tool call logging failed (continuing): %s", outcome)
+            return result
+        return outcome
 
     def _relay_upstream_auth_http_exception(e: MCPUpstreamAuthError, request: Request) -> HTTPException:
         """Convert a client-forwarded pass-through upstream 401 into an HTTPException that preserves the
@@ -196,7 +221,7 @@ if MCP_AVAILABLE:
             raw_headers=virtual_raw_headers,
             litellm_logging_obj=virtual_logging_obj,
         )
-        await _safe_fire_mcp_tool_call_logging(
+        return await _safe_fire_mcp_tool_call_logging(
             virtual_logging_obj,
             result,
             _tool_start_time,
@@ -204,7 +229,6 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_dict,
             request_data=data,
         )
-        return result
 
     def _get_server_auth_header(
         server,
@@ -507,19 +531,17 @@ if MCP_AVAILABLE:
         tools = filter_tools_by_allowed_tools(tools, server)
 
         # Filter by the key's effective tool permissions through the same
-        # primitive the MCP protocol path uses (direct grants, toolset grants,
-        # and team/agent/org ceilings), so REST listing cannot drift from it
+        # function the MCP protocol path uses (direct grants, toolset grants,
+        # and team/agent/org ceilings), so REST listing cannot drift from it.
+        # Entries here are tool names on one server, written bare by every
+        # writer, and dispatch compares them bare; matching a wider set of
+        # spellings would advertise a tool that tools/call then refuses
         if user_api_key_auth:
-            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-                MCPRequestHandler,
-            )
-
-            allowed_tools_for_server = await MCPRequestHandler.get_allowed_tools_for_server(
+            tools = await filter_tools_by_key_team_permissions(
+                tools=tools,
                 server_id=server.server_id,
                 user_api_key_auth=user_api_key_auth,
             )
-            if allowed_tools_for_server is not None:
-                tools = [tool for tool in tools if _tool_name_matches(tool.name, allowed_tools_for_server)]
 
         return _create_tool_response_objects(tools, server)
 
@@ -632,7 +654,7 @@ if MCP_AVAILABLE:
             return {
                 "tools": [],
                 "error": "server_error",
-                "message": f"Failed to get tools from server {server.name}: {str(e)}",
+                "message": f"Failed to get tools from server {server.name}: {e!s}",
             }
         return {
             "tools": list_tools_result,
@@ -644,13 +666,19 @@ if MCP_AVAILABLE:
         """Coerce an Optional[str] Query param to str|None, dropping unresolved FastAPI defaults."""
         return value if isinstance(value, str) else None
 
-    async def _resolve_toolset_scope(
+    async def _resolve_acting_auth(
         toolset_name: str | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> UserAPIKeyAuth:
-        """Resolve ``toolset_name`` to its scoped ``UserAPIKeyAuth``, or return unchanged."""
+        """The one credential this tools request acts as.
+
+        A toolset name narrows the caller's own credential to that toolset; otherwise a dashboard
+        session is swapped for its admitted subject. The two are mutually exclusive by construction,
+        which is why they share an owner: the admitted subject resolves per grant source and a team
+        source deliberately carries none of the caller's ``object_permission``, so a toolset
+        narrowing layered on top would evaporate on every team-granted server."""
         if not toolset_name:
-            return user_api_key_dict
+            return await acting_user_auth(user_api_key_dict)
 
         from litellm.proxy.utils import get_prisma_client_or_throw
 
@@ -708,14 +736,13 @@ if MCP_AVAILABLE:
         try:
             mcp_server_name = _as_query_str(mcp_server_name)
             toolset_name = _as_query_str(toolset_name)
+            user_api_key_dict = await _resolve_acting_auth(toolset_name, user_api_key_dict)
 
             # The full catalog (allowlist filter skipped) is admin-only so the
             # REST endpoint can't be used to enumerate deliberately-disabled tools.
             apply_tool_filters = not (
                 include_disabled_tools and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
-
-            user_api_key_dict = await _resolve_toolset_scope(toolset_name, user_api_key_dict)
 
             if server_id is None:
                 server_id = mcp_server_name
@@ -839,7 +866,7 @@ if MCP_AVAILABLE:
                         errors.append(
                             f"{get_server_prefix(server)}: {classify_list_exception(e).tag}"
                             if isinstance(e, (MCPServerListError, MCPUpstreamAuthError))
-                            else f"{get_server_prefix(server)}: {str(e)}"
+                            else f"{get_server_prefix(server)}: {e!s}"
                         )
                         continue
 
@@ -878,7 +905,7 @@ if MCP_AVAILABLE:
             return {
                 "tools": [],
                 "error": "unexpected_error",
-                "message": f"An unexpected error occurred: {str(e)}",
+                "message": f"An unexpected error occurred: {e!s}",
             }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
@@ -905,6 +932,7 @@ if MCP_AVAILABLE:
         )
 
         try:
+            user_api_key_dict = await acting_user_auth(user_api_key_dict)
             data = await request.json()
 
             tool_name = data.get("name")
@@ -998,7 +1026,7 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=data.get("litellm_logging_obj"),
                 requested_server_id=canonical_server_id,
             )
-            await _safe_fire_mcp_tool_call_logging(
+            return await _safe_fire_mcp_tool_call_logging(
                 logging_obj,
                 result,
                 _tool_start_time,
@@ -1006,7 +1034,6 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_dict,
                 request_data=data,
             )
-            return result
         except MCPMissingUserEnvVarsError as e:
             verbose_logger.info(
                 "MCP tool call missing per-user env vars: server_id=%s missing=%s",
@@ -1025,7 +1052,7 @@ if MCP_AVAILABLE:
                 },
             )
         except BlockedPiiEntityError as e:
-            verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
+            verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {e!s}")
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1036,7 +1063,7 @@ if MCP_AVAILABLE:
                 },
             )
         except GuardrailRaisedException as e:
-            verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
+            verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {e!s}")
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1055,15 +1082,15 @@ if MCP_AVAILABLE:
             # Locally generated denials (tool/server permission, IP filtering, BYOK) stay at error level
             # so restriction probing keeps full monitoring visibility; the relayed upstream 401 above is
             # the only status demoted to info.
-            verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
+            verbose_logger.error(f"HTTPException in MCP tool call: {e!s}")
             raise e
         except Exception as e:
-            verbose_logger.exception(f"Unexpected error in MCP tool call: {str(e)}")
+            verbose_logger.exception(f"Unexpected error in MCP tool call: {e!s}")
             raise HTTPException(
                 status_code=500,
                 detail={
                     "error": "internal_server_error",
-                    "message": f"An unexpected error occurred: {str(e)}",
+                    "message": f"An unexpected error occurred: {e!s}",
                 },
             )
 

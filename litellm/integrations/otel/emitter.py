@@ -1,15 +1,15 @@
 """The span engine: dedup, start, run the mapper chain, set status, end."""
 
 from collections import OrderedDict
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 from opentelemetry.context import Context
 from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -18,8 +18,6 @@ from litellm.integrations.otel.model.payloads import (
     ServiceSpanData,
     SpanError,
 )
-from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
-from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
 from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
@@ -30,6 +28,8 @@ from litellm.integrations.otel.model.spans import (
     mcp_tool_call_span_name,
     service_span_name,
 )
+from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
 
 # Roles emit() knows how to name and emit. PROXY_REQUEST and the management
 # routes are SERVER spans owned by the mounted FastAPI instrumentor, so they
@@ -126,7 +126,7 @@ class SpanEmitter:
         )
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.
-        self._emitted: "OrderedDict[tuple[str, SpanRole], None]" = OrderedDict()
+        self._emitted: OrderedDict[tuple[str, SpanRole], None] = OrderedDict()
 
     # -- low-level helpers --------------------------------------------------- #
 

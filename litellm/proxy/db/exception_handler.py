@@ -1,4 +1,5 @@
-from typing import Any, Awaitable, Callable, Optional, Union
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -25,9 +26,7 @@ class PrismaDBExceptionHandler:
         """
         from litellm.proxy.proxy_server import general_settings
 
-        _allow_requests_on_db_unavailable: Union[bool, str] = general_settings.get(
-            "allow_requests_on_db_unavailable", False
-        )
+        _allow_requests_on_db_unavailable: bool | str = general_settings.get("allow_requests_on_db_unavailable", False)
         if isinstance(_allow_requests_on_db_unavailable, bool):
             return _allow_requests_on_db_unavailable
         if str_to_bool(_allow_requests_on_db_unavailable) is True:
@@ -261,7 +260,7 @@ class PrismaDBExceptionHandler:
             PrismaDBExceptionHandler.is_database_connection_error(e)
             and PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
         ):
-            return None
+            return
         raise e
 
 
@@ -286,8 +285,8 @@ async def call_with_db_reconnect_retry(
     coro_factory: Callable[[], Awaitable[Any]],
     *,
     reason: str,
-    timeout_seconds: Optional[float] = None,
-    lock_timeout_seconds: Optional[float] = None,
+    timeout_seconds: float | None = None,
+    lock_timeout_seconds: float | None = None,
 ) -> Any:
     """Run a Prisma read coroutine with one transport-reconnect-and-retry.
 

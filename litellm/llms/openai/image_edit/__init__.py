@@ -4,8 +4,8 @@ from .dalle2_transformation import DallE2ImageEditConfig
 from .transformation import OpenAIImageEditConfig
 
 __all__ = [
-    "OpenAIImageEditConfig",
     "DallE2ImageEditConfig",
+    "OpenAIImageEditConfig",
     "get_openai_image_edit_config",
 ]
 

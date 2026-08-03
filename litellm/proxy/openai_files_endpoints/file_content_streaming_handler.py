@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional, Tuple, cast
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi.responses import StreamingResponse
 
@@ -17,11 +18,11 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         should_route: bool,
-        original_file_id: Optional[str],
-        credentials: Optional[Dict[str, Any]],
-    ) -> Tuple[str, str, Dict[str, Any]]:
+        original_file_id: str | None,
+        credentials: dict[str, Any] | None,
+    ) -> tuple[str, str, dict[str, Any]]:
         """
         Resolve the provider, file ID, and request payload to use for streaming.
 
@@ -70,7 +71,7 @@ class FileContentStreamingHandler:
         stream_iterator: AsyncIterator[bytes],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
-        data: Dict[str, Any],
+        data: dict[str, Any],
     ):
         try:
             async for chunk in stream_iterator:
@@ -94,7 +95,7 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         version: str,

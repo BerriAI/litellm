@@ -2,7 +2,7 @@
 
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -32,7 +32,7 @@ _DEFAULT_TRANSCRIPTION_MODEL = "gpt-realtime-whisper"
 _ALLOWED_SESSION_TYPES = ("realtime", "transcription")
 
 
-def _coerce_realtime_session_type(session_type: Optional[str]) -> str:
+def _coerce_realtime_session_type(session_type: str | None) -> str:
     if session_type in _ALLOWED_SESSION_TYPES:
         return session_type
     return "realtime"
@@ -115,11 +115,11 @@ def _set_transcription_model_on_session(
 async def _prepare_client_secret_session(
     req: RealtimeClientSecretRequest,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_model_list: Optional[list],
+    llm_model_list: list | None,
     llm_router: Any,
-) -> tuple[str, Optional[dict], str]:
+) -> tuple[str, dict | None, str]:
     session_type = _coerce_realtime_session_type(req.session.type if req.session else None)
-    session_data: Optional[dict] = req.session.model_dump(exclude_none=True) if req.session else None
+    session_data: dict | None = req.session.model_dump(exclude_none=True) if req.session else None
     if session_data is not None:
         session_data["type"] = session_type
 
@@ -162,16 +162,16 @@ async def _prepare_client_secret_session(
 def _encode_realtime_token_payload(
     ephemeral_key: str,
     model_id: str,
-    user_id: Optional[str],
-    team_id: Optional[str],
-    expires_at: Optional[int],
+    user_id: str | None,
+    team_id: str | None,
+    expires_at: int | None,
     session_type: str = "realtime",
 ) -> str:
     """
     Encode metadata with the upstream ephemeral key so /realtime/calls can
     route without requiring model as a query param.
     """
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "v": _REALTIME_TOKEN_VERSION,
         "ephemeral_key": ephemeral_key,
         "model_id": model_id,
@@ -185,7 +185,7 @@ def _encode_realtime_token_payload(
 
 def _decode_realtime_token_payload(
     decrypted_value: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Decode realtime token payload; returns None for legacy/raw ephemeral tokens.
     """
@@ -228,8 +228,8 @@ async def create_realtime_client_secret(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        llm_router,
         llm_model_list,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         route_request,
@@ -341,7 +341,7 @@ async def create_realtime_client_secret(
     encrypted_token: str = encrypt_value_helper(token_payload)
     upstream_json["value"] = encrypted_token
 
-    session_obj: Optional[dict] = upstream_json.get("session")
+    session_obj: dict | None = upstream_json.get("session")
     if isinstance(session_obj, dict):
         cs = session_obj.get("client_secret")
         if isinstance(cs, dict) and "value" in cs:
@@ -380,7 +380,7 @@ async def proxy_realtime_calls(
 
     # Auth: the Bearer token is the encrypted ephemeral key issued by
     # /realtime/client_secrets, not a standard proxy API key.
-    auth_header: Optional[str] = request.headers.get("Authorization")
+    auth_header: str | None = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         return Response(
             content=json.dumps({"error": "Missing or invalid Authorization header"}),
@@ -540,8 +540,8 @@ async def create_realtime_transcription_session(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        llm_router,
         llm_model_list,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         route_request,

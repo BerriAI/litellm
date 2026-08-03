@@ -10,12 +10,10 @@ class BaseBudgetAlertType(ABC):
     @abstractmethod
     def get_event_message(self) -> str:
         """Return the event message for this alert type"""
-        pass
 
     @abstractmethod
     def get_id(self, user_info: CallInfo) -> str:
         """Return the ID to use for caching/tracking this alert"""
-        pass
 
 
 class ProxyBudgetAlert(BaseBudgetAlertType):

@@ -1,6 +1,5 @@
 import asyncio
 import traceback
-from typing import List
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, status
@@ -36,8 +35,8 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
 
 
 async def batch_to_bytesio(
-    uploads: Optional[List[UploadFile]],
-) -> Optional[List[io.BytesIO]]:
+    uploads: list[UploadFile] | None,
+) -> list[io.BytesIO] | None:
     """
     Convert a list of UploadFiles to a list of BytesIO buffers, or None.
     """
@@ -68,7 +67,7 @@ async def image_generation(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    model: Optional[str] = None,
+    model: str | None = None,
 ):
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
@@ -186,9 +185,7 @@ async def image_generation(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.image_generation(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.image_generation(): Exception occured - {e!s}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -198,7 +195,7 @@ async def image_generation(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{str(e)}"
+            error_msg = f"{e!s}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -228,11 +225,11 @@ async def image_edit_api(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    image: Optional[List[UploadFile]] = File(None),
-    image_array: Optional[List[UploadFile]] = File(None, alias="image[]"),
-    mask: Optional[List[UploadFile]] = File(None),
-    mask_array: Optional[List[UploadFile]] = File(None, alias="mask[]"),
-    model: Optional[str] = None,
+    image: list[UploadFile] | None = File(None),
+    image_array: list[UploadFile] | None = File(None, alias="image[]"),
+    mask: list[UploadFile] | None = File(None),
+    mask_array: list[UploadFile] | None = File(None, alias="mask[]"),
+    model: str | None = None,
 ):
     """
     Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create

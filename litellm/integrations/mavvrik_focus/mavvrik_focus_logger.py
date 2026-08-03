@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -36,8 +36,8 @@ else:
 
 
 def _parse_metrics_marker(
-    marker: Optional[object],
-) -> Optional[datetime]:
+    marker: object | None,
+) -> datetime | None:
     """Parse metricsMarker from Mavvrik register response into a UTC datetime.
 
     Handles both formats Mavvrik may return:
@@ -70,7 +70,7 @@ def _parse_metrics_marker(
     return None
 
 
-def _is_empty_metrics_marker(marker: Optional[object]) -> bool:
+def _is_empty_metrics_marker(marker: object | None) -> bool:
     if marker is None:
         return True
     if isinstance(marker, (int, float)):
@@ -105,13 +105,13 @@ class MavvrikFocusLogger(FocusLogger):
             **kwargs,
         )
         raw = os.getenv("MAVVRIK_FOCUS_MAX_ROWS")
-        self._max_rows: Optional[int] = int(raw) if raw else 500_000
+        self._max_rows: int | None = int(raw) if raw else 500_000
 
     async def _export_window(
         self,
         *,
         window: FocusTimeWindow,
-        limit: Optional[int],
+        limit: int | None,
     ) -> None:
         """Export with Mavvrik row cap applied when no explicit limit is passed."""
         effective_limit = limit if limit is not None else self._max_rows
@@ -249,7 +249,7 @@ class MavvrikFocusLogger(FocusLogger):
         scheduler: AsyncIOScheduler,
     ) -> None:
         """Register the Mavvrik FOCUS export job on the provided scheduler."""
-        loggers: List[MavvrikFocusLogger] = [
+        loggers: list[MavvrikFocusLogger] = [
             cb
             for cb in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=MavvrikFocusLogger)
             if type(cb) is MavvrikFocusLogger

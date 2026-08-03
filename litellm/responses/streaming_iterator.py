@@ -5,9 +5,11 @@ import json
 import time
 import traceback
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
-from typing import Any, Dict, List, Literal, Optional
+from types import MappingProxyType
+from typing import Any, Literal
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -40,7 +42,7 @@ def _get_openai_response_types():
     return openai_types
 
 
-def _log_background_task_failure(task: "asyncio.Task[Any]", *, task_name: str) -> None:
+def _log_background_task_failure(task: asyncio.Task[Any], *, task_name: str) -> None:
     if task.cancelled():
         return
     exception = task.exception()
@@ -48,17 +50,36 @@ def _log_background_task_failure(task: "asyncio.Task[Any]", *, task_name: str) -
         verbose_logger.error("%s failed: %s", task_name, exception)
 
 
-_CLIENT_ERROR_CODES: frozenset[str] = frozenset(
-    (
-        "invalid_request_error",
-        "context_length_exceeded",
-        "content_policy_violation",
-        "model_not_found",
-    )
+_ERROR_CODE_HTTP_STATUS: Mapping[str, int] = MappingProxyType(
+    {  # mutable-ok: immediately frozen by MappingProxyType
+        "server_error": 500,
+        "rate_limit_exceeded": 429,
+        "insufficient_quota": 429,
+        "vector_store_timeout": 504,
+        "invalid_prompt": 400,
+        "invalid_image": 400,
+        "invalid_image_format": 400,
+        "invalid_base64_image": 400,
+        "invalid_image_url": 400,
+        "image_too_large": 400,
+        "image_too_small": 400,
+        "image_parse_error": 400,
+        "image_content_policy_violation": 400,
+        "invalid_image_mode": 400,
+        "image_file_too_large": 400,
+        "unsupported_image_media_type": 400,
+        "empty_image_file": 400,
+        "failed_to_download_image": 400,
+        "image_file_not_found": 400,
+        "invalid_request_error": 400,
+        "context_length_exceeded": 400,
+        "content_policy_violation": 400,
+        "model_not_found": 400,
+    }
 )
 
 
-def _error_event_fields(error_obj: object) -> tuple[str, Optional[str], Optional[str]]:
+def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]:
     if isinstance(error_obj, dict):
         raw_message = error_obj.get("message")
         raw_type = error_obj.get("type")
@@ -77,13 +98,14 @@ def _error_event_fields(error_obj: object) -> tuple[str, Optional[str], Optional
     return message, error_type, code
 
 
-def _status_code_for_error_fields(error_type: Optional[str], error_code: Optional[str]) -> int:
-    fields = tuple(field for field in (error_type, error_code) if field is not None)
+def _status_code_for_error_fields(error_type: str | None, error_code: str | None) -> int:
+    fields = tuple(field for field in (error_code, error_type) if field is not None)
     if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
         return 429
-    if any(field in _CLIENT_ERROR_CODES for field in fields):
-        return 400
-    return 500
+    return next(
+        (_ERROR_CODE_HTTP_STATUS[field] for field in fields if field in _ERROR_CODE_HTTP_STATUS),
+        500,
+    )
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -97,34 +119,34 @@ class BaseResponsesAPIStreamingIterator:
         self,
         response: httpx.Response,
         model: str,
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig],
+        responses_api_provider_config: BaseResponsesAPIConfig | None,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict[str, Any]] = None,
-        call_type: Optional[str] = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        custom_llm_provider: str | None = None,
+        request_data: dict[str, Any] | None = None,
+        call_type: str | None = None,
     ):
         self.response = response
         self.model = model
         self.logging_obj = logging_obj
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
-        self.completed_response: Optional[Any] = None
+        self.completed_response: Any | None = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
         self._generated_content = ""
         self._completed_response_cached = False
         self._completed_response_logged = False
-        self._completed_response_cache_hit: Optional[bool] = None
+        self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
-        self.request_data: Dict[str, Any] = request_data or {}
-        self.call_type: Optional[str] = call_type
+        self.request_data: dict[str, Any] = request_data or {}
+        self.call_type: str | None = call_type
 
         # set hidden params for response headers (e.g., x-litellm-model-id)
         # This matches the stream wrapper in litellm/litellm_core_utils/streaming_handler.py
@@ -132,7 +154,7 @@ class BaseResponsesAPIStreamingIterator:
             model=model or "",
             optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
         )
-        _model_info: Dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        _model_info: dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
         self._hidden_params = {
             "model_id": _model_info.get("id", None),
             "api_base": _api_base,
@@ -154,7 +176,7 @@ class BaseResponsesAPIStreamingIterator:
                 llm_provider=self.custom_llm_provider or "",
             )
 
-    def _process_chunk(self, chunk) -> Optional[Any]:
+    def _process_chunk(self, chunk) -> Any | None:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
@@ -277,14 +299,12 @@ class BaseResponsesAPIStreamingIterator:
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
                     if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
-                        response_obj: Optional[Any] = getattr(openai_responses_api_chunk, "response", None)
+                        response_obj: Any | None = getattr(openai_responses_api_chunk, "response", None)
                         if response_obj:
-                            usage_obj: Optional[Any] = getattr(response_obj, "usage", None)
+                            usage_obj: Any | None = getattr(response_obj, "usage", None)
                             if usage_obj is not None:
                                 try:
-                                    cost: Optional[float] = self.logging_obj._response_cost_calculator(
-                                        result=response_obj
-                                    )
+                                    cost: float | None = self.logging_obj._response_cost_calculator(result=response_obj)
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
                                 except Exception:
@@ -359,7 +379,6 @@ class BaseResponsesAPIStreamingIterator:
 
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
-        pass
 
     def _handle_logging_failed_response(self):
         """
@@ -382,7 +401,7 @@ class BaseResponsesAPIStreamingIterator:
         )
         self._handle_failure(exception)
 
-    def _record_failed_response_usage(self, response_obj: Optional[Any]) -> None:
+    def _record_failed_response_usage(self, response_obj: Any | None) -> None:
         if response_obj is None or self.logging_obj is None:
             return
         usage_obj = getattr(response_obj, "usage", None)
@@ -432,7 +451,7 @@ class BaseResponsesAPIStreamingIterator:
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
 
-    def _get_completed_response_object(self) -> Optional[Any]:
+    def _get_completed_response_object(self) -> Any | None:
         openai_types = _get_openai_response_types()
         completed_response = self.completed_response
         if isinstance(completed_response, openai_types.ResponsesAPIResponse):
@@ -514,7 +533,7 @@ class BaseResponsesAPIStreamingIterator:
         """
         try:
             # Align with chat pipeline: use logging_obj model_call_details + call_type
-            typed_call_type: Optional[CallTypes] = None
+            typed_call_type: CallTypes | None = None
             if self.call_type is not None:
                 try:
                     typed_call_type = CallTypes(self.call_type)
@@ -558,7 +577,7 @@ class BaseResponsesAPIStreamingIterator:
         if self.completed_response is None:
             return
 
-        request_payload: Dict[str, Any] = {}
+        request_payload: dict[str, Any] = {}
         if isinstance(self.request_data, dict):
             request_payload.update(self.request_data)
         try:
@@ -588,7 +607,7 @@ class BaseResponsesAPIStreamingIterator:
             pass
 
         try:
-            typed_call_type: Optional[CallTypes] = None
+            typed_call_type: CallTypes | None = None
             if self.call_type is not None:
                 try:
                     typed_call_type = CallTypes(self.call_type)
@@ -668,10 +687,10 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict[str, Any]] = None,
-        call_type: Optional[str] = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        custom_llm_provider: str | None = None,
+        request_data: dict[str, Any] | None = None,
+        call_type: str | None = None,
     ):
         super().__init__(
             response,
@@ -750,10 +769,10 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict[str, Any]] = None,
-        call_type: Optional[str] = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        custom_llm_provider: str | None = None,
+        request_data: dict[str, Any] | None = None,
+        call_type: str | None = None,
     ):
         super().__init__(
             response,
@@ -837,10 +856,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict[str, Any]] = None,
-        call_type: Optional[str] = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        custom_llm_provider: str | None = None,
+        request_data: dict[str, Any] | None = None,
+        call_type: str | None = None,
     ):
         transformed = responses_api_provider_config.transform_response_api_response(
             model=model,
@@ -906,8 +925,8 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         self,
         response: Any,
         logging_obj: LiteLLMLoggingObj,
-        request_data: Optional[Dict[str, Any]] = None,
-        call_type: Optional[str] = None,
+        request_data: dict[str, Any] | None = None,
+        call_type: str | None = None,
     ):
         BaseResponsesAPIStreamingIterator.__init__(
             self,
@@ -922,7 +941,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self._completed_response_cache_hit = True
         self._persist_completed_response_before_logging = False
-        self._events: List[Any] = []
+        self._events: list[Any] = []
         self._idx = 0
         self._set_events_from_response(transformed=response, logging_obj=logging_obj)
 
@@ -968,7 +987,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return evt
 
 
-def _dump_response_object(obj: Any) -> Dict[str, Any]:
+def _dump_response_object(obj: Any) -> dict[str, Any]:
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
     if isinstance(obj, dict):
@@ -998,8 +1017,8 @@ def _build_content_part_done_event(
     item_id: str,
     output_index: int,
     content_index: int,
-    part_payload: Dict[str, Any],
-) -> Optional[Any]:
+    part_payload: dict[str, Any],
+) -> Any | None:
     openai_types = _get_openai_response_types()
     part_type = part_payload.get("type")
     part: Any
@@ -1038,11 +1057,11 @@ def _build_content_part_done_event(
 
 def _add_text_like_part_events(
     *,
-    events: List[Any],
+    events: list[Any],
     item_id: str,
     output_index: int,
     content_index: int,
-    part_payload: Dict[str, Any],
+    part_payload: dict[str, Any],
     chunk_size: int,
 ) -> None:
     openai_types = _get_openai_response_types()
@@ -1107,19 +1126,19 @@ def _build_synthetic_response_events(
     transformed: Any,
     logging_obj: LiteLLMLoggingObj,
     chunk_size: int,
-) -> List[Any]:
+) -> list[Any]:
     openai_types = _get_openai_response_types()
     if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-        usage_obj: Optional[Any] = getattr(transformed, "usage", None)
+        usage_obj: Any | None = getattr(transformed, "usage", None)
         if usage_obj is not None:
             try:
-                cost: Optional[float] = logging_obj._response_cost_calculator(result=transformed)
+                cost: float | None = logging_obj._response_cost_calculator(result=transformed)
                 if cost is not None:
                     setattr(usage_obj, "cost", cost)
             except Exception:
                 pass
 
-    events: List[Any] = [
+    events: list[Any] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
     ]
@@ -1276,26 +1295,26 @@ class ResponsesWebSocketStreaming:
         websocket: Any,
         backend_ws: Any,
         logging_obj: LiteLLMLoggingObj,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[Dict] = None,
-        first_message: Optional[str] = None,
-        guardrail_callbacks: Optional[List[Any]] = None,
-        output_guardrail_callbacks: Optional[List[Any]] = None,
-        authorized_model: Optional[str] = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
+        first_message: str | None = None,
+        guardrail_callbacks: list[Any] | None = None,
+        output_guardrail_callbacks: list[Any] | None = None,
+        authorized_model: str | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: Dict = request_data or {}
-        self.messages: list[Dict] = []
-        self.input_messages: list[Dict[str, str]] = []
+        self.request_data: dict = request_data or {}
+        self.messages: list[dict] = []
+        self.input_messages: list[dict[str, str]] = []
         self.first_message = first_message
-        self.guardrail_callbacks: List[Any] = guardrail_callbacks or []
-        self.output_guardrail_callbacks: List[Any] = output_guardrail_callbacks or []
+        self.guardrail_callbacks: list[Any] = guardrail_callbacks or []
+        self.output_guardrail_callbacks: list[Any] = output_guardrail_callbacks or []
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
-        self.authorized_model: Optional[str] = authorized_model
+        self.authorized_model: str | None = authorized_model
 
     def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1571,7 +1590,7 @@ class ResponsesWebSocketStreaming:
         if not self.guardrail_callbacks:
             return response_str
 
-        pii_tokens: Dict[str, str] = (self.request_data.get("metadata") or {}).get("pii_tokens", {})
+        pii_tokens: dict[str, str] = (self.request_data.get("metadata") or {}).get("pii_tokens", {})
         if not pii_tokens:
             return response_str
 
@@ -1776,22 +1795,22 @@ class ManagedResponsesWebSocketHandler:
         self,
         websocket: Any,
         model: str,
-        logging_obj: "LiteLLMLoggingObj",
-        user_api_key_dict: Optional[Any] = None,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        timeout: Optional[float] = None,
-        custom_llm_provider: Optional[str] = None,
-        first_message: Optional[str] = None,
+        logging_obj: LiteLLMLoggingObj,
+        user_api_key_dict: Any | None = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float | None = None,
+        custom_llm_provider: str | None = None,
+        first_message: str | None = None,
         **kwargs: Any,
     ) -> None:
         self.websocket = websocket
         self.model = model
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.litellm_metadata: Dict[str, Any] = litellm_metadata or {}
-        self.model_group: Optional[str] = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
+        self.litellm_metadata: dict[str, Any] = litellm_metadata or {}
+        self.model_group: str | None = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
             "deployment_model_name"
         )
         self.api_key = api_key
@@ -1801,19 +1820,19 @@ class ManagedResponsesWebSocketHandler:
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
         # Carry through safe pass-through kwargs (e.g. extra_headers)
-        self.extra_kwargs: Dict[str, Any] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
+        self.extra_kwargs: dict[str, Any] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
         # Keyed by the DECODED (pre-encoding) response ID from response.completed.
         # This avoids the async DB-write race condition where spend logs haven't
         # been committed yet when the next response.create arrives.
-        self._session_history: Dict[str, List[Dict[str, Any]]] = {}
+        self._session_history: dict[str, list[dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _serialize_chunk(chunk: Any) -> Optional[str]:
+    def _serialize_chunk(chunk: Any) -> str | None:
         """Serialize a streaming chunk to a JSON string for WebSocket transmission."""
         try:
             if hasattr(chunk, "model_dump_json"):
@@ -1835,7 +1854,7 @@ class ManagedResponsesWebSocketHandler:
         except Exception:
             pass
 
-    def _get_history_messages(self, previous_response_id: str) -> List[Dict[str, Any]]:
+    def _get_history_messages(self, previous_response_id: str) -> list[dict[str, Any]]:
         """
         Return accumulated message history for *previous_response_id*.
 
@@ -1846,7 +1865,7 @@ class ManagedResponsesWebSocketHandler:
         raw_id = decoded.get("response_id", previous_response_id)
         return list(self._session_history.get(raw_id, []))
 
-    def _store_history(self, response_id: str, messages: List[Dict[str, Any]]) -> None:
+    def _store_history(self, response_id: str, messages: list[dict[str, Any]]) -> None:
         """
         Store the complete accumulated message history for *response_id*.
 
@@ -1856,13 +1875,13 @@ class ManagedResponsesWebSocketHandler:
         self._session_history[response_id] = messages
 
     @staticmethod
-    def _extract_response_id(completed_event: Dict[str, Any]) -> Optional[str]:
+    def _extract_response_id(completed_event: dict[str, Any]) -> str | None:
         """
         Pull the raw (decoded) response ID out of a ``response.completed`` event.
         Returns *None* if the event doesn't contain a usable ID.
         """
         resp_obj = completed_event.get("response", {})
-        encoded_id: Optional[str] = resp_obj.get("id") if isinstance(resp_obj, dict) else None
+        encoded_id: str | None = resp_obj.get("id") if isinstance(resp_obj, dict) else None
         if not encoded_id:
             return None
         decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(encoded_id)
@@ -1870,8 +1889,8 @@ class ManagedResponsesWebSocketHandler:
 
     @staticmethod
     def _extract_output_messages(
-        completed_event: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
+        completed_event: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         """
         Convert the output items in a ``response.completed`` event into
         Responses API message dicts suitable for the next turn's ``input``.
@@ -1879,7 +1898,7 @@ class ManagedResponsesWebSocketHandler:
         resp_obj = completed_event.get("response", {})
         if not isinstance(resp_obj, dict):
             return []
-        messages: List[Dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
         for item in resp_obj.get("output", []) or []:
             if not isinstance(item, dict):
                 continue
@@ -1906,7 +1925,7 @@ class ManagedResponsesWebSocketHandler:
         return messages
 
     @staticmethod
-    def _input_to_messages(input_val: Any) -> List[Dict[str, Any]]:
+    def _input_to_messages(input_val: Any) -> list[dict[str, Any]]:
         """
         Normalise the ``input`` field of a ``response.create`` event to a list
         of Responses API message dicts.
@@ -1927,7 +1946,7 @@ class ManagedResponsesWebSocketHandler:
     # _process_response_create sub-methods
     # ------------------------------------------------------------------
 
-    async def _parse_message(self, raw_message: str) -> Optional[Dict[str, Any]]:
+    async def _parse_message(self, raw_message: str) -> dict[str, Any] | None:
         """Parse raw WS text; return the message dict or None (JSON error / ignored type)."""
         try:
             msg_obj = json.loads(raw_message)
@@ -1940,14 +1959,14 @@ class ManagedResponsesWebSocketHandler:
         return msg_obj
 
     @staticmethod
-    def _is_warmup_frame(msg_obj: Dict[str, Any]) -> bool:
+    def _is_warmup_frame(msg_obj: dict[str, Any]) -> bool:
         """Return True for a response.create whose generate flag is false."""
         nested = msg_obj.get("response")
         source = nested if isinstance(nested, dict) and nested else msg_obj
         return source.get("generate") is False
 
     @staticmethod
-    def _is_warmup_response_id(response_id: Optional[str]) -> bool:
+    def _is_warmup_response_id(response_id: str | None) -> bool:
         """Return True for synthetic warmup IDs that only exist on this connection."""
         if not response_id:
             return False
@@ -1956,13 +1975,13 @@ class ManagedResponsesWebSocketHandler:
         return str(raw_id).startswith(_WARMUP_RESPONSE_ID_PREFIX)
 
     @staticmethod
-    def _warmup_source_params(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+    def _warmup_source_params(msg_obj: dict[str, Any]) -> dict[str, Any]:
         nested = msg_obj.get("response")
         if isinstance(nested, dict) and nested:
             return nested
         return {k: v for k, v in msg_obj.items() if k != "type"}
 
-    def _build_warmup_response(self, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_warmup_response(self, msg_obj: dict[str, Any]) -> dict[str, Any]:
         """Build a minimal completed Responses API object for a warmup ack."""
         source = self._warmup_source_params(msg_obj)
         wire_model = source.get("model") or self.model_group or self.model
@@ -1980,7 +1999,7 @@ class ManagedResponsesWebSocketHandler:
             },
         }
 
-    async def _send_warmup_ack(self, msg_obj: Dict[str, Any]) -> None:
+    async def _send_warmup_ack(self, msg_obj: dict[str, Any]) -> None:
         """
         Acknowledge a generate=false prewarm without calling the provider.
 
@@ -2003,14 +2022,14 @@ class ManagedResponsesWebSocketHandler:
             await self.websocket.send_text(serialized)
 
     @staticmethod
-    def _build_base_call_kwargs(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_base_call_kwargs(msg_obj: dict[str, Any]) -> dict[str, Any]:
         """
         Extract Responses API params from the event, handling both wire formats:
           Nested: {"type": "response.create", "response": {"input": [...], ...}}
           Flat:   {"type": "response.create", "input": [...], "model": "...", ...}
         """
         nested = msg_obj.get("response")
-        response_params: Dict[str, Any] = (
+        response_params: dict[str, Any] = (
             nested if isinstance(nested, dict) and nested else {k: v for k, v in msg_obj.items() if k != "type"}
         )
         return {
@@ -2021,10 +2040,10 @@ class ManagedResponsesWebSocketHandler:
 
     def _apply_history(
         self,
-        call_kwargs: Dict[str, Any],
-        previous_response_id: Optional[str],
-        current_messages: List[Dict[str, Any]],
-        prior_history: List[Dict[str, Any]],
+        call_kwargs: dict[str, Any],
+        previous_response_id: str | None,
+        current_messages: list[dict[str, Any]],
+        prior_history: list[dict[str, Any]],
     ) -> None:
         """Prepend in-memory turn history, or fall back to DB-based reconstruction."""
         if not previous_response_id:
@@ -2053,7 +2072,7 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["previous_response_id"] = previous_response_id
 
     @staticmethod
-    def _resolve_provider(model: Optional[str]) -> Optional[str]:
+    def _resolve_provider(model: str | None) -> str | None:
         """Resolve the LLM provider for a model string, or None if unresolvable."""
         if not model:
             return None
@@ -2065,7 +2084,7 @@ class ManagedResponsesWebSocketHandler:
         except Exception:
             return None
 
-    def _same_provider(self, model: Optional[str]) -> bool:
+    def _same_provider(self, model: str | None) -> bool:
         """Return True if model uses the same LLM provider as the connection model."""
         if model is None or model == self.model:
             return True
@@ -2074,7 +2093,7 @@ class ManagedResponsesWebSocketHandler:
             return False
         return event_provider == self._connection_provider
 
-    def _inject_credentials(self, call_kwargs: Dict[str, Any], model: Optional[str] = None) -> None:
+    def _inject_credentials(self, call_kwargs: dict[str, Any], model: str | None = None) -> None:
         """Inject connection-level credentials and metadata into call_kwargs."""
         if self.api_key is not None:
             call_kwargs["api_key"] = self.api_key
@@ -2093,7 +2112,7 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
 
     @staticmethod
-    def _update_proxy_request(call_kwargs: Dict[str, Any], model: str) -> None:
+    def _update_proxy_request(call_kwargs: dict[str, Any], model: str) -> None:
         """Update proxy_server_request body so spend logs record the full request."""
         proxy_server_request = (call_kwargs.get("litellm_metadata") or {}).get("proxy_server_request") or {}
         if not isinstance(proxy_server_request, dict):
@@ -2112,7 +2131,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs.setdefault("litellm_params", {})
         call_kwargs["litellm_params"]["proxy_server_request"] = proxy_server_request
 
-    async def _stream_and_forward(self, model: str, call_kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, Any]) -> dict[str, Any] | None:
         """
         Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
 
@@ -2120,7 +2139,7 @@ class ManagedResponsesWebSocketHandler:
         directly (before serialization) to avoid a redundant JSON round-trip on
         every chunk.  Returns the completed event dict, or ``None``.
         """
-        completed_event: Optional[Dict[str, Any]] = None
+        completed_event: dict[str, Any] | None = None
         stream_response = await litellm.aresponses(model=model, **call_kwargs)
         async for chunk in stream_response:  # type: ignore[union-attr]
             if chunk is None:
@@ -2144,9 +2163,9 @@ class ManagedResponsesWebSocketHandler:
 
     def _save_turn_history(
         self,
-        completed_event: Optional[Dict[str, Any]],
-        prior_history: List[Dict[str, Any]],
-        current_messages: List[Dict[str, Any]],
+        completed_event: dict[str, Any] | None,
+        prior_history: list[dict[str, Any]],
+        current_messages: list[dict[str, Any]],
     ) -> None:
         """Store this turn in in-memory history for future previous_response_id lookups."""
         if completed_event is None:
@@ -2215,7 +2234,7 @@ class ManagedResponsesWebSocketHandler:
         else:
             model = requested_model
 
-        previous_response_id: Optional[str] = call_kwargs.pop("previous_response_id", None)
+        previous_response_id: str | None = call_kwargs.pop("previous_response_id", None)
         current_messages = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history

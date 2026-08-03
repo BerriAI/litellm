@@ -1,9 +1,10 @@
 """``CustomLogger`` adapter on the OpenTelemetry span engine."""
 
 from collections import OrderedDict
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
@@ -13,20 +14,10 @@ from opentelemetry.trace import Span, Tracer, get_current_span, use_span
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.otel.model.baggage import promoted_baggage
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
-from litellm.integrations.otel.plumbing.context import (
-    is_recordable_span,
-    mcp_message_transport_span,
-    request_root_span,
-    resolve_mcp_span_context,
-    resolve_parent_context,
-    resolve_request_span_context,
-    set_request_baggage,
-    set_request_root_span,
-)
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
+from litellm.integrations.otel.model.baggage import promoted_baggage
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
@@ -42,6 +33,18 @@ from litellm.integrations.otel.model.payloads import (
     is_mcp_list_tools,
     is_mcp_tool_call,
 )
+from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
+from litellm.integrations.otel.model.utils import to_ns
+from litellm.integrations.otel.plumbing.context import (
+    is_recordable_span,
+    mcp_message_transport_span,
+    request_root_span,
+    resolve_mcp_span_context,
+    resolve_parent_context,
+    resolve_request_span_context,
+    set_request_baggage,
+    set_request_root_span,
+)
 from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
 from litellm.integrations.otel.plumbing.metrics import (
     GenAIMetricRecorder,
@@ -56,8 +59,6 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
-from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
-from litellm.integrations.otel.model.utils import to_ns
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -157,7 +158,7 @@ class OpenTelemetryV2(CustomLogger):
             event_recorder=self._init_events(logger_provider),
         )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
-        self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
+        self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
     def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":
@@ -281,13 +282,29 @@ class OpenTelemetryV2(CustomLogger):
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time) -> None:
-        """Record the GenAI metrics for a successful LLM call. Best-effort: a
-        recording failure (e.g. a malformed payload) must never break the span
-        close or the request itself."""
+        """Record the GenAI metrics for a successful LLM call."""
+        self._guarded_record(lambda recorder: recorder.record(kwargs, response_obj, start_time, end_time))
+
+    def _record_failure_metrics(self, kwargs, start_time, end_time) -> None:
+        """Record the GenAI metrics for a failed LLM call, so the duration
+        histogram covers the whole traffic rather than only what survived.
+
+        A synthetic proxy-gate log (auth / rate-limit rejection) is skipped for the
+        same reason it gets no span: no upstream call happened, so its duration is
+        not a GenAI operation's duration and would pull the histogram down."""
+        if LLMCallEvent.from_dict(kwargs).is_no_upstream_call:
+            return
+        self._guarded_record(lambda recorder: recorder.record_failure(kwargs, start_time, end_time))
+
+    def _guarded_record(self, record: "Callable[[GenAIMetricRecorder], None]") -> None:
+        """Run one metric recording. Best-effort: a recording failure (e.g. a
+        malformed payload) must never break the span close or the request itself. A
+        misconfigured attribute filter is operator-fixable, so it is surfaced once
+        at ERROR instead of being swallowed."""
         if self._metrics_recorder is None:
             return
         try:
-            self._metrics_recorder.record(kwargs, response_obj, start_time, end_time)
+            record(self._metrics_recorder)
         except ValueError as exc:
             if not self._metric_filter_error_logged:
                 verbose_logger.error(
@@ -304,6 +321,7 @@ class OpenTelemetryV2(CustomLogger):
         if self._emit_mcp_list_tools(kwargs, start_time, end_time):
             return
         self._close_llm_call(kwargs, start_time, end_time)
+        self._record_failure_metrics(kwargs, start_time, end_time)
 
     def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
         """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
@@ -651,9 +669,9 @@ class OpenTelemetryV2(CustomLogger):
         SDK dropped it, leaving the POST that actually failed unmarked."""
         span = mcp_message_transport_span() or request_root_span() or user_api_key_dict.parent_otel_span
         if span is None or not is_recordable_span(span):
-            return None
+            return
         stamp_error(span, _span_error_from_exception(original_exception, traceback_str=traceback_str))
-        return None
+        return
 
     def emit_guardrail_span(self, entry: "StandardLoggingGuardrailInformation") -> None:
         # Emitted by the guardrail-recording code the moment a guardrail finishes,

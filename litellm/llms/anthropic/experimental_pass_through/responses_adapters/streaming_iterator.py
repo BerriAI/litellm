@@ -3,7 +3,8 @@
 import json
 import traceback
 from collections import deque
-from typing import Any, AsyncIterator, Dict
+from collections.abc import AsyncIterator
+from typing import Any
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
@@ -33,14 +34,14 @@ class AnthropicResponsesStreamWrapper:
         self._message_id: str = f"msg_{uuid.uuid4()}"
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
-        self._item_id_to_block_index: Dict[str, int] = {}
+        self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
-        self._pending_tool_ids: Dict[str, str] = {}  # item_id -> call_id / name accumulator
+        self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque = deque()
 
-    def _make_message_start(self) -> Dict[str, Any]:
+    def _make_message_start(self) -> dict[str, Any]:
         return {
             "type": "message_start",
             "message": {
@@ -256,7 +257,7 @@ class AnthropicResponsesStreamWrapper:
                         stop_reason = "tool_use"
                         break
 
-            usage_delta: Dict[str, Any] = {
+            usage_delta: dict[str, Any] = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
             }
@@ -279,7 +280,7 @@ class AnthropicResponsesStreamWrapper:
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
-    async def __anext__(self) -> Dict[str, Any]:
+    async def __anext__(self) -> dict[str, Any]:
         # Return any queued chunks first
         if self._chunk_queue:
             return self._chunk_queue.popleft()

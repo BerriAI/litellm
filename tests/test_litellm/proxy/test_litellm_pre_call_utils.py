@@ -671,6 +671,8 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_guardrails": ["spoofed"],
         "applied_policies": ["spoofed-policy"],
         "policy_sources": {"spoofed-policy": "request"},
+        "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
+        "internal_call_origin": "autorouter_classifier",
         "_guardrail_pipelines": [{"name": "spoofed"}],
         "_pipeline_managed_guardrails": ["evaded"],
         "safe_user_metadata": "kept",
@@ -681,6 +683,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "mock_response": "free response",
         "mock_tool_calls": [{"id": "call_1"}],
         "disable_global_guardrails": True,
+        "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
         "metadata": copy.deepcopy(malicious_metadata),
         "litellm_metadata": copy.deepcopy(malicious_metadata),
     }
@@ -697,6 +700,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "mock_response" not in updated
     assert "mock_tool_calls" not in updated
     assert "disable_global_guardrails" not in updated
+    assert "routing_decision" not in updated
 
     stripped_keys = {
         "disable_global_guardrails",
@@ -710,6 +714,8 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_guardrails",
         "applied_policies",
         "policy_sources",
+        "routing_decision",
+        "internal_call_origin",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
     }

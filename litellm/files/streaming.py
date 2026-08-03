@@ -1,17 +1,15 @@
 import datetime
 import traceback
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
     Optional,
-    Union,
     cast,
 )
 
 import anyio
+
 from litellm.files.types import FileContentProvider
 
 if TYPE_CHECKING:
@@ -29,10 +27,10 @@ class FileContentStreamingResponse:
 
     def __init__(
         self,
-        stream_iterator: Union[Iterator[bytes], AsyncIterator[bytes]],
+        stream_iterator: Iterator[bytes] | AsyncIterator[bytes],
         file_id: str,
-        model: Optional[str],
-        custom_llm_provider: Optional[Union[FileContentProvider, str]],
+        model: str | None,
+        custom_llm_provider: FileContentProvider | str | None,
         logging_obj: Optional["LiteLLMLoggingObj"],
     ) -> None:
         self.stream_iterator = stream_iterator
@@ -40,8 +38,8 @@ class FileContentStreamingResponse:
         self.model = model
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj = logging_obj
-        self.standard_logging_object: Optional["StandardLoggingPayload"] = None
-        self._hidden_params: Dict[str, Any] = {}
+        self.standard_logging_object: StandardLoggingPayload | None = None
+        self._hidden_params: dict[str, Any] = {}
         self._logging_completed = False
         self._close_completed = False
         self._start_time = (
@@ -94,7 +92,7 @@ class FileContentStreamingResponse:
         self._close_completed = True
         self._logging_completed = True
         stream_to_close = self.stream_iterator
-        self.stream_iterator = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
+        self.stream_iterator = cast(Iterator[bytes] | AsyncIterator[bytes], iter(()))
 
         # Shield cleanup from request cancellation so upstream HTTP connections
         # are released promptly on client disconnects.
@@ -113,12 +111,12 @@ class FileContentStreamingResponse:
         self._close_completed = True
         self._logging_completed = True
         stream_to_close = self.stream_iterator
-        self.stream_iterator = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
+        self.stream_iterator = cast(Iterator[bytes] | AsyncIterator[bytes], iter(()))
 
         if hasattr(stream_to_close, "close"):
             cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
 
-    def _build_logging_response(self) -> Dict[str, str]:
+    def _build_logging_response(self) -> dict[str, str]:
         response = {
             "id": self.file_id,
             "object": "file.content",
@@ -170,7 +168,7 @@ class FileContentStreamingResponse:
         merged_hidden_params = cast(
             "StandardLoggingHiddenParams",
             {
-                **cast(Dict[str, Any], payload.get("hidden_params") or {}),
+                **cast(dict[str, Any], payload.get("hidden_params") or {}),
                 **self._hidden_params,
             },
         )

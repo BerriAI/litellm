@@ -1,7 +1,5 @@
 """Exceptions raised by the LiteLLM MCP proxy."""
 
-from typing import Optional
-
 from fastapi import HTTPException
 
 
@@ -21,7 +19,7 @@ class MCPUpstreamAuthError(Exception):
     def __init__(
         self,
         status_code: int,
-        www_authenticate: Optional[str],
+        www_authenticate: str | None,
         server_name: str,
     ) -> None:
         self.status_code = status_code
@@ -31,8 +29,8 @@ class MCPUpstreamAuthError(Exception):
 
     def to_http_exception(
         self,
-        base_url: Optional[str] = None,
-        request_path: Optional[str] = None,
+        base_url: str | None = None,
+        request_path: str | None = None,
     ) -> HTTPException:
         """Convert this upstream-auth error into an ``HTTPException`` that
         preserves the upstream status code and any ``WWW-Authenticate``
@@ -57,9 +55,9 @@ class MCPUpstreamAuthError(Exception):
         ``/.well-known/oauth-protected-resource/mcp/{server_name}``. This
         keeps the ``resource_metadata`` URI aligned with the resource pattern
         the client originally targeted, matching the path-aware behaviour of
-        ``_get_passthrough_resource_metadata_url`` in ``server.py``.
+        ``get_passthrough_resource_metadata_url`` in ``oauth_utils.py``.
         """
-        challenge: Optional[str] = self.www_authenticate
+        challenge: str | None = self.www_authenticate
         if challenge is None and self.status_code == 401 and base_url:
             prefix = base_url.rstrip("/")
             if request_path and request_path.startswith(f"/{self.server_name}/mcp"):

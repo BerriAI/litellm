@@ -10,7 +10,8 @@ A2A Streaming Events (in order):
 4. Status update (kind: "status-update") - Final status "completed" with final=true
 """
 
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 import litellm
 from litellm._logging import verbose_logger
@@ -46,13 +47,13 @@ class A2ACompletionBridgeHandler:
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
-        params: Dict[str, Any],
-        litellm_params: Dict[str, Any],
-        api_base: Optional[str] = None,
-        agent_extra_headers: Optional[Dict[str, str]] = None,
+        params: dict[str, Any],
+        litellm_params: dict[str, Any],
+        api_base: str | None = None,
+        agent_extra_headers: dict[str, str] | None = None,
         *,
         _skip_a2a_provider_routing: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Handle non-streaming A2A request via litellm.acompletion.
 
@@ -105,7 +106,7 @@ class A2ACompletionBridgeHandler:
         verbose_logger.info(f"A2A completion bridge: model={full_model}, api_base={api_base}")
 
         # Build completion params dict
-        completion_params: Dict[str, Any] = {
+        completion_params: dict[str, Any] = {
             "model": full_model,
             "messages": openai_messages,
             "api_base": api_base,
@@ -149,13 +150,13 @@ class A2ACompletionBridgeHandler:
     @staticmethod
     async def handle_streaming(
         request_id: str,
-        params: Dict[str, Any],
-        litellm_params: Dict[str, Any],
-        api_base: Optional[str] = None,
-        agent_extra_headers: Optional[Dict[str, str]] = None,
+        params: dict[str, Any],
+        litellm_params: dict[str, Any],
+        api_base: str | None = None,
+        agent_extra_headers: dict[str, str] | None = None,
         *,
         _skip_a2a_provider_routing: bool = False,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         Handle streaming A2A request via litellm.acompletion with stream=True.
 
@@ -223,7 +224,7 @@ class A2ACompletionBridgeHandler:
         verbose_logger.info(f"A2A completion bridge streaming: model={full_model}, api_base={api_base}")
 
         # Build completion params dict
-        completion_params: Dict[str, Any] = {
+        completion_params: dict[str, Any] = {
             "model": full_model,
             "messages": openai_messages,
             "api_base": api_base,
@@ -305,11 +306,11 @@ class A2ACompletionBridgeHandler:
 # Convenience functions that delegate to the class methods
 async def handle_a2a_completion(
     request_id: str,
-    params: Dict[str, Any],
-    litellm_params: Dict[str, Any],
-    api_base: Optional[str] = None,
-    agent_extra_headers: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
+    params: dict[str, Any],
+    litellm_params: dict[str, Any],
+    api_base: str | None = None,
+    agent_extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Convenience function for non-streaming A2A completion."""
     return await A2ACompletionBridgeHandler.handle_non_streaming(
         request_id=request_id,
@@ -322,11 +323,11 @@ async def handle_a2a_completion(
 
 async def handle_a2a_completion_streaming(
     request_id: str,
-    params: Dict[str, Any],
-    litellm_params: Dict[str, Any],
-    api_base: Optional[str] = None,
-    agent_extra_headers: Optional[Dict[str, str]] = None,
-) -> AsyncIterator[Dict[str, Any]]:
+    params: dict[str, Any],
+    litellm_params: dict[str, Any],
+    api_base: str | None = None,
+    agent_extra_headers: dict[str, str] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
     """Convenience function for streaming A2A completion."""
     async for chunk in A2ACompletionBridgeHandler.handle_streaming(
         request_id=request_id,

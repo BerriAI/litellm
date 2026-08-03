@@ -397,6 +397,16 @@ def unattributed_rows(rows: list[SpendLogRow]) -> list[SpendLogRow]:
     return [row for row in rows if not row.api_key]
 
 
+@pytest.mark.skip(
+    reason=(
+        "LIT-5027: the path under test hangs. The batch rate limiter reads the input file "
+        "to count tokens by awaiting litellm.afile_content with no timeout, so a slow Files "
+        "API holds POST /v1/batches open past any client deadline (63.6s observed on stage "
+        "against a 60s read timeout). The unattributed-spend-row contract below is never "
+        "reached, so the test reports a timeout rather than the behavior it guards. Unskip "
+        "once the fetch is bounded."
+    )
+)
 def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
 ) -> None:

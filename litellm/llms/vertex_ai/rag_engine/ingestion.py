@@ -14,7 +14,7 @@ Key differences from OpenAI:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from litellm import get_secret_str
 from litellm._logging import verbose_logger
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from litellm.types.rag import RAGIngestOptions
 
 
-def _get_str_or_none(value: Any) -> Optional[str]:
+def _get_str_or_none(value: Any) -> str | None:
     """Cast config value to Optional[str]."""
     return str(value) if value is not None else None
 
@@ -65,8 +65,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         super().__init__(ingest_options=ingest_options, router=router)
 
@@ -227,7 +227,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
         transformation = VertexAIRAGTransformation()
         chunking_config = transformation.transform_chunking_strategy_to_vertex_format(
-            cast(Optional[RAGChunkingStrategy], self.chunking_strategy)
+            cast(RAGChunkingStrategy | None, self.chunking_strategy)
         )
 
         chunk_size = chunking_config["chunking_config"]["chunk_size"]
@@ -242,8 +242,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         Vertex AI handles embedding internally - skip this step.
 
@@ -254,12 +254,12 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
+    ) -> tuple[str | None, str | None]:
         """
         Store content in Vertex AI RAG corpus.
 

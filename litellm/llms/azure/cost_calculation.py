@@ -3,8 +3,6 @@ Helper util for handling azure openai-specific cost calculation
 - e.g.: prompt caching, audio tokens
 """
 
-from typing import Optional, Tuple
-
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
@@ -14,9 +12,9 @@ from litellm.utils import get_model_info
 def cost_per_token(
     model: str,
     usage: Usage,
-    response_time_ms: Optional[float] = 0.0,
-    service_tier: Optional[str] = None,
-) -> Tuple[float, float]:
+    response_time_ms: float | None = 0.0,
+    service_tier: str | None = None,
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 

@@ -1,6 +1,6 @@
 import json
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import click
 import requests
@@ -13,7 +13,7 @@ from ... import Client
 from ...chat import ChatClient
 
 
-def _get_available_models(ctx: click.Context) -> List[Dict[str, Any]]:
+def _get_available_models(ctx: click.Context) -> list[dict[str, Any]]:
     """Get list of available models from the proxy server"""
     try:
         client = Client(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
@@ -28,7 +28,7 @@ def _get_available_models(ctx: click.Context) -> List[Dict[str, Any]]:
         return []
 
 
-def _select_model(console: Console, available_models: List[Dict[str, Any]]) -> Optional[str]:
+def _select_model(console: Console, available_models: list[dict[str, Any]]) -> str | None:
     """Interactive model selection"""
     if not available_models:
         console.print("[yellow]No models available or could not fetch models list.[/yellow]")
@@ -42,7 +42,7 @@ def _select_model(console: Console, available_models: List[Dict[str, Any]]) -> O
     table.add_column("Owned By", style="yellow")
     MAX_MODELS_TO_DISPLAY = 200
 
-    models_to_display: List[Dict[str, Any]] = available_models[:MAX_MODELS_TO_DISPLAY]
+    models_to_display: list[dict[str, Any]] = available_models[:MAX_MODELS_TO_DISPLAY]
     for i, model in enumerate(models_to_display):  # Limit to first 200 models
         table.add_row(str(i + 1), str(model.get("id", "")), str(model.get("owned_by", "")))
 
@@ -104,10 +104,10 @@ def _select_model(console: Console, available_models: List[Dict[str, Any]]) -> O
 @click.pass_context
 def chat(
     ctx: click.Context,
-    model: Optional[str],
+    model: str | None,
     temperature: float,
-    max_tokens: Optional[int] = None,
-    system: Optional[str] = None,
+    max_tokens: int | None = None,
+    system: str | None = None,
 ):
     """Interactive chat with streaming responses
 
@@ -135,7 +135,7 @@ def chat(
     client = ChatClient(ctx.obj["base_url"], ctx.obj["api_key"])
 
     # Initialize conversation history
-    messages: List[Dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
 
     # Add system message if provided
     if system:
@@ -238,7 +238,7 @@ def _show_help(console: Console):
     console.print(Panel(help_text, title="Help"))
 
 
-def _show_history(console: Console, messages: List[Dict[str, Any]]):
+def _show_history(console: Console, messages: list[dict[str, Any]]):
     """Show conversation history"""
     if not messages:
         console.print("[yellow]No conversation history.[/yellow]")
@@ -260,7 +260,7 @@ def _show_history(console: Console, messages: List[Dict[str, Any]]):
             )
 
 
-def _save_conversation(console: Console, messages: List[Dict[str, Any]], command: str):
+def _save_conversation(console: Console, messages: list[dict[str, Any]], command: str):
     """Save conversation to a file"""
     parts = command.split()
     if len(parts) < 2:
@@ -279,7 +279,7 @@ def _save_conversation(console: Console, messages: List[Dict[str, Any]], command
         console.print(f"[red]Error saving conversation: {e}[/red]")
 
 
-def _load_conversation(console: Console, command: str, system: Optional[str]) -> List[Dict[str, Any]]:
+def _load_conversation(console: Console, command: str, system: str | None) -> list[dict[str, Any]]:
     """Load conversation from a file"""
     parts = command.split()
     if len(parts) < 2:
@@ -309,10 +309,10 @@ def _load_conversation(console: Console, command: str, system: Optional[str]) ->
 def _handle_special_commands(
     console: Console,
     user_input: str,
-    messages: List[Dict[str, Any]],
-    system: Optional[str],
+    messages: list[dict[str, Any]],
+    system: str | None,
     ctx: click.Context,
-) -> tuple[bool, List[Dict[str, Any]], Optional[str]]:
+) -> tuple[bool, list[dict[str, Any]], str | None]:
     """Handle special chat commands. Returns (should_exit, updated_messages, updated_model)"""
     if user_input.lower() in ["/quit", "/exit", "/q"]:
         console.print("[yellow]Chat session ended.[/yellow]")
@@ -353,10 +353,10 @@ def _stream_response(
     console: Console,
     client: ChatClient,
     model: str,
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, Any]],
     temperature: float,
-    max_tokens: Optional[int],
-) -> Optional[str]:
+    max_tokens: int | None,
+) -> str | None:
     """Stream the model response and return the complete content"""
     try:
         assistant_content = ""
@@ -386,5 +386,5 @@ def _stream_response(
             console.print(f"[red]{e.response.text}[/red]")
         return None
     except Exception as e:
-        console.print(f"\n[red]Error: {str(e)}[/red]")
+        console.print(f"\n[red]Error: {e!s}[/red]")
         return None

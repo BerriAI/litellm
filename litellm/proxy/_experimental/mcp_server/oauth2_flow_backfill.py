@@ -36,7 +36,7 @@ a healed fleet has no null rows and the backfill exits after one query.
 
 import json
 from collections import Counter
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.db import _decode_oauth_payload, decrypt_credentials
@@ -55,7 +55,7 @@ BackfillRule = Literal[
 _BACKFILL_AUDIT_ACTOR = "oauth2_flow_backfill"
 
 
-def _decrypted_credentials(raw_credentials: Any) -> Optional[MCPCredentials]:
+def _decrypted_credentials(raw_credentials: Any) -> MCPCredentials | None:
     if raw_credentials is None:
         return None
     if isinstance(raw_credentials, str):
@@ -73,11 +73,11 @@ def _decrypted_credentials(raw_credentials: Any) -> Optional[MCPCredentials]:
 def classify_null_flow_row(
     *,
     has_per_user_tokens: bool,
-    authorization_url: Optional[str],
-    registration_url: Optional[str],
-    token_url: Optional[str],
-    credentials: Optional[MCPCredentials],
-) -> tuple[Optional[OAuth2Flow], BackfillRule]:
+    authorization_url: str | None,
+    registration_url: str | None,
+    token_url: str | None,
+    credentials: MCPCredentials | None,
+) -> tuple[OAuth2Flow | None, BackfillRule]:
     if has_per_user_tokens:
         return "authorization_code", "per_user_tokens"
     if authorization_url:

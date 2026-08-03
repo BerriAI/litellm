@@ -7,7 +7,7 @@ https://docs.twelvelabs.io/docs/models/pegasus
 
 import json
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -42,7 +42,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
     response_format, max_tokens) are translated to the TwelveLabs schema.
     """
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "max_completion_tokens",
@@ -102,13 +102,13 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
         input_prompt = self._convert_messages_to_prompt(messages=messages)
-        request_data: Dict[str, Any] = {"inputPrompt": input_prompt}
+        request_data: dict[str, Any] = {"inputPrompt": input_prompt}
 
         media_source = self._build_media_source(optional_params)
         if media_source is not None:
@@ -128,7 +128,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
 
         return request_data
 
-    def _build_media_source(self, optional_params: dict) -> Optional[dict]:
+    def _build_media_source(self, optional_params: dict) -> dict | None:
         direct_source = optional_params.get("mediaSource") or optional_params.get("media_source")
         if isinstance(direct_source, dict):
             return direct_source
@@ -154,8 +154,8 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             return {"s3Location": s3_location}
         return None
 
-    def _convert_messages_to_prompt(self, messages: List[AllMessageValues]) -> str:
-        prompt_parts: List[str] = []
+    def _convert_messages_to_prompt(self, messages: list[AllMessageValues]) -> str:
+        prompt_parts: list[str] = []
         for message in messages:
             role = message.get("role", "user")
             content = message.get("content", "")
@@ -185,12 +185,12 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform TwelveLabs Pegasus response to LiteLLM format.
@@ -208,7 +208,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             completion_response = raw_response.json()
         except Exception as e:
             raise BedrockError(
-                message=f"Error parsing response: {raw_response.text}, error: {str(e)}",
+                message=f"Error parsing response: {raw_response.text}, error: {e!s}",
                 status_code=raw_response.status_code,
             )
 
@@ -237,7 +237,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 raise Exception("Unable to set message content")
         except Exception as e:
             raise BedrockError(
-                message=f"Error setting response content: {str(e)}. Response: {completion_response}",
+                message=f"Error setting response content: {e!s}. Response: {completion_response}",
                 status_code=raw_response.status_code,
             )
 

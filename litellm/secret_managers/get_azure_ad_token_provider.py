@@ -1,5 +1,6 @@
 import os
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 from litellm._logging import verbose_logger
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
@@ -17,23 +18,23 @@ def infer_credential_type_from_environment() -> AzureCredentialType:
     elif os.environ.get("AZURE_CLIENT_ID"):
         return AzureCredentialType.ManagedIdentityCredential
     elif (
-        os.environ.get("AZURE_CLIENT_ID")
-        and os.environ.get("AZURE_TENANT_ID")
-        and os.environ.get("AZURE_CERTIFICATE_PATH")
-        and os.environ.get("AZURE_CERTIFICATE_PASSWORD")
+        (
+            os.environ.get("AZURE_CLIENT_ID")
+            and os.environ.get("AZURE_TENANT_ID")
+            and os.environ.get("AZURE_CERTIFICATE_PATH")
+            and os.environ.get("AZURE_CERTIFICATE_PASSWORD")
+        )
+        or os.environ.get("AZURE_CERTIFICATE_PASSWORD")
+        or os.environ.get("AZURE_CERTIFICATE_PATH")
     ):
-        return AzureCredentialType.CertificateCredential
-    elif os.environ.get("AZURE_CERTIFICATE_PASSWORD"):
-        return AzureCredentialType.CertificateCredential
-    elif os.environ.get("AZURE_CERTIFICATE_PATH"):
         return AzureCredentialType.CertificateCredential
     else:
         return AzureCredentialType.DefaultAzureCredential
 
 
 def get_azure_ad_token_provider(
-    azure_scope: Optional[str] = None,
-    azure_credential: Optional[AzureCredentialType] = None,
+    azure_scope: str | None = None,
+    azure_credential: AzureCredentialType | None = None,
 ) -> Callable[[], str]:
     """
     Get Azure AD token provider based on Service Principal with Secret workflow.
@@ -51,7 +52,7 @@ def get_azure_ad_token_provider(
     Returns:
         Callable that returns a temporary authentication token.
     """
-    import azure.identity as identity
+    from azure import identity
     from azure.identity import (
         CertificateCredential,
         ClientSecretCredential,
@@ -69,15 +70,9 @@ def get_azure_ad_token_provider(
         else None or os.environ.get("AZURE_CREDENTIAL") or infer_credential_type_from_environment()
     )
     verbose_logger.info(f"For Azure AD Token Provider, choosing credential type: {cred}")
-    credential: Optional[
-        Union[
-            ClientSecretCredential,
-            ManagedIdentityCredential,
-            CertificateCredential,
-            DefaultAzureCredential,
-            Any,
-        ]
-    ] = None
+    credential: (
+        ClientSecretCredential | ManagedIdentityCredential | CertificateCredential | DefaultAzureCredential | Any | None
+    ) = None
     if cred == AzureCredentialType.ClientSecretCredential:
         credential = ClientSecretCredential(
             client_id=os.environ["AZURE_CLIENT_ID"],

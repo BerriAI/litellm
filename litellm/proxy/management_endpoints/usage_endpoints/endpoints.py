@@ -4,7 +4,7 @@ USAGE AI CHAT ENDPOINTS
 /usage/ai/chat - Stream AI chat responses about usage data
 """
 
-from typing import List, Literal, Optional
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -22,8 +22,8 @@ class ChatMessage(BaseModel):
 
 
 class UsageAIChatRequest(BaseModel):
-    messages: List[ChatMessage] = Field(..., description="Chat messages (user/assistant history)")
-    model: Optional[str] = Field(default=None, description="Model to use for AI chat")
+    messages: list[ChatMessage] = Field(..., description="Chat messages (user/assistant history)")
+    model: str | None = Field(default=None, description="Model to use for AI chat")
 
 
 @router.post(

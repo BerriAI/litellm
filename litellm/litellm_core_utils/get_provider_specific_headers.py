@@ -1,14 +1,12 @@
-from typing import Dict, Optional
-
 from litellm.types.utils import ProviderSpecificHeader
 
 
 class ProviderSpecificHeaderUtils:
     @staticmethod
     def get_provider_specific_headers(
-        provider_specific_header: Optional[ProviderSpecificHeader],
-        custom_llm_provider: Optional[str],
-    ) -> Dict:
+        provider_specific_header: ProviderSpecificHeader | None,
+        custom_llm_provider: str | None,
+    ) -> dict:
         """
         Get the provider specific headers for the given custom llm provider.
 

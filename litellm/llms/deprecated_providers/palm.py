@@ -2,7 +2,7 @@ import copy
 import time
 import traceback
 import types
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import httpx
 
@@ -43,23 +43,23 @@ class PalmConfig:
     - `max_output_tokens` (int): Sets the maximum number of tokens to be returned in the output
     """
 
-    context: Optional[str] = None
-    examples: Optional[list] = None
-    temperature: Optional[float] = None
-    candidate_count: Optional[int] = None
-    top_k: Optional[int] = None
-    top_p: Optional[float] = None
-    max_output_tokens: Optional[int] = None
+    context: str | None = None
+    examples: list | None = None
+    temperature: float | None = None
+    candidate_count: int | None = None
+    top_k: int | None = None
+    top_p: float | None = None
+    max_output_tokens: int | None = None
 
     def __init__(
         self,
-        context: Optional[str] = None,
-        examples: Optional[list] = None,
-        temperature: Optional[float] = None,
-        candidate_count: Optional[int] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
+        context: str | None = None,
+        examples: list | None = None,
+        temperature: float | None = None,
+        candidate_count: int | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():

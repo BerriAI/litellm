@@ -5,8 +5,6 @@ Why separate file? Make it easy to see how transformation works
 """
 
 from litellm._uuid import uuid
-from typing import List, Optional
-
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
@@ -23,12 +21,12 @@ class TogetherAIRerankConfig:
         _tokens = RerankTokens(**response.get("usage", {}))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        _results: Optional[List[dict]] = response.get("results")
+        _results: list[dict] | None = response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={response}")
 
-        rerank_results: List[RerankResponseResult] = []
+        rerank_results: list[RerankResponseResult] = []
 
         for result in _results:
             # Validate required fields exist

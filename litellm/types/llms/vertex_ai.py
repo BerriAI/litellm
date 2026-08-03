@@ -16,7 +16,7 @@ GeminiEmbeddingInput = Union[EmbeddingInput, List[List[str]]]
 
 class FunctionResponse(TypedDict, total=False):
     # `id` correlates this response with the originating `functionCall` part.
-    # Supported on Google AI Studio Gemini 3.5+; Vertex AI rejects this field.
+    # Supported on Gemini 3+; older Gemini models reject this field.
     id: str
     name: Required[str]
     response: Optional[dict]
@@ -24,8 +24,8 @@ class FunctionResponse(TypedDict, total=False):
 
 
 class FunctionCall(TypedDict, total=False):
-    # `id` correlates the corresponding `functionResponse` on Google AI Studio
-    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
+    # `id` correlates the corresponding `functionResponse` on Gemini 3+.
+    # Older Gemini models omit/reject this field.
     id: str
     name: Required[str]
     args: Optional[dict]
@@ -58,8 +58,8 @@ class PartType(TypedDict, total=False):
 
 
 class HttpxFunctionCall(TypedDict, total=False):
-    # `id` correlates the corresponding `functionResponse` on Google AI Studio
-    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
+    # `id` correlates the corresponding `functionResponse` on Gemini 3+.
+    # Older Gemini models omit/reject this field.
     id: str
     name: Required[str]
     args: dict

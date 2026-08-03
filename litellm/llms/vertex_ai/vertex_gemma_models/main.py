@@ -19,7 +19,7 @@ The API expects a custom endpoint URL format:
 https://{ENDPOINT_NUMBER}.{location}-{REGION_NUMBER}.prediction.vertexai.goog/v1/projects/{PROJECT_ID}/locations/{location}/endpoints/{ENDPOINT_ID}:predict
 """
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 import httpx  # type: ignore
 
@@ -41,11 +41,11 @@ class VertexAIGemmaModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: Optional[dict],
-        timeout: Union[float, httpx.Timeout],
+        headers: dict | None,
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,

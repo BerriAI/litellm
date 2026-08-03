@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -205,9 +205,9 @@ class HashicorpSecretManager(BaseSecretManager):
     def get_url(
         self,
         secret_name: str,
-        namespace: Optional[str] = None,
-        mount_name: Optional[str] = None,
-        path_prefix: Optional[str] = None,
+        namespace: str | None = None,
+        mount_name: str | None = None,
+        path_prefix: str | None = None,
     ) -> str:
         """
         Constructs the Vault URL for KV v2 secrets.
@@ -238,7 +238,7 @@ class HashicorpSecretManager(BaseSecretManager):
         _url += secret_name
         return _url
 
-    def _sanitize_plain_value(self, value: Optional[Union[str, int]]) -> Optional[str]:
+    def _sanitize_plain_value(self, value: str | int | None) -> str | None:
         if value is None:
             return None
         value_str = str(value).strip()
@@ -246,14 +246,14 @@ class HashicorpSecretManager(BaseSecretManager):
             return None
         return value_str
 
-    def _sanitize_path_component(self, value: Optional[Union[str, int]]) -> Optional[str]:
+    def _sanitize_path_component(self, value: str | int | None) -> str | None:
         sanitized_value = self._sanitize_plain_value(value)
         if sanitized_value is None:
             return None
         sanitized_value = sanitized_value.strip("/")
         return sanitized_value or None
 
-    def _extract_secret_manager_settings(self, optional_params: Optional[dict]) -> Dict[str, Any]:
+    def _extract_secret_manager_settings(self, optional_params: dict | None) -> dict[str, Any]:
         if not isinstance(optional_params, dict):
             return {}
 
@@ -262,7 +262,7 @@ class HashicorpSecretManager(BaseSecretManager):
         allowed_keys = {"namespace", "mount", "path_prefix", "data"}
         return {k: source[k] for k in allowed_keys if k in source}
 
-    def _build_secret_target(self, secret_name: str, optional_params: Optional[dict]) -> Dict[str, Any]:
+    def _build_secret_target(self, secret_name: str, optional_params: dict | None) -> dict[str, Any]:
         settings = self._extract_secret_manager_settings(optional_params)
 
         namespace = settings.get("namespace", self.vault_namespace)
@@ -308,9 +308,9 @@ class HashicorpSecretManager(BaseSecretManager):
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Optional[str]:
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
         """
         Reads a secret from Vault KV v2 using an async HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -343,9 +343,9 @@ class HashicorpSecretManager(BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Optional[str]:
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
         """
         Reads a secret from Vault KV v2 using a sync HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -375,11 +375,11 @@ class HashicorpSecretManager(BaseSecretManager):
         self,
         secret_name: str,
         secret_value: str,
-        description: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tags: Optional[Union[dict, list]] = None,
-    ) -> Dict[str, Any]:
+        description: str | None = None,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        tags: dict | list | None = None,
+    ) -> dict[str, Any]:
         """
         Writes a secret to Vault KV v2 using an async HTTPX client.
 
@@ -423,9 +423,9 @@ class HashicorpSecretManager(BaseSecretManager):
         current_secret_name: str,
         new_secret_name: str,
         new_secret_value: str,
-        optional_params: Dict | None = None,
+        optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Rotates a secret by creating a new one and deleting the old one.
         Uses _build_secret_target to handle optional_params for namespace, mount, path_prefix customization.
@@ -567,9 +567,9 @@ class HashicorpSecretManager(BaseSecretManager):
     async def async_delete_secret(
         self,
         secret_name: str,
-        recovery_window_in_days: Optional[int] = 7,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        recovery_window_in_days: int | None = 7,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> dict:
         """
         Async function to delete a secret from Hashicorp Vault.
@@ -607,7 +607,7 @@ class HashicorpSecretManager(BaseSecretManager):
             verbose_logger.exception(f"Error deleting secret from Hashicorp Vault: {e}")
             return {"status": "error", "message": str(e)}
 
-    def _get_secret_value_from_json_response(self, json_resp: Optional[dict]) -> Optional[str]:
+    def _get_secret_value_from_json_response(self, json_resp: dict | None) -> str | None:
         """
         Get the secret value from the JSON response
 

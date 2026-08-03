@@ -10,9 +10,10 @@ import subprocess
 import time
 import urllib
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Protocol, Union
+from typing import Any, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
@@ -835,6 +836,21 @@ class PrismaManager:
         return dname
 
     @staticmethod
+    def _apply_replica_identity_full_if_requested() -> None:
+        """
+        `prisma db push` bypasses litellm-proxy-extras, so the opt-in
+        REPLICA IDENTITY FULL step has to be driven from here too.
+
+        litellm-proxy-extras is an optional install, so this is a no-op when it
+        is absent.
+        """
+        try:
+            from litellm_proxy_extras.utils import ProxyExtrasDBManager
+        except ImportError:
+            return
+        ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
+
+    @staticmethod
     def setup_database(use_migrate: bool = False, use_v2_resolver: bool = False) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
@@ -880,6 +896,7 @@ class PrismaManager:
                         timeout=60,
                         check=True,
                     )
+                    PrismaManager._apply_replica_identity_full_if_requested()
                     return True
             except subprocess.TimeoutExpired:
                 verbose_proxy_logger.warning(f"Attempt {attempt + 1} timed out")
@@ -895,7 +912,7 @@ class PrismaManager:
 
 
 def should_update_prisma_schema(
-    disable_updates: Union[bool, str] | None = None,
+    disable_updates: bool | str | None = None,
 ) -> bool:
     """
     Determines if Prisma Schema updates should be applied during startup.

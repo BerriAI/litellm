@@ -11,8 +11,9 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
+from collections.abc import AsyncGenerator
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -45,7 +46,7 @@ if TYPE_CHECKING:
 
 router = APIRouter()
 
-_PASCAL_TO_WIRE: Dict[str, str] = {
+_PASCAL_TO_WIRE: dict[str, str] = {
     "SendMessage": "message/send",
     "SendStreamingMessage": "message/stream",
     "GetTask": "tasks/get",
@@ -106,8 +107,8 @@ def _validate_push_notification_url(url: str) -> None:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str]:
-    headers: Dict[str, str] = {}
+def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> dict[str, str]:
+    headers: dict[str, str] = {}
     if user_api_key_dict.user_id:
         headers["X-LiteLLM-User-Id"] = user_api_key_dict.user_id
     if user_api_key_dict.team_id:
@@ -118,8 +119,8 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str
 def _forwarding_headers(
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict[str, Any],
-    agent_extra_headers: Dict[str, str] | None,
-) -> Dict[str, str] | None:
+    agent_extra_headers: dict[str, str] | None,
+) -> dict[str, str] | None:
     sanitized = (
         {k: v for k, v in agent_extra_headers.items() if not k.lower().startswith("x-litellm-")}
         if agent_extra_headers
@@ -181,7 +182,7 @@ def _enforce_inbound_trace_id(agent: Any, request: Request) -> None:
 async def _forward_jsonrpc(
     agent_url: str,
     body: dict[str, Any],
-    extra_headers: Dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -206,7 +207,7 @@ async def _a2a_sse_event_source(
     agent_url: str,
     body: dict[str, Any],
     request_id: Any | None = None,
-    extra_headers: Dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
     served_version: A2AVersion = "0.3",
 ) -> AsyncGenerator[dict, None]:
     """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
@@ -268,7 +269,7 @@ async def _forward_jsonrpc_sse(
     agent_url: str,
     body: dict[str, Any],
     request_id: Any | None = None,
-    extra_headers: Dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
     proxy_logging_obj: Any | None = None,
     user_api_key_dict: Any | None = None,
     request_data: dict[str, Any] | None = None,
@@ -337,7 +338,7 @@ async def _handle_stream_message(
     metadata: dict[str, Any] | None = None,
     proxy_server_request: dict[str, Any] | None = None,
     *,
-    agent_extra_headers: Dict[str, str] | None = None,
+    agent_extra_headers: dict[str, str] | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     request_data: dict[str, Any] | None = None,
     proxy_logging_obj: Any | None = None,
@@ -490,7 +491,7 @@ async def _handle_stream_message(
                         "id": request_id,
                         "error": {
                             "code": -32603,
-                            "message": f"Streaming error: {str(e)}",
+                            "message": f"Streaming error: {e!s}",
                         },
                     }
                 )
@@ -608,8 +609,8 @@ async def invoke_agent_a2a(
         version,
     )
 
-    body: Dict[str, Any] = {}
-    request_data: Dict[str, Any] = body
+    body: dict[str, Any] = {}
+    request_data: dict[str, Any] = body
     try:
         body = await request.json()
         request_data = body
@@ -722,12 +723,12 @@ async def invoke_agent_a2a(
         request_data = data
 
         # Build merged headers for the backend agent
-        static_headers: Dict[str, str] = dict(agent.static_headers or {})
+        static_headers: dict[str, str] = dict(agent.static_headers or {})
 
         raw_headers = dict(request.headers)
         normalized = {k.lower(): v for k, v in raw_headers.items()}
 
-        dynamic_headers: Dict[str, str] = {}
+        dynamic_headers: dict[str, str] = {}
 
         # 1. Admin-configured extra_headers: forward named headers from client request
         if agent.extra_headers:
@@ -771,7 +772,7 @@ async def invoke_agent_a2a(
         if _agent_guardrails:
             if not isinstance(_agent_guardrails, list):
                 _agent_guardrails = [_agent_guardrails]
-            _existing_guardrails: List = data.get("guardrails") or []
+            _existing_guardrails: list = data.get("guardrails") or []
             if not isinstance(_existing_guardrails, list):
                 _existing_guardrails = [_existing_guardrails]
             data["guardrails"] = _existing_guardrails + [g for g in _agent_guardrails if g not in _existing_guardrails]
@@ -825,7 +826,7 @@ async def invoke_agent_a2a(
                     logging_obj._enqueue_deferred_logging = None  # type: ignore[union-attr]
                     _enqueue_fn()
 
-            response_dict: Dict[str, Any] = (
+            response_dict: dict[str, Any] = (
                 response.model_dump(mode="json", exclude_none=True)  # type: ignore
                 if hasattr(response, "model_dump")
                 else response
@@ -973,4 +974,4 @@ async def invoke_agent_a2a(
             )
         except Exception:
             pass
-        return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {str(e)}", 500)
+        return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e!s}", 500)

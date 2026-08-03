@@ -1,9 +1,9 @@
 import json
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-MaxRequestSizeGetter = Callable[[], Optional[Union[int, float]]]
+MaxRequestSizeGetter = Callable[[], int | float | None]
 RequestSizeLimitEnabledGetter = Callable[[], bool]
 
 
@@ -76,7 +76,7 @@ class RequestSizeLimitMiddleware:
             await _send_request_too_large(send=send, max_request_size_mb=max_request_size_mb)
 
 
-def _mb_to_bytes(max_request_size_mb: Optional[Union[int, float]]) -> Optional[int]:
+def _mb_to_bytes(max_request_size_mb: float | None) -> int | None:
     if max_request_size_mb is None:
         return None
     if max_request_size_mb <= 0:
@@ -84,7 +84,7 @@ def _mb_to_bytes(max_request_size_mb: Optional[Union[int, float]]) -> Optional[i
     return int(max_request_size_mb * 1024 * 1024)
 
 
-def _get_content_length(scope: Scope) -> Optional[int]:
+def _get_content_length(scope: Scope) -> int | None:
     headers = dict(scope.get("headers") or [])
     raw_content_length = headers.get(b"content-length")
     if raw_content_length is None:
@@ -98,7 +98,7 @@ def _get_content_length(scope: Scope) -> Optional[int]:
 
 async def _send_request_too_large(
     send: Send,
-    max_request_size_mb: Optional[Union[int, float]],
+    max_request_size_mb: float | None,
 ) -> None:
     body = json.dumps(
         {"error": f"Request size is too large. Max size is {max_request_size_mb} MB"},

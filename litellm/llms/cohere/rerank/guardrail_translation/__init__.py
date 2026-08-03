@@ -8,4 +8,4 @@ guardrail_translation_mappings = {
     CallTypes.arerank: CohereRerankHandler,
 }
 
-__all__ = ["guardrail_translation_mappings", "CohereRerankHandler"]
+__all__ = ["CohereRerankHandler", "guardrail_translation_mappings"]

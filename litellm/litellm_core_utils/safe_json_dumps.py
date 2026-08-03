@@ -1,5 +1,5 @@
 import json
-from typing import Any, Union
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -31,7 +31,7 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
         if id(obj) in seen:
             return "CircularReference Detected"
         seen.add(id(obj))
-        result: Union[dict, list, tuple, set, str]
+        result: dict | list | tuple | set | str
         if isinstance(obj, dict):
             result = {}
             for k, v in obj.items():

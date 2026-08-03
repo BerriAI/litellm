@@ -1,9 +1,10 @@
 import os
 import re
 import sys
+from collections.abc import Iterator, Mapping
 from functools import lru_cache
 from logging import Logger
-from typing import Any, Dict, FrozenSet, Iterator, List, Mapping, Optional, Tuple, Union
+from typing import Any
 
 from fastapi import HTTPException, Request, status
 
@@ -26,7 +27,7 @@ from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 
-def _get_request_ip_address(request: Request, use_x_forwarded_for: Optional[bool] = False) -> Optional[str]:
+def _get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
     client_ip = None
     if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"]
@@ -39,10 +40,10 @@ def _get_request_ip_address(request: Request, use_x_forwarded_for: Optional[bool
 
 
 def _check_valid_ip(
-    allowed_ips: Optional[List[str]],
+    allowed_ips: list[str] | None,
     request: Request,
-    use_x_forwarded_for: Optional[bool] = False,
-) -> Tuple[bool, Optional[str]]:
+    use_x_forwarded_for: bool | None = False,
+) -> tuple[bool, str | None]:
     """
     Returns if ip is allowed or not
     """
@@ -69,7 +70,7 @@ def check_complete_credentials(request_body: dict) -> bool:
     be used as an SSRF pivot. Validate any URL fields here so the gate
     can't be bypassed with ``api_key=anything`` plus a malicious target.
     """
-    given_model: Optional[str] = None
+    given_model: str | None = None
 
     given_model = request_body.get("model")
     if given_model is None:
@@ -130,7 +131,7 @@ def _is_param_allowed(
     for item in configurable_clientside_auth_params:
         if isinstance(item, str) and param == item:
             return True
-        elif isinstance(item, Dict):
+        elif isinstance(item, dict):
             if param == "api_base" and check_regex_or_str_match(
                 request_body_value=request_body_value,
                 regex_str=item["api_base"],
@@ -141,7 +142,7 @@ def _is_param_allowed(
 
 
 def _allow_model_level_clientside_configurable_parameters(
-    model: str, param: str, request_body_value: Any, llm_router: Optional[Router]
+    model: str, param: str, request_body_value: Any, llm_router: Router | None
 ) -> bool:
     """
     Check if model is allowed to use configurable client-side params
@@ -179,7 +180,7 @@ def _allow_model_level_clientside_configurable_parameters(
 # ``extra_body.aws_web_identity_token``) without re-validating, so the
 # banned-key check has to descend into it the same way it descends into
 # ``litellm_embedding_config``.
-_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config", "extra_body")
+_NESTED_CONFIG_KEYS: tuple[str, ...] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
 # observability callbacks. The same banned-param list applies — a value
@@ -187,7 +188,7 @@ _NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config", "extra_body"
 # leaks the same credentials as the root-level ``langfuse_host``, but the
 # original check only walked the request-body root, so the metadata path
 # was an unintentional bypass.
-_NESTED_METADATA_KEYS: Tuple[str, ...] = ("metadata", "litellm_metadata")
+_NESTED_METADATA_KEYS: tuple[str, ...] = ("metadata", "litellm_metadata")
 
 # Banned request-body params. The same list applies to every entry in
 # ``_NESTED_CONFIG_KEYS`` (dicts spread as ``**kwargs`` into outbound
@@ -199,7 +200,7 @@ _NESTED_METADATA_KEYS: Tuple[str, ...] = ("metadata", "litellm_metadata")
 # without choosing the destination or the credentials, so they don't
 # contribute to the data-exfil primitive that the rest of
 # ``_supported_callback_params`` does.
-_SAFE_CLIENT_CALLBACK_PARAMS: FrozenSet[str] = frozenset(
+_SAFE_CLIENT_CALLBACK_PARAMS: frozenset[str] = frozenset(
     {
         "langfuse_prompt_version",
         "langsmith_sampling_rate",
@@ -211,7 +212,7 @@ _SAFE_CLIENT_CALLBACK_PARAMS: FrozenSet[str] = frozenset(
 # Listed here so the proxy bans them today; the long-term cleanup is to
 # fold these into the canonical allowlist so they share one source of
 # truth with the rest.
-_EXTRA_BANNED_OBSERVABILITY_PARAMS: FrozenSet[str] = frozenset(
+_EXTRA_BANNED_OBSERVABILITY_PARAMS: frozenset[str] = frozenset(
     {
         "posthog_api_url",
         "phoenix_project_name",
@@ -227,7 +228,7 @@ _EXTRA_BANNED_OBSERVABILITY_PARAMS: FrozenSet[str] = frozenset(
 )
 
 
-def _build_banned_observability_params() -> FrozenSet[str]:
+def _build_banned_observability_params() -> frozenset[str]:
     """Derive the observability ban list from the canonical allowlist.
 
     ``_supported_callback_params`` and ``_request_blocked_callback_params`` in
@@ -252,7 +253,7 @@ def _build_banned_observability_params() -> FrozenSet[str]:
     )
 
 
-_BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
+_BANNED_REQUEST_BODY_PARAMS: tuple[str, ...] = (
     "api_base",
     "base_url",
     "user_config",
@@ -308,7 +309,7 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
 def _check_banned_params(
     body: dict,
     general_settings: dict,
-    llm_router: Optional[Router],
+    llm_router: Router | None,
     model: str,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
@@ -402,7 +403,7 @@ def _reject_url_valued_fallback_target(value: str) -> None:
         )
 
 
-def is_request_body_safe(request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str) -> bool:
+def is_request_body_safe(request_body: dict, general_settings: dict, llm_router: Router | None, model: str) -> bool:
     """
     Check if the request body is safe.
 
@@ -460,7 +461,7 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
     return True
 
 
-def _coerce_metadata_to_dict(value: Any) -> Optional[Dict[str, Any]]:
+def _coerce_metadata_to_dict(value: Any) -> dict[str, Any] | None:
     """Return ``value`` as a dict, parsing it from JSON if delivered as a string.
 
     Multipart/form-data and ``extra_body`` callers send ``litellm_metadata``
@@ -581,7 +582,7 @@ def route_in_additonal_public_routes(current_route: str):
 
         return False
     except Exception as e:
-        verbose_proxy_logger.error(f"route_in_additonal_public_routes: {str(e)}")
+        verbose_proxy_logger.error(f"route_in_additonal_public_routes: {e!s}")
         return False
 
 
@@ -618,12 +619,12 @@ def get_request_route(request: Request) -> str:
         return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
-            f"error on get_request_route: {str(e)}, defaulting to request.url.path={request.url.path}"
+            f"error on get_request_route: {e!s}, defaulting to request.url.path={request.url.path}"
         )
         return str(request.url.path)
 
 
-def get_request_route_template(request: Request) -> Optional[str]:
+def get_request_route_template(request: Request) -> str | None:
     """
     Return the low-cardinality route template, e.g.
     ``/v1/threads/{thread_id}/runs`` (vs. the literal path from
@@ -638,7 +639,7 @@ def get_request_route_template(request: Request) -> Optional[str]:
         template = getattr(route, "path", None)
         return template if isinstance(template, str) and template else None
     except Exception as e:
-        verbose_proxy_logger.debug(f"error on get_request_route_template: {str(e)}")
+        verbose_proxy_logger.debug(f"error on get_request_route_template: {e!s}")
         return None
 
 
@@ -865,7 +866,7 @@ def bytes_to_mb(bytes_value: int):
 
 
 # helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
-def _get_deployment_default_limit(model_name: str, field: str) -> Optional[int]:
+def _get_deployment_default_limit(model_name: str, field: str) -> int | None:
     """
     Return the minimum value of `field` across all deployments for model_name,
     or None if no deployment has the field set.
@@ -893,18 +894,18 @@ def _get_deployment_default_limit(model_name: str, field: str) -> Optional[int]:
     return min(limits) if limits else None
 
 
-def _get_deployment_default_rpm_limit(model_name: str) -> Optional[int]:
+def _get_deployment_default_rpm_limit(model_name: str) -> int | None:
     return _get_deployment_default_limit(model_name, "default_api_key_rpm_limit")
 
 
-def _get_deployment_default_tpm_limit(model_name: str) -> Optional[int]:
+def _get_deployment_default_tpm_limit(model_name: str) -> int | None:
     return _get_deployment_default_limit(model_name, "default_api_key_tpm_limit")
 
 
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
-    model_name: Optional[str] = None,
-) -> Optional[Dict[str, int]]:
+    model_name: str | None = None,
+) -> dict[str, int] | None:
     """
     Get the model rpm limit for a given api key.
 
@@ -922,7 +923,7 @@ def get_key_model_rpm_limit(
 
     # 2. Check model_max_budget
     if user_api_key_dict.model_max_budget:
-        model_rpm_limit: Dict[str, Any] = {}
+        model_rpm_limit: dict[str, Any] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
             if isinstance(budget, dict) and budget.get("rpm_limit") is not None:
                 model_rpm_limit[model] = budget["rpm_limit"]
@@ -946,8 +947,8 @@ def get_key_model_rpm_limit(
 
 def get_key_model_tpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
-    model_name: Optional[str] = None,
-) -> Optional[Dict[str, int]]:
+    model_name: str | None = None,
+) -> dict[str, int] | None:
     """
     Get the model tpm limit for a given api key.
 
@@ -965,7 +966,7 @@ def get_key_model_tpm_limit(
 
     # 2. Check model_max_budget (iterate per-model like RPM does)
     if user_api_key_dict.model_max_budget:
-        model_tpm_limit: Dict[str, Any] = {}
+        model_tpm_limit: dict[str, Any] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
             if isinstance(budget, dict) and budget.get("tpm_limit") is not None:
                 model_tpm_limit[model] = budget["tpm_limit"]
@@ -991,7 +992,7 @@ def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
     metadata_accessor_key: Literal["team_metadata", "organization_metadata", "project_metadata"],
     rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
-) -> Optional[Dict[str, int]]:
+) -> dict[str, int] | None:
     if getattr(user_api_key_dict, metadata_accessor_key):
         return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
     return None
@@ -999,7 +1000,7 @@ def get_model_rate_limit_from_metadata(
 
 def get_team_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Dict[str, int]]:
+) -> dict[str, int] | None:
     if user_api_key_dict.team_metadata:
         return user_api_key_dict.team_metadata.get("model_rpm_limit")
     return None
@@ -1007,7 +1008,7 @@ def get_team_model_rpm_limit(
 
 def get_team_model_tpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Dict[str, int]]:
+) -> dict[str, int] | None:
     if user_api_key_dict.team_metadata:
         return user_api_key_dict.team_metadata.get("model_tpm_limit")
     return None
@@ -1015,7 +1016,7 @@ def get_team_model_tpm_limit(
 
 def get_key_mcp_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Dict[str, int]]:
+) -> dict[str, int] | None:
     """
     Get the per-MCP-server rpm limit for a given api key.
 
@@ -1041,7 +1042,7 @@ def get_key_mcp_rpm_limit(
 
 def get_team_mcp_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Dict[str, int]]:
+) -> dict[str, int] | None:
     if user_api_key_dict.team_metadata:
         return user_api_key_dict.team_metadata.get("mcp_rpm_limit")
     return None
@@ -1049,7 +1050,7 @@ def get_team_mcp_rpm_limit(
 
 def get_key_tag_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[dict[str, int]]:
+) -> dict[str, int] | None:
     """
     Get the per-request-tag rpm limit configured on a given api key.
 
@@ -1063,7 +1064,7 @@ def get_key_tag_rpm_limit(
 
 def get_project_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Dict[str, int]]:
+) -> dict[str, int] | None:
     if user_api_key_dict.project_metadata:
         return user_api_key_dict.project_metadata.get("model_rpm_limit")
     return None
@@ -1071,7 +1072,7 @@ def get_project_model_rpm_limit(
 
 def get_project_model_tpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Dict[str, int]]:
+) -> dict[str, int] | None:
     if user_api_key_dict.project_metadata:
         return user_api_key_dict.project_metadata.get("model_tpm_limit")
     return None
@@ -1143,7 +1144,7 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[list]:
+def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:
     """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
     if not user_id_mapping:
         return None
@@ -1166,8 +1167,8 @@ def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[list]:
 
 
 def _get_customer_id_from_standard_headers(
-    request_headers: Optional[dict],
-) -> Optional[str]:
+    request_headers: dict | None,
+) -> str | None:
     """
     Check standard customer ID headers for a customer/end-user ID.
 
@@ -1192,7 +1193,7 @@ def _get_customer_id_from_standard_headers(
     return None
 
 
-def _coerce_user_id_to_str(value: Any) -> Optional[str]:
+def _coerce_user_id_to_str(value: Any) -> str | None:
     """Return a usable end-user identifier string, or None if the value isn't one.
 
     Always drops non-string structured values (dict/list/tuple/set) because
@@ -1227,7 +1228,7 @@ def _coerce_user_id_to_str(value: Any) -> Optional[str]:
     return None
 
 
-def get_end_user_id_from_request_body(request_body: dict, request_headers: Optional[dict] = None) -> Optional[str]:
+def get_end_user_id_from_request_body(request_body: dict, request_headers: dict | None = None) -> str | None:
     # Import general_settings here to avoid potential circular import issues at module level
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
@@ -1241,7 +1242,7 @@ def get_end_user_id_from_request_body(request_body: dict, request_headers: Optio
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
-        custom_header_name_to_check: Optional[Union[list, str]] = None
+        custom_header_name_to_check: list | str | None = None
 
         # Prefer user mappings (new behavior)
         user_id_mapping = general_settings.get("user_header_mappings", None)
@@ -1361,7 +1362,7 @@ _MODEL_ROUTING_ID_FIELDS = (
 )
 
 
-def _append_model_candidates(candidates: List[str], value: Any) -> None:
+def _append_model_candidates(candidates: list[str], value: Any) -> None:
     if value is None:
         return
 
@@ -1376,15 +1377,15 @@ def _append_model_candidates(candidates: List[str], value: Any) -> None:
         candidates.extend(model for model in model_names if model)
 
 
-def _dedupe_model_candidates(candidates: List[str]) -> List[str]:
-    deduped: List[str] = []
+def _dedupe_model_candidates(candidates: list[str]) -> list[str]:
+    deduped: list[str] = []
     for model in candidates:
         if model not in deduped:
             deduped.append(model)
     return deduped
 
 
-def _get_case_insensitive_mapping_value(mapping: Optional[Mapping[str, Any]], key: str) -> Any:
+def _get_case_insensitive_mapping_value(mapping: Mapping[str, Any] | None, key: str) -> Any:
     if not mapping:
         return None
     if key in mapping:
@@ -1396,7 +1397,7 @@ def _get_case_insensitive_mapping_value(mapping: Optional[Mapping[str, Any]], ke
     return None
 
 
-def _route_matches_any_marker(route: str, markers: Tuple[str, ...]) -> bool:
+def _route_matches_any_marker(route: str, markers: tuple[str, ...]) -> bool:
     normalized_route = route.lower()
     return any(marker in normalized_route for marker in markers)
 
@@ -1407,13 +1408,13 @@ def _route_uses_model_routing_sources(route: str) -> bool:
 
 def _extract_models_from_managed_resource_id(
     resource_id: Any,
-    resource_id_field: Optional[str] = None,
-    llm_router: Optional[Router] = None,
-) -> List[str]:
+    resource_id_field: str | None = None,
+    llm_router: Router | None = None,
+) -> list[str]:
     if not isinstance(resource_id, str) or not resource_id:
         return []
 
-    candidates: List[str] = []
+    candidates: list[str] = []
 
     try:
         from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -1432,7 +1433,7 @@ def _extract_models_from_managed_resource_id(
             )
             _append_model_candidates(
                 candidates=candidates,
-                value=get_model_id_from_unified_batch_id(unified_file_id),
+                value=_resolve_model_id_with_router(get_model_id_from_unified_batch_id(unified_file_id), llm_router),
             )
     except Exception as e:
         verbose_proxy_logger.debug("Unable to extract model from managed file/batch ID: %s", str(e))
@@ -1442,7 +1443,10 @@ def _extract_models_from_managed_resource_id(
 
         parsed_id = parse_unified_id(resource_id)
         if parsed_id:
-            _append_model_candidates(candidates=candidates, value=parsed_id.get("model_id"))
+            _append_model_candidates(
+                candidates=candidates,
+                value=_resolve_model_id_with_router(parsed_id.get("model_id"), llm_router),
+            )
             _append_model_candidates(candidates=candidates, value=parsed_id.get("target_model_names"))
     except Exception as e:
         verbose_proxy_logger.debug("Unable to extract model from unified managed resource ID: %s", str(e))
@@ -1472,7 +1476,7 @@ def _extract_models_from_managed_resource_id(
     return _dedupe_model_candidates(candidates)
 
 
-def _resolve_model_id_with_router(model_id: Optional[str], llm_router: Optional[Router]) -> Optional[str]:
+def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | None) -> str | None:
     if model_id is None or llm_router is None:
         return model_id
     try:
@@ -1485,11 +1489,11 @@ def _resolve_model_id_with_router(model_id: Optional[str], llm_router: Optional[
 def _extract_model_candidates_from_request(
     request_data: dict,
     route: str,
-    request_headers: Optional[Mapping[str, Any]] = None,
-    request_query_params: Optional[Mapping[str, Any]] = None,
-    llm_router: Optional[Router] = None,
-) -> List[str]:
-    candidates: List[str] = []
+    request_headers: Mapping[str, Any] | None = None,
+    request_query_params: Mapping[str, Any] | None = None,
+    llm_router: Router | None = None,
+) -> list[str]:
+    candidates: list[str] = []
     uses_model_routing_sources = _route_uses_model_routing_sources(route=route)
     uses_header_or_query_model_sources = _route_matches_any_marker(
         route=route, markers=_MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS
@@ -1545,8 +1549,8 @@ def _extract_model_candidates_from_request(
 
 
 def _format_model_candidates(
-    candidates: List[str],
-) -> Optional[Union[str, List[str]]]:
+    candidates: list[str],
+) -> str | list[str] | None:
     if not candidates:
         return None
     if len(candidates) == 1:
@@ -1578,11 +1582,11 @@ def _request_dispatched_to_pass_through_endpoint(request: Request | None) -> boo
 def get_model_from_request(
     request_data: dict,
     route: str,
-    request_headers: Optional[Mapping[str, Any]] = None,
-    request_query_params: Optional[Mapping[str, Any]] = None,
-    llm_router: Optional[Router] = None,
+    request_headers: Mapping[str, Any] | None = None,
+    request_query_params: Mapping[str, Any] | None = None,
+    llm_router: Router | None = None,
     request: Request | None = None,
-) -> Optional[Union[str, List[str]]]:
+) -> str | list[str] | None:
     """Resolve the model(s) a request targets, for model-access and budget checks.
 
     Returns ``None`` when the request was dispatched to a user-defined pass-through

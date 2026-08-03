@@ -6,7 +6,8 @@ and signs requests via AmazonAgentCoreConfig (SigV4 or JWT).
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Mapping, Optional, Tuple
+from collections.abc import AsyncIterator, Mapping
+from typing import Any
 
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
@@ -28,15 +29,15 @@ _RESERVED_EXACT_HEADERS = frozenset(
         "host",
     }
 )
-_RESERVED_PREFIX_HEADERS: Tuple[str, ...] = (
+_RESERVED_PREFIX_HEADERS: tuple[str, ...] = (
     "x-amzn-bedrock-agentcore-runtime-",
     "x-amz-",
 )
 
 
 def _filter_reserved_headers(
-    agent_extra_headers: Optional[Mapping[str, str]],
-) -> Optional[Dict[str, str]]:
+    agent_extra_headers: Mapping[str, str] | None,
+) -> dict[str, str] | None:
     """
     Strip reserved AWS / AgentCore headers from caller-supplied
     ``agent_extra_headers`` before they are merged into the signed request.
@@ -46,7 +47,7 @@ def _filter_reserved_headers(
     if not agent_extra_headers:
         return None
 
-    filtered: Dict[str, str] = {}
+    filtered: dict[str, str] = {}
     dropped: list = []
     for k, v in agent_extra_headers.items():
         k_lower = k.lower()
@@ -76,12 +77,12 @@ class BedrockAgentCoreA2ATransformation:
     @staticmethod
     def get_url_and_signed_request(
         request_id: str,
-        params: Dict[str, Any],
-        litellm_params: Dict[str, Any],
+        params: dict[str, Any],
+        litellm_params: dict[str, Any],
         method: str = "message/send",
         stream: bool = False,
-        agent_extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Tuple[str, dict, bytes]:
+        agent_extra_headers: dict[str, str] | None = None,
+    ) -> tuple[str, dict, bytes]:
         """
         Build the AgentCore URL, construct a JSON-RPC envelope, and sign the request.
 
@@ -169,7 +170,7 @@ class BedrockAgentCoreA2ATransformation:
         return url, signed_headers, signed_body
 
     @staticmethod
-    async def parse_sse_events(response: Any) -> AsyncIterator[Dict[str, Any]]:
+    async def parse_sse_events(response: Any) -> AsyncIterator[dict[str, Any]]:
         """
         Parse SSE events from an httpx streaming response.
 

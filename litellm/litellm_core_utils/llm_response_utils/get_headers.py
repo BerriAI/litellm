@@ -1,7 +1,4 @@
-from typing import Optional
-
-
-def get_response_headers(_response_headers: Optional[dict] = None) -> dict:
+def get_response_headers(_response_headers: dict | None = None) -> dict:
     """
 
     Sets the Appropriate OpenAI headers for the response and forward all headers as llm_provider-{header}

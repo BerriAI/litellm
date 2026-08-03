@@ -2,14 +2,9 @@
 Handler for transforming interactions API requests to litellm.responses requests.
 """
 
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import (
     Any,
-    AsyncIterator,
-    Coroutine,
-    Dict,
-    Iterator,
-    Optional,
-    Union,
     cast,
 )
 
@@ -36,24 +31,17 @@ class LiteLLMResponsesInteractionsHandler:
     def interactions_api_handler(
         self,
         model: str,
-        input: Optional[InteractionInput],
+        input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
         _is_async: bool = False,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
         **kwargs,
-    ) -> Union[
-        InteractionsAPIResponse,
-        Iterator[InteractionsAPIStreamingResponse],
-        Coroutine[
-            Any,
-            Any,
-            Union[
-                InteractionsAPIResponse,
-                AsyncIterator[InteractionsAPIStreamingResponse],
-            ],
-        ],
-    ]:
+    ) -> (
+        InteractionsAPIResponse
+        | Iterator[InteractionsAPIStreamingResponse]
+        | Coroutine[Any, Any, InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]]
+    ):
         """
         Handle Interactions API request by calling litellm.responses().
 
@@ -118,12 +106,12 @@ class LiteLLMResponsesInteractionsHandler:
 
     async def async_interactions_api_handler(
         self,
-        responses_request: Dict[str, Any],
+        responses_request: dict[str, Any],
         model: str,
-        input: Optional[InteractionInput],
+        input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         **kwargs,
-    ) -> Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]]:
+    ) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
         """Async handler for interactions API requests."""
         # Call litellm.aresponses()
         # Note: litellm.aresponses() returns Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]

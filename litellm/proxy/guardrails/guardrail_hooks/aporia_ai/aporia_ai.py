@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import HTTPException
 
@@ -38,13 +38,13 @@ if TYPE_CHECKING:
 
 class AporiaGuardrail(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
+    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.aporia_api_key = api_key or os.environ["APORIO_API_KEY"]
@@ -52,7 +52,7 @@ class AporiaGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####
-    def transform_messages(self, messages: List[dict]) -> List[dict]:
+    def transform_messages(self, messages: list[dict]) -> list[dict]:
         supported_openai_roles = ["system", "user", "assistant"]
         default_role = "other"  # for unsupported roles - e.g. tool
         new_messages = []
@@ -69,7 +69,7 @@ class AporiaGuardrail(CustomGuardrail):
 
         return new_messages
 
-    async def prepare_aporia_request(self, new_messages: List[dict], response_string: Optional[str] = None) -> dict:
+    async def prepare_aporia_request(self, new_messages: list[dict], response_string: str | None = None) -> dict:
         data: dict[str, Any] = {}
         if new_messages is not None:
             data["messages"] = new_messages
@@ -90,8 +90,8 @@ class AporiaGuardrail(CustomGuardrail):
     async def make_aporia_api_request(
         self,
         request_data: dict,
-        new_messages: List[dict],
-        response_string: Optional[str] = None,
+        new_messages: list[dict],
+        response_string: str | None = None,
     ):
         data = await self.prepare_aporia_request(new_messages=new_messages, response_string=response_string)
 
@@ -156,7 +156,7 @@ class AporiaGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        response_str: Optional[str] = convert_litellm_response_object_to_str(response)
+        response_str: str | None = convert_litellm_response_object_to_str(response)
         if response_str is not None:
             await self.make_aporia_api_request(
                 request_data=data,
@@ -165,8 +165,6 @@ class AporiaGuardrail(CustomGuardrail):
             )
 
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-
-        pass
 
     @log_guardrail_information
     async def async_moderation_hook(
@@ -206,7 +204,7 @@ class AporiaGuardrail(CustomGuardrail):
         ):
             return
 
-        new_messages: Optional[List[dict]] = None
+        new_messages: list[dict] | None = None
         if "messages" in data and isinstance(data["messages"], list):
             new_messages = self.transform_messages(messages=data["messages"])
 
@@ -218,10 +216,9 @@ class AporiaGuardrail(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         else:
             verbose_proxy_logger.warning("Aporia AI: not running guardrail. No messages in data")
-            pass
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.aporia_ai import (
             AporiaGuardrailConfigModel,
         )

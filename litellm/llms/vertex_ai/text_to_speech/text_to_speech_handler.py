@@ -1,5 +1,3 @@
-from typing import Optional, Union
-
 import httpx
 from typing_extensions import TypedDict
 
@@ -14,8 +12,8 @@ from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 
 class VertexInput(TypedDict, total=False):
-    text: Optional[str]
-    ssml: Optional[str]
+    text: str | None
+    ssml: str | None
 
 
 class VertexVoice(TypedDict, total=False):
@@ -31,7 +29,7 @@ class VertexAudioConfig(TypedDict, total=False):
 class VertexTextToSpeechRequest(TypedDict, total=False):
     input: VertexInput
     voice: VertexVoice
-    audioConfig: Optional[VertexAudioConfig]
+    audioConfig: VertexAudioConfig | None
 
 
 class VertexTextToSpeechAPI(VertexLLM):
@@ -45,17 +43,17 @@ class VertexTextToSpeechAPI(VertexLLM):
     def audio_speech(
         self,
         logging_obj,
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        api_base: str | None,
+        timeout: float | httpx.Timeout,
         model: str,
         input: str,
-        voice: Optional[dict] = None,
-        _is_async: Optional[bool] = False,
-        optional_params: Optional[dict] = None,
-        kwargs: Optional[dict] = None,
+        voice: dict | None = None,
+        _is_async: bool | None = False,
+        optional_params: dict | None = None,
+        kwargs: dict | None = None,
     ) -> HttpxBinaryResponseContent:
         import base64
 

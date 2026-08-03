@@ -4,7 +4,7 @@ Wrapper around router cache. Meant to handle model cooldown logic
 
 import functools
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from typing_extensions import TypedDict
 
@@ -43,7 +43,7 @@ class CooldownCache:
 
     def _common_add_cooldown_logic(
         self, model_id: str, original_exception, exception_status, cooldown_time: float
-    ) -> Tuple[str, CooldownCacheValue]:
+    ) -> tuple[str, CooldownCacheValue]:
         try:
             current_time = time.time()
             cooldown_key = CooldownCache.get_cooldown_cache_key(model_id)
@@ -58,7 +58,7 @@ class CooldownCache:
 
             return cooldown_key, cooldown_data
         except Exception as e:
-            verbose_logger.error("CooldownCache::_common_add_cooldown_logic - Exception occurred - {}".format(str(e)))
+            verbose_logger.error(f"CooldownCache::_common_add_cooldown_logic - Exception occurred - {e!s}")
             raise e
 
     def add_deployment_to_cooldown(
@@ -66,7 +66,7 @@ class CooldownCache:
         model_id: str,
         original_exception: Exception,
         exception_status: int,
-        cooldown_time: Optional[float],
+        cooldown_time: float | None,
     ):
         try:
             #########################################################
@@ -92,7 +92,7 @@ class CooldownCache:
                 ttl=_cooldown_time,
             )
         except Exception as e:
-            verbose_logger.error("CooldownCache::add_deployment_to_cooldown - Exception occurred - {}".format(str(e)))
+            verbose_logger.error(f"CooldownCache::add_deployment_to_cooldown - Exception occurred - {e!s}")
             raise e
 
     @staticmethod
@@ -101,8 +101,8 @@ class CooldownCache:
         return "deployment:" + model_id + ":cooldown"
 
     async def async_get_active_cooldowns(
-        self, model_ids: List[str], parent_otel_span: Optional[Span]
-    ) -> List[Tuple[str, CooldownCacheValue]]:
+        self, model_ids: list[str], parent_otel_span: Span | None
+    ) -> list[tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
 
@@ -112,7 +112,7 @@ class CooldownCache:
 
         ## check in memory cache first
         results = await self.cache.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
-        active_cooldowns: List[Tuple[str, CooldownCacheValue]] = []
+        active_cooldowns: list[tuple[str, CooldownCacheValue]] = []
 
         if results is None or all(v is None for v in results):
             return active_cooldowns
@@ -126,8 +126,8 @@ class CooldownCache:
         return active_cooldowns
 
     def get_active_cooldowns(
-        self, model_ids: List[str], parent_otel_span: Optional[Span]
-    ) -> List[Tuple[str, CooldownCacheValue]]:
+        self, model_ids: list[str], parent_otel_span: Span | None
+    ) -> list[tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         # Retrieve the values for the keys using mget
@@ -142,7 +142,7 @@ class CooldownCache:
 
         return active_cooldowns
 
-    def get_min_cooldown(self, model_ids: List[str], parent_otel_span: Optional[Span]) -> float:
+    def get_min_cooldown(self, model_ids: list[str], parent_otel_span: Span | None) -> float:
         """Return min cooldown time required for a group of model id's."""
 
         # Generate the keys for the deployments
@@ -151,14 +151,12 @@ class CooldownCache:
         # Retrieve the values for the keys using mget
         results = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
-        min_cooldown_time: Optional[float] = None
+        min_cooldown_time: float | None = None
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
                 cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
-                if min_cooldown_time is None:
-                    min_cooldown_time = cooldown_cache_value["cooldown_time"]
-                elif cooldown_cache_value["cooldown_time"] < min_cooldown_time:
+                if min_cooldown_time is None or cooldown_cache_value["cooldown_time"] < min_cooldown_time:
                     min_cooldown_time = cooldown_cache_value["cooldown_time"]
 
         return min_cooldown_time or self.default_cooldown_time

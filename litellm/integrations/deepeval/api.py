@@ -1,7 +1,9 @@
 # duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/confident/api.py
 import logging
-import httpx
 from enum import Enum
+
+import httpx
+
 from litellm._logging import verbose_logger
 
 DEEPEVAL_BASE_URL = "https://deepeval.confident-ai.com"

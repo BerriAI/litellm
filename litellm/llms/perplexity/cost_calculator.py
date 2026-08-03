@@ -3,13 +3,11 @@ Helper util for handling perplexity-specific cost calculation
 - e.g.: citation tokens, search queries
 """
 
-from typing import Tuple, Union
-
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -34,7 +32,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     ## GET MODEL INFO
     model_info = get_model_info(model=model, custom_llm_provider="perplexity")
 
-    def _safe_float_cast(value: Union[str, int, float, None, object], default: float = 0.0) -> float:
+    def _safe_float_cast(value: str | float | None | object, default: float = 0.0) -> float:
         """Safely cast a value to float with proper type handling for mypy."""
         if value is None:
             return default

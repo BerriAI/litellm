@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -31,11 +31,11 @@ router = APIRouter()
 
 
 def _update_request_data_with_managed_file_id(
-    data: Dict,
+    data: dict,
     file_id: str,
     request: Request,
     llm_router: Optional["Router"] = None,
-) -> tuple[Dict, Optional[str]]:
+) -> tuple[dict, str | None]:
     """
     Update request data with model routing information from managed file ID.
 
@@ -188,7 +188,7 @@ async def _authorize_model_routing_hint(
     *,
     model: str,
     llm_router: Optional["Router"],
-    user_api_key_dict: Optional[UserAPIKeyAuth],
+    user_api_key_dict: UserAPIKeyAuth | None,
 ) -> None:
     if user_api_key_dict is None:
         return
@@ -215,11 +215,11 @@ async def _authorize_model_routing_hint(
 
 
 async def _update_request_data_with_model_routing_hint(
-    data: Dict,
+    data: dict,
     request: Request,
     llm_router: Optional["Router"] = None,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-) -> Dict:
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+) -> dict:
     if data.get("api_key") is not None or data.get("api_base") is not None:
         return data
 
@@ -323,12 +323,12 @@ async def _update_request_data_with_model_routing_hint(
 
 
 def _update_request_data_with_litellm_managed_vector_store_registry(
-    data: Dict,
+    data: dict,
     vector_store_id: str,
     llm_router: Optional["Router"] = None,
-    managed_vector_store: Optional[LiteLLM_ManagedVectorStore] = None,
+    managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
     should_lookup_registry: bool = True,
-) -> Dict:
+) -> dict:
     """
     Update request data with model routing information from managed vector store.
 
@@ -416,9 +416,9 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
 async def _resolve_provider(
     *,
-    data: Dict,
+    data: dict,
     request: Request,
-) -> Optional[LlmProviders]:
+) -> LlmProviders | None:
     provider = (
         data.get("custom_llm_provider")
         or get_custom_llm_provider_from_request_headers(request=request)
@@ -439,7 +439,7 @@ async def _resolve_provider(
 
 def _maybe_check_permissions(
     *,
-    provider: Optional[LlmProviders],
+    provider: LlmProviders | None,
     vector_store_id: str,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
@@ -593,7 +593,7 @@ async def vector_store_file_list(
     )
 
     query_params = dict(request.query_params)
-    data: Dict[str, Optional[str]] = {"vector_store_id": vector_store_id}
+    data: dict[str, str | None] = {"vector_store_id": vector_store_id}
     data.update(query_params)
     data["vector_store_id"] = vector_store_id
     managed_vector_store = await assert_user_can_access_vector_store_id(
@@ -689,7 +689,7 @@ async def vector_store_file_retrieve(
         version,
     )
 
-    data: Dict[str, str] = {
+    data: dict[str, str] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
@@ -791,7 +791,7 @@ async def vector_store_file_content(
         version,
     )
 
-    data: Dict[str, str] = {
+    data: dict[str, str] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
@@ -995,7 +995,7 @@ async def vector_store_file_delete(
         version,
     )
 
-    data: Dict[str, str] = {
+    data: dict[str, str] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }

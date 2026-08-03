@@ -26,7 +26,6 @@ import signal
 import sys
 import threading
 import time
-from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
 
@@ -53,7 +52,7 @@ def set_child_subreaper() -> bool:
         return False
 
 
-def _read_comm_and_ppid(pid: int, proc_root: str) -> Optional[tuple[str, int]]:
+def _read_comm_and_ppid(pid: int, proc_root: str) -> tuple[str, int] | None:
     try:
         with open(f"{proc_root}/{pid}/stat", encoding="ascii", errors="replace") as stat_file:
             data = stat_file.read()
@@ -180,7 +179,7 @@ def _reaper_loop(parent_pid: int) -> None:
 REAPER_THREAD_NAME = "litellm-orphan-query-engine-reaper"
 
 
-def start_query_engine_reaper() -> Optional[threading.Thread]:
+def start_query_engine_reaper() -> threading.Thread | None:
     """Start the reaper daemon thread in the supervisor process.
 
     Must only be called from a process that never hosts the proxy app

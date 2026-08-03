@@ -13,7 +13,7 @@ Pattern Overview:
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -76,8 +76,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     @staticmethod
     def _build_streaming_usage_response(
         responses_so_far: list[Any],
-        request_data: Optional[dict],
-    ) -> Optional[ModelResponse]:
+        request_data: dict | None,
+    ) -> ModelResponse | None:
         chunks = tuple(response for response in responses_so_far if isinstance(response, (str, bytes)))
         if not chunks:
             return None
@@ -93,7 +93,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         exc: "ModifyResponseException",
         stream_started: bool = False,
-        responses_so_far: Optional[list[Any]] = None,
+        responses_so_far: list[Any] | None = None,
     ) -> list[bytes]:
         """
         Build an Anthropic SSE sequence delivering the guardrail block message
@@ -187,7 +187,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     @staticmethod
     def _content_block_state(
         responses_so_far: list[Any],
-    ) -> tuple[Optional[int], Optional[int]]:
+    ) -> tuple[int | None, int | None]:
         """From the SSE chunks already sent to the client, return (open
         content-block index or None, highest content-block index seen or None).
 
@@ -196,7 +196,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         considered -- matching how ``get_streaming_string_so_far`` reads the
         same stream."""
         open_indices: set[int] = set()
-        max_index: Optional[int] = None
+        max_index: int | None = None
         for item in responses_so_far:
             for data in AnthropicMessagesHandler._iter_sse_events(item):
                 event_type = data.get("type")
@@ -247,7 +247,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return chat_completion_compatible_request
 
-    def get_structured_messages(self, data: dict) -> Optional[List[AllMessageValues]]:
+    def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
         """
         Convert Anthropic messages request data to OpenAI-spec structured messages.
 
@@ -258,7 +258,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             return None
         chat_completion_compatible_request = self._translate_to_openai(data)
         result = cast(
-            List[AllMessageValues],
+            list[AllMessageValues],
             chat_completion_compatible_request.get("messages", []),
         )
         return result if result else None
@@ -267,7 +267,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
+        litellm_logging_obj: Any | None = None,
     ) -> Any:
         """
         Process input messages by applying guardrails to text content.
@@ -282,7 +282,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         chat_completion_compatible_request = self._translate_to_openai(data)
 
         structured_messages = cast(
-            List[AllMessageValues],
+            list[AllMessageValues],
             chat_completion_compatible_request.get("messages", []),
         )
         if skip_system:
@@ -290,10 +290,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         if skip_tool:
             structured_messages = openai_messages_without_tool(structured_messages)
 
-        texts_to_check: List[str] = []
-        images_to_check: List[str] = []
-        tools_to_check: List[ChatCompletionToolParam] = chat_completion_compatible_request.get("tools", [])
-        task_mappings: List[Tuple[int, Optional[int]]] = []
+        texts_to_check: list[str] = []
+        images_to_check: list[str] = []
+        tools_to_check: list[ChatCompletionToolParam] = chat_completion_compatible_request.get("tools", [])
+        task_mappings: list[tuple[int, int | None]] = []
 
         # Step 1: Extract all text content and images
         for msg_idx, message in enumerate(messages):
@@ -333,7 +333,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             if guardrailed_tools is not None:
                 # Convert tools back from OpenAI format to Anthropic format
                 anthropic_config = AnthropicConfig()
-                anthropic_tools: List[AllAnthropicToolsValues] = []
+                anthropic_tools: list[AllAnthropicToolsValues] = []
                 for tool in guardrailed_tools:
                     converted_tool, mcp_server = anthropic_config._map_tool_helper(tool)
                     if converted_tool is not None:
@@ -361,14 +361,34 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _write_back_structured_messages(data: dict, structured_messages: list) -> None:
-        """Convert compressed structured_messages back to Anthropic format and write to data."""
+        """Convert compressed structured_messages back to Anthropic format and write to data.
+
+        ``anthropic_messages_pt`` merges every run of consecutive user/tool rows
+        into a single message, so a turn carrying only tool results and the user
+        turn that follows it come back fused, and the request the model sees no
+        longer has the boundaries the client sent. Converting a row at a time
+        would keep them apart but breaks tool pairing: an assistant row whose
+        tool results sit outside its own call reads as an orphaned tool call,
+        and under ``modify_params`` the sanitizer answers it with a synthetic
+        "tool execution skipped" result and drops the real one. Converting each
+        assistant row together with the tool rows that answer it, and every
+        other row on its own, satisfies both.
+        """
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
+            group_tool_exchanges,
         )
 
         model = str(data.get("model") or "")
         non_system = [m for m in structured_messages if m.get("role") != "system"]
-        converted = anthropic_messages_pt(messages=non_system, model=model, llm_provider="anthropic")
+        groups = tuple([non_system[index] for index in group] for group in group_tool_exchanges(non_system)) or (
+            non_system,
+        )
+        converted = [
+            message
+            for group in groups
+            for message in anthropic_messages_pt(messages=group, model=model, llm_provider="anthropic")
+        ]
         for msg in converted:
             content = msg.get("content")
             if isinstance(content, list):
@@ -377,9 +397,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                         block.pop("cache_control", None)
         data["messages"] = converted
 
-    def extract_request_tool_names(self, data: dict) -> List[str]:
+    def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from Anthropic messages request (tools[].name)."""
-        names: List[str] = []
+        names: list[str] = []
         for tool in data.get("tools") or []:
             if isinstance(tool, dict) and tool.get("name"):
                 names.append(str(tool["name"]))
@@ -387,11 +407,11 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def _extract_input_text_and_images(
         self,
-        message: Dict[str, Any],
+        message: dict[str, Any],
         msg_idx: int,
-        texts_to_check: List[str],
-        images_to_check: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
+        texts_to_check: list[str],
+        images_to_check: list[str],
+        task_mappings: list[tuple[int, int | None]],
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
     ) -> None:
@@ -437,8 +457,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def _extract_input_tools(
         self,
-        tools: List[Dict[str, Any]],
-        tools_to_check: List[ChatCompletionToolParam],
+        tools: list[dict[str, Any]],
+        tools_to_check: list[ChatCompletionToolParam],
     ) -> None:
         """
         Extract tools from a message.
@@ -447,15 +467,15 @@ class AnthropicMessagesHandler(BaseTranslation):
         if tools is not None and isinstance(tools, list):
             # TRANSFORM ANTHROPIC TOOLS TO OPENAI TOOLS
             openai_tools = self.adapter.translate_anthropic_tools_to_openai(
-                tools=cast(List[AllAnthropicToolsValues], tools)
+                tools=cast(list[AllAnthropicToolsValues], tools)
             )
             tools_to_check.extend(openai_tools)  # type: ignore
 
     async def _apply_guardrail_responses_to_input(
         self,
-        messages: List[Dict[str, Any]],
-        responses: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
+        messages: list[dict[str, Any]],
+        responses: list[str],
+        task_mappings: list[tuple[int, int | None]],
     ) -> None:
         """
         Apply guardrail responses back to input messages.
@@ -465,7 +485,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         for task_idx, guardrail_response in enumerate(responses):
             mapping = task_mappings[task_idx]
             msg_idx = cast(int, mapping[0])
-            content_idx_optional = cast(Optional[int], mapping[1])
+            content_idx_optional = cast(int | None, mapping[1])
 
             content = messages[msg_idx].get("content", None)
             if content is None:
@@ -483,9 +503,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         response: "AnthropicMessagesResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content and tool calls.
@@ -506,10 +526,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 ...
             ]
         """
-        texts_to_check: List[str] = []
-        images_to_check: List[str] = []
-        tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
-        task_mappings: List[Tuple[int, Optional[int]]] = []
+        texts_to_check: list[str] = []
+        images_to_check: list[str] = []
+        tool_calls_to_check: list[ChatCompletionToolCallChunk] = []
+        task_mappings: list[tuple[int, int | None]] = []
 
         response_content = self._get_response_content(response)
         if not response_content:
@@ -562,12 +582,12 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     async def process_output_streaming_response(
         self,
-        responses_so_far: List[Any],
+        responses_so_far: list[Any],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
-    ) -> List[Any]:
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
+    ) -> list[Any]:
         """
         Process output streaming response by applying guardrails to text content.
 
@@ -589,7 +609,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 model_response = cast(ModelResponse, built_response)
                 first_choice = cast(Choices, model_response.choices[0])
                 tool_calls_list = cast(
-                    Optional[List[ChatCompletionMessageToolCall]],
+                    list[ChatCompletionMessageToolCall] | None,
                     first_choice.message.tool_calls,
                 )
                 string_so_far = first_choice.message.content
@@ -644,9 +664,9 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def _prepare_request_data(
         self,
-        request_data: Optional[dict],
+        request_data: dict | None,
         response: Any,
-        user_api_key_dict: Optional[Any],
+        user_api_key_dict: Any | None,
         key: str,
     ) -> dict:
         """Ensure request_data has the response/responses_so_far key and metadata."""
@@ -663,7 +683,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         return request_data
 
     @staticmethod
-    def _get_response_content(response: Any) -> List[Any]:
+    def _get_response_content(response: Any) -> list[Any]:
         """Extract content list from a dict or object response."""
         if isinstance(response, dict):
             return response.get("content", []) or []
@@ -673,18 +693,18 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def _extract_from_content_blocks(
         self,
-        response_content: List[Any],
-        texts_to_check: List[str],
-        images_to_check: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
-        tool_calls_to_check: List["ChatCompletionToolCallChunk"],
+        response_content: list[Any],
+        texts_to_check: list[str],
+        images_to_check: list[str],
+        task_mappings: list[tuple[int, int | None]],
+        tool_calls_to_check: list["ChatCompletionToolCallChunk"],
     ) -> None:
         """Extract text, images, and tool calls from content blocks."""
         for content_idx, content_block in enumerate(response_content):
-            block_dict: Dict[str, Any] = {}
+            block_dict: dict[str, Any] = {}
             if isinstance(content_block, dict):
                 block_type = content_block.get("type")
-                block_dict = cast(Dict[str, Any], content_block)
+                block_dict = cast(dict[str, Any], content_block)
             elif hasattr(content_block, "type"):
                 block_type = getattr(content_block, "type", None)
                 if hasattr(content_block, "model_dump"):
@@ -709,9 +729,9 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _build_guardrail_inputs(
-        texts_to_check: List[str],
-        images_to_check: List[str],
-        tool_calls_to_check: List["ChatCompletionToolCallChunk"],
+        texts_to_check: list[str],
+        images_to_check: list[str],
+        tool_calls_to_check: list["ChatCompletionToolCallChunk"],
         response: Any,
     ) -> "GenericGuardrailAPIInputs":
         """Build GenericGuardrailAPIInputs with optional images, tool calls, model."""
@@ -729,7 +749,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             inputs["model"] = response_model
         return inputs
 
-    def get_streaming_string_so_far(self, responses_so_far: List[Any]) -> str:
+    def get_streaming_string_so_far(self, responses_so_far: list[Any]) -> str:
         """
         Parse streaming responses and extract accumulated text content.
 
@@ -812,7 +832,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return text
 
-    def _check_streaming_has_ended(self, responses_so_far: List[Any]) -> bool:
+    def _check_streaming_has_ended(self, responses_so_far: list[Any]) -> bool:
         """
         Check if streaming response has ended by looking for non-null stop_reason.
 
@@ -907,12 +927,12 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def _extract_output_text_and_images(
         self,
-        content_block: Dict[str, Any],
+        content_block: dict[str, Any],
         content_idx: int,
-        texts_to_check: List[str],
-        images_to_check: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
-        tool_calls_to_check: Optional[List[ChatCompletionToolCallChunk]] = None,
+        texts_to_check: list[str],
+        images_to_check: list[str],
+        task_mappings: list[tuple[int, int | None]],
+        tool_calls_to_check: list[ChatCompletionToolCallChunk] | None = None,
     ) -> None:
         """
         Extract text content, images, and tool calls from a response content block.
@@ -942,8 +962,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     async def _apply_guardrail_responses_to_output(
         self,
         response: "AnthropicMessagesResponse",
-        responses: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
+        responses: list[str],
+        task_mappings: list[tuple[int, int | None]],
     ) -> None:
         """
         Apply guardrail responses back to output response.
@@ -955,7 +975,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             content_idx = cast(int, mapping[0])
 
             # Handle both dict and object responses
-            response_content: List[Any] = []
+            response_content: list[Any] = []
             if isinstance(response, dict):
                 response_content = response.get("content", []) or []
             elif hasattr(response, "content"):
@@ -977,7 +997,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             # Handle both dict and Pydantic object content blocks
             if isinstance(content_block, dict):
                 if content_block.get("type") == "text":
-                    cast(Dict[str, Any], content_block)["text"] = guardrail_response
+                    cast(dict[str, Any], content_block)["text"] = guardrail_response
             elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
                 # Update Pydantic object's text attribute
                 if hasattr(content_block, "text"):

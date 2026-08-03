@@ -19,6 +19,7 @@ import random
 import sys
 import time
 import traceback
+from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -26,16 +27,8 @@ from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
-    Dict,
-    Iterable,
-    List,
     Literal,
-    Mapping,
     Optional,
-    Tuple,
-    Type,
     Union,
     cast,
     get_args,
@@ -207,7 +200,7 @@ from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
-from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
+from .llms.bedrock.chat import BedrockConverseLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
@@ -346,30 +339,28 @@ class LiteLLM:
         self,
         *,
         api_key=None,
-        organization: Optional[str] = None,
-        base_url: Optional[str] = None,
-        timeout: Optional[float] = 600,
-        max_retries: Optional[int] = litellm.num_retries,
-        default_headers: Optional[Mapping[str, str]] = None,
+        organization: str | None = None,
+        base_url: str | None = None,
+        timeout: float | None = 600,
+        max_retries: int | None = litellm.num_retries,
+        default_headers: Mapping[str, str] | None = None,
     ):
         self.params = locals()
         self.chat = Chat(self.params, router_obj=None)
 
 
 class Chat:
-    def __init__(self, params, router_obj: Optional[Any]):
+    def __init__(self, params, router_obj: Any | None):
         self.params = params
         if self.params.get("acompletion", False) is True:
             self.params.pop("acompletion")
-            self.completions: Union[AsyncCompletions, Completions] = AsyncCompletions(
-                self.params, router_obj=router_obj
-            )
+            self.completions: AsyncCompletions | Completions = AsyncCompletions(self.params, router_obj=router_obj)
         else:
             self.completions = Completions(self.params, router_obj=router_obj)
 
 
 class Completions:
-    def __init__(self, params, router_obj: Optional[Any]):
+    def __init__(self, params, router_obj: Any | None):
         self.params = params
         self.router_obj = router_obj
 
@@ -385,7 +376,7 @@ class Completions:
 
 
 class AsyncCompletions:
-    def __init__(self, params, router_obj: Optional[Any]):
+    def __init__(self, params, router_obj: Any | None):
         self.params = params
         self.router_obj = router_obj
 
@@ -405,54 +396,54 @@ class AsyncCompletions:
 async def acompletion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
-    stream: Optional[bool] = None,
-    stream_options: Optional[dict] = None,
+    messages: list = [],
+    functions: list | None = None,
+    function_call: str | None = None,
+    timeout: float | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    n: int | None = None,
+    stream: bool | None = None,
+    stream_options: dict | None = None,
     stop=None,
-    max_tokens: Optional[int] = None,
-    max_completion_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
+    max_tokens: int | None = None,
+    max_completion_tokens: int | None = None,
+    modalities: list[ChatCompletionModality] | None = None,
+    prediction: ChatCompletionPredictionContentParam | None = None,
+    audio: ChatCompletionAudioParam | None = None,
+    presence_penalty: float | None = None,
+    frequency_penalty: float | None = None,
+    logit_bias: dict | None = None,
+    user: str | None = None,
     # openai v1.0+ new params
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[Union[str, dict]] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
+    response_format: dict | type[BaseModel] | None = None,
+    seed: int | None = None,
+    tools: list | None = None,
+    tool_choice: str | dict | None = None,
+    parallel_tool_calls: bool | None = None,
+    logprobs: bool | None = None,
+    top_logprobs: int | None = None,
     deployment_id=None,
-    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"]] = None,
-    verbosity: Optional[Literal["low", "medium", "high"]] = None,
-    safety_identifier: Optional[str] = None,
-    service_tier: Optional[str] = None,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"] | None = None,
+    verbosity: Literal["low", "medium", "high"] | None = None,
+    safety_identifier: str | None = None,
+    service_tier: str | None = None,
     # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-    extra_headers: Optional[dict] = None,
+    base_url: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    model_list: list | None = None,  # pass in a list of api_base,keys, etc.
+    extra_headers: dict | None = None,
     # Optional liteLLM function params
-    thinking: Optional[AnthropicThinkingParam] = None,
-    web_search_options: Optional[OpenAIWebSearchOptions] = None,
-    include_server_side_tool_invocations: Optional[bool] = None,
+    thinking: AnthropicThinkingParam | None = None,
+    web_search_options: OpenAIWebSearchOptions | None = None,
+    include_server_side_tool_invocations: bool | None = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
-    enable_json_schema_validation: Optional[bool] = None,
+    enable_json_schema_validation: bool | None = None,
     **kwargs,
-) -> Union[ModelResponse, CustomStreamWrapper]:
+) -> ModelResponse | CustomStreamWrapper:
     """
     Asynchronously executes a litellm.completion() call for any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
 
@@ -519,7 +510,7 @@ async def acompletion(
         non_default_params=kwargs,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
         model=model,
-        custom_llm_provider=cast(Optional[str], custom_llm_provider),  # cast-ok: read from untyped kwargs
+        custom_llm_provider=cast(str | None, custom_llm_provider),  # cast-ok: read from untyped kwargs
         tools=tools,
     )
 
@@ -733,9 +724,9 @@ async def _async_streaming(response, model, custom_llm_provider, args):
 
 
 def _handle_mock_potential_exceptions(
-    mock_response: Union[str, Exception],
+    mock_response: str | Exception,
     model: str,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
 ):
     if isinstance(mock_response, Exception):
         if isinstance(mock_response, openai.APIError):
@@ -776,8 +767,8 @@ def _handle_mock_potential_exceptions(
 
 
 def _handle_mock_timeout(
-    mock_timeout: Optional[bool],
-    timeout: Optional[Union[float, str, httpx.Timeout]],
+    mock_timeout: bool | None,
+    timeout: float | str | httpx.Timeout | None,
     model: str,
 ):
     if mock_timeout is True and timeout is not None:
@@ -790,8 +781,8 @@ def _handle_mock_timeout(
 
 
 async def _handle_mock_timeout_async(
-    mock_timeout: Optional[bool],
-    timeout: Optional[Union[float, str, httpx.Timeout]],
+    mock_timeout: bool | None,
+    timeout: float | str | httpx.Timeout | None,
     model: str,
 ):
     if mock_timeout is True and timeout is not None:
@@ -803,7 +794,7 @@ async def _handle_mock_timeout_async(
         )
 
 
-def _sleep_for_timeout(timeout: Union[float, str, httpx.Timeout]):
+def _sleep_for_timeout(timeout: float | str | httpx.Timeout):
     if isinstance(timeout, float):
         time.sleep(timeout)
     elif isinstance(timeout, str):
@@ -812,7 +803,7 @@ def _sleep_for_timeout(timeout: Union[float, str, httpx.Timeout]):
         time.sleep(timeout.connect)
 
 
-async def _sleep_for_timeout_async(timeout: Union[float, str, httpx.Timeout]):
+async def _sleep_for_timeout_async(timeout: float | str | httpx.Timeout):
     if isinstance(timeout, float):
         await asyncio.sleep(timeout)
     elif isinstance(timeout, str):
@@ -823,15 +814,15 @@ async def _sleep_for_timeout_async(timeout: Union[float, str, httpx.Timeout]):
 
 def mock_completion(
     model: str,
-    messages: List,
-    stream: Optional[bool] = False,
-    n: Optional[int] = None,
-    mock_response: Optional[MOCK_RESPONSE_TYPE] = "This is a mock request",
-    mock_tool_calls: Optional[List] = None,
-    mock_timeout: Optional[bool] = False,
+    messages: list,
+    stream: bool | None = False,
+    n: int | None = None,
+    mock_response: MOCK_RESPONSE_TYPE | None = "This is a mock request",
+    mock_tool_calls: list | None = None,
+    mock_timeout: bool | None = False,
     logging=None,
     custom_llm_provider=None,
-    timeout: Optional[Union[float, str, httpx.Timeout]] = None,
+    timeout: float | str | httpx.Timeout | None = None,
     **kwargs,
 ):
     """
@@ -879,7 +870,7 @@ def mock_completion(
             )
 
         mock_response = cast(
-            Union[str, dict, ModelResponse, ModelResponseStream], mock_response
+            str | dict | ModelResponse | ModelResponseStream, mock_response
         )  # after this point, mock_response is a string, dict, ModelResponse, or ModelResponseStream
         if isinstance(mock_response, str) and mock_response.startswith("Exception: mock_streaming_error"):
             mock_response = litellm.MockException(
@@ -901,7 +892,7 @@ def mock_completion(
             # convert to ModelResponseStream
             mock_response = convert_model_response_to_streaming(mock_response)  # type: ignore
 
-        model_response: Union[ModelResponse, ModelResponseStream] = ModelResponse()
+        model_response: ModelResponse | ModelResponseStream = ModelResponse()
 
         if stream is True:
             model_response = ModelResponseStream()
@@ -976,18 +967,18 @@ def mock_completion(
     except Exception as e:
         if isinstance(e, openai.APIError):
             raise e
-        raise Exception("Mock completion response failed - {}".format(e))
+        raise Exception(f"Mock completion response failed - {e}")
 
 
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
-    web_search_options: Optional[OpenAIWebSearchOptions] = None,
-    tools: Optional[List[Any]] = None,
-    reasoning_effort: Optional[Any] = None,
-    reasoning_summary: Optional[Any] = None,
-) -> Tuple[dict, str]:
-    model_info: Dict[str, Any] = {}
+    web_search_options: OpenAIWebSearchOptions | None = None,
+    tools: list[Any] | None = None,
+    reasoning_effort: Any | None = None,
+    reasoning_summary: Any | None = None,
+) -> tuple[dict, str]:
+    model_info: dict[str, Any] = {}
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
     # Returns early with minimal model_info; callers only inspect the "mode" key.
@@ -1011,7 +1002,7 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
 
     except Exception as e:
-        verbose_logger.debug("Error getting model info: {}".format(e))
+        verbose_logger.debug(f"Error getting model info: {e}")
 
         if model.startswith("responses/"):  # handle azure models - `azure/responses/<deployment-name>`
             model = model.replace("responses/", "")
@@ -1039,7 +1030,7 @@ def responses_api_bridge_check(
     return model_info, model
 
 
-def _should_allow_input_examples(custom_llm_provider: Optional[str], model: str) -> bool:
+def _should_allow_input_examples(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "anthropic":
         return True
     if custom_llm_provider == "azure_ai" or custom_llm_provider == "bedrock" or custom_llm_provider == "vertex_ai":
@@ -1059,11 +1050,11 @@ def _drop_input_examples_from_tool(tool: dict) -> dict:
 
 
 def _drop_input_examples_from_tools(
-    tools: Optional[List[dict]],
-) -> Optional[List[dict]]:
+    tools: list[dict] | None,
+) -> list[dict] | None:
     if tools is None:
         return None
-    cleaned_tools: List[dict] = []
+    cleaned_tools: list[dict] = []
     for tool in tools:
         if isinstance(tool, dict):
             cleaned_tools.append(_drop_input_examples_from_tool(tool))
@@ -1075,7 +1066,7 @@ def _drop_input_examples_from_tools(
 def _build_custom_pricing_entry(
     custom_llm_provider: str,
     kwargs: dict,
-    model_info: Optional[dict] = None,
+    model_info: dict | None = None,
 ) -> dict:
     """Build a complete model cost entry from kwargs and model_info.
 
@@ -1098,7 +1089,7 @@ def _build_custom_pricing_entry(
     return entry
 
 
-def _get_router_deployment_id(kwargs: dict) -> Optional[str]:
+def _get_router_deployment_id(kwargs: dict) -> str | None:
     for metadata_key in ("litellm_metadata", "metadata"):
         metadata = kwargs.get(metadata_key) or {}
         if not isinstance(metadata, dict):
@@ -1116,7 +1107,7 @@ def _register_custom_pricing_for_request(
     model: str,
     custom_llm_provider: str,
     kwargs: dict,
-    model_info: Optional[dict],
+    model_info: dict | None,
 ) -> None:
     """Register per-request custom pricing in litellm.model_cost.
 
@@ -2601,7 +2592,7 @@ def _complete_anthropic_text(
     api_key = api_key or litellm.anthropic_key or litellm.api_key or os.environ.get("ANTHROPIC_API_KEY")
     custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
     api_base = cast(
-        Optional[str],
+        str | None,
         api_base
         or litellm.api_base
         or get_secret("ANTHROPIC_API_BASE")
@@ -2657,7 +2648,7 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     # call /messages
     # default route for all anthropic models
     api_base = cast(
-        Optional[str],
+        str | None,
         api_base
         or litellm.api_base
         or get_secret("ANTHROPIC_API_BASE")
@@ -4047,7 +4038,7 @@ def _complete_watsonx_text(
         optional_params.pop("watsonx_credentials", None),  # follow {provider}_credentials, same as vertex ai
     )
 
-    token: Optional[str] = None
+    token: str | None = None
     if wx_credentials is not None:
         api_base = wx_credentials.get("url", api_base)
         api_key = wx_credentials.get("apikey", wx_credentials.get("api_key", api_key))
@@ -4479,8 +4470,6 @@ def _complete_bytez(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
         provider_config=bytez_transformation,
     )
 
-    pass
-
     return response
 
 
@@ -4520,8 +4509,6 @@ def _complete_lemonade(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
         stream=stream,
         provider_config=lemonade_transformation,
     )
-
-    pass
 
     return response
 
@@ -4569,8 +4556,6 @@ def _complete_ovhcloud(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
         stream=stream,
         provider_config=ovhcloud_transformation,
     )
-
-    pass
 
     return response
 
@@ -4665,7 +4650,7 @@ def _complete_custom_providers(
     stream = ctx.stream
     timeout = ctx.timeout
 
-    custom_handler: Optional[CustomLLM] = None
+    custom_handler: CustomLLM | None = None
     for item in litellm.custom_provider_map:
         if item["provider"] == custom_llm_provider:
             custom_handler = item["custom_handler"]
@@ -4811,55 +4796,55 @@ def _complete_langflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
 def completion(  # type: ignore
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    timeout: Optional[Union[float, str, httpx.Timeout]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
-    stream: Optional[bool] = None,
-    stream_options: Optional[dict] = None,
+    messages: list = [],
+    timeout: float | str | httpx.Timeout | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    n: int | None = None,
+    stream: bool | None = None,
+    stream_options: dict | None = None,
     stop=None,
-    max_completion_tokens: Optional[int] = None,
-    max_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
+    max_completion_tokens: int | None = None,
+    max_tokens: int | None = None,
+    modalities: list[ChatCompletionModality] | None = None,
+    prediction: ChatCompletionPredictionContentParam | None = None,
+    audio: ChatCompletionAudioParam | None = None,
+    presence_penalty: float | None = None,
+    frequency_penalty: float | None = None,
+    logit_bias: dict | None = None,
+    user: str | None = None,
     # openai v1.0+ new params
-    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"]] = None,
-    verbosity: Optional[Literal["low", "medium", "high"]] = None,
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[Union[str, dict]] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    web_search_options: Optional[OpenAIWebSearchOptions] = None,
-    include_server_side_tool_invocations: Optional[bool] = None,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"] | None = None,
+    verbosity: Literal["low", "medium", "high"] | None = None,
+    response_format: dict | type[BaseModel] | None = None,
+    seed: int | None = None,
+    tools: list | None = None,
+    tool_choice: str | dict | None = None,
+    logprobs: bool | None = None,
+    top_logprobs: int | None = None,
+    parallel_tool_calls: bool | None = None,
+    web_search_options: OpenAIWebSearchOptions | None = None,
+    include_server_side_tool_invocations: bool | None = None,
     deployment_id=None,
-    extra_headers: Optional[dict] = None,
-    safety_identifier: Optional[str] = None,
-    service_tier: Optional[str] = None,
+    extra_headers: dict | None = None,
+    safety_identifier: str | None = None,
+    service_tier: str | None = None,
     # soon to be deprecated params by OpenAI
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
+    functions: list | None = None,
+    function_call: str | None = None,
     # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
+    base_url: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    model_list: list | None = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
-    thinking: Optional[AnthropicThinkingParam] = None,
+    thinking: AnthropicThinkingParam | None = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
-    enable_json_schema_validation: Optional[bool] = None,
+    enable_json_schema_validation: bool | None = None,
     **kwargs,
-) -> Union[ModelResponse, CustomStreamWrapper]:
+) -> ModelResponse | CustomStreamWrapper:
     """
     Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
     Parameters:
@@ -4937,7 +4922,7 @@ def completion(  # type: ignore
 
         # Check if MCP tools are present (following responses pattern)
         # Cast tools to Optional[Iterable[ToolParam]] for type checking
-        tools_for_mcp = cast(Optional[Iterable[ToolParam]], tools)
+        tools_for_mcp = cast(Iterable[ToolParam] | None, tools)
         if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools_for_mcp):
             return acompletion_with_mcp(  # pyright: ignore[reportReturnType]  # MCP path returns a coroutine that acompletion() awaits; completion()'s sync return type omits it
                 model=model,
@@ -4984,9 +4969,9 @@ def completion(  # type: ignore
                 **kwargs,
             )
     api_base = kwargs.get("api_base", None)
-    mock_response: Optional[MOCK_RESPONSE_TYPE] = kwargs.get("mock_response", None)
+    mock_response: MOCK_RESPONSE_TYPE | None = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
-    mock_timeout = cast(Optional[bool], kwargs.get("mock_timeout", None))
+    mock_timeout = cast(bool | None, kwargs.get("mock_timeout", None))
     force_timeout = kwargs.get("force_timeout", 600)  ## deprecated
     logger_fn = kwargs.get("logger_fn", None)
     verbose = kwargs.get("verbose", False)
@@ -4997,14 +4982,12 @@ def completion(  # type: ignore
     model_info = kwargs.get("model_info", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
-    provider_specific_header = cast(Optional[ProviderSpecificHeader], kwargs.get("provider_specific_header", None))
+    provider_specific_header = cast(ProviderSpecificHeader | None, kwargs.get("provider_specific_header", None))
     headers = kwargs.get("headers", None) or extra_headers
 
-    ensure_alternating_roles: Optional[bool] = kwargs.get("ensure_alternating_roles", None)
-    user_continue_message: Optional[ChatCompletionUserMessage] = kwargs.get("user_continue_message", None)
-    assistant_continue_message: Optional[ChatCompletionAssistantMessage] = kwargs.get(
-        "assistant_continue_message", None
-    )
+    ensure_alternating_roles: bool | None = kwargs.get("ensure_alternating_roles", None)
+    user_continue_message: ChatCompletionUserMessage | None = kwargs.get("user_continue_message", None)
+    assistant_continue_message: ChatCompletionAssistantMessage | None = kwargs.get("assistant_continue_message", None)
     if headers is None:
         headers = {}
     if extra_headers is not None:
@@ -5053,8 +5036,8 @@ def completion(  # type: ignore
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
     ### PROMPT MANAGEMENT ###
-    prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
-    prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+    prompt_id = cast(str | None, kwargs.get("prompt_id", None))
+    prompt_variables = cast(dict | None, kwargs.get("prompt_variables", None))
     litellm_system_prompt = kwargs.get("litellm_system_prompt", None)
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
     messages = get_completion_messages(
@@ -5077,7 +5060,7 @@ def completion(  # type: ignore
         non_default_params=non_default_params,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
         model=model,
-        custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
+        custom_llm_provider=cast(str | None, kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
         tools=tools,
     )
 
@@ -5213,12 +5196,12 @@ def completion(  # type: ignore
             messages=messages,
             model_id=(kwargs.get("model_info") or {}).get("id", None),
             model_file_id_mapping=cast(
-                Dict[str, Dict[str, str]],
+                dict[str, dict[str, str]],
                 kwargs.get("model_file_id_mapping") or {},
             ),
         )
 
-        provider_config: Optional[BaseConfig] = None
+        provider_config: BaseConfig | None = None
         if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model,
@@ -5602,7 +5585,6 @@ def completion(  # type: ignore
             """
             Deprecated. We now do together ai calls via the openai client - https://docs.together.ai/docs/openai-api-compatibility
             """
-            pass
         elif custom_llm_provider == "palm":
             raise ValueError(
                 "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
@@ -5838,7 +5820,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
 
-        response: Optional[EmbeddingResponse] = None
+        response: EmbeddingResponse | None = None
         if isinstance(init_response, dict):
             response = EmbeddingResponse(**init_response)
         elif isinstance(init_response, EmbeddingResponse):  ## CACHING SCENARIO
@@ -5870,16 +5852,16 @@ def embedding(
     model,
     input=[],
     # Optional params
-    dimensions: Optional[int] = None,
-    encoding_format: Optional[str] = None,
+    dimensions: int | None = None,
+    encoding_format: str | None = None,
     timeout=600,  # default to 10 minutes
     # set api_base, api_version, api_key
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_type: Optional[str] = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    api_type: str | None = None,
     caching: bool = False,
-    user: Optional[str] = None,
+    user: str | None = None,
     custom_llm_provider=None,
     litellm_call_id=None,
     logger_fn=None,
@@ -5896,16 +5878,16 @@ def embedding(
     model,
     input=[],
     # Optional params
-    dimensions: Optional[int] = None,
-    encoding_format: Optional[str] = None,
+    dimensions: int | None = None,
+    encoding_format: str | None = None,
     timeout=600,  # default to 10 minutes
     # set api_base, api_version, api_key
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_type: Optional[str] = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    api_type: str | None = None,
     caching: bool = False,
-    user: Optional[str] = None,
+    user: str | None = None,
     custom_llm_provider=None,
     litellm_call_id=None,
     logger_fn=None,
@@ -5923,21 +5905,21 @@ def embedding(
     model,
     input=[],
     # Optional params
-    dimensions: Optional[int] = None,
-    encoding_format: Optional[str] = None,
+    dimensions: int | None = None,
+    encoding_format: str | None = None,
     timeout=600,  # default to 10 minutes
     # set api_base, api_version, api_key
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_type: Optional[str] = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    api_type: str | None = None,
     caching: bool = False,
-    user: Optional[str] = None,
+    user: str | None = None,
     custom_llm_provider=None,
     litellm_call_id=None,
     logger_fn=None,
     **kwargs,
-) -> Union[EmbeddingResponse, Coroutine[Any, Any, EmbeddingResponse]]:
+) -> EmbeddingResponse | Coroutine[Any, Any, EmbeddingResponse]:
     """
     Embedding function that calls an API to generate embeddings for the given input.
 
@@ -5968,9 +5950,9 @@ def embedding(
     shared_session = kwargs.get("shared_session", None)
     max_retries = kwargs.get("max_retries", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
+    mock_response: list[float] | None = kwargs.get("mock_response", None)  # type: ignore
     azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
-    aembedding: Optional[bool] = kwargs.get("aembedding", None)
+    aembedding: bool | None = kwargs.get("aembedding", None)
     extra_headers = kwargs.get("extra_headers", None)
     headers = kwargs.get("headers", None) or extra_headers
     if headers is None:
@@ -6023,7 +6005,7 @@ def embedding(
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
-    allowed_openai_params: Optional[List[str]] = kwargs.get("allowed_openai_params", None)
+    allowed_openai_params: list[str] | None = kwargs.get("allowed_openai_params", None)
     optional_params = get_optional_params_embeddings(
         model=model,
         user=user,
@@ -6057,7 +6039,7 @@ def embedding(
     if mock_response is not None:
         return mock_embedding(model=model, mock_response=mock_response)
     try:
-        response: Optional[Union[EmbeddingResponse, Coroutine[Any, Any, EmbeddingResponse]]] = None
+        response: EmbeddingResponse | Coroutine[Any, Any, EmbeddingResponse] | None = None
 
         if azure is True or custom_llm_provider == "azure":
             # azure configs
@@ -6649,22 +6631,7 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params={},
             )
-        elif custom_llm_provider == "voyage":
-            response = base_llm_http_handler.embedding(
-                model=model,
-                input=input,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                api_key=api_key,
-                logging_obj=logging,
-                timeout=timeout,
-                model_response=EmbeddingResponse(),
-                optional_params=optional_params,
-                client=client,
-                aembedding=aembedding,
-                litellm_params={},
-            )
-        elif custom_llm_provider == "infinity":
+        elif custom_llm_provider == "voyage" or custom_llm_provider == "infinity":
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -6878,7 +6845,7 @@ def embedding(
                 litellm_params={},
             )
         elif custom_llm_provider in litellm._custom_providers:
-            custom_handler: Optional[CustomLLM] = None
+            custom_handler: CustomLLM | None = None
             for item in litellm.custom_provider_map:
                 if item["provider"] == custom_llm_provider:
                     custom_handler = item["custom_handler"]
@@ -6979,7 +6946,7 @@ def embedding(
 
 ###### Text Completion ################
 @client
-async def atext_completion(*args, **kwargs) -> Union[TextCompletionResponse, TextCompletionStreamWrapper]:
+async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextCompletionStreamWrapper:
     """
     Implemented to handle async streaming for the text completion endpoint
     """
@@ -7050,36 +7017,31 @@ async def atext_completion(*args, **kwargs) -> Union[TextCompletionResponse, Tex
 
 @client
 def text_completion(
-    prompt: Union[
-        str, List[Union[str, List[Union[str, List[int]]]]]
-    ],  # Required: The prompt(s) to generate completions for.
-    model: Optional[str] = None,  # Optional: either `model` or `engine` can be set
-    best_of: Optional[int] = None,  # Optional: Generates best_of completions server-side.
-    echo: Optional[bool] = None,  # Optional: Echo back the prompt in addition to the completion.
-    frequency_penalty: Optional[float] = None,  # Optional: Penalize new tokens based on their existing frequency.
-    logit_bias: Optional[Dict[int, int]] = None,  # Optional: Modify the likelihood of specified tokens.
-    logprobs: Optional[int] = None,  # Optional: Include the log probabilities on the most likely tokens.
-    max_tokens: Optional[int] = None,  # Optional: The maximum number of tokens to generate in the completion.
-    n: Optional[int] = None,  # Optional: How many completions to generate for each prompt.
-    presence_penalty: Optional[
-        float
-    ] = None,  # Optional: Penalize new tokens based on whether they appear in the text so far.
-    stop: Optional[
-        Union[str, List[str]]
-    ] = None,  # Optional: Sequences where the API will stop generating further tokens.
-    stream: Optional[bool] = None,  # Optional: Whether to stream back partial progress.
-    stream_options: Optional[dict] = None,
-    suffix: Optional[str] = None,  # Optional: The suffix that comes after a completion of inserted text.
-    temperature: Optional[float] = None,  # Optional: Sampling temperature to use.
-    top_p: Optional[float] = None,  # Optional: Nucleus sampling parameter.
-    user: Optional[str] = None,  # Optional: A unique identifier representing your end-user.
+    prompt: str | list[str | list[str | list[int]]],  # Required: The prompt(s) to generate completions for.
+    model: str | None = None,  # Optional: either `model` or `engine` can be set
+    best_of: int | None = None,  # Optional: Generates best_of completions server-side.
+    echo: bool | None = None,  # Optional: Echo back the prompt in addition to the completion.
+    frequency_penalty: float | None = None,  # Optional: Penalize new tokens based on their existing frequency.
+    logit_bias: dict[int, int] | None = None,  # Optional: Modify the likelihood of specified tokens.
+    logprobs: int | None = None,  # Optional: Include the log probabilities on the most likely tokens.
+    max_tokens: int | None = None,  # Optional: The maximum number of tokens to generate in the completion.
+    n: int | None = None,  # Optional: How many completions to generate for each prompt.
+    presence_penalty: float
+    | None = None,  # Optional: Penalize new tokens based on whether they appear in the text so far.
+    stop: str | list[str] | None = None,  # Optional: Sequences where the API will stop generating further tokens.
+    stream: bool | None = None,  # Optional: Whether to stream back partial progress.
+    stream_options: dict | None = None,
+    suffix: str | None = None,  # Optional: The suffix that comes after a completion of inserted text.
+    temperature: float | None = None,  # Optional: Sampling temperature to use.
+    top_p: float | None = None,  # Optional: Nucleus sampling parameter.
+    user: str | None = None,  # Optional: A unique identifier representing your end-user.
     # set api_base, api_version, api_key
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
+    api_base: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    model_list: list | None = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     *args,
     **kwargs,
 ):
@@ -7120,7 +7082,7 @@ def text_completion(
 
     text_completion_response = TextCompletionResponse()
 
-    optional_params: Dict[str, Any] = {}
+    optional_params: dict[str, Any] = {}
     # default values for all optional params are none, litellm only passes them to the llm when they are set to non None values
     if best_of is not None:
         optional_params["best_of"] = best_of
@@ -7290,29 +7252,25 @@ def text_completion(
 ###### Adapter Completion ################
 
 
-async def aadapter_completion(
-    *, adapter_id: str, **kwargs
-) -> Optional[Union[BaseModel, AdapterCompletionStreamWrapper]]:
+async def aadapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompletionStreamWrapper | None:
     """
     Implemented to handle async calls for adapter_completion()
     """
     try:
-        translation_obj: Optional[CustomLogger] = None
+        translation_obj: CustomLogger | None = None
         for item in litellm.adapters:
             if item["id"] == adapter_id:
                 translation_obj = item["adapter"]
 
         if translation_obj is None:
             raise ValueError(
-                "No matching adapter given. Received 'adapter_id'={}, litellm.adapters={}".format(
-                    adapter_id, litellm.adapters
-                )
+                f"No matching adapter given. Received 'adapter_id'={adapter_id}, litellm.adapters={litellm.adapters}"
             )
 
         new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
-        response: Union[ModelResponse, CustomStreamWrapper] = await acompletion(**new_kwargs)  # type: ignore
-        translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = None
+        response: ModelResponse | CustomStreamWrapper = await acompletion(**new_kwargs)  # type: ignore
+        translated_response: BaseModel | AdapterCompletionStreamWrapper | None = None
         if isinstance(response, ModelResponse):
             translated_response = translation_obj.translate_completion_output_params(response=response)
         if isinstance(response, CustomStreamWrapper):
@@ -7327,33 +7285,31 @@ async def aadapter_completion(
 
 async def aadapter_generate_content(
     **kwargs,
-) -> Union[Dict[str, Any], AsyncIterator[bytes]]:
+) -> dict[str, Any] | AsyncIterator[bytes]:
     from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 
     coro = cast(
-        Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes]]],
+        Coroutine[Any, Any, dict[str, Any] | AsyncIterator[bytes]],
         GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True),
     )
     return await coro
 
 
-def adapter_completion(*, adapter_id: str, **kwargs) -> Optional[Union[BaseModel, AdapterCompletionStreamWrapper]]:
-    translation_obj: Optional[CustomLogger] = None
+def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompletionStreamWrapper | None:
+    translation_obj: CustomLogger | None = None
     for item in litellm.adapters:
         if item["id"] == adapter_id:
             translation_obj = item["adapter"]
 
     if translation_obj is None:
         raise ValueError(
-            "No matching adapter given. Received 'adapter_id'={}, litellm.adapters={}".format(
-                adapter_id, litellm.adapters
-            )
+            f"No matching adapter given. Received 'adapter_id'={adapter_id}, litellm.adapters={litellm.adapters}"
         )
 
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
-    response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = None
+    response: ModelResponse | CustomStreamWrapper = completion(**new_kwargs)  # type: ignore
+    translated_response: BaseModel | AdapterCompletionStreamWrapper | None = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(response=response)
     elif isinstance(response, CustomStreamWrapper) or inspect.isgenerator(response):
@@ -7365,9 +7321,7 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> Optional[Union[BaseModel
 ##### Moderation #######################
 
 
-def moderation(
-    input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
-) -> OpenAIModerationResponse:
+def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
@@ -7386,7 +7340,7 @@ def moderation(
     else:
         response = openai_client.moderations.create(input=input)
 
-    response_dict: Dict = response.model_dump()
+    response_dict: dict = response.model_dump()
     return litellm.utils.LiteLLMResponseObjectHandler.convert_to_moderation_response(
         response_object=response_dict,
     )
@@ -7395,9 +7349,9 @@ def moderation(
 @client
 async def amoderation(
     input: str,
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    custom_llm_provider: Optional[str] = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
@@ -7405,7 +7359,7 @@ async def amoderation(
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     optional_params = GenericLiteLLMParams(**kwargs)
-    litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj", None)
+    litellm_logging_obj: LiteLLMLoggingObj | None = kwargs.get("litellm_logging_obj", None)
     _dynamic_api_base = None
     try:
         (
@@ -7452,7 +7406,7 @@ async def amoderation(
         response = await _openai_client.moderations.create(input=input, model=model)
     else:
         response = await _openai_client.moderations.create(input=input)
-    response_dict: Dict = response.model_dump()
+    response_dict: dict = response.model_dump()
     return litellm.utils.LiteLLMResponseObjectHandler.convert_to_moderation_response(
         response_object=response_dict,
     )
@@ -7528,21 +7482,21 @@ def transcription(
     model: str,
     file: FileTypes,
     ## OPTIONAL OPENAI PARAMS ##
-    language: Optional[str] = None,
-    prompt: Optional[str] = None,
-    response_format: Optional[Literal["json", "text", "srt", "verbose_json", "vtt"]] = None,
-    timestamp_granularities: Optional[List[Literal["word", "segment"]]] = None,
-    temperature: Optional[int] = None,  # openai defaults this to 0
+    language: str | None = None,
+    prompt: str | None = None,
+    response_format: Literal["json", "text", "srt", "verbose_json", "vtt"] | None = None,
+    timestamp_granularities: list[Literal["word", "segment"]] | None = None,
+    temperature: int | None = None,  # openai defaults this to 0
     ## LITELLM PARAMS ##
-    user: Optional[str] = None,
+    user: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    max_retries: Optional[int] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
+    max_retries: int | None = None,
     custom_llm_provider=None,
     **kwargs,
-) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
     """
     Calls openai + azure whisper endpoints.
 
@@ -7559,14 +7513,9 @@ def transcription(
     kwargs.pop("tags", [])
     non_default_params = get_non_default_transcription_params(kwargs)
 
-    client: Optional[
-        Union[
-            openai.AsyncOpenAI,
-            openai.OpenAI,
-            openai.AzureOpenAI,
-            openai.AsyncAzureOpenAI,
-        ]
-    ] = kwargs.pop("client", None)
+    client: openai.AsyncOpenAI | openai.OpenAI | openai.AzureOpenAI | openai.AsyncAzureOpenAI | None = kwargs.pop(
+        "client", None
+    )
 
     if litellm_logging_obj:
         litellm_logging_obj.model_call_details["client"] = str(client)
@@ -7614,7 +7563,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: Optional[Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]] = None
+    response: TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse] | None = None
 
     provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
@@ -7831,26 +7780,26 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
 def speech(
     model: str,
     input: str,
-    voice: Optional[Union[str, dict]] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    organization: Optional[str] = None,
-    project: Optional[str] = None,
-    max_retries: Optional[int] = None,
-    metadata: Optional[dict] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    response_format: Optional[str] = None,
-    speed: Optional[int] = None,
-    instructions: Optional[str] = None,
+    voice: str | dict | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
+    organization: str | None = None,
+    project: str | None = None,
+    max_retries: int | None = None,
+    metadata: dict | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    response_format: str | None = None,
+    speed: int | None = None,
+    instructions: str | None = None,
     client=None,
-    headers: Optional[dict] = None,
-    custom_llm_provider: Optional[str] = None,
-    aspeech: Optional[bool] = None,
+    headers: dict | None = None,
+    custom_llm_provider: str | None = None,
+    aspeech: bool | None = None,
     **kwargs,
-) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
     user = kwargs.get("user", None)
-    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+    litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     extra_headers = kwargs.get("extra_headers", None)
     model_info = kwargs.get("model_info", None)
@@ -7907,11 +7856,7 @@ def speech(
         },
         custom_llm_provider=custom_llm_provider,
     )
-    response: Union[
-        HttpxBinaryResponseContent,
-        Coroutine[Any, Any, HttpxBinaryResponseContent],
-        None,
-    ] = None
+    response: HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent] | None = None
     if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
@@ -8018,7 +7963,7 @@ def speech(
                 or get_secret("AZURE_API_KEY")
             )  # type: ignore
 
-            azure_ad_token: Optional[str] = optional_params.get("extra_body", {}).pop(  # type: ignore
+            azure_ad_token: str | None = optional_params.get("extra_body", {}).pop(  # type: ignore
                 "azure_ad_token", None
             ) or get_secret("AZURE_AD_TOKEN")
             azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
@@ -8205,7 +8150,7 @@ def speech(
             litellm_params_dict["api_key"] = api_key
 
         # Convert voice to string if it's a dict (minimax handler expects Optional[str])
-        voice_str: Optional[str] = None
+        voice_str: str | None = None
         if isinstance(voice, str):
             voice_str = voice
         elif isinstance(voice, dict):
@@ -8256,9 +8201,7 @@ def speech(
 
     if response is None:
         raise Exception(
-            "Unable to map the custom llm provider={} to a known provider={}.".format(
-                custom_llm_provider, litellm.provider_list
-            )
+            f"Unable to map the custom llm provider={custom_llm_provider} to a known provider={litellm.provider_list}."
         )
     return response
 
@@ -8269,8 +8212,8 @@ def speech(
 async def ahealth_check(
     model_params: dict,
     mode: str | None = "chat",
-    prompt: Optional[str] = None,
-    input: Optional[List] = None,
+    prompt: str | None = None,
+    input: list | None = None,
 ):
     """
     Support health checks for different providers. Return remaining rate limit, etc.
@@ -8308,7 +8251,7 @@ async def ahealth_check(
     )
     #########################################################
     try:
-        model: Optional[str] = model_params.get("model", None)
+        model: str | None = model_params.get("model", None)
         if model is None:
             raise Exception("model not set")
 
@@ -8360,7 +8303,7 @@ async def ahealth_check(
 
         if mode is None:
             return {
-                "error": f"error:{str(e)}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
+                "error": f"error:{e!s}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
                 "exception": e,
             }
 
@@ -8397,7 +8340,7 @@ def config_completion(**kwargs):
         )
 
 
-def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] = None) -> TextCompletionResponse:
+def stream_chunk_builder_text_completion(chunks: list, messages: list | None = None) -> TextCompletionResponse:
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
@@ -8453,11 +8396,11 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
 
 def stream_chunk_builder(
     chunks: list,
-    messages: Optional[list] = None,
+    messages: list | None = None,
     start_time=None,
     end_time=None,
     logging_obj: Optional["Logging"] = None,
-) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+) -> ModelResponse | TextCompletionResponse | None:
     try:
         if chunks is None:
             raise litellm.APIError(
@@ -8488,7 +8431,7 @@ def stream_chunk_builder(
 
         # Fast path for the common text-only streaming case:
         # avoid repeated multi-pass list scans over chunks.
-        simple_content_parts: List[str] = []
+        simple_content_parts: list[str] = []
         is_simple_text_stream = True
         for chunk in chunks:
             if len(chunk["choices"]) == 0:
@@ -8499,7 +8442,7 @@ def stream_chunk_builder(
             if isinstance(delta_obj, dict):
                 delta = delta_obj
             elif hasattr(delta_obj, "model_dump"):
-                delta = cast(Dict[str, Any], delta_obj.model_dump())
+                delta = cast(dict[str, Any], delta_obj.model_dump())
             else:
                 delta = {}
 
@@ -8675,7 +8618,7 @@ def stream_chunk_builder(
         ]
 
         if len(provider_specific_chunks) > 0:
-            combined_provider_fields: Dict[str, Any] = {}
+            combined_provider_fields: dict[str, Any] = {}
             for chunk in provider_specific_chunks:
                 fields = chunk["choices"][0]["delta"]["provider_specific_fields"]
                 if isinstance(fields, dict):
@@ -8726,7 +8669,7 @@ def stream_chunk_builder(
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
         return response
     except Exception as e:
-        verbose_logger.exception("litellm.main.py::stream_chunk_builder() - Exception occurred - {}".format(str(e)))
+        verbose_logger.exception(f"litellm.main.py::stream_chunk_builder() - Exception occurred - {e!s}")
         raise litellm.APIError(
             status_code=500,
             message="Error building chunks for logging/streaming usage calculation",
@@ -8740,11 +8683,11 @@ def stream_chunk_builder(
 
 async def acount_tokens(
     model: str,
-    messages: Optional[List[Dict[str, Any]]] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    system: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
+    messages: list[dict[str, Any]] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    system: str | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
 ) -> "TokenCountResponse":
     """
     Count tokens for a given model and messages using provider-specific APIs.
@@ -8786,7 +8729,7 @@ async def acount_tokens(
         api_base = dynamic_api_base
 
     # Build deployment dict for the token counter
-    deployment: Dict[str, Any] = {
+    deployment: dict[str, Any] = {
         "litellm_params": {
             "model": model,
             "api_key": api_key,
@@ -8837,7 +8780,7 @@ async def acount_tokens(
 
 
 # Cache for encoding to avoid repeated __getattr__ calls
-_encoding_cache: Optional[Any] = None
+_encoding_cache: Any | None = None
 
 
 def _get_encoding():

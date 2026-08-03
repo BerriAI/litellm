@@ -1,5 +1,3 @@
-from typing import Dict, Optional
-
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
@@ -16,15 +14,15 @@ class PassthroughEndpointRouter:
     """
 
     def __init__(self):
-        self.credentials: Dict[str, str] = {}
-        self.deployment_key_to_vertex_credentials: Dict[str, VertexPassThroughCredentials] = {}
-        self.default_vertex_config: Optional[VertexPassThroughCredentials] = None
+        self.credentials: dict[str, str] = {}
+        self.deployment_key_to_vertex_credentials: dict[str, VertexPassThroughCredentials] = {}
+        self.default_vertex_config: VertexPassThroughCredentials | None = None
 
     def set_pass_through_credentials(
         self,
         custom_llm_provider: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
     ):
         """
         Set credentials for a pass-through endpoint. Used when a user adds a pass-through LLM endpoint on the UI.
@@ -45,8 +43,8 @@ class PassthroughEndpointRouter:
     def get_credentials(
         self,
         custom_llm_provider: str,
-        region_name: Optional[str],
-    ) -> Optional[str]:
+        region_name: str | None,
+    ) -> str | None:
         credential_name = self._get_credential_name_for_provider(
             custom_llm_provider=custom_llm_provider,
             region_name=region_name,
@@ -77,7 +75,7 @@ class PassthroughEndpointRouter:
             vertex_credentials=get_secret_str("DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"),
         )
 
-    def set_default_vertex_config(self, config: Optional[dict] = None):
+    def set_default_vertex_config(self, config: dict | None = None):
         """Sets vertex configuration from provided config and/or environment variables
 
         Args:
@@ -104,7 +102,7 @@ class PassthroughEndpointRouter:
         self,
         project_id: str,
         location: str,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
     ):
         """
         Add the vertex credentials for the given project-id, location
@@ -124,7 +122,7 @@ class PassthroughEndpointRouter:
         )
         self.deployment_key_to_vertex_credentials[deployment_key] = vertex_pass_through_credentials
 
-    def _get_deployment_key(self, project_id: Optional[str], location: Optional[str]) -> Optional[str]:
+    def _get_deployment_key(self, project_id: str | None, location: str | None) -> str | None:
         """
         Get the deployment key for the given project-id, location
         """
@@ -132,13 +130,13 @@ class PassthroughEndpointRouter:
             return None
         return f"{project_id}-{location}"
 
-    def get_vector_store_credentials(self, vector_store_id: str) -> Optional[LiteLLM_ManagedVectorStore]:
+    def get_vector_store_credentials(self, vector_store_id: str) -> LiteLLM_ManagedVectorStore | None:
         """
         Get the vector store credentials for the given vector store id
         """
         if litellm.vector_store_registry is None:
             return None
-        vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
+        vector_store_to_run: LiteLLM_ManagedVectorStore | None = (
             litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
                 vector_store_id=vector_store_id
             )
@@ -146,8 +144,8 @@ class PassthroughEndpointRouter:
         return vector_store_to_run
 
     def get_vertex_credentials(
-        self, project_id: Optional[str], location: Optional[str]
-    ) -> Optional[VertexPassThroughCredentials]:
+        self, project_id: str | None, location: str | None
+    ) -> VertexPassThroughCredentials | None:
         """
         Get the vertex credentials for the given project-id, location
         """
@@ -166,7 +164,7 @@ class PassthroughEndpointRouter:
     def _get_credential_name_for_provider(
         self,
         custom_llm_provider: str,
-        region_name: Optional[str],
+        region_name: str | None,
     ) -> str:
         if region_name is None:
             return f"{custom_llm_provider.upper()}_API_KEY"
@@ -175,8 +173,8 @@ class PassthroughEndpointRouter:
     def _get_region_name_from_api_base(
         self,
         custom_llm_provider: str,
-        api_base: Optional[str],
-    ) -> Optional[str]:
+        api_base: str | None,
+    ) -> str | None:
         """
         Get the region name from the API base.
 

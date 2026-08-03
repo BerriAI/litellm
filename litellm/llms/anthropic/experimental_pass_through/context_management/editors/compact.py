@@ -13,7 +13,8 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 """
 
 import re
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +23,18 @@ from litellm.types.llms.anthropic import (
     CompactionBlock,
     UsageIteration,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.router import Router
+    from litellm.types.llms.anthropic import (
+        AllAnthropicToolsValues,
+        AnthopicMessagesAssistantMessageParam,
+        AnthropicMessagesUserMessageParam,
+    )
+    from litellm.types.llms.openai import ChatCompletionToolParam
+    from litellm.types.utils import ModelResponse
 
 from ..constants import (
     COMPACT_DEFAULT_INSTRUCTIONS,
@@ -70,7 +83,7 @@ _PROPAGATED_METADATA_KEYS = (
 _SUMMARY_TAG_RE = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
 
 
-def _read_summary_model_setting() -> Optional[str]:
+def _read_summary_model_setting() -> str | None:
     """Look up the configured summarization model from proxy general_settings."""
     try:
         from litellm.proxy.proxy_server import general_settings
@@ -98,9 +111,9 @@ def _read_summary_max_tokens_setting() -> int:
 
 
 async def _check_summary_model_access(
-    user_api_key_auth: Any,
+    user_api_key_auth: Optional["UserAPIKeyAuth"],
     summary_model: str,
-    llm_router: Any,
+    llm_router: Optional["Router"],
 ) -> bool:
     """Return True when every model-allowlist scope on the parent request is
     satisfied for ``summary_model``.
@@ -150,7 +163,7 @@ async def _check_summary_model_access(
     user_id = getattr(user_api_key_auth, "user_id", None)
     project_id = getattr(user_api_key_auth, "project_id", None)
 
-    checks: Tuple[Tuple[Literal["key", "team"], List[str]], ...] = (
+    checks: tuple[tuple[Literal["key", "team"], list[str]], ...] = (
         ("key", key_models),
         ("team", team_models),
     )
@@ -294,7 +307,7 @@ async def _check_summary_model_access(
 
 
 async def _check_summary_model_budget(
-    user_api_key_auth: Any,
+    user_api_key_auth: Optional["UserAPIKeyAuth"],
     summary_model: str,
 ) -> bool:
     """Return True when the caller is within their per-model budget for
@@ -357,7 +370,7 @@ async def _check_summary_model_budget(
 
 
 async def _check_summary_model_rate_limit(
-    user_api_key_auth: Any,
+    user_api_key_auth: Optional["UserAPIKeyAuth"],
     summary_model: str,
 ) -> bool:
     """Return True when the caller is within their configured RPM/TPM limits
@@ -433,8 +446,8 @@ async def _check_summary_model_rate_limit(
 
 
 def _find_latest_compaction_index(
-    messages: List[Dict[str, Any]],
-) -> Tuple[Optional[int], Optional[int]]:
+    messages: list[dict[str, object]],
+) -> tuple[int | None, int | None]:
     """Return (message_index, block_index) of the most recent compaction block.
 
     ``None, None`` if no compaction block is present. Iterates from the end so
@@ -452,8 +465,8 @@ def _find_latest_compaction_index(
 
 
 def _slice_around_compaction_block(
-    messages: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     """Apply Anthropic's "drop everything before the compaction block" rule.
 
     Returns ``(sliced_messages_with_compaction_block, compaction_block_dict)``
@@ -468,27 +481,26 @@ def _slice_around_compaction_block(
 
     original_msg = messages[msg_idx]
     original_content = original_msg["content"]
-    compaction_block = cast(Dict[str, Any], original_content[blk_idx])
+    compaction_block = cast(dict[str, object], original_content[blk_idx])
 
     # Per Anthropic's contract everything before the compaction block is
     # dropped, including earlier blocks within the same assistant message.
     sliced_content = list(original_content[blk_idx:])
-    sliced_first_msg = {**original_msg, "content": sliced_content}
 
-    sliced_messages: List[Dict[str, Any]] = [sliced_first_msg]
+    sliced_messages: list[dict[str, object]] = [{**original_msg, "content": sliced_content}]
     sliced_messages.extend(messages[msg_idx + 1 :])
     return sliced_messages, compaction_block
 
 
 def _strip_compaction_blocks(
-    messages: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    messages: list[dict[str, object]],
+) -> list[dict[str, object]]:
     """Drop any ``compaction`` content blocks from messages.
 
     Used to build the downstream-bound message list — the adapter has no
     concept of a compaction block, so it must not see one.
     """
-    cleaned: List[Dict[str, Any]] = []
+    cleaned: list[dict[str, object]] = []
     for msg in messages:
         content = msg.get("content")
         if not isinstance(content, list):
@@ -503,9 +515,9 @@ def _strip_compaction_blocks(
 
 
 def _augment_system_with_summary(
-    system: Optional[Union[str, List[Dict[str, Any]]]],
+    system: str | list[dict[str, object]] | None,
     summary_text: str,
-) -> Union[str, List[Dict[str, Any]]]:
+) -> str | list[dict[str, object]]:
     """Prepend a "Previous conversation summary: ..." block to ``system``."""
     prefix = f"{COMPACT_SUMMARY_SYSTEM_PREFIX}{summary_text}\n\n"
     if system is None:
@@ -522,14 +534,14 @@ def _augment_system_with_summary(
     return [{"type": "text", "text": prefix.rstrip()}, *system]
 
 
-def _resolve_trigger_tokens(edit_spec: Dict[str, Any]) -> Tuple[int, List[str]]:
+def _resolve_trigger_tokens(edit_spec: dict[str, object]) -> tuple[int, list[str]]:
     """Validate and resolve ``trigger.value``.
 
     Raises ``AnthropicContextManagementError`` if the explicitly-supplied value
     is below the 50k minimum. Unknown ``trigger.type`` values fall back to
     ``input_tokens`` with a warning.
     """
-    warnings: List[str] = []
+    warnings: list[str] = []
     trigger = edit_spec.get("trigger") or {}
     if not isinstance(trigger, dict):
         warnings.append("trigger_not_a_dict_using_default")
@@ -556,7 +568,7 @@ def _resolve_trigger_tokens(edit_spec: Dict[str, Any]) -> Tuple[int, List[str]]:
     return value, warnings
 
 
-def _build_summary_prompt(edit_spec: Dict[str, Any], tools: Optional[List[Dict[str, Any]]]) -> str:
+def _build_summary_prompt(edit_spec: dict[str, object], tools: list[dict[str, object]] | None) -> str:
     custom = edit_spec.get("instructions")
     if isinstance(custom, str) and custom.strip():
         return custom
@@ -567,8 +579,8 @@ def _build_summary_prompt(edit_spec: Dict[str, Any], tools: Optional[List[Dict[s
 
 
 def _propagate_metadata(
-    parent_litellm_metadata: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    parent_litellm_metadata: Mapping[str, object] | None,
+) -> dict[str, object]:
     """Extract the parent request's auth/spend-attribution fields for the summary subcall.
 
     The proxy attaches ``user_api_key``, ``user_api_key_team_id`` etc. to
@@ -579,7 +591,7 @@ def _propagate_metadata(
     """
     if not parent_litellm_metadata:
         return {}
-    propagated: Dict[str, Any] = {}
+    propagated: dict[str, object] = {}
     for key in _PROPAGATED_METADATA_KEYS:
         if key in parent_litellm_metadata:
             propagated[key] = parent_litellm_metadata[key]
@@ -588,10 +600,10 @@ def _propagate_metadata(
 
 def _count_effective_tokens(
     model: str,
-    effective_messages: List[Dict[str, Any]],
-    compaction_block: Optional[Dict[str, Any]],
-    tools: Optional[List[Dict[str, Any]]],
-    system: Optional[Union[str, List[Dict[str, Any]]]] = None,
+    effective_messages: list[dict[str, object]],
+    compaction_block: CompactionBlock | None,
+    tools: list[dict[str, object]] | None,
+    system: str | list[dict[str, object]] | None = None,
 ) -> int:
     """Token-count the conversation as it will appear downstream.
 
@@ -609,25 +621,32 @@ def _count_effective_tokens(
     messages_without_compaction = _strip_compaction_blocks(effective_messages)
     adapter = LiteLLMAnthropicMessagesAdapter()
     try:
-        openai_shape = adapter.translate_anthropic_messages_to_openai(messages=cast(Any, messages_without_compaction))
+        openai_shape = adapter.translate_anthropic_messages_to_openai(
+            messages=cast(
+                "list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]",
+                messages_without_compaction,
+            )
+        )
     except Exception as e:
         verbose_logger.debug(
             "compact_20260112: anthropic→openai translation failed during token "
             "count, falling back to raw messages: %s",
             e,
         )
-        openai_shape = cast(Any, messages_without_compaction)
+        openai_shape = messages_without_compaction
 
     # Translate Anthropic-shaped tools (``input_schema``) to OpenAI-shaped
     # tools (``{"type": "function", "function": {...}}``) so ``token_counter``
     # gets a consistent format regardless of which counting path it uses.
     # An inaccurate tool token count here could cause the polyfill to skip
     # needed compaction or trigger unnecessary summarization.
-    openai_tools: Optional[List[Dict[str, Any]]] = None
+    openai_tools: list[dict[str, object]] | None = None
     if tools:
         try:
-            translated_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=cast(Any, tools))
-            openai_tools = cast(List[Dict[str, Any]], translated_tools)
+            translated_tools, _ = adapter.translate_anthropic_tools_to_openai(
+                tools=cast("list[AllAnthropicToolsValues]", tools)
+            )
+            openai_tools = cast(list[dict[str, object]], translated_tools)
         except Exception as e:
             verbose_logger.debug(
                 "compact_20260112: anthropic→openai tools translation failed "
@@ -638,8 +657,8 @@ def _count_effective_tokens(
 
     total = litellm.token_counter(
         model=model,
-        messages=cast(Any, openai_shape),
-        tools=cast(Any, openai_tools),
+        messages=cast(list[dict[str, object]], openai_shape),
+        tools=cast("list[ChatCompletionToolParam] | None", openai_tools),
     )
     if compaction_block is not None:
         content = compaction_block.get("content") or ""
@@ -652,7 +671,7 @@ def _count_effective_tokens(
 
 
 def _system_to_text(
-    system: Optional[Union[str, List[Dict[str, Any]]]],
+    system: str | list[dict[str, object]] | None,
 ) -> str:
     """Flatten an Anthropic-style ``system`` value into a single string for
     token counting. Returns ``""`` when ``system`` carries no text."""
@@ -660,7 +679,7 @@ def _system_to_text(
         return ""
     if isinstance(system, str):
         return system
-    parts: List[str] = []
+    parts: list[str] = []
     for block in system:
         if isinstance(block, dict) and block.get("type") == "text":
             text = block.get("text")
@@ -670,8 +689,8 @@ def _system_to_text(
 
 
 def _select_last_user_question(
-    messages: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    messages: list[dict[str, object]],
+) -> list[dict[str, object]]:
     """Pick the most recent ``user`` turn that is a real question.
 
     Returns a one-element message list with any ``tool_result`` blocks
@@ -705,7 +724,7 @@ def _select_last_user_question(
     ]
 
 
-def _extract_summary_text(raw: Optional[str]) -> Optional[str]:
+def _extract_summary_text(raw: str | None) -> str | None:
     if not raw:
         return None
     match = _SUMMARY_TAG_RE.search(raw)
@@ -716,8 +735,8 @@ def _extract_summary_text(raw: Optional[str]) -> Optional[str]:
 
 
 def _system_to_openai_message(
-    system: Optional[Union[str, List[Dict[str, Any]]]],
-) -> Optional[Dict[str, Any]]:
+    system: str | list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
     """Translate Anthropic-shaped ``system`` to an OpenAI system message.
 
     Accepts a bare string or a list of Anthropic content blocks; returns
@@ -735,10 +754,10 @@ def _system_to_openai_message(
 
 
 def _build_summary_messages(
-    effective_messages: List[Dict[str, Any]],
+    effective_messages: list[dict[str, object]],
     prompt: str,
-    system: Optional[Union[str, List[Dict[str, Any]]]] = None,
-) -> List[Dict[str, Any]]:
+    system: str | list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     """Build the OpenAI-shape message list for the summary call.
 
     The caller's ``system`` prompt is prepended (the default summarization
@@ -753,7 +772,10 @@ def _build_summary_messages(
     stripped = _strip_compaction_blocks(effective_messages)
     try:
         openai_messages = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
-            messages=cast(Any, stripped)
+            messages=cast(
+                "list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]",
+                stripped,
+            )
         )
     except Exception as e:
         verbose_logger.warning(
@@ -761,9 +783,9 @@ def _build_summary_messages(
             "building summary call; falling back to raw shape: %s",
             e,
         )
-        openai_messages = cast(Any, stripped)
+        openai_messages = stripped
 
-    summary_messages: List[Dict[str, Any]] = []
+    summary_messages: list[dict[str, object]] = []
     system_message = _system_to_openai_message(system)
     if system_message is not None:
         summary_messages.append(system_message)
@@ -783,7 +805,7 @@ def _build_summary_messages(
     return summary_messages
 
 
-def _is_user_message(msg: Any) -> bool:
+def _is_user_message(msg: object) -> bool:
     return isinstance(msg, dict) and msg.get("role") == "user"
 
 
@@ -805,12 +827,12 @@ def _append_text_to_content(content: Any, extra_text: str) -> Any:
 async def _call_summary_model(
     *,
     summary_model: str,
-    summary_messages: List[Dict[str, Any]],
-    metadata: Dict[str, Any],
+    summary_messages: list[dict[str, object]],
+    metadata: Mapping[str, object],
     llm_router: Any,
-    allowed_model_region: Optional[str] = None,
+    allowed_model_region: str | None = None,
     max_tokens: int = COMPACT_SUMMARY_MAX_TOKENS,
-) -> Any:
+) -> Union["ModelResponse", "CustomStreamWrapper"]:
     """Invoke the configured summary model.
 
     Prefers ``llm_router.acompletion`` so the model alias resolves against the
@@ -838,7 +860,7 @@ async def _call_summary_model(
     # the parent ``/v1/messages`` request. On timeout the caller catches the
     # exception and surfaces ``applied_edits[0].error = "summary_call_failed"``,
     # forwarding the request without compaction rather than hanging.
-    call_kwargs: Dict[str, Any] = {
+    call_kwargs: dict[str, Any] = {
         "model": summary_model,
         "messages": summary_messages,
         "max_tokens": max_tokens,
@@ -859,7 +881,7 @@ async def _call_summary_model(
     return await litellm.acompletion(**call_kwargs)
 
 
-def _extract_response_text(response: Any) -> Optional[str]:
+def _extract_response_text(response: Any) -> str | None:
     try:
         choice = response.choices[0]
         message = choice.message
@@ -877,7 +899,7 @@ def _extract_response_text(response: Any) -> Optional[str]:
     return None
 
 
-def _extract_usage(response: Any) -> Tuple[int, int]:
+def _extract_usage(response: object) -> tuple[int, int]:
     usage = getattr(response, "usage", None)
     if usage is None:
         return 0, 0
@@ -889,9 +911,9 @@ def _extract_usage(response: Any) -> Tuple[int, int]:
 
 def apply_client_compaction_block_history(
     *,
-    messages: List[Dict[str, Any]],
-    system: Optional[Union[str, List[Dict[str, Any]]]],
-) -> Optional[PolyfillResult]:
+    messages: list[dict[str, object]],
+    system: str | list[dict[str, object]] | None,
+) -> PolyfillResult | None:
     """Honor client-sent compaction blocks without a ``compact_20260112`` edit.
 
     When the request omits ``context_management`` but the message history already
@@ -911,7 +933,7 @@ def apply_client_compaction_block_history(
     )
 
     prior_summary_text = prior_compaction_block.get("content") or ""
-    augmented_system: Union[str, List[Dict[str, Any]], None] = system
+    augmented_system: str | list[dict[str, object]] | None = system
     if isinstance(prior_summary_text, str) and prior_summary_text:
         augmented_system = _augment_system_with_summary(system, prior_summary_text)
         verbose_logger.info(
@@ -936,13 +958,13 @@ def apply_client_compaction_block_history(
 async def apply_compact_20260112(
     *,
     model: str,
-    messages: List[Dict[str, Any]],
-    tools: Optional[List[Dict[str, Any]]],
-    system: Optional[Union[str, List[Dict[str, Any]]]],
-    edit_spec: Dict[str, Any],
-    litellm_metadata: Optional[Dict[str, Any]] = None,
-    llm_router: Any = None,
-    user_api_key_auth: Any = None,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
+    system: str | list[dict[str, object]] | None,
+    edit_spec: dict[str, object],
+    litellm_metadata: Mapping[str, object] | None = None,
+    llm_router: Optional["Router"] = None,
+    user_api_key_auth: Optional["UserAPIKeyAuth"] = None,
 ) -> PolyfillResult:
     """Apply ``compact_20260112``; return a ``PolyfillResult``.
 
@@ -971,7 +993,7 @@ async def apply_compact_20260112(
     # non-Anthropic backends (which would reject them).
     effective_messages, prior_compaction_block = _slice_around_compaction_block(messages)
     prior_summary_text = prior_compaction_block.get("content") if prior_compaction_block else None
-    augmented_system: Union[str, List[Dict[str, Any]], None] = system
+    augmented_system: str | list[dict[str, object]] | None = system
     if isinstance(prior_summary_text, str) and prior_summary_text:
         augmented_system = _augment_system_with_summary(system, prior_summary_text)
         verbose_logger.info(
@@ -1121,7 +1143,7 @@ async def apply_compact_20260112(
         "type": "compaction",
         "content": summary_text,
     }
-    iterations_usage: List[UsageIteration] = [
+    iterations_usage: list[UsageIteration] = [
         {
             "type": "compaction",
             "input_tokens": summary_input_tokens,

@@ -1,7 +1,10 @@
 import asyncio
+import json
+import os
 import time
+from collections.abc import Coroutine, Mapping
+from typing import Any
 from urllib.parse import unquote
-from typing import Any, Coroutine, Optional, Tuple, Union
 
 import httpx
 
@@ -15,13 +18,14 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     should_allow_legacy_cloud_file_ids,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import (
     FileContentRequest,
     HttpxBinaryResponseContent,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.utils import StandardCallbackDynamicParams
 
 from .transformation import VertexAIFilesConfig
 
@@ -39,12 +43,41 @@ class VertexAIFilesHandler(GCSBucketBase):
             llm_provider=LlmProviders.VERTEX_AI,
         )
 
+    def _resolve_read_gcs_config(
+        self,
+        litellm_params: Mapping[str, object] | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    ) -> tuple[str | None, str | None]:
+        """
+        Resolve the GCS bucket and service-account credentials for the read/content path.
+
+        Sources them from the deployment's ``litellm_params`` (``gcs_bucket_name`` /
+        ``bucket_name`` and ``vertex_credentials``), mirroring the write path in
+        ``VertexAIFilesConfig._get_configured_bucket_name``, and falls back to the global
+        ``GCS_BUCKET_NAME`` / ``GCS_PATH_SERVICE_ACCOUNT`` env vars. This lets Vertex batch
+        run entirely at the model-group level, so output written to a per-model bucket is
+        readable without setting the global env vars.
+        """
+        params: Mapping[str, object] = litellm_params or {}
+        bucket_candidate = params.get("gcs_bucket_name") or params.get("bucket_name")
+        configured_bucket_name = bucket_candidate if isinstance(bucket_candidate, str) else os.getenv("GCS_BUCKET_NAME")
+
+        credentials = params.get("vertex_credentials") or vertex_credentials
+        if isinstance(credentials, dict):
+            path_service_account: str | None = json.dumps(credentials)
+        elif isinstance(credentials, str):
+            path_service_account = credentials
+        else:
+            path_service_account = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
+
+        return configured_bucket_name, path_service_account
+
     def _extract_bucket_and_object_from_file_id(
         self,
         file_id: str,
         configured_bucket_name: str,
-        litellm_params: Optional[dict] = None,
-    ) -> Tuple[str, str]:
+        litellm_params: dict | None = None,
+    ) -> tuple[str, str]:
         """
         Validate and extract bucket name and object path from file_id.
 
@@ -66,12 +99,12 @@ class VertexAIFilesHandler(GCSBucketBase):
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        litellm_params: Optional[dict] = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        litellm_params: dict | None = None,
     ) -> HttpxBinaryResponseContent:
         """
         Download file content from GCS bucket for VertexAI files.
@@ -91,7 +124,17 @@ class VertexAIFilesHandler(GCSBucketBase):
         if not file_id:
             raise ValueError("file_id is required in file_content_request")
 
-        gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(kwargs={})
+        configured_bucket_name, path_service_account = self._resolve_read_gcs_config(
+            litellm_params=litellm_params,
+            vertex_credentials=vertex_credentials,
+        )
+        dynamic_params = StandardCallbackDynamicParams(
+            gcs_bucket_name=configured_bucket_name,
+            gcs_path_service_account=path_service_account,
+        )
+        gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
+            kwargs={"standard_callback_dynamic_params": dynamic_params}
+        )
         bucket_name, object_path = self._extract_bucket_and_object_from_file_id(
             file_id=file_id,
             configured_bucket_name=gcs_logging_config["bucket_name"],
@@ -143,14 +186,14 @@ class VertexAIFilesHandler(GCSBucketBase):
         self,
         _is_async: bool,
         file_content_request: FileContentRequest,
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        litellm_params: Optional[dict] = None,
-    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+        api_base: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        litellm_params: dict | None = None,
+    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
         """
         Download file content from GCS bucket for VertexAI files.
         Supports both sync and async operations.

@@ -4,12 +4,10 @@ PDF text extraction utilities.
 Provides text extraction from PDF files using pypdf or PyPDF2.
 """
 
-from typing import Optional
-
 from litellm._logging import verbose_logger
 
 
-def extract_text_from_pdf(file_content: bytes) -> Optional[str]:
+def extract_text_from_pdf(file_content: bytes) -> str | None:
     """
     Extract text from PDF using pypdf if available.
 

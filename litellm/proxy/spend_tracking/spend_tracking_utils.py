@@ -3,10 +3,9 @@ import json
 import os
 import re
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from datetime import datetime as dt
-from datetime import timezone
-from typing import Any, List, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel
 
@@ -15,11 +14,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    REDACTED_BY_LITELM_STRING,
 )
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
-from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
@@ -62,7 +61,7 @@ def _hash_api_key_for_spend_log(api_key: str) -> str:
     return stripped
 
 
-def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
+def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     """
     Raw-only constant-time master-key comparison. The hashed form is never
     considered equivalent — only the raw master-key string matches.
@@ -73,18 +72,18 @@ def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
 
 
 def _get_spend_logs_metadata(
-    metadata: Optional[dict],
-    applied_guardrails: Optional[List[str]] = None,
-    batch_models: Optional[List[str]] = None,
-    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
-    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]] = None,
-    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = None,
-    usage_object: Optional[dict] = None,
-    model_map_information: Optional[StandardLoggingModelInformation] = None,
-    cold_storage_object_key: Optional[str] = None,
-    litellm_overhead_time_ms: Optional[float] = None,
-    cost_breakdown: Optional[CostBreakdown] = None,
-    litellm_call_id: Optional[str] = None,
+    metadata: dict | None,
+    applied_guardrails: list[str] | None = None,
+    batch_models: list[str] | None = None,
+    mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = None,
+    vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None = None,
+    guardrail_information: list[StandardLoggingGuardrailInformation] | None = None,
+    usage_object: dict | None = None,
+    model_map_information: StandardLoggingModelInformation | None = None,
+    cold_storage_object_key: str | None = None,
+    litellm_overhead_time_ms: float | None = None,
+    cost_breakdown: CostBreakdown | None = None,
+    litellm_call_id: str | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -109,6 +108,7 @@ def _get_spend_logs_metadata(
             model_map_information=None,
             usage_object=None,
             guardrail_information=None,
+            internal_call_origin=None,
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
@@ -171,12 +171,12 @@ def generate_hash_from_response(response_obj: Any) -> str:
         return hashlib.md5(str(response_obj).encode()).hexdigest()
 
 
-def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> Optional[str]:
+def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str | None:
     if call_type == "aretrieve_batch" or call_type == "acreate_file":
         # Generate a hash from the response object
-        id: Optional[str] = generate_hash_from_response(response_obj)
+        id: str | None = generate_hash_from_response(response_obj)
     else:
-        id = cast(Optional[str], response_obj.get("id")) or cast(Optional[str], kwargs.get("litellm_call_id"))
+        id = cast(str | None, response_obj.get("id")) or cast(str | None, kwargs.get("litellm_call_id"))
     return id
 
 
@@ -278,7 +278,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
-    standard_logging_payload = cast(Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None))
+    standard_logging_payload = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
 
@@ -362,7 +362,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             standard_logging_payload.get("cost_breakdown", None) if standard_logging_payload is not None else None
         ),
         litellm_call_id=cast(
-            Optional[str],
+            str | None,
             kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
         ),
     )
@@ -402,12 +402,12 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
     mcp_namespaced_tool_name = None
-    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = clean_metadata.get("mcp_tool_call_metadata")
+    mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = clean_metadata.get("mcp_tool_call_metadata")
     if mcp_tool_call_metadata is not None:
         mcp_namespaced_tool_name = mcp_tool_call_metadata.get("namespaced_tool_name", None)
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
-    agent_id: Optional[str] = kwargs.get("agent_id") or metadata.get("agent_id")
+    agent_id: str | None = kwargs.get("agent_id") or metadata.get("agent_id")
     custom_llm_provider = kwargs.get("custom_llm_provider")
     raw_model = cast(str, kwargs.get("model") or "")
     model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
@@ -475,7 +475,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
 def _get_session_id_for_spend_log(
     kwargs: dict,
-    standard_logging_payload: Optional[StandardLoggingPayload],
+    standard_logging_payload: StandardLoggingPayload | None,
 ) -> str:
     """
     Get the session id for the spend log.
@@ -496,7 +496,7 @@ def _get_session_id_for_spend_log(
     return str(uuid.uuid4())
 
 
-def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> Optional[int]:
+def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> int | None:
     """Compute request duration in milliseconds from start and end times."""
     try:
         return int((end_time - start_time).total_seconds() * 1000)
@@ -513,7 +513,7 @@ def _ensure_datetime_utc(timestamp: datetime) -> datetime:
 async def get_spend_by_team(
     start_date: dt,
     end_date: dt,
-    team_id: Optional[str],
+    team_id: str | None,
     prisma_client: PrismaClient,
 ):
     sql_query = """
@@ -654,8 +654,8 @@ async def get_spend_by_team_and_customer(
 
 
 def _get_messages_for_spend_logs_payload(
-    standard_logging_payload: Optional[StandardLoggingPayload],
-    metadata: Optional[dict] = None,
+    standard_logging_payload: StandardLoggingPayload | None,
+    metadata: dict | None = None,
 ) -> str:
     if _should_store_prompts_and_responses_in_spend_logs():
         if standard_logging_payload is not None:
@@ -675,8 +675,8 @@ _SENSITIVE_REQUEST_BODY_KEYS = frozenset({"secret_fields"})
 
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: dict,
-    visited: Optional[set] = None,
-    max_string_length_prompt_in_db: Optional[int] = None,
+    visited: set | None = None,
+    max_string_length_prompt_in_db: int | None = None,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -855,7 +855,7 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
     if not text:
         return text
     redaction = f'"{REDACTED_BY_LITELM_STRING}"'
-    out: List[str] = []
+    out: list[str] = []
     n = len(text)
     pos = 0
     while pos < n:
@@ -886,8 +886,8 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
 
 
 def _sanitize_guardrail_information_for_spend_logs(
-    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]],
-) -> Optional[List[StandardLoggingGuardrailInformation]]:
+    guardrail_information: list[StandardLoggingGuardrailInformation] | None,
+) -> list[StandardLoggingGuardrailInformation] | None:
     """
     When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
     (``guardrail_request``, ``guardrail_response``, ``match_details``,
@@ -962,8 +962,8 @@ def _redact_prompt_fields_in_guardrail_entry(
 
 
 def _sanitize_error_information_for_spend_logs(
-    error_information: Optional[StandardLoggingPayloadErrorInformation],
-) -> Optional[StandardLoggingPayloadErrorInformation]:
+    error_information: StandardLoggingPayloadErrorInformation | None,
+) -> StandardLoggingPayloadErrorInformation | None:
     """
     Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
 
@@ -996,7 +996,7 @@ def _sanitize_error_information_for_spend_logs(
     return cast(StandardLoggingPayloadErrorInformation, sanitized)
 
 
-def _convert_to_json_serializable_dict(obj: Any, visited: Optional[set] = None, max_depth: int = 20) -> Any:
+def _convert_to_json_serializable_dict(obj: Any, visited: set | None = None, max_depth: int = 20) -> Any:
     """
     Convert object to JSON-serializable dict, handling Pydantic models safely.
 
@@ -1053,7 +1053,7 @@ def _convert_to_json_serializable_dict(obj: Any, visited: Optional[set] = None, 
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
-    kwargs: Optional[dict] = None,
+    kwargs: dict | None = None,
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
@@ -1061,7 +1061,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
-        _proxy_server_request = cast(Optional[dict], litellm_params.get("proxy_server_request", {}))
+        _proxy_server_request = cast(dict | None, litellm_params.get("proxy_server_request", {}))
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
 
@@ -1101,8 +1101,8 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
 
 def _get_vector_store_request_for_spend_logs_payload(
-    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]],
-) -> Optional[List[StandardLoggingVectorStoreRequest]]:
+    vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None,
+) -> list[StandardLoggingVectorStoreRequest] | None:
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
@@ -1125,8 +1125,8 @@ def _get_vector_store_request_for_spend_logs_payload(
 
 
 def _get_response_for_spend_logs_payload(
-    payload: Optional[StandardLoggingPayload],
-    kwargs: Optional[dict] = None,
+    payload: StandardLoggingPayload | None,
+    kwargs: dict | None = None,
 ) -> str:
     if payload is None:
         return "{}"
@@ -1205,7 +1205,7 @@ def _get_status_for_spend_log(
 
     It's only a failure if metadata.get("status") is "failure"
     """
-    _status: Optional[str] = metadata.get("status", None)
+    _status: str | None = metadata.get("status", None)
     if _status == "failure":
         return "failure"
     return "success"
