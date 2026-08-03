@@ -12099,6 +12099,10 @@ class Router:
         Prompt content the message list never carries is read from `request_kwargs`:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
+
+        Embeddings also arrive as `input`, but as a `list[str]` batch rather than Responses
+        input items. Those are counted as text, since the Responses transform expects
+        object-shaped items and raises on plain strings.
         """
         from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
             anthropic_system_to_openai_message,
@@ -12118,6 +12122,10 @@ class Router:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
             return litellm.token_counter(messages=counted_messages, tools=tools)
         if input is not None:
+            if isinstance(input, list) and all(isinstance(item, str) for item in input):
+                text_batch = cast(list[str], input)  # cast-ok: the isinstance guard narrows every item to str
+                return litellm.token_counter(text=text_batch)
+
             from openai.types.responses.response_create_params import ResponseInputParam
 
             from litellm.responses.litellm_completion_transformation.transformation import (
