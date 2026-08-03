@@ -10755,7 +10755,8 @@ class TestValidateTeamModelMaxBudget:
             _validate_team_model_max_budget,
         )
 
-        _validate_team_model_max_budget(model_max_budget)
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            _validate_team_model_max_budget(model_max_budget)
 
     def test_normalized_duplicate_entries_rejected(self):
         from litellm.proxy._types import ProxyException
