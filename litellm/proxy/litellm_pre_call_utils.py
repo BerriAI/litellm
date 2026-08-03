@@ -4,7 +4,6 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
@@ -562,7 +561,6 @@ def safe_add_api_version_from_query_params(data: dict, request: Request):
 def convert_key_logging_metadata_to_callback(
     data: AddTeamCallback,
     team_callback_settings_obj: TeamCallbackMetadata | None,
-    blocked_vars: AbstractSet[str] = frozenset(),
 ) -> TeamCallbackMetadata:
     if team_callback_settings_obj is None:
         team_callback_settings_obj = TeamCallbackMetadata()
@@ -598,8 +596,6 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
-        if var in blocked_vars:
-            continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
         team_callback_settings_obj.callback_vars[var] = str(value)
@@ -655,13 +651,9 @@ def _get_dynamic_logging_metadata(
             callback = _get_validated_callback_metadata(item=item, source="key-level")
             if callback is None:
                 continue
-            # Strip params that could redirect traffic to attacker-controlled
-            # destinations (e.g. dd_site, dd_agent_host). Key metadata is
-            # user-configurable; only team-level callbacks are admin-trusted.
             callback_settings_obj = convert_key_logging_metadata_to_callback(
                 data=callback,
                 team_callback_settings_obj=callback_settings_obj,
-                blocked_vars=_request_blocked_callback_params,
             )
     #########################################################################################
     # Team-based callbacks

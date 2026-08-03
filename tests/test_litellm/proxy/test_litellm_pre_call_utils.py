@@ -5686,3 +5686,40 @@ def test_trusted_callback_vars_never_reach_the_provider():
 
     assert TRUSTED_CALLBACK_VARS_FIELD not in non_default
     assert non_default["some_provider_param"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_key_level_callback_vars_survive_the_strip():
+    """
+    Key-level callbacks configure their own destination and credentials, and they replace
+    team settings rather than merging with them, so only the request body is untrusted.
+    """
+    key_with_datadog_callback = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "datadog",
+                    "callback_type": "success",
+                    "callback_vars": {"dd_api_key": "key-dd-key", "dd_site": "us5.datadoghq.com"},
+                }
+            ]
+        },
+    )
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "dd_site": "attacker.example.com",
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key_with_datadog_callback,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "key-dd-key", "dd_site": "us5.datadoghq.com"}
+    assert updated["dd_site"] == "us5.datadoghq.com"
