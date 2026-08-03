@@ -6,6 +6,7 @@ from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix_extraction import (
     extract_tool_results,
     make_tool_data,
     tool_call_to_tool_data,
+    tool_result_text_indices,
 )
 
 
@@ -93,7 +94,7 @@ def test_make_tool_data_truncates_and_defaults_name():
 def test_unhashable_block_type_skipped_without_raising():
     msgs = [{"role": "user", "content": [{"type": ["file"], "file": {"filename": "a.txt"}}]}]
     parts = extract_file_parts_from_messages(msgs, size_limit=1000)
-    assert parts == []
+    assert parts == ()
 
 
 def test_unhashable_tool_call_id_skipped_without_raising():
@@ -102,7 +103,7 @@ def test_unhashable_tool_call_id_skipped_without_raising():
         {"role": "tool", "tool_call_id": ["c1"], "content": "sunny"},
     ]
     results = extract_tool_results(msgs)
-    assert results == [("tool_result", "sunny", ["c1"])]
+    assert results == (("tool_result", "sunny", ["c1"]),)
 
 
 def test_extract_tool_results_list_form_content():
@@ -152,7 +153,7 @@ def test_image_url_block_data_url_decoded_from_messages():
 
 def test_image_url_block_non_string_url_skipped():
     block = {"type": "image_url", "image_url": {"url": 123}}
-    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == []
+    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == ()
 
 
 def test_input_image_block_data_url_decoded():
@@ -163,7 +164,7 @@ def test_input_image_block_data_url_decoded():
 
 def test_file_block_non_dict_file_skipped():
     block = {"type": "file", "file": "not-a-dict"}
-    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == []
+    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == ()
 
 
 def test_file_block_reference_without_bytes_is_name_only():
@@ -216,7 +217,7 @@ def test_input_audio_block_undecodable_is_name_only():
 
 def test_input_audio_block_non_dict_skipped():
     block = {"type": "input_audio", "input_audio": "nope"}
-    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == []
+    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == ()
 
 
 def test_tool_call_dict_arguments_serialized_and_parsed():
@@ -242,7 +243,7 @@ def test_tool_call_invalid_json_string_arguments_kept_as_content():
 def test_tool_result_with_non_string_tool_call_id_uses_default_name():
     msgs = [{"role": "tool", "tool_call_id": ["c1"], "content": "orphan"}]
     results = extract_tool_results(msgs)
-    assert results == [("tool_result", "orphan", ["c1"])]
+    assert results == (("tool_result", "orphan", ["c1"]),)
 
 
 def test_images_field_http_url_is_name_only_reference():
@@ -268,12 +269,12 @@ def test_messages_skip_non_dict_and_unknown_blocks():
 
 def test_image_url_block_invalid_data_url_returns_no_part():
     block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,%%%invalid%%%"}}
-    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == []
+    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == ()
 
 
 def test_tool_message_with_empty_content_is_skipped():
     msgs = [{"role": "tool", "tool_call_id": "c1", "content": "   "}]
-    assert extract_tool_results(msgs) == []
+    assert extract_tool_results(msgs) == ()
 
 
 def test_extract_tool_results_skips_non_dict_messages_and_tool_calls():
@@ -282,7 +283,7 @@ def test_extract_tool_results_skips_non_dict_messages_and_tool_calls():
         {"role": "assistant", "tool_calls": ["not-a-dict", {"id": "c1", "function": {"name": "f"}}]},
         {"role": "tool", "tool_call_id": "c1", "content": "ok"},
     ]
-    assert extract_tool_results(msgs) == [("f", "ok", "c1")]
+    assert extract_tool_results(msgs) == (("f", "ok", "c1"),)
 
 
 def test_malformed_data_url_yields_no_bytes():
@@ -293,11 +294,11 @@ def test_malformed_data_url_yields_no_bytes():
 
 def test_input_audio_block_without_data_skipped():
     block = {"type": "input_audio", "input_audio": {"format": "wav"}}
-    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == []
+    assert extract_file_parts_from_messages(_msgs(block), size_limit=1000) == ()
 
 
 def test_images_field_non_string_entries_skipped():
-    assert extract_file_parts_from_images([123, None, ""], size_limit=1000) == []
+    assert extract_file_parts_from_images([123, None, ""], size_limit=1000) == ()
 
 
 def test_make_tool_data_whitespace_after_truncation_defaults_name():
@@ -337,14 +338,14 @@ def test_file_oversize_detected_after_decode_when_estimate_passes():
 
 def test_image_http_url_that_urlparse_rejects_is_dropped():
     parts = extract_file_parts_from_images(["http://["], size_limit=1000)
-    assert parts == []
+    assert parts == ()
 
 
 def test_message_content_not_a_list_is_skipped():
     parts = extract_file_parts_from_messages(
         [{"role": "user", "content": "just a plain string prompt"}], size_limit=1000
     )
-    assert parts == []
+    assert parts == ()
 
 
 def test_tool_call_dict_arguments_non_serializable_falls_back_to_str():
@@ -360,3 +361,43 @@ def test_tool_call_non_serializable_other_arguments_falls_back_to_str():
 def test_tool_result_dict_content_non_serializable_falls_back_to_str():
     results = extract_tool_results([{"role": "tool", "tool_call_id": "c1", "content": {"x": {1, 2}}}])
     assert len(results) == 1 and isinstance(results[0][1], str) and results[0][1].strip()
+
+
+def test_tool_result_text_indices_marks_only_tool_role_positions():
+    messages = [
+        {"role": "user", "content": "ask"},
+        {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "f"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+    ]
+    assert tool_result_text_indices(messages, ["ask", "result"]) == frozenset({1})
+
+
+def test_tool_result_text_indices_covers_every_text_block_of_a_tool_message():
+    messages = [
+        {"role": "user", "content": "ask"},
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
+        },
+    ]
+    assert tool_result_text_indices(messages, ["ask", "a", "b"]) == frozenset({1, 2})
+
+
+def test_tool_result_text_indices_empty_when_texts_do_not_replay_messages():
+    messages = [
+        {"role": "user", "content": "ask"},
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+    ]
+    assert tool_result_text_indices(messages, ["result"]) == frozenset()
+    assert tool_result_text_indices(messages, ["ask", "tampered"]) == frozenset()
+
+
+def test_tool_result_text_indices_skips_blank_tool_content_never_submitted_as_tool():
+    messages = [{"role": "tool", "tool_call_id": "c1", "content": "   "}]
+    assert extract_tool_results(messages) == ()
+    assert tool_result_text_indices(messages, ["   "]) == frozenset()
+
+
+def test_tool_result_text_indices_empty_without_structured_messages():
+    assert tool_result_text_indices(None, ["ask"]) == frozenset()

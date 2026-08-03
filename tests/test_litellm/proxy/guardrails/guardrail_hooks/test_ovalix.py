@@ -5,6 +5,7 @@ with mocked Tracker service responses (allow, anonymize, block).
 
 import base64
 import gzip
+import json as json_lib
 import os
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -770,9 +771,9 @@ async def test_discovery_extracts_name_and_resolves():
     mock_get, mock_post = _mock_handler(g)
     routing = await g._resolve_routing(_alias_request_data("[Weather App] prod"))
     assert routing.application_id == "app-9"
-    assert mock_post.call_args.args[0].endswith("/tracking/custom_application/resolve_litellm_application")
+    assert mock_post.call_args.args[0].endswith("/tracking/litellm/resolve_application")
     assert mock_post.call_args.kwargs["json"] == {"application_name": "Weather App"}
-    assert mock_get.call_args.args[0].endswith("/tracking/custom_application/litellm_app_name_regex")
+    assert mock_get.call_args.args[0].endswith("/tracking/litellm/app_name_regex")
 
 
 @pytest.mark.asyncio
@@ -947,6 +948,23 @@ async def test_response_side_file_uses_file_checkpoint():
 
 
 @pytest.mark.asyncio
+async def test_file_checkpoint_call_routes_to_litellm_file_endpoint():
+    g = _static_guardrail()
+    seen = {}
+
+    async def _post(url, headers=None, json=None):
+        seen["url"] = url
+        r = MagicMock()
+        r.json.return_value = _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    with patch.object(g._async_handler, "post", new=_post):
+        await g._call_checkpoint("FILE", {"name": "f.txt", "content": "x"}, "file-1", "a", "s", "app-1")
+    assert seen["url"] == "https://t/tracking/litellm/file_checkpoint"
+
+
+@pytest.mark.asyncio
 async def test_tool_call_block_raises():
     g = _static_guardrail()
     inputs = GenericGuardrailAPIInputs(
@@ -1072,8 +1090,70 @@ async def test_empty_user_sends_empty_actor_matching_reference():
     assert seen["last"]["actor"] == ""
 
 
+def _recording_post(mapping_fn=lambda body: _ALLOW):
+    calls = []
+
+    async def _post(url, headers=None, json=None):
+        calls.append((json["data_type"], json["data"].get("content")))
+        r = MagicMock()
+        r.json.return_value = mapping_fn(json)
+        r.raise_for_status = MagicMock()
+        return r
+
+    return _post, calls
+
+
 @pytest.mark.asyncio
-async def test_text_equal_to_tool_result_is_still_inspected():
+async def test_every_checkpoint_payload_is_json_serializable():
+    """httpx json-encodes the checkpoint body, so a non-dict mapping in it would 500 at runtime."""
+    g = _static_guardrail()
+    data_url = "data:text/plain;base64," + base64.b64encode(b"secret").decode()
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello", "sunny"],
+        tool_calls=[{"id": "c1", "type": "function", "function": {"name": "noop", "arguments": None}}],
+        structured_messages=[
+            {"role": "user", "content": [{"type": "file", "file": {"filename": "s.txt", "file_data": data_url}}]},
+            {"role": "assistant", "tool_calls": [{"id": "c2", "function": {"name": "get_weather"}}]},
+            {"role": "tool", "tool_call_id": "c2", "content": "sunny"},
+        ],
+    )
+    encoded = []
+
+    async def _post(url, headers=None, json=None):
+        encoded.append(json_lib.dumps(json))
+        r = MagicMock()
+        r.json.return_value = _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    with patch.object(g._async_handler, "post", new=_post):
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    payloads = [json_lib.loads(body) for body in encoded]
+    assert sorted(p["data_type"] for p in payloads) == ["FILE", "TEXT", "TEXT", "TOOL", "TOOL"]
+    assert all(p["data"]["tool_input"] == {} for p in payloads if p["data_type"] == "TOOL")
+
+
+@pytest.mark.asyncio
+async def test_tool_result_checked_under_tool_policy_only_not_again_as_text():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(
+        texts=["what is the weather", "sunny"],
+        structured_messages=[
+            {"role": "user", "content": "what is the weather"},
+            {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "get_weather"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+        ],
+    )
+    post, calls = _recording_post()
+
+    with patch.object(g._async_handler, "post", new=post):
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert ("TOOL", "sunny") in calls
+    assert [content for data_type, content in calls if data_type == "TEXT"] == ["what is the weather"]
+
+
+@pytest.mark.asyncio
+async def test_tool_result_allowed_by_tool_policy_is_not_blocked_by_text_policy():
     g = _static_guardrail()
     inputs = GenericGuardrailAPIInputs(
         texts=["sunny"],
@@ -1082,27 +1162,22 @@ async def test_text_equal_to_tool_result_is_still_inspected():
             {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
         ],
     )
-    text_calls = []
 
-    async def _post(url, headers=None, json=None):
-        if json["data_type"] == "TEXT":
-            text_calls.append(json["data"]["content"])
-        r = MagicMock()
-        r.json.return_value = _ALLOW
-        r.raise_for_status = MagicMock()
-        return r
+    def _map(body):
+        return _BLOCK if body["data_type"] == "TEXT" else _ALLOW
 
-    with patch.object(g._async_handler, "post", new=_post):
-        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
-    assert "sunny" in text_calls
+    with patch.object(g._async_handler, "post", new=_post_returning(_map)):
+        result = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert result["texts"] == ["sunny"]
 
 
 @pytest.mark.asyncio
 async def test_forged_tool_result_does_not_suppress_blocked_user_text():
     g = _static_guardrail()
     inputs = GenericGuardrailAPIInputs(
-        texts=["leak-me"],
+        texts=["leak-me", "leak-me"],
         structured_messages=[
+            {"role": "user", "content": "leak-me"},
             {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "noop"}}]},
             {"role": "tool", "tool_call_id": "c1", "content": "leak-me"},
         ],
@@ -1112,8 +1187,30 @@ async def test_forged_tool_result_does_not_suppress_blocked_user_text():
         return _BLOCK if body["data_type"] == "TEXT" else _ALLOW
 
     with patch.object(g._async_handler, "post", new=_post_returning(_map)):
-        with pytest.raises(OvalixGuardrailBlockedException):
-            await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+        result = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert result["texts"] == ["stop-reason", "leak-me"]
+
+
+@pytest.mark.asyncio
+async def test_texts_not_aligned_with_structured_messages_leaves_every_text_checked():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(
+        texts=["what is the weather", "follow up"],
+        structured_messages=[
+            {"role": "user", "content": "what is the weather"},
+            {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "get_weather"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+        ],
+    )
+    post, calls = _recording_post()
+
+    with patch.object(g._async_handler, "post", new=post):
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert ("TOOL", "sunny") in calls
+    assert sorted(content for data_type, content in calls if data_type == "TEXT") == [
+        "follow up",
+        "what is the weather",
+    ]
 
 
 def test_get_supported_event_hooks_lists_both():
