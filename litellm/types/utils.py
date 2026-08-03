@@ -949,9 +949,12 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     "/openai/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     # Realtime API
-    "/realtime": [CallTypes.arealtime],
-    "/v1/realtime": [CallTypes.arealtime],
-    "/openai/v1/realtime": [CallTypes.arealtime],
+    "/realtime": (CallTypes.arealtime,),
+    "/v1/realtime": (CallTypes.arealtime,),
+    "/openai/v1/realtime": (CallTypes.arealtime,),
+    "/realtime/translations": (CallTypes.arealtime,),
+    "/v1/realtime/translations": (CallTypes.arealtime,),
+    "/openai/v1/realtime/translations": (CallTypes.arealtime,),
     # Provider-specific routes
     "/anthropic/v1/messages": [CallTypes.anthropic_messages],
     # Google GenAI routes

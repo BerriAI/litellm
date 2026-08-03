@@ -399,6 +399,9 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
+        "/realtime/translations",
+        "/v1/realtime/translations",
+        "/openai/v1/realtime/translations",
         # realtime (GA WebRTC HTTP routes)
         "/realtime/client_secrets",
         "/v1/realtime/client_secrets",
@@ -409,6 +412,12 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime/transcription_sessions",
         "/v1/realtime/transcription_sessions",
         "/openai/v1/realtime/transcription_sessions",
+        "/realtime/translations/client_secrets",
+        "/v1/realtime/translations/client_secrets",
+        "/openai/v1/realtime/translations/client_secrets",
+        "/realtime/translations/calls",
+        "/v1/realtime/translations/calls",
+        "/openai/v1/realtime/translations/calls",
         # responses API
         "/responses",
         "/v1/responses",
