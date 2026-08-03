@@ -422,7 +422,7 @@ class TestBatchLogging:
         )
         assert len(handler.log_queue) == 1
         msgs = handler.log_queue[0]["messages"]
-        assert isinstance(msgs, list)
+        assert isinstance(msgs, tuple)
         assert msgs[0]["role"] == "system"
         assert msgs[1] == {"role": "user", "content": "hi"}
 
@@ -1324,7 +1324,7 @@ class TestFlattenMessagesForModeration:
 
     def test_none_messages_returns_empty(self):
         result = RubrikLogger._flatten_messages_for_moderation(None)
-        assert result == []
+        assert result == ()
 
     def test_multiple_messages_preserved_in_order(self):
         messages = [
