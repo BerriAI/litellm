@@ -38,6 +38,9 @@ The weighted sum is mapped to tiers using configurable boundaries:
 
 ### Basic Configuration
 
+Every tier needs at least one model of its own. A tier left empty does not route nowhere; whatever the fallback chain reaches answers in its place, which silently swaps the model you configured for another tier's. Configs missing a tier are rejected at load, naming every tier that has none. Omitting `tiers` entirely still works and takes the defaults for all four.
+
+
 ```yaml
 model_list:
   - model_name: smart-router

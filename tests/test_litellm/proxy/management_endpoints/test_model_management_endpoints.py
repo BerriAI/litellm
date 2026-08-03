@@ -642,7 +642,7 @@ class TestDeleteModelClearsRouterRegistry:
             "model_name": "smart-router",
             "litellm_params": {
                 "model": "auto_router/complexity_router",
-                "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}},
+                "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o", "COMPLEX": 'gpt-4o-mini', "REASONING": 'gpt-4o-mini'}},
                 "complexity_router_default_model": "gpt-4o",
                 **({"tags": tags} if tags else {}),
             },
@@ -3408,7 +3408,7 @@ class TestStrategyRouterWriteValidation:
     def _stored_complexity_params(self) -> LiteLLM_Params:
         return LiteLLM_Params(
             model="auto_router/complexity_router",
-            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": 'gpt-4o-mini', "COMPLEX": 'gpt-4o-mini', "REASONING": 'gpt-4o-mini'}},
         )
 
     def _db_complexity_router(self, model_id: str) -> Deployment:
@@ -3467,7 +3467,7 @@ class TestStrategyRouterWriteValidation:
 
         corrupted = LiteLLM_Params(
             model="auto_router/auto_router/complexity_router",
-            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": 'gpt-4o-mini', "COMPLEX": 'gpt-4o-mini', "REASONING": 'gpt-4o-mini'}},
         )
         assert (
             _strategy_router_write_violation(
@@ -3580,7 +3580,7 @@ class TestStrategyRouterWriteValidation:
             "model_name": "my-auto-router",
             "litellm_params": {
                 "model": "auto_router/complexity_router",
-                "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
+                "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": 'gpt-4o-mini', "COMPLEX": 'gpt-4o-mini', "REASONING": 'gpt-4o-mini'}},
             },
             "model_info": {"id": model_id},
         }

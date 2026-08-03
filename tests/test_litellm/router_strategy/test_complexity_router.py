@@ -323,26 +323,28 @@ class TestModelSelection:
         model = complexity_router.get_model_for_tier(ComplexityTier.REASONING)
         assert model == "o1-preview"
 
-    def test_get_model_fallback_to_default(self, mock_router_instance):
-        """Should fallback to default_model if tier not configured."""
-        config = {
-            "tiers": {},  # Empty tiers
-            "default_model": "fallback-model",
-        }
-        router = ComplexityRouter(
-            model_name="test-router",
-            litellm_router_instance=mock_router_instance,
-            complexity_router_config=config,
-        )
-        model = router.get_model_for_tier(ComplexityTier.SIMPLE)
-        assert model == "fallback-model"
+    def test_a_tiers_map_missing_tiers_is_rejected_even_with_a_default_model(self, mock_router_instance):
+        """default_model no longer stands in for an unconfigured tier. It used to serve
+        that tier's traffic, which is exactly the silent substitution this requirement
+        removes: the model an operator names for a tier is the model that tier gets."""
+        with pytest.raises(ValidationError, match="no model for SIMPLE, MEDIUM, COMPLEX, REASONING"):
+            ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={"tiers": {}, "default_model": "fallback-model"},
+            )
 
     def test_get_model_for_tier_list_random_choice(self, mock_router_instance):
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": ["cheap", "premium"], "MEDIUM": "mid"},
+                "tiers": {
+                    "SIMPLE": ["cheap", "premium"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "default_model": "mid",
             },
         )
@@ -355,119 +357,20 @@ class TestModelSelection:
             choice.assert_called_once_with(pool)
         assert router.get_model_for_tier(ComplexityTier.MEDIUM) == "mid"
 
-    def test_get_model_for_tier_empty_pool_raises(self, mock_router_instance):
-        router = ComplexityRouter(
-            model_name="test-router",
-            litellm_router_instance=mock_router_instance,
-            complexity_router_config={
-                "tiers": {"SIMPLE": []},
-                "default_model": "mid",
-            },
-        )
-        with pytest.raises(ValueError, match="Empty model pool for tier SIMPLE"):
-            router.get_model_for_tier(ComplexityTier.SIMPLE)
-
-
-class TestPreRoutingHook:
-    """Test the async_pre_routing_hook method."""
-
-    @pytest.mark.asyncio
-    async def test_pre_routing_hook_simple_message(self, complexity_router):
-        """Test pre-routing hook with a simple message."""
-        messages = [{"role": "user", "content": "Hello!"}]
-        result = await complexity_router.async_pre_routing_hook(
-            model="test-model",
-            request_kwargs={},
-            messages=messages,
-        )
-        assert result is not None
-        assert result.model == "gpt-4o-mini"  # SIMPLE tier model
-        assert result.messages == messages
-
-    @pytest.mark.asyncio
-    async def test_pre_routing_hook_complex_message(self, complexity_router):
-        """Test pre-routing hook with a message containing technical content."""
-        messages = [
-            {
-                "role": "user",
-                "content": (
-                    "Design a distributed microservice architecture with Kubernetes "
-                    "orchestration, implementing proper authentication, encryption, "
-                    "and database optimization for high throughput. Think step by step "
-                    "about the performance implications and scalability requirements."
-                ),
-            }
-        ]
-        result = await complexity_router.async_pre_routing_hook(
-            model="test-model",
-            request_kwargs={},
-            messages=messages,
-        )
-        assert result is not None
-        # Should return a valid model from the configured tiers
-        assert result.model in [
-            "gpt-4o-mini",
-            "gpt-4o",
-            "claude-sonnet-4-20250514",
-            "o1-preview",
-        ]
-
-    @pytest.mark.asyncio
-    async def test_pre_routing_hook_no_messages(self, complexity_router):
-        """Test pre-routing hook returns None when no messages."""
-        result = await complexity_router.async_pre_routing_hook(
-            model="test-model",
-            request_kwargs={},
-            messages=None,
-        )
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_pre_routing_hook_empty_messages(self, complexity_router):
-        """Test pre-routing hook returns None when messages empty."""
-        result = await complexity_router.async_pre_routing_hook(
-            model="test-model",
-            request_kwargs={},
-            messages=[],
-        )
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_pre_routing_hook_with_system_prompt(self, complexity_router):
-        """Test pre-routing hook considers system prompt."""
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"},
-        ]
-        result = await complexity_router.async_pre_routing_hook(
-            model="test-model",
-            request_kwargs={},
-            messages=messages,
-        )
-        assert result is not None
-        # Should still be SIMPLE
-        assert result.model == "gpt-4o-mini"
-
-    @pytest.mark.asyncio
-    async def test_pre_routing_hook_reasoning_message(self, complexity_router):
-        """Test pre-routing hook with reasoning markers."""
-        messages = [
-            {
-                "role": "user",
-                "content": "Let's think step by step and reason through this problem carefully.",
-            }
-        ]
-        result = await complexity_router.async_pre_routing_hook(
-            model="test-model",
-            request_kwargs={},
-            messages=messages,
-        )
-        assert result is not None
-        assert result.model == "o1-preview"  # REASONING tier model
-
-
-class TestConfigOverrides:
-    """Test configuration override functionality."""
+    @pytest.mark.parametrize("no_models", [[], ""], ids=["empty_pool", "empty_pin"])
+    def test_a_tier_with_no_models_is_rejected_at_load_not_at_selection(self, mock_router_instance, no_models):
+        """An empty pool used to be caught when the tier was first selected, so a config
+        carrying one started fine and failed on a request. Naming a tier and giving it
+        nothing says the same as not naming it, and both are refused up front."""
+        with pytest.raises(ValidationError, match="no model for SIMPLE"):
+            ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={
+                    "tiers": {"SIMPLE": no_models, "MEDIUM": "m", "COMPLEX": "c", "REASONING": "r"},
+                    "default_model": "mid",
+                },
+            )
 
     def test_custom_tier_boundaries(self, mock_router_instance):
         """Test custom tier boundaries work correctly."""
@@ -562,7 +465,14 @@ class TestCustomTechnicalKeywords:
         router_absent = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={"tiers": {"MEDIUM": "gpt-4o"}},
+            complexity_router_config={
+                "tiers": {
+                    "MEDIUM": "gpt-4o",
+                    "SIMPLE": "simple-unused",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                }
+            },
         )
         router_none = ComplexityRouter(
             model_name="test-router",
@@ -746,7 +656,7 @@ class TestSingletonMutation:
     def test_default_config_not_mutated(self, mock_router_instance):
         """Test that creating routers without config doesn't mutate defaults."""
         from litellm.router_strategy.complexity_router.config import (
-    DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+            DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
             ComplexityRouterConfig,
         )
 
@@ -952,6 +862,8 @@ class TestRouterComplexityDeploymentMethods:
                             "tiers": {
                                 "SIMPLE": ["cheap"],
                                 "MEDIUM": ["cheap", "premium"],
+                                "COMPLEX": "premium",
+                                "REASONING": "premium",
                             },
                         },
                     },
@@ -1662,6 +1574,8 @@ class TestRouterPreRoutingAliasOverrides:
                             "tiers": {
                                 "SIMPLE": "gpt-4o-mini",
                                 "MEDIUM": "gpt-4o",
+                                "COMPLEX": "complex-unused",
+                                "REASONING": "reasoning-unused",
                             }
                         },
                         "complexity_router_default_model": "gpt-4o",
@@ -1719,6 +1633,8 @@ class TestRouterPreRoutingAliasOverrides:
             "tiers": {
                 "SIMPLE": "gpt-4o-mini",
                 "MEDIUM": "gpt-4o",
+                "COMPLEX": "complex-unused",
+                "REASONING": "reasoning-unused",
             }
         }
         assert request_kwargs["complexity_router_default_model"] == "gpt-4o"
@@ -1823,7 +1739,7 @@ class TestAdaptiveSoftFloors:
     def test_adaptive_defaults_use_cost_weighted_cold_policy(self):
         config = ComplexityRouterConfig(
             adaptive=True,
-            tiers={"SIMPLE": ["cheap"]},
+            tiers={"SIMPLE": ["cheap"], "MEDIUM": "cheap", "COMPLEX": "cheap", "REASONING": "cheap"},
         )
         assert config.adaptive_weights.quality == pytest.approx(0.3)
         assert config.adaptive_weights.cost == pytest.approx(0.7)
@@ -1870,7 +1786,9 @@ class TestAdaptiveSoftFloors:
 
     def test_adaptive_config_requires_non_empty_pools(self):
         with pytest.raises(ValidationError):
-            ComplexityRouterConfig(adaptive=True, tiers={"SIMPLE": []})
+            ComplexityRouterConfig(
+                adaptive=True, tiers={"SIMPLE": [], "MEDIUM": None, "COMPLEX": None, "REASONING": None}
+            )
 
     def test_cold_start_randomly_samples_unobserved_classified_tier_models(self, adaptive_router_instance):
         cr = ComplexityRouter(
@@ -1881,6 +1799,8 @@ class TestAdaptiveSoftFloors:
                 "tiers": {
                     "SIMPLE": ["cheap", "premium"],
                     "MEDIUM": ["premium"],
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
                 },
             },
         )
@@ -1907,7 +1827,12 @@ class TestAdaptiveSoftFloors:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "adaptive": False,
-                "tiers": {"SIMPLE": ["cheap", "premium"], "MEDIUM": "mid"},
+                "tiers": {
+                    "SIMPLE": ["cheap", "premium"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "default_model": "mid",
             },
         )
@@ -1976,6 +1901,7 @@ class TestAdaptiveSoftFloors:
                     "SIMPLE": ["cheap"],
                     "MEDIUM": ["cheap", "premium"],
                     "COMPLEX": ["premium"],
+                    "REASONING": "premium",
                 },
             },
         )
@@ -3164,7 +3090,12 @@ class TestRoutingPlugins:
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"]},
+                "tiers": {
+                    "SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"],
+                    "MEDIUM": "medium-unused",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "plugins": [ExcludeGpt4oMini()],
             },
         )
@@ -3192,7 +3123,12 @@ class TestRoutingPlugins:
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "medium-unused",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "default_model": "gpt-4o-fallback",
                 "plugins": [BlockEverything()],
             },
@@ -3215,7 +3151,12 @@ class TestRoutingPlugins:
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "medium-unused",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "plugins": [BlockEverything()],
             },
         )
@@ -3239,7 +3180,12 @@ class TestRoutingPlugins:
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "medium-unused",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "plugins": [CaptureMetadata()],
             },
         )
@@ -3263,7 +3209,12 @@ class TestRoutingPlugins:
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"]},
+                "tiers": {
+                    "SIMPLE": ["gpt-4o-mini", "gpt-4o-nano"],
+                    "MEDIUM": "medium-unused",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "keyword_tier_rules": [{"keywords": ["hello"], "tier": "SIMPLE"}],
                 "plugins": [ExcludeGpt4oMini()],
             },
@@ -3292,7 +3243,12 @@ class TestRoutingPlugins:
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"MEDIUM": ["gpt-4o-default", "gpt-4o-nano"]},
+                "tiers": {
+                    "MEDIUM": ["gpt-4o-default", "gpt-4o-nano"],
+                    "SIMPLE": "simple-unused",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "default_model": "gpt-4o-default",
                 "plugins": [ExcludeDefaultModel()],
             },
@@ -3319,7 +3275,12 @@ class TestRoutingPlugins:
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"MEDIUM": ["gpt-4o-medium-tier"]},
+                "tiers": {
+                    "MEDIUM": ["gpt-4o-medium-tier"],
+                    "SIMPLE": "simple-unused",
+                    "COMPLEX": "complex-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "default_model": "gpt-4o-configured-default",
             },
         )
@@ -3337,7 +3298,12 @@ class TestRoutingPlugins:
     def test_plugins_and_adaptive_together_raises(self):
         with pytest.raises(ValidationError, match="plugins and adaptive=True cannot both be set"):
             ComplexityRouterConfig(
-                tiers={"SIMPLE": ["gpt-4o-mini"]},
+                tiers={
+                    "SIMPLE": ["gpt-4o-mini"],
+                    "MEDIUM": "gpt-4o-mini",
+                    "COMPLEX": "gpt-4o-mini",
+                    "REASONING": "gpt-4o-mini",
+                },
                 adaptive=True,
                 plugins=[_DummyPlugin()],
             )
@@ -3369,7 +3335,12 @@ class TestRoutingPlugins:
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                "tiers": {
+                    "SIMPLE": ["gpt-4o-mini"],
+                    "MEDIUM": "premium",
+                    "COMPLEX": "premium",
+                    "REASONING": "premium",
+                },
                 "session_affinity": True,
                 "plugins": [AllowAll()],
             },
@@ -3412,19 +3383,32 @@ class TestEscalationKeywords:
     def test_escalate_tier_caps_at_highest_configured(self, complexity_router):
         assert complexity_router._escalate_tier(ComplexityTier.REASONING) == ComplexityTier.REASONING
 
-    def test_escalate_tier_skips_unconfigured_intermediate(self, mock_router_instance):
+    def test_escalate_tier_steps_one_tier_at_a_time(self, mock_router_instance):
+        """Escalation used to skip intermediate tiers that had no models, which only
+        happened because a tiers map could omit them. Every tier now has models, so a bump
+        is always exactly one step."""
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"}},
+            complexity_router_config={
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "gpt-4o",
+                    "COMPLEX": "claude-sonnet-4",
+                    "REASONING": "o1-preview",
+                }
+            },
         )
-        assert router._escalate_tier(ComplexityTier.SIMPLE) == ComplexityTier.REASONING
+        assert router._escalate_tier(ComplexityTier.SIMPLE) == ComplexityTier.MEDIUM
+        assert router._escalate_tier(ComplexityTier.COMPLEX) == ComplexityTier.REASONING
 
     def test_tier_for_model_returns_most_severe(self, mock_router_instance):
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={"tiers": {"SIMPLE": "shared", "COMPLEX": "shared", "REASONING": "top"}},
+            complexity_router_config={
+                "tiers": {"SIMPLE": "shared", "COMPLEX": "shared", "REASONING": "top", "MEDIUM": "medium-unused"}
+            },
         )
         assert router._tier_for_model("shared") == ComplexityTier.COMPLEX
         assert router._tier_for_model("top") == ComplexityTier.REASONING
@@ -3671,13 +3655,18 @@ class TestEscalationKeywords:
         every request; surrounding whitespace on real phrases is trimmed."""
         assert (
             ComplexityRouterConfig(
-                tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                tiers={
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "gpt-4o",
+                    "COMPLEX": "gpt-4o-mini",
+                    "REASONING": "gpt-4o-mini",
+                },
                 escalation_keywords=["", "  "],
             ).escalation_keywords
             == []
         )
         assert ComplexityRouterConfig(
-            tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+            tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o-mini", "REASONING": "gpt-4o-mini"},
             escalation_keywords=["  LITELLM ESCALATE  ", ""],
         ).escalation_keywords == ["LITELLM ESCALATE"]
 
@@ -3702,7 +3691,14 @@ class TestEscalationKeywords:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}},
+            complexity_router_config={
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "REASONING": ["o1-a", "o1-b", "o1-c"],
+                    "MEDIUM": "medium-unused",
+                    "COMPLEX": "complex-unused",
+                }
+            },
         )
         for pinned in ("o1-a", "o1-b", "o1-c"):
             assert router._escalated_pin(pinned) == pinned
@@ -3714,7 +3710,12 @@ class TestEscalationKeywords:
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]},
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "REASONING": ["o1-a", "o1-b", "o1-c"],
+                    "MEDIUM": "medium-unused",
+                    "COMPLEX": "complex-unused",
+                },
                 "session_affinity": True,
             },
         )
@@ -3947,7 +3948,12 @@ class TestRoutingDecisionSurvivesToSpendLogOnEveryMetadataShape:
             "litellm_params": {
                 "model": "auto_router/complexity_router",
                 "complexity_router_config": {
-                    "tiers": {"SIMPLE": ["gpt-4o-mini"], "MEDIUM": ["gpt-4o"]},
+                    "tiers": {
+                        "SIMPLE": ["gpt-4o-mini"],
+                        "MEDIUM": ["gpt-4o"],
+                        "COMPLEX": "complex-unused",
+                        "REASONING": "reasoning-unused",
+                    },
                     "session_affinity": False,
                 },
             },
@@ -4027,7 +4033,12 @@ class TestRoutingDecisionIsPerAttempt:
             "litellm_params": {
                 "model": "auto_router/complexity_router",
                 "complexity_router_config": {
-                    "tiers": {"SIMPLE": ["gpt-4o-mini"], "MEDIUM": ["gpt-4o"]},
+                    "tiers": {
+                        "SIMPLE": ["gpt-4o-mini"],
+                        "MEDIUM": ["gpt-4o"],
+                        "COMPLEX": "complex-unused",
+                        "REASONING": "reasoning-unused",
+                    },
                     "session_affinity": False,
                 },
             },
@@ -4036,18 +4047,14 @@ class TestRoutingDecisionIsPerAttempt:
         {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
     ]
 
-    @pytest.mark.parametrize(
-        "seed, bucket", [({}, "metadata"), ({"litellm_metadata": {}}, "litellm_metadata")]
-    )
+    @pytest.mark.parametrize("seed, bucket", [({}, "metadata"), ({"litellm_metadata": {}}, "litellm_metadata")])
     @pytest.mark.asyncio
     async def test_fallback_to_plain_model_group_clears_the_earlier_decision(self, seed, bucket):
         router = Router(model_list=self.MODEL_LIST)
         request_kwargs: Dict = dict(seed)
         messages = [{"role": "user", "content": "Hello!"}]
 
-        await router.async_pre_routing_hook(
-            model="smart-router", request_kwargs=request_kwargs, messages=messages
-        )
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=request_kwargs, messages=messages)
         assert "routing_decision" in request_kwargs[bucket]
 
         # The fallback attempt reuses the same kwargs and selects no strategy.
@@ -4107,7 +4114,12 @@ class TestEscalationIsRecordedConsistently:
     never happened is the opposite error; both must be avoided identically everywhere."""
 
     CEILING_CONFIG = {
-        "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["o1-preview"]},
+        "tiers": {
+            "SIMPLE": ["gpt-4o-mini"],
+            "REASONING": ["o1-preview"],
+            "MEDIUM": "medium-unused",
+            "COMPLEX": "complex-unused",
+        },
         "session_affinity": False,
     }
 
@@ -4219,7 +4231,12 @@ class TestRedactedLoggingDropsPromptText:
             "litellm_params": {
                 "model": "auto_router/complexity_router",
                 "complexity_router_config": {
-                    "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["gpt-4o"]},
+                    "tiers": {
+                        "SIMPLE": ["gpt-4o-mini"],
+                        "REASONING": ["gpt-4o"],
+                        "MEDIUM": "medium-unused",
+                        "COMPLEX": "complex-unused",
+                    },
                     "session_affinity": False,
                     "keyword_tier_rules": [{"keywords": ["deploy to k8s"], "tier": "REASONING"}],
                 },
@@ -4362,7 +4379,12 @@ class TestContextAwareClassifier:
                 id="multiple-reminders-stripped",
             ),
             pytest.param(
-                [{"role": "user", "content": [{"type": "text", "text": _REMINDER}, {"type": "text", "text": "and now?"}]}],
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": _REMINDER}, {"type": "text", "text": "and now?"}],
+                    }
+                ],
                 "and now?",
                 id="reminder-in-its-own-content-part",
             ),
@@ -4729,9 +4751,7 @@ class TestContextAwareClassifier:
         assert reported > 100
 
     @pytest.mark.asyncio
-    async def test_no_trajectory_signal_when_request_had_no_messages(
-        self, llm_complexity_router, mock_router_instance
-    ):
+    async def test_no_trajectory_signal_when_request_had_no_messages(self, llm_complexity_router, mock_router_instance):
         """On the prompt-only path there is no conversation to measure, so the depth line is omitted
         rather than asserting a false "~0 tokens" to the classifier."""
         mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
@@ -4743,9 +4763,7 @@ class TestContextAwareClassifier:
         assert "what is 2+2" in user_payload
 
     @pytest.mark.asyncio
-    async def test_single_turn_request_sends_no_conversation_context(
-        self, llm_complexity_router, mock_router_instance
-    ):
+    async def test_single_turn_request_sends_no_conversation_context(self, llm_complexity_router, mock_router_instance):
         """A single-turn request carries no conversation, so the classifier sees only the ask.
 
         Found in QA: the depth line gated on `messages` being non-empty, so single-turn requests got a
@@ -4772,7 +4790,12 @@ class TestContextAwareClassifier:
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": "gpt-4o-mini", "COMPLEX": "claude-sonnet-4-20250514"},
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "COMPLEX": "claude-sonnet-4-20250514",
+                    "MEDIUM": "medium-unused",
+                    "REASONING": "reasoning-unused",
+                },
                 "classifier_type": "llm",
                 "classifier_llm_config": {"model": "haiku-classifier"},
                 "classifier_context_window_size": 0,
@@ -4794,7 +4817,6 @@ class TestContextAwareClassifier:
         assert "Recent conversation" not in user_payload
         assert "sharding strategy" not in user_payload
         assert user_payload.strip() == "Classify this message:\nwhat is 2+2"
-
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("include_assistant,plan_is_quoted", [(True, True), (False, False)])
@@ -4836,7 +4858,6 @@ class TestContextAwareClassifier:
         assert (f"[1] user: {ask}" in user_payload) is plan_is_quoted
         assert (f"[1] {ask}" in user_payload) is not plan_is_quoted
         assert user_payload.endswith("Classify this message:\nyes.")
-
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("include_assistant", [True, False])
@@ -4940,7 +4961,12 @@ class TestClassifierTrustBoundary:
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"},
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "REASONING": "o1-preview",
+                    "MEDIUM": "medium-unused",
+                    "COMPLEX": "complex-unused",
+                },
                 "classifier_type": "llm",
                 "classifier_llm_config": {"model": "haiku-classifier"},
             },
@@ -4958,9 +4984,6 @@ class TestClassifierTrustBoundary:
         assert system_message["content"] == _classification_system_prompt(router.config.classifier_context_window_size)
         assert hostile not in system_message["content"]
         assert hostile in user_message["content"]
-
-
-
 
     @pytest.mark.parametrize(
         "window_size,conversation_is_quoted",
@@ -4987,7 +5010,6 @@ class TestClassifierTrustBoundary:
         assert ("using the earlier turns quoted above it as context" in system_prompt) is conversation_is_quoted
         assert ('short reply such as "yes" or "continue"' in system_prompt) is conversation_is_quoted
         assert ("Classify only the current message" in system_prompt) is not conversation_is_quoted
-
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("include_assistant", [True, False])
@@ -5045,3 +5067,60 @@ class TestClassifierTrustBoundary:
         assert "Classify only the current message" not in system_prompt
         assert "using the earlier turns quoted above it as context" in system_prompt
         assert "rate the work it approves rather than the reply itself" in system_prompt
+
+
+class TestEveryTierNeedsAModel:
+    """A tier with no models of its own does not route nowhere, it routes somewhere else.
+    Whatever the fallback chain reaches answers in its place, so the model an operator
+    configured is silently swapped for another tier's, visible only in a spend log."""
+
+    ALL_TIERS = {"SIMPLE": "s", "MEDIUM": "m", "COMPLEX": "c", "REASONING": "r"}
+
+    def test_a_complete_map_is_accepted(self):
+        assert ComplexityRouterConfig(tiers=dict(self.ALL_TIERS)).tiers == self.ALL_TIERS
+
+    def test_omitting_tiers_entirely_still_works(self):
+        """The defaults name all four, so the requirement costs nothing to anyone who has
+        not opted into configuring tiers at all."""
+        assert set(ComplexityRouterConfig().tiers) == set(self.ALL_TIERS)
+
+    @pytest.mark.parametrize("absent", list(ALL_TIERS))
+    def test_each_missing_tier_is_named(self, absent):
+        with pytest.raises(ValidationError, match=f"no model for {absent}"):
+            ComplexityRouterConfig(tiers={k: v for k, v in self.ALL_TIERS.items() if k != absent})
+
+    def test_every_missing_tier_is_named_at_once(self):
+        """One startup, one edit: an operator should not fix a tier, restart, and learn
+        about the next one."""
+        with pytest.raises(ValidationError, match="no model for COMPLEX, REASONING"):
+            ComplexityRouterConfig(tiers={"SIMPLE": "s", "MEDIUM": "m"})
+
+    @pytest.mark.parametrize("no_models", [[], ""], ids=["empty_pool", "empty_pin"])
+    def test_a_named_tier_with_nothing_in_it_counts_as_missing(self, no_models):
+        with pytest.raises(ValidationError, match="no model for MEDIUM"):
+            ComplexityRouterConfig(tiers={**self.ALL_TIERS, "MEDIUM": no_models})
+
+    def test_a_pool_counts_as_models(self):
+        assert ComplexityRouterConfig(tiers={**self.ALL_TIERS, "SIMPLE": ["a", "b"]}).tiers["SIMPLE"] == ["a", "b"]
+
+    def test_extra_tiers_beyond_the_four_are_left_alone(self):
+        """The requirement is a floor, not a whitelist; a config naming its own tier keys
+        is not this validator's business."""
+        config = ComplexityRouterConfig(tiers={**self.ALL_TIERS, "CUSTOM": "x"})
+        assert config.tiers["CUSTOM"] == "x"
+
+    def test_default_model_does_not_satisfy_the_requirement(self):
+        """default_model is a last resort for a tier that cannot serve, not a substitute
+        for configuring one."""
+        with pytest.raises(ValidationError, match="no model for REASONING"):
+            ComplexityRouterConfig(
+                tiers={k: v for k, v in self.ALL_TIERS.items() if k != "REASONING"},
+                default_model="fallback-model",
+            )
+
+    def test_the_error_tells_an_operator_what_to_do(self):
+        with pytest.raises(ValidationError) as caught:
+            ComplexityRouterConfig(tiers={"SIMPLE": "s"})
+        message = str(caught.value)
+        assert "configure all of SIMPLE, MEDIUM, COMPLEX, REASONING" in message
+        assert "omit `tiers` to take the defaults" in message

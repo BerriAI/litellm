@@ -121,11 +121,11 @@ def test__scrub_db_overlay_remote_module_loads_invalid_non_dict_returns_input():
 
 
 def test_resolve_complexity_router_plugins_no_plugins_key_is_a_noop():
-    config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+    config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": 'gpt-4o-mini', "COMPLEX": 'gpt-4o-mini', "REASONING": 'gpt-4o-mini'}}
     resolve_complexity_router_plugins(
         model_name="smart-router", complexity_router_config=config, config_file_path=None
     )
-    assert config == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+    assert config == {"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": 'gpt-4o-mini', "COMPLEX": 'gpt-4o-mini', "REASONING": 'gpt-4o-mini'}}
 
 
 def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance(tmp_path):
