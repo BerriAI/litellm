@@ -8,8 +8,10 @@ should still use the built-in pricing.
 """
 
 import copy
+import json
 import os
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -21,6 +23,7 @@ sys.path.insert(
 import litellm
 from litellm import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
@@ -447,6 +450,68 @@ def test_partial_custom_pricing_inherits_builtin_cache_pricing():
         assert entry["output_cost_per_token"] == 0.000015
         assert entry.get("cache_creation_input_token_cost") == builtin_cache_create
         assert entry.get("cache_read_input_token_cost") == builtin_cache_read
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_openai_compatible_glm_partial_pricing_inherits_cache_rate():
+    backend_model = "openai/z-ai/glm-5.2"
+    deploy_id = "glm-5-2-partial-pricing"
+    model_keys = {
+        deploy_id: litellm.model_cost.get(deploy_id),
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+    }
+
+    try:
+        model_prices_path = (
+            Path(__file__).parents[2] / "model_prices_and_context_window.json"
+        )
+        with model_prices_path.open(encoding="utf-8") as model_prices_file:
+            model_cost = json.load(model_prices_file)
+        litellm.register_model({backend_model: model_cost[backend_model]})
+
+        Router(
+            model_list=[
+                {
+                    "model_name": "glm-5.2",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_base": "https://api.example.com/v1",
+                        "api_key": "fake-key",
+                        "custom_llm_provider": "openai",
+                    },
+                    "model_info": {
+                        "id": deploy_id,
+                        "input_cost_per_token": 7.8e-07,
+                        "output_cost_per_token": 2.42e-06,
+                    },
+                }
+            ],
+        )
+
+        entry = litellm.model_cost[deploy_id]
+        assert entry["input_cost_per_token"] == 7.8e-07
+        assert entry["output_cost_per_token"] == 2.42e-06
+        assert entry["cache_read_input_token_cost"] == 2.6e-07
+
+        response = ModelResponse(
+            model=backend_model,
+            choices=[],
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=100,
+                total_tokens=1100,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800),
+            ),
+        )
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model=backend_model,
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            router_model_id=deploy_id,
+        )
+        assert cost == pytest.approx(200 * 7.8e-07 + 800 * 2.6e-07 + 100 * 2.42e-06)
     finally:
         _restore_model_cost_entries(model_keys)
 
