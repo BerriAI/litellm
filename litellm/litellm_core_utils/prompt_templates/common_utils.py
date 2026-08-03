@@ -6,7 +6,7 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import (
@@ -1742,3 +1742,23 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
         idx = end_idx
 
     return results
+
+
+def text_completion_prompt_to_messages(prompt: str | Sequence[str]) -> tuple[AllMessageValues, ...]:
+    """
+    Wrap an OpenAI ``/v1/completions`` ``prompt`` into Chat Completion messages.
+
+    Mirrors what ``litellm.text_completion`` does on the real-time path: a
+    string becomes a single user message, and a list of strings becomes one
+    user message per element. Pre-tokenized prompts (``list[int]`` /
+    ``list[list[int]]``) are only meaningful for the OpenAI-family text
+    endpoints, so they are rejected here rather than silently forwarded, as is
+    an empty prompt, which every chat-shaped provider rejects downstream.
+    """
+    if isinstance(prompt, str) and prompt:
+        return (ChatCompletionUserMessage(role="user", content=prompt),)
+    if isinstance(prompt, Sequence) and prompt and all(isinstance(entry, str) and entry for entry in prompt):
+        return tuple(ChatCompletionUserMessage(role="user", content=entry) for entry in prompt)
+    raise ValueError(
+        f"`prompt` must be a non-empty string or a non-empty list of strings. Got: {type(prompt).__name__}."
+    )
