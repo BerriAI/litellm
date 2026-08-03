@@ -1,5 +1,4 @@
 from collections.abc import Mapping
-from typing import Dict, FrozenSet, List, Union
 
 from fastapi import Request
 
@@ -25,7 +24,7 @@ from litellm.proxy.auth.trusted_proxy_utils import require_trusted_proxy_request
 # Operators who need a trusted upstream to assert anything beyond
 # identity should switch to JWT authentication, which validates a
 # signature on the assertion rather than blindly trusting headers.
-ALLOWED_OAUTH2_PROXY_FIELDS: FrozenSet[str] = frozenset(
+ALLOWED_OAUTH2_PROXY_FIELDS: frozenset[str] = frozenset(
     {
         "user_id",
         "user_email",
@@ -65,7 +64,7 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
         feature_name="OAuth2 proxy auth",
     )
 
-    oauth2_config_mappings: Dict[str, str] = general_settings.get("oauth2_config_mappings") or {}
+    oauth2_config_mappings: dict[str, str] = general_settings.get("oauth2_config_mappings") or {}
     verbose_proxy_logger.debug(f"Oauth2 config mappings: {oauth2_config_mappings}")
 
     if not oauth2_config_mappings:
@@ -84,7 +83,7 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
             "(signature-validated) instead of header-trust."
         )
 
-    auth_data: Mapping[str, Union[str, List[str]]] = {
+    auth_data: Mapping[str, str | list[str]] = {
         key: [model.strip() for model in value.split(",")] if key == "models" else value
         for key, header in oauth2_config_mappings.items()
         if (value := request.headers.get(header))

@@ -7,18 +7,9 @@ import importlib
 import json
 import os
 import re
-from collections.abc import MutableMapping, MutableSequence
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence
 from typing import (
     Any,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Mapping,
-    Optional,
-    Set,
-    Tuple,
-    Union,
 )
 from urllib.parse import quote
 
@@ -155,11 +146,11 @@ def sanitize_mcp_alias_for_header(alias: str) -> str:
 
 
 def lookup_mcp_server_auth_in_headers(
-    mcp_server_auth_headers: Mapping[str, Union[str, Dict[str, str]]],
+    mcp_server_auth_headers: Mapping[str, str | dict[str, str]],
     *,
-    alias: Optional[str] = None,
-    server_name: Optional[str] = None,
-) -> Optional[Union[str, Dict[str, str]]]:
+    alias: str | None = None,
+    server_name: str | None = None,
+) -> str | dict[str, str] | None:
     """
     Resolve server-specific auth headers with case-insensitive matching.
 
@@ -187,7 +178,7 @@ def lookup_mcp_server_auth_in_headers(
 MCP_TOOL_ALLOWLIST_ENFORCED_KEY = "tool_allowlist_enforced"
 
 
-def _parse_mcp_info_dict(mcp_info: Any) -> Optional[Dict[str, Any]]:
+def _parse_mcp_info_dict(mcp_info: Any) -> dict[str, Any] | None:
     if mcp_info is None:
         return None
     if isinstance(mcp_info, dict):
@@ -307,7 +298,7 @@ def iter_known_server_prefixes(server: Any) -> Iterator[str]:
     """
     seen = set()
 
-    def _emit(value: Optional[str]) -> Iterator[str]:
+    def _emit(value: str | None) -> Iterator[str]:
         if value and value not in seen:
             seen.add(value)
             yield value
@@ -370,7 +361,7 @@ def match_known_tool_name(tool_name: str, server: MCPServer, names: Iterable[str
     return next((name for name in names if normalize(name) in spellings), None)
 
 
-def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
+def split_server_prefix_from_name(prefixed_name: str) -> tuple[str, str]:
     """Return the unprefixed name plus the server name used as prefix.
 
     Cuts at the FIRST separator, so the two halves are only trustworthy as a
@@ -408,7 +399,7 @@ def match_known_server_prefix(name: str, known_prefixes: Iterable[str]) -> tuple
     return None
 
 
-def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
+def strip_known_server_prefix(name: str, server: Any | None) -> str:
     """Strip ``server``'s registered prefix from a prefixed tool/resource name.
 
     Unlike :func:`split_server_prefix_from_name`, which guesses the boundary at
@@ -431,7 +422,7 @@ def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
 
 def is_tool_name_prefixed(
     tool_name: str,
-    known_server_prefixes: Optional[set] = None,
+    known_server_prefixes: set | None = None,
 ) -> bool:
     """
     Check if tool name has a known MCP server prefix.
@@ -486,7 +477,7 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
             raise Exception(error_message)
 
 
-def extract_mcp_tool_result_error_message(result: object) -> Optional[str]:
+def extract_mcp_tool_result_error_message(result: object) -> str | None:
     """The first text content of an ``isError=True`` tool result, or ``None``
     when the result is not an error.
 
@@ -558,7 +549,7 @@ def with_mcp_content_item_text(item: object, text: str) -> object:
 TOOL_DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
-def validate_tool_display_names(tool_name_to_display_name: Optional[Mapping[str, str]]) -> None:
+def validate_tool_display_names(tool_name_to_display_name: Mapping[str, str] | None) -> None:
     """
     Validate tool display name overrides against Bedrock's tool-name constraint.
 
@@ -603,8 +594,8 @@ class MCPMissingUserEnvVarsError(Exception):
         self,
         *,
         server_id: str,
-        server_name: Optional[str],
-        missing: List[str],
+        server_name: str | None,
+        missing: list[str],
         setup_url: str,
     ) -> None:
         self.server_id = server_id
@@ -630,8 +621,8 @@ _ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def parse_admin_env_vars(
-    env_vars: Optional[Iterable[Any]],
-) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
+    env_vars: Iterable[Any] | None,
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """Split admin-configured env var entries into globals and per-user specs.
 
     Accepts the raw value of ``MCPServer.env_vars`` (list of dicts or Pydantic
@@ -643,8 +634,8 @@ def parse_admin_env_vars(
 
     Unknown / malformed entries are skipped silently.
     """
-    global_values: Dict[str, str] = {}
-    user_specs: List[Dict[str, Any]] = []
+    global_values: dict[str, str] = {}
+    user_specs: list[dict[str, Any]] = []
     if not env_vars:
         return global_values, user_specs
     for raw in env_vars:
@@ -668,16 +659,16 @@ def parse_admin_env_vars(
     return global_values, user_specs
 
 
-def find_env_var_references(value: str) -> Set[str]:
+def find_env_var_references(value: str) -> set[str]:
     """Return the set of ``${NAME}`` identifiers referenced inside ``value``."""
     if not value:
         return set()
     return set(_ENV_VAR_PATTERN.findall(value))
 
 
-def collect_env_var_references(*, strings: Iterable[str]) -> Set[str]:
+def collect_env_var_references(*, strings: Iterable[str]) -> set[str]:
     """Union of every ``${NAME}`` reference across a collection of strings."""
-    refs: Set[str] = set()
+    refs: set[str] = set()
     for s in strings:
         if isinstance(s, str):
             refs |= find_env_var_references(s)
@@ -701,7 +692,7 @@ def interpolate_env_vars(value: str, variables: Mapping[str, str]) -> str:
     return _ENV_VAR_PATTERN.sub(_sub, value)
 
 
-def interpolate_headers(headers: Mapping[str, str], variables: Mapping[str, str]) -> Dict[str, str]:
+def interpolate_headers(headers: Mapping[str, str], variables: Mapping[str, str]) -> dict[str, str]:
     """Return a copy of ``headers`` with every value passed through ``interpolate_env_vars``."""
     return {k: interpolate_env_vars(v, variables) for k, v in headers.items()}
 
@@ -715,9 +706,9 @@ def build_env_var_setup_url(server_id: str) -> str:
 
 def merge_mcp_headers(
     *,
-    extra_headers: Optional[Mapping[str, str]] = None,
-    static_headers: Optional[Mapping[str, str]] = None,
-) -> Optional[Dict[str, str]]:
+    extra_headers: Mapping[str, str] | None = None,
+    static_headers: Mapping[str, str] | None = None,
+) -> dict[str, str] | None:
     """Merge outbound HTTP headers for MCP calls.
 
     This is used when calling out to external MCP servers (or OpenAPI-based MCP tools).
@@ -730,7 +721,7 @@ def merge_mcp_headers(
     behavior in `MCPServerManager` where `server.static_headers` is applied after
     any caller-provided headers.
     """
-    merged: Dict[str, str] = {}
+    merged: dict[str, str] = {}
 
     if extra_headers:
         merged.update({str(k): str(v) for k, v in extra_headers.items()})

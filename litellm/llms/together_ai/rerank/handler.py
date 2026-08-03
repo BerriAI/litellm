@@ -4,7 +4,7 @@ Re rank api
 LiteLLM supports the re rank API format, no paramter transformation occurs
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import litellm
 from litellm.llms.base import BaseLLM
@@ -22,12 +22,12 @@ class TogetherAIRerank(BaseLLM):
         model: str,
         api_key: str,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        _is_async: Optional[bool] = False,
+        documents: list[str | dict[str, Any]],
+        top_n: int | None = None,
+        rank_fields: list[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        _is_async: bool | None = False,
     ) -> RerankResponse:
         client = _get_httpx_client()
 
@@ -67,7 +67,7 @@ class TogetherAIRerank(BaseLLM):
 
     async def async_rerank(  # New async method
         self,
-        request_data_dict: Dict[str, Any],
+        request_data_dict: dict[str, Any],
         api_key: str,
     ) -> RerankResponse:
         client = get_async_httpx_client(llm_provider=litellm.LlmProviders.TOGETHER_AI)  # Use async client

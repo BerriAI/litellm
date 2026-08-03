@@ -674,12 +674,12 @@ class TestCheckBatchCost:
         mock_hook.get_unified_output_file_id.assert_any_call(
             output_file_id=raw_output_file_id,
             model_id="model-123",
-            model_name="gpt-5-mini",
+            model_name="gpt-5-batch",
         )
         mock_hook.get_unified_output_file_id.assert_any_call(
             output_file_id=raw_error_file_id,
             model_id="model-123",
-            model_name="gpt-5-mini",
+            model_name="gpt-5-batch",
         )
         assert mock_hook.store_unified_file_id.await_count == 2
         # {raw_file_id: managed_file_id} for each store call
@@ -1221,3 +1221,182 @@ class TestUnmanagedBatchCostFlagIsGeneralized:
 
         assert vertex_result == ("deploy-vertex", "8823717160934178816")
         assert bedrock_result == ("deploy-bedrock", TestUnmanagedBedrockRouting._ARN)
+
+
+class TestManagedOutputFileIdEncodesPublicModelGroup:
+    """LIT-4964 regression: the unified output file id created by the background poller must
+    encode the public model group as ``target_model_names``, not the provider model.
+
+    Key model-access checks resolve a managed file id back to a model via ``target_model_names``,
+    so encoding the provider model (e.g. ``gpt-5.5``) makes
+    ``GET /v1/files/{output_file_id}/content`` fail for every key.
+    """
+
+    _PUBLIC_MODEL_GROUP = "gpt-5-batch"
+    _RAW_OUTPUT_FILE_ID = "file-batch-output-abc123"
+
+    @staticmethod
+    def _managed_input_file_id(model_group: str) -> str:
+        import base64
+
+        unified_id = (
+            "litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;"
+            f"target_model_names,{model_group}"
+        )
+        return base64.urlsafe_b64encode(unified_id.encode()).decode().rstrip("=")
+
+    def _job(self, input_file_id: str) -> MagicMock:
+        from litellm.types.utils import LiteLLMBatch
+
+        job = MagicMock()
+        job.id = "job-lit-4964"
+        job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        job.created_by = "user-1"
+        job.team_id = None
+        job.file_object = LiteLLMBatch(
+            id="batch-456",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id=input_file_id,
+            object="batch",
+            status="completed",
+        ).model_dump_json()
+        return job
+
+    async def _run(self, job: MagicMock) -> str:
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+            CheckBatchCost,
+        )
+        from litellm.types.utils import LiteLLMBatch
+        from enterprise.litellm_enterprise.proxy.hooks.managed_files import (
+            _PROXY_LiteLLMManagedFiles,
+        )
+
+        router = MagicMock()
+        router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"api_key": "sk-test"}
+        )
+        deployment = MagicMock()
+        deployment.litellm_params.custom_llm_provider = "azure"
+        deployment.litellm_params.model = "azure/gpt-5.5"
+        deployment.model_name = self._PUBLIC_MODEL_GROUP
+        deployment.model_info.model_dump.return_value = {}
+        router.get_deployment = MagicMock(return_value=deployment)
+
+        hook = MagicMock()
+        hook.get_unified_output_file_id = (
+            lambda output_file_id, model_id, model_name: _PROXY_LiteLLMManagedFiles.get_unified_output_file_id(
+                None, output_file_id=output_file_id, model_id=model_id, model_name=model_name
+            )
+        )
+        hook.store_unified_file_id = AsyncMock()
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook.return_value = hook
+
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        instance = CheckBatchCost(
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+            llm_router=router,
+        )
+
+        response = LiteLLMBatch(
+            id="batch-456",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id=job.file_object,
+            object="batch",
+            status="completed",
+        )
+        response.output_file_id = self._RAW_OUTPUT_FILE_ID
+
+        file_content = MagicMock()
+        file_content.content = b'{"id":"req-1"}'
+
+        with (
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                return_value=file_content,
+            ),
+            patch(
+                "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                return_value=[{"id": "req-1"}],
+            ),
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+                return_value=(0.01, {"prompt_tokens": 10}, ["gpt-5.5"]),
+            ),
+            patch("litellm.litellm_core_utils.litellm_logging.Logging") as logging_cls,
+        ):
+            logging_obj = MagicMock()
+            logging_obj.async_success_handler = AsyncMock()
+            logging_cls.return_value = logging_obj
+
+            await instance._track_completed_batch_cost(
+                job=job,
+                response=response,
+                model_id="model-123",
+                batch_id="batch-456",
+                prom_logger=None,
+            )
+
+        return response.output_file_id
+
+    @pytest.mark.asyncio
+    async def test_target_model_names_comes_from_input_file_not_provider_model(self):
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            _is_base64_encoded_unified_file_id,
+            get_models_from_unified_file_id,
+        )
+
+        output_file_id = await self._run(
+            self._job(self._managed_input_file_id(self._PUBLIC_MODEL_GROUP))
+        )
+
+        decoded = _is_base64_encoded_unified_file_id(output_file_id)
+        assert get_models_from_unified_file_id(decoded) == [self._PUBLIC_MODEL_GROUP]
+        assert "gpt-5.5" not in decoded
+
+    @pytest.mark.asyncio
+    async def test_key_scoped_to_model_group_can_read_the_output_file(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.auth_checks import can_key_call_model
+        from litellm.proxy.auth.auth_utils import (
+            _extract_models_from_managed_resource_id,
+        )
+
+        output_file_id = await self._run(
+            self._job(self._managed_input_file_id(self._PUBLIC_MODEL_GROUP))
+        )
+
+        models = _extract_models_from_managed_resource_id(output_file_id, "file_id", None)
+        assert models == [self._PUBLIC_MODEL_GROUP]
+        assert (
+            await can_key_call_model(
+                model=models[0],
+                llm_model_list=None,
+                valid_token=UserAPIKeyAuth(
+                    api_key="sk-test", models=[self._PUBLIC_MODEL_GROUP]
+                ),
+                llm_router=None,
+            )
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_deployment_model_group_without_managed_input_file(self):
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            _is_base64_encoded_unified_file_id,
+            get_models_from_unified_file_id,
+        )
+
+        output_file_id = await self._run(self._job("file-raw-provider-input"))
+
+        decoded = _is_base64_encoded_unified_file_id(output_file_id)
+        assert get_models_from_unified_file_id(decoded) == [self._PUBLIC_MODEL_GROUP]

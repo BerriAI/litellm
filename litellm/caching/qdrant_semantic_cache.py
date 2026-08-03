@@ -12,7 +12,7 @@ import ast
 import asyncio
 import json
 import os
-from typing import Any, Dict, cast
+from typing import Any, cast
 
 import litellm
 from litellm._logging import print_verbose
@@ -104,7 +104,7 @@ class QdrantSemanticCache(BaseCache):
             print_verbose(f"Collection already exists.\nCollection details:{self.collection_info}")
             self._ensure_cache_key_payload_index()
         else:
-            quantization_params: Dict[str, Any]
+            quantization_params: dict[str, Any]
             if quantization_config is None or quantization_config == "binary":
                 quantization_params = {
                     "binary": {
@@ -178,7 +178,7 @@ class QdrantSemanticCache(BaseCache):
             if response.status_code not in (200, 201):
                 print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {response.text}")
         except Exception as exc:
-            print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {str(exc)}")
+            print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {exc!s}")
 
     def _payload_matches_cache_key(self, payload: dict, key: str) -> bool:
         # Pre-isolation points stored only prompt + response with no cache-key
@@ -188,7 +188,7 @@ class QdrantSemanticCache(BaseCache):
         cached_key = payload.get(self.CACHE_KEY_FIELD_NAME)
         return cached_key is not None and str(cached_key) == str(key)
 
-    def _get_embedding(self, prompt: str, metadata: Dict[str, Any] | None = None) -> EmbeddingResponse:
+    def _get_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> EmbeddingResponse:
         """Embed via the proxy Router when it serves the model, else direct."""
         try:
             from litellm.proxy.proxy_server import llm_model_list, llm_router
@@ -210,7 +210,7 @@ class QdrantSemanticCache(BaseCache):
             cache={"no-store": True, "no-cache": True},
         )
 
-    async def _get_async_embedding(self, prompt: str, metadata: Dict[str, Any] | None = None) -> EmbeddingResponse:
+    async def _get_async_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> EmbeddingResponse:
         try:
             from litellm.proxy.proxy_server import llm_model_list, llm_router
         except ImportError:
@@ -270,7 +270,6 @@ class QdrantSemanticCache(BaseCache):
             headers=self.headers,
             json=data,
         )
-        return
 
     def get_cache(self, key, **kwargs):
         print_verbose(f"sync qdrant semantic-cache get_cache, kwargs: {kwargs}")
@@ -344,7 +343,6 @@ class QdrantSemanticCache(BaseCache):
         else:
             # cache miss !
             return None
-        pass
 
     async def async_set_cache(self, key, value, **kwargs):
         from litellm._uuid import uuid
@@ -381,7 +379,6 @@ class QdrantSemanticCache(BaseCache):
             headers=self.headers,
             json=data,
         )
-        return
 
     async def async_get_cache(self, key, **kwargs):
         print_verbose(f"async qdrant semantic-cache get_cache, kwargs: {kwargs}")
@@ -452,7 +449,6 @@ class QdrantSemanticCache(BaseCache):
         else:
             # cache miss !
             return None
-        pass
 
     async def _collection_info(self):
         return self.collection_info

@@ -1,5 +1,3 @@
-from typing import List, Set
-
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
@@ -111,7 +109,7 @@ async def _invalidate_cache_access_group(access_group_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _sync_add_access_group_to_teams(tx, team_ids: List[str], access_group_id: str) -> None:
+async def _sync_add_access_group_to_teams(tx, team_ids: list[str], access_group_id: str) -> None:
     """Add access_group_id to each team's access_group_ids (idempotent)."""
     for team_id in team_ids:
         team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
@@ -122,7 +120,7 @@ async def _sync_add_access_group_to_teams(tx, team_ids: List[str], access_group_
             )
 
 
-async def _sync_remove_access_group_from_teams(tx, team_ids: List[str], access_group_id: str) -> None:
+async def _sync_remove_access_group_from_teams(tx, team_ids: list[str], access_group_id: str) -> None:
     """Remove access_group_id from each team's access_group_ids (idempotent)."""
     for team_id in team_ids:
         team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
@@ -133,7 +131,7 @@ async def _sync_remove_access_group_from_teams(tx, team_ids: List[str], access_g
             )
 
 
-async def _sync_add_access_group_to_keys(tx, key_tokens: List[str], access_group_id: str) -> None:
+async def _sync_add_access_group_to_keys(tx, key_tokens: list[str], access_group_id: str) -> None:
     """Add access_group_id to each key's access_group_ids (idempotent)."""
     for token in key_tokens:
         key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
@@ -144,7 +142,7 @@ async def _sync_add_access_group_to_keys(tx, key_tokens: List[str], access_group
             )
 
 
-async def _sync_remove_access_group_from_keys(tx, key_tokens: List[str], access_group_id: str) -> None:
+async def _sync_remove_access_group_from_keys(tx, key_tokens: list[str], access_group_id: str) -> None:
     """Remove access_group_id from each key's access_group_ids (idempotent)."""
     for token in key_tokens:
         key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
@@ -161,7 +159,7 @@ async def _sync_remove_access_group_from_keys(tx, key_tokens: List[str], access_
 
 
 async def _patch_team_caches_add_access_group(
-    team_ids: List[str],
+    team_ids: list[str],
     access_group_id: str,
     user_api_key_cache,
     proxy_logging_obj,
@@ -169,7 +167,7 @@ async def _patch_team_caches_add_access_group(
     """Patch cached team objects to include access_group_id."""
     for team_id in team_ids:
         cached_team = await _get_team_object_from_cache(
-            key="team_id:{}".format(team_id),
+            key=f"team_id:{team_id}",
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
@@ -191,7 +189,7 @@ async def _patch_team_caches_add_access_group(
 
 
 async def _patch_team_caches_remove_access_group(
-    team_ids: List[str],
+    team_ids: list[str],
     access_group_id: str,
     user_api_key_cache,
     proxy_logging_obj,
@@ -199,7 +197,7 @@ async def _patch_team_caches_remove_access_group(
     """Patch cached team objects to remove access_group_id."""
     for team_id in team_ids:
         cached_team = await _get_team_object_from_cache(
-            key="team_id:{}".format(team_id),
+            key=f"team_id:{team_id}",
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
@@ -215,7 +213,7 @@ async def _patch_team_caches_remove_access_group(
 
 
 async def _patch_key_caches_add_access_group(
-    key_tokens: List[str],
+    key_tokens: list[str],
     access_group_id: str,
     user_api_key_cache,
     proxy_logging_obj,
@@ -243,7 +241,7 @@ async def _patch_key_caches_add_access_group(
 
 
 async def _patch_key_caches_remove_access_group(
-    key_tokens: List[str],
+    key_tokens: list[str],
     access_group_id: str,
     user_api_key_cache,
     proxy_logging_obj,
@@ -341,11 +339,11 @@ async def create_access_group(
 
 @router.get(
     "/v1/access_group",
-    response_model=List[AccessGroupResponse],
+    response_model=list[AccessGroupResponse],
 )
 async def list_access_groups(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> List[AccessGroupResponse]:
+) -> list[AccessGroupResponse]:
     _require_admin_view(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
@@ -404,10 +402,10 @@ async def update_access_group(
 
     # Initialize delta lists before the try block so they remain accessible
     # for cache updates after the transaction, even if an error path is added later.
-    teams_to_add: List[str] = []
-    teams_to_remove: List[str] = []
-    keys_to_add: List[str] = []
-    keys_to_remove: List[str] = []
+    teams_to_add: list[str] = []
+    teams_to_remove: list[str] = []
+    keys_to_add: list[str] = []
+    keys_to_remove: list[str] = []
 
     try:
         async with prisma_client.db.tx() as tx:
@@ -420,12 +418,12 @@ async def update_access_group(
                     detail=f"Access group '{access_group_id}' not found",
                 )
 
-            old_team_ids: Set[str] = set(existing.assigned_team_ids or [])
-            old_key_ids: Set[str] = set(existing.assigned_key_ids or [])
-            new_team_ids: Set[str] = (
+            old_team_ids: set[str] = set(existing.assigned_team_ids or [])
+            old_key_ids: set[str] = set(existing.assigned_key_ids or [])
+            new_team_ids: set[str] = (
                 set(update_fields["assigned_team_ids"] or []) if "assigned_team_ids" in update_fields else old_team_ids
             )
-            new_key_ids: Set[str] = (
+            new_key_ids: set[str] = (
                 set(update_fields["assigned_key_ids"] or []) if "assigned_key_ids" in update_fields else old_key_ids
             )
 
@@ -479,8 +477,8 @@ async def delete_access_group(
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        affected_team_ids: List[str] = []
-        affected_key_tokens: List[str] = []
+        affected_team_ids: list[str] = []
+        affected_key_tokens: list[str] = []
 
         async with prisma_client.db.tx() as tx:
             existing = await tx.litellm_accessgrouptable.find_unique(where={"access_group_id": access_group_id})
@@ -495,7 +493,7 @@ async def delete_access_group(
             teams_with_group = await tx.litellm_teamtable.find_many(
                 where={"access_group_ids": {"hasSome": [access_group_id]}}
             )
-            all_affected_team_ids: Set[str] = {team.team_id for team in teams_with_group} | set(
+            all_affected_team_ids: set[str] = {team.team_id for team in teams_with_group} | set(
                 existing.assigned_team_ids or []
             )
             affected_team_ids = list(all_affected_team_ids)
@@ -505,7 +503,7 @@ async def delete_access_group(
             keys_with_group = await tx.litellm_verificationtoken.find_many(
                 where={"access_group_ids": {"hasSome": [access_group_id]}}
             )
-            all_affected_key_tokens: Set[str] = {key.token for key in keys_with_group} | set(
+            all_affected_key_tokens: set[str] = {key.token for key in keys_with_group} | set(
                 existing.assigned_key_ids or []
             )
             affected_key_tokens = list(all_affected_key_tokens)
@@ -578,7 +576,7 @@ router.add_api_route(
     "/v1/unified_access_group",
     list_access_groups,
     methods=["GET"],
-    response_model=List[AccessGroupResponse],
+    response_model=list[AccessGroupResponse],
 )
 router.add_api_route(
     "/v1/unified_access_group/{access_group_id}",

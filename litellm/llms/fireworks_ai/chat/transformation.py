@@ -1,13 +1,8 @@
 import json
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     Any,
-    AsyncIterator,
-    Iterator,
-    List,
     Literal,
-    Optional,
-    Tuple,
-    Union,
     cast,
 )
 
@@ -18,10 +13,10 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -48,7 +43,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from ..common_utils import FireworksAIMixin, FireworksAIException
+from ..common_utils import FireworksAIException, FireworksAIMixin
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -77,42 +72,42 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     The class `FireworksAIConfig` provides configuration for the Fireworks's Chat Completions API interface. Below are the parameters:
     """
 
-    tools: Optional[list] = None
-    tool_choice: Optional[Union[str, dict]] = None
-    max_tokens: Optional[int] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    top_k: Optional[int] = None
-    frequency_penalty: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    n: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    response_format: Optional[dict] = None
-    user: Optional[str] = None
-    logprobs: Optional[int] = None
-    reasoning_effort: Optional[str] = None
+    tools: list | None = None
+    tool_choice: str | dict | None = None
+    max_tokens: int | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    top_k: int | None = None
+    frequency_penalty: int | None = None
+    presence_penalty: int | None = None
+    n: int | None = None
+    stop: str | list | None = None
+    response_format: dict | None = None
+    user: str | None = None
+    logprobs: int | None = None
+    reasoning_effort: str | None = None
 
-    prompt_truncate_len: Optional[int] = None
-    context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None
+    prompt_truncate_len: int | None = None
+    context_length_exceeded_behavior: Literal["error", "truncate"] | None = None
 
     def __init__(
         self,
-        tools: Optional[list] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        top_k: Optional[int] = None,
-        frequency_penalty: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        n: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        response_format: Optional[dict] = None,
-        user: Optional[str] = None,
-        logprobs: Optional[int] = None,
-        reasoning_effort: Optional[str] = None,
-        prompt_truncate_len: Optional[int] = None,
-        context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None,
+        tools: list | None = None,
+        tool_choice: str | dict | None = None,
+        max_tokens: int | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        top_k: int | None = None,
+        frequency_penalty: int | None = None,
+        presence_penalty: int | None = None,
+        n: int | None = None,
+        stop: str | list | None = None,
+        response_format: dict | None = None,
+        user: str | None = None,
+        logprobs: int | None = None,
+        reasoning_effort: str | None = None,
+        prompt_truncate_len: int | None = None,
+        context_length_exceeded_behavior: Literal["error", "truncate"] | None = None,
     ) -> None:
         OpenAIGPTConfig.__init__(
             self,
@@ -137,7 +132,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -282,7 +277,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         return optional_params
 
-    def _transform_tools(self, tools: List[OpenAIChatCompletionToolParam]) -> List[OpenAIChatCompletionToolParam]:
+    def _transform_tools(self, tools: list[OpenAIChatCompletionToolParam]) -> list[OpenAIChatCompletionToolParam]:
         for tool in tools:
             if tool.get("type") != "function":
                 continue
@@ -294,8 +289,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         return tools
 
     def _transform_messages_helper(
-        self, messages: List[AllMessageValues], model: str, litellm_params: dict
-    ) -> List[AllMessageValues]:
+        self, messages: list[AllMessageValues], model: str, litellm_params: dict
+    ) -> list[AllMessageValues]:
         """
         Strip fields not permitted by FireworksAI from messages.
         """
@@ -350,25 +345,24 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     # mutation_generation): the generation counter is bumped on every
     # register_model / reload path, so add+remove or in-place value
     # replacement (which can leave id and len unchanged) still invalidates.
-    _fireworks_index_cache: Optional[Tuple[int, int, List[Tuple[str, dict]]]] = None
+    _fireworks_index_cache: tuple[int, int, list[tuple[str, dict]]] | None = None
 
     @classmethod
-    def _get_fireworks_index(cls) -> List[Tuple[str, dict]]:
+    def _get_fireworks_index(cls) -> list[tuple[str, dict]]:
         model_cost = litellm.model_cost
         signature = (id(model_cost), get_model_cost_mutation_generation())
         cached = cls._fireworks_index_cache
         if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
             return cached[2]
 
-        index: List[Tuple[str, dict]] = []
+        index: list[tuple[str, dict]] = []
         for key, model_info in model_cost.items():
             if not key.startswith("fireworks_ai/"):
                 continue
             if not isinstance(model_info, dict):
                 continue
             key_short = key[len("fireworks_ai/") :]
-            if key_short.startswith("accounts/fireworks/models/"):
-                key_short = key_short[len("accounts/fireworks/models/") :]
+            key_short = key_short.removeprefix("accounts/fireworks/models/")
             if not key_short:
                 continue
             index.append((key_short, model_info))
@@ -393,13 +387,11 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     @staticmethod
     def _short_model_name(model: str) -> str:
         short_name = model
-        if short_name.startswith("fireworks_ai/"):
-            short_name = short_name[len("fireworks_ai/") :]
-        if short_name.startswith("accounts/fireworks/models/"):
-            short_name = short_name[len("accounts/fireworks/models/") :]
+        short_name = short_name.removeprefix("fireworks_ai/")
+        short_name = short_name.removeprefix("accounts/fireworks/models/")
         return short_name
 
-    def _get_model_cost_capability_exact(self, model: str, capability: str) -> Optional[bool]:
+    def _get_model_cost_capability_exact(self, model: str, capability: str) -> bool | None:
         short_name = self._short_model_name(model)
         candidate_keys = (
             model,
@@ -409,10 +401,10 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         for candidate_key in candidate_keys:
             model_info = litellm.model_cost.get(candidate_key)
             if model_info is not None and model_info.get(capability) is not None:
-                return cast(Optional[bool], model_info.get(capability))
+                return cast(bool | None, model_info.get(capability))
         return None
 
-    def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
+    def _get_model_cost_capability(self, model: str, capability: str) -> bool | None:
         exact = self._get_model_cost_capability_exact(model=model, capability=capability)
         if exact is not None:
             return exact
@@ -427,7 +419,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         # custom deployment.
         short_name = self._short_model_name(model)
         matches = [
-            (key_short, cast(Optional[bool], model_info.get(capability)))
+            (key_short, cast(bool | None, model_info.get(capability)))
             for key_short, model_info in self._get_fireworks_index()
             if model_info.get(capability) is not None and self._matches_on_hyphen_boundary(short_name, key_short)
         ]
@@ -466,7 +458,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -500,7 +492,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     def _handle_message_content_with_tool_calls(
         self,
         message: Message,
-        tool_calls: Optional[List[ChatCompletionToolParam]],
+        tool_calls: list[ChatCompletionToolParam] | None,
     ) -> Message:
         """
         Fireworks AI sends tool calls in the content field instead of tool_calls
@@ -529,12 +521,12 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -550,7 +542,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise FireworksAIException(
-                message="Unable to get json response - {}, Original Response: {}".format(str(e), raw_response.text),
+                message=f"Unable to get json response - {e!s}, Original Response: {raw_response.text}",
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
@@ -580,9 +572,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         return FireworksAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
@@ -591,8 +583,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         )
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("FIREWORKS_API_BASE") or "https://api.fireworks.ai/inference/v1"  # type: ignore
         dynamic_api_key = api_key or (
             get_secret_str("FIREWORKS_API_KEY")
@@ -602,7 +594,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
+    def get_models(self, api_key: str | None = None, api_base: str | None = None):
         api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
         if api_base is None or api_key is None:
             raise ValueError(
@@ -616,8 +608,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             )
 
         base = api_base.rstrip("/")
-        if base.endswith("/v1"):
-            base = base[: -len("/v1")]
+        base = base.removesuffix("/v1")
         response = litellm.module_level_client.get(
             url=f"{base}/v1/accounts/{account_id}/models",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -633,7 +624,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         return ["fireworks_ai/" + model["name"] for model in models]
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or (
             get_secret_str("FIREWORKS_API_KEY")
             or get_secret_str("FIREWORKS_AI_API_KEY")

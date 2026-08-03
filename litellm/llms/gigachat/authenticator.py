@@ -7,7 +7,6 @@ Based on official GigaChat SDK authentication flow.
 
 import time
 import uuid
-from typing import Optional, Tuple
 
 import httpx
 
@@ -38,10 +37,8 @@ _token_cache = InMemoryCache()
 class GigaChatAuthError(BaseLLMException):
     """GigaChat authentication error."""
 
-    pass
 
-
-def _get_credentials() -> Optional[str]:
+def _get_credentials() -> str | None:
     """Get GigaChat credentials from environment."""
     return get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
 
@@ -62,9 +59,9 @@ def _get_http_client() -> HTTPHandler:
 
 
 def get_access_token(
-    credentials: Optional[str] = None,
-    scope: Optional[str] = None,
-    auth_url: Optional[str] = None,
+    credentials: str | None = None,
+    scope: str | None = None,
+    auth_url: str | None = None,
 ) -> str:
     """
     Get valid access token, using cache if available.
@@ -112,9 +109,9 @@ def get_access_token(
 
 
 async def get_access_token_async(
-    credentials: Optional[str] = None,
-    scope: Optional[str] = None,
-    auth_url: Optional[str] = None,
+    credentials: str | None = None,
+    scope: str | None = None,
+    auth_url: str | None = None,
 ) -> str:
     """Async version of get_access_token."""
     credentials = credentials or _get_credentials()
@@ -151,7 +148,7 @@ def _request_token_sync(
     credentials: str,
     scope: str,
     auth_url: str,
-) -> Tuple[str, int]:
+) -> tuple[str, int]:
     """
     Request new access token from GigaChat OAuth endpoint (sync).
 
@@ -180,7 +177,7 @@ def _request_token_sync(
     except httpx.RequestError as e:
         raise GigaChatAuthError(
             status_code=500,
-            message=f"GigaChat authentication request failed: {str(e)}",
+            message=f"GigaChat authentication request failed: {e!s}",
         )
 
 
@@ -188,7 +185,7 @@ async def _request_token_async(
     credentials: str,
     scope: str,
     auth_url: str,
-) -> Tuple[str, int]:
+) -> tuple[str, int]:
     """Async version of _request_token_sync."""
     headers = {
         "Authorization": f"Basic {credentials}",
@@ -215,11 +212,11 @@ async def _request_token_async(
     except httpx.RequestError as e:
         raise GigaChatAuthError(
             status_code=500,
-            message=f"GigaChat authentication request failed: {str(e)}",
+            message=f"GigaChat authentication request failed: {e!s}",
         )
 
 
-def _parse_token_response(response: httpx.Response) -> Tuple[str, int]:
+def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
     """Parse OAuth token response."""
     data = response.json()
 

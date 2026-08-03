@@ -11,10 +11,10 @@ from urllib.parse import quote
 from uuid import UUID, uuid4
 
 import anyio
-import mcp.types as types
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from fastapi.requests import Request
 from fastapi.responses import Response
+from mcp import types
 from pydantic import ValidationError
 from sse_starlette import EventSourceResponse
 from starlette.types import Receive, Scope, Send

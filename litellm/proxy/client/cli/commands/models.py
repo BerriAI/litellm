@@ -1,14 +1,14 @@
 # stdlib imports
-from datetime import datetime
 import re
-from typing import Optional, Literal, Any
-import yaml
-from dataclasses import dataclass
 from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Literal
 
 # third party imports
 import click
 import rich
+import yaml
 
 # local imports
 from ... import Client
@@ -46,7 +46,7 @@ def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
     )
 
 
-def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
+def format_iso_datetime_str(iso_datetime_str: str | None) -> str:
     """Format an ISO format datetime string to human-readable date with minute resolution."""
     if not iso_datetime_str:
         return ""
@@ -58,7 +58,7 @@ def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
         return str(iso_datetime_str)
 
 
-def format_timestamp(timestamp: Optional[int]) -> str:
+def format_timestamp(timestamp: int | None) -> str:
     """Format a Unix timestamp (integer) to human-readable date with minute resolution."""
     if timestamp is None:
         return ""
@@ -69,7 +69,7 @@ def format_timestamp(timestamp: Optional[int]) -> str:
         return str(timestamp)
 
 
-def format_cost_per_1k_tokens(cost: Optional[float]) -> str:
+def format_cost_per_1k_tokens(cost: float | None) -> str:
     """Format a per-token cost to cost per 1000 tokens."""
     if cost is None:
         return ""
@@ -90,7 +90,6 @@ def create_client(ctx: click.Context) -> Client:
 @click.group()
 def models() -> None:
     """Manage models on your LiteLLM proxy server"""
-    pass
 
 
 @models.command("list")
@@ -180,7 +179,7 @@ def delete_model(ctx: click.Context, model_id: str) -> None:
 @click.option("--id", "model_id", help="ID of the model to retrieve")
 @click.option("--name", "model_name", help="Name of the model to retrieve")
 @click.pass_context
-def get_model(ctx: click.Context, model_id: Optional[str], model_name: Optional[str]) -> None:
+def get_model(ctx: click.Context, model_id: str | None, model_name: str | None) -> None:
     """Get information about a specific model"""
     if not model_id and not model_name:
         raise click.UsageError("Either --id or --name must be provided")
@@ -411,8 +410,8 @@ def import_models(
     ctx: click.Context,
     yaml_file: str,
     dry_run: bool,
-    only_models_matching_regex: Optional[str],
-    only_access_groups_matching_regex: Optional[str],
+    only_models_matching_regex: str | None,
+    only_access_groups_matching_regex: str | None,
 ) -> None:
     """Import models from a YAML file and add them to the proxy."""
     provider_counts: dict[str, int] = defaultdict(int)

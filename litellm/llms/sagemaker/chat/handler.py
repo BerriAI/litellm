@@ -1,6 +1,6 @@
 import json
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Callable, Optional, Union
 
 import httpx
 
@@ -69,7 +69,7 @@ class SagemakerChatHandler(BaseAWSLLM):
         data: dict,
         optional_params: dict,
         aws_region_name: str,
-        extra_headers: Optional[dict] = None,
+        extra_headers: dict | None = None,
     ):
         try:
             from botocore.auth import SigV4Auth
@@ -112,12 +112,12 @@ class SagemakerChatHandler(BaseAWSLLM):
         logging_obj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict={},
         logger_fn=None,
         acompletion: bool = False,
         headers: dict = {},
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ):
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         credentials, aws_region_name = self._load_credentials(optional_params)

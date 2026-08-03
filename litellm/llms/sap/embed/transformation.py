@@ -2,17 +2,17 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import Optional, List, Dict, Literal, Union
-from pydantic import BaseModel, Field
 from functools import cached_property
-from litellm.llms.sap.chat.models import MaskingModuleConfig
+from typing import Literal
 
 import httpx
+from pydantic import BaseModel, Field
 
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
     LiteLLMLoggingObj,
 )
+from litellm.llms.sap.chat.models import MaskingModuleConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
@@ -27,13 +27,13 @@ class Usage(BaseModel):
 
 class EmbeddingItem(BaseModel):
     object: Literal["embedding"]
-    embedding: List[float] = Field(..., description="Vector of floats (length varies by model).")
+    embedding: list[float] = Field(..., description="Vector of floats (length varies by model).")
     index: int
 
 
 class FinalResult(BaseModel):
     object: Literal["list"]
-    data: List[EmbeddingItem]
+    data: list[EmbeddingItem]
     model: str
     usage: Usage
 
@@ -47,8 +47,8 @@ class EmbeddingModel(BaseModel):
     name: str
     version: str = "latest"
     params: dict = Field(default_factory=dict)
-    timeout: Optional[int] = Field(default=None, ge=1, le=600)
-    max_retries: Optional[int] = Field(default=None, ge=0, le=5)
+    timeout: int | None = Field(default=None, ge=1, le=600)
+    max_retries: int | None = Field(default=None, ge=0, le=5)
 
 
 class EmbeddingsModelConfig(BaseModel):
@@ -57,12 +57,12 @@ class EmbeddingsModelConfig(BaseModel):
 
 class EmbeddingsModules(BaseModel):
     embeddings: EmbeddingsModelConfig
-    masking: Optional[MaskingModuleConfig] = None
+    masking: MaskingModuleConfig | None = None
 
 
 class EmbeddingInput(BaseModel):
-    text: Union[str, List[str]]
-    type: Optional[Literal["text", "document", "query"]] = None
+    text: str | list[str]
+    type: Literal["text", "document", "query"] | None = None
 
 
 class EmbeddingConfig(BaseModel):
@@ -85,7 +85,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         self.token_creator, self.base_url, self.resource_group = get_token_creator()
 
     @property
-    def headers(self) -> Dict:
+    def headers(self) -> dict:
         access_token = self.token_creator()
         # headers for completions and embeddings requests
         headers = {
@@ -136,12 +136,12 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         url = self.deployment_url.rstrip("/") + "/v2/embeddings"
         return url
@@ -182,7 +182,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
