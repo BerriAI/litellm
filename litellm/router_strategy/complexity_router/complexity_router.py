@@ -1400,6 +1400,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        conversation_continuing: bool = True,
     ) -> PreRoutingHookResponse | None:
         """
         Pre-routing hook called before the routing decision.
@@ -1479,6 +1480,7 @@ class ComplexityRouter(CustomLogger):
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            conversation_continuing=conversation_continuing,
         )
         if cache_key is not None and response is not None:
             await self.litellm_router_instance.cache.async_set_cache(
@@ -1495,6 +1497,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        conversation_continuing: bool = True,
     ) -> PreRoutingHookResponse | None:
         """
         Classifies the request by complexity and returns the appropriate model.
@@ -1514,7 +1517,6 @@ class ComplexityRouter(CustomLogger):
         from litellm.types.router import PreRoutingHookResponse
 
         resolved_messages = self._resolve_messages(messages, request_kwargs)
-        conversation_continuing = _conversation_is_continuing(resolved_messages)
 
         if not resolved_messages:
             verbose_router_logger.debug("ComplexityRouter: No messages could be resolved, skipping routing")

@@ -59,6 +59,13 @@ from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
 from litellm.proxy.spend_tracking.savings import compute_savings_spend
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+else:
+    PrismaClient = Any
+    ProxyLogging = Any
 
 
 def _get_llm_router():
@@ -73,15 +80,6 @@ def _get_llm_router():
         return llm_router
     except Exception:  # noqa: BLE001  # no proxy in scope; savings degrade to zero
         return None
-
-
-from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
-
-if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient, ProxyLogging
-else:
-    PrismaClient = Any
-    ProxyLogging = Any
 
 
 def _extract_cache_read_tokens(usage_obj: dict) -> int:

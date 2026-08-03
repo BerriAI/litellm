@@ -5197,8 +5197,7 @@ class TestConversationShapeDiscriminator:
         source = inspect.getsource(module.ComplexityRouter.async_pre_routing_hook) + inspect.getsource(
             module.ComplexityRouter._classify_and_route
         )
-        builds = source.count("self._build_routing_decision(")
-        assert builds > 0
-        assert source.count("conversation_continuing=conversation_continuing") == builds, (
-            "every routing decision must carry the conversation shape, or that path silently charges the write"
-        )
+        builds = source.split("self._build_routing_decision(")[1:]
+        assert builds
+        missing = [i for i, block in enumerate(builds) if "conversation_continuing=conversation_continuing" not in block.split("),")[0]]
+        assert not missing, f"routing decisions {missing} do not carry the conversation shape"
