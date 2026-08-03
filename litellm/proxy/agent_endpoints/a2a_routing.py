@@ -29,6 +29,7 @@ async def route_a2a_agent_request(
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
     )
+    from litellm.proxy.agent_endpoints.utils import merge_agent_headers
     from litellm.proxy.route_llm_request import (
         ROUTE_ENDPOINT_MAPPING,
         ProxyModelNotFoundError,
@@ -74,6 +75,19 @@ async def route_a2a_agent_request(
 
     # Inject API base and route to litellm
     data["api_base"] = agent.agent_card_params["url"]
+
+    # Attach the agent's admin-configured upstream credentials. ``POST
+    # /a2a/{agent_id}`` already sends these; without them here, an agent that
+    # authenticates its callers rejects every request that arrives through the
+    # ``a2a/<agent-name>`` chat model. Static headers win over anything the
+    # caller supplied, matching the A2A endpoint's precedence.
+    merged_headers = merge_agent_headers(
+        dynamic_headers=data.get("headers"),
+        static_headers=agent.static_headers,
+    )
+    if merged_headers:
+        data["headers"] = merged_headers
+
     verbose_proxy_logger.debug(f"[A2A] Routing {model_name} to {data['api_base']}")
 
     return getattr(litellm, f"{route_type}")(**data)
