@@ -81,6 +81,67 @@ class TestAlertingHangingRequestCheck:
         assert cached_data.request_id == "test_request_123"
         assert cached_data.model == "gpt-4"
         assert cached_data.api_base == "https://api.openai.com/v1"
+        assert cached_data.key_alias == "test_key"
+        assert cached_data.team_alias == "test_team"
+
+    @pytest.mark.asyncio
+    async def test_add_request_reads_aliases_from_top_level_litellm_metadata(
+        self, hanging_request_checker
+    ):
+        """
+        Batch/file routes keep proxy metadata in top-level `litellm_metadata`, which is
+        also the only place it lives at pre-call time.
+        """
+        request_data = {
+            "litellm_call_id": "litellm_metadata_request",
+            "model": "gpt-4",
+            "litellm_metadata": {
+                "user_api_key_alias": "batch_key",
+                "user_api_key_team_alias": "batch_team",
+            },
+        }
+
+        await hanging_request_checker.add_request_to_hanging_request_check(request_data)
+
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="litellm_metadata_request"
+            )
+        )
+
+        assert cached_data.key_alias == "batch_key"
+        assert cached_data.team_alias == "batch_team"
+
+    @pytest.mark.asyncio
+    async def test_add_request_prefers_litellm_params_metadata_when_present(
+        self, hanging_request_checker
+    ):
+        """
+        Post-call kwargs carry metadata under `litellm_params`; that copy wins over a
+        stale top-level one.
+        """
+        request_data = {
+            "litellm_call_id": "litellm_params_request",
+            "model": "gpt-4",
+            "metadata": {"user_api_key_alias": "stale_key"},
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_alias": "nested_key",
+                    "user_api_key_team_alias": "nested_team",
+                }
+            },
+        }
+
+        await hanging_request_checker.add_request_to_hanging_request_check(request_data)
+
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="litellm_params_request"
+            )
+        )
+
+        assert cached_data.key_alias == "nested_key"
+        assert cached_data.team_alias == "nested_team"
 
     @pytest.mark.asyncio
     async def test_add_request_to_hanging_request_check_none_request_data(
