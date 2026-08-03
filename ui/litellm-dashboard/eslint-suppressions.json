@@ -779,6 +779,20 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/CreateMCPServer.tsx": {
+    "max-lines": {
+      "count": 1
+    },
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 4
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/DcrBridgeToggle.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -898,23 +912,6 @@
     },
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/create_mcp_server.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "max-lines": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/index.tsx": {
