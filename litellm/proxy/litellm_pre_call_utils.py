@@ -1,9 +1,11 @@
 import asyncio
 import copy
 import json
+import os
 import re
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
@@ -45,6 +47,15 @@ from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_head
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
+
+_REDACTED_HEADER_VALUE = "***REDACTED***"
+_CREDENTIAL_HEADER_NAMES = SpecialHeaders.litellm_credential_header_names() | frozenset(
+    {"cookie", "proxy-authorization"}
+)
+_MCP_HEADER_PREFIX = "x-mcp-"
+_NON_CREDENTIAL_MCP_HEADERS = frozenset(
+    {SpecialHeaders.mcp_servers.value.lower(), SpecialHeaders.mcp_access_groups.value.lower()}
+)
 
 # Matches any header of the form x-<something>-session-id (case-insensitive).
 # Excludes the two explicit litellm headers which are handled with higher priority.
@@ -709,6 +720,55 @@ def clean_headers(
         ):
             clean_headers[header] = value
     return clean_headers
+
+
+def configured_credential_header_names(general_settings: Mapping[str, Any] | None) -> frozenset[str]:
+    """Credential header names that are only knowable from this deployment's config.
+
+    The MCP client-side auth header can be renamed through either source, so both
+    candidate names are collected instead of resolving their precedence; redacting a
+    name this deployment no longer uses is free, missing the one it does use is not.
+    """
+    candidates = (
+        os.environ.get("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME"),
+        general_settings.get("mcp_client_side_auth_header_name") if general_settings else None,
+    )
+    return frozenset(name.lower() for name in candidates if isinstance(name, str) and name)
+
+
+def _is_credential_header(header: str, configured_names: frozenset[str]) -> bool:
+    """Whether `header` carries a caller credential rather than request context.
+
+    Covers the fixed credential header names, the per-server MCP auth headers
+    documented as `x-mcp-{server_alias}-{header_name}`, and any header name this
+    deployment configured as the MCP client-side auth header.
+    """
+    header_lower = header.lower()
+    if header_lower in _CREDENTIAL_HEADER_NAMES or header_lower in configured_names:
+        return True
+    return header_lower.startswith(_MCP_HEADER_PREFIX) and header_lower not in _NON_CREDENTIAL_MCP_HEADERS
+
+
+def redact_credential_headers(
+    headers: Mapping[str, str],
+    configured_names: frozenset[str] = frozenset(),
+) -> Mapping[str, str]:
+    """Return a copy of `headers` with credential-bearing values masked.
+
+    `clean_headers` deliberately preserves some credential headers so they can be
+    forwarded to the upstream provider; an Anthropic subscription OAuth token in
+    `Authorization`, or a client-supplied provider key in `x-api-key`. Those values
+    must never reach a logging callback or a spend log, so every observability-facing
+    copy of the header dict is built through this helper while the copy that is
+    forwarded upstream keeps the real values.
+
+    The returned object is a plain dict; guardrail hooks stamp their own headers onto
+    the stored copy and the logging callbacks JSON-serialize it.
+    """
+    return {
+        header: (_REDACTED_HEADER_VALUE if _is_credential_header(header, configured_names) else value)
+        for header, value in headers.items()
+    }
 
 
 class LiteLLMProxyRequestSetup:
@@ -1407,6 +1467,9 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
+    _logging_safe_headers = redact_credential_headers(
+        _headers, configured_names=configured_credential_header_names(general_settings)
+    )
     verbose_proxy_logger.debug(f"Request Headers: {_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
@@ -1428,7 +1491,7 @@ async def add_litellm_data_to_request(
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
-        "headers": _headers,
+        "headers": _logging_safe_headers,
         "body": None,  # filled in post-strip; see below
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
@@ -1454,7 +1517,7 @@ async def add_litellm_data_to_request(
 
     # Expose request headers under the metadata field for guardrails (fixes #17477)
     if _metadata_variable_name in data and isinstance(data[_metadata_variable_name], dict):
-        data[_metadata_variable_name]["headers"] = _headers
+        data[_metadata_variable_name]["headers"] = _logging_safe_headers
 
     # check for forwardable headers
     data = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
@@ -1579,7 +1642,13 @@ async def add_litellm_data_to_request(
     #     self-reference — body.proxy_server_request.body would be the same
     #     dict as body, producing an infinite traversal loop for any consumer
     #     that walks the structure.
-    _body_snapshot_exclude = {"secret_fields", "proxy_server_request"}
+    #   - provider_specific_header, headers, api_key: the transport copies of the
+    #     credential headers preserved by clean_headers. They have to keep the real
+    #     values for the upstream request, so they are dropped from the snapshot
+    #     rather than masked.
+    _body_snapshot_exclude = frozenset(
+        {"secret_fields", "proxy_server_request", "provider_specific_header", "headers", "api_key"}
+    )
     _body_snapshot = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     data["proxy_server_request"]["body"] = _body_snapshot
 
@@ -1686,7 +1755,7 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = getattr(
         user_api_key_dict, "team_object_permission_id", None
     )
-    data[_metadata_variable_name]["headers"] = _headers
+    data[_metadata_variable_name]["headers"] = _logging_safe_headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
     # Carry the proxy-receive instant via metadata (like `endpoint`) so the
     # OTel layer can compute pre-request latency, including on the failure
