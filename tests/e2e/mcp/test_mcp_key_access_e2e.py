@@ -47,8 +47,7 @@ class TestMcpKeyWithoutAccessIsDenied:
 
         denied_tools = unwrap(client.list_tools(denied_key)).tool_names_for_server(server_id)
         assert denied_tools == frozenset(), (
-            f"ungranted key saw the server's tools; tools/list leaked across the permission "
-            f"boundary: {denied_tools}"
+            f"ungranted key saw the server's tools; tools/list leaked across the permission boundary: {denied_tools}"
         )
 
     @pytest.mark.skip(
@@ -87,7 +86,5 @@ class TestMcpKeyWithoutAccessIsDenied:
         )
         assert permitted_call.is_error is not True, f"granted key's tool call errored: {permitted_call}"
 
-        denied = client.await_call_tool_denied(
-            denied_key, server_id=server_id, name=tool_name, arguments=search_args
-        )
+        denied = client.await_call_tool_denied(denied_key, server_id=server_id, name=tool_name, arguments=search_args)
         assert "access_denied" in denied.body, f"403 was not an MCP access denial: {denied.body}"

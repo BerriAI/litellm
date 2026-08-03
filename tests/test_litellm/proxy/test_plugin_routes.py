@@ -95,9 +95,7 @@ def test_registered_plugins_appear_in_list_without_restart() -> None:
             ]
         }
     )
-    names = sorted(
-        p["name"] for p in asyncio.run(list_plugins(user_api_key_dict=_admin()))
-    )
+    names = sorted(p["name"] for p in asyncio.run(list_plugins(user_api_key_dict=_admin())))
     assert names == ["agent-builder", "chat-ui"]
 
     # Removing a plugin from config drops it from the live list.

@@ -41,6 +41,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             "max_completion_tokens",
             "presence_penalty",
             "response_format",
+            "stop",
             "stream",
             "temperature",
             "top_p",

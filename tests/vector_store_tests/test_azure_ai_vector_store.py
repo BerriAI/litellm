@@ -30,9 +30,7 @@ async def test_basic_search_vector_store(sync_mode):
         if sync_mode:
             response = vector_store_search(query=default_query, **base_request_args)
         else:
-            response = await vector_store_asearch(
-                query=default_query, **base_request_args
-            )
+            response = await vector_store_asearch(query=default_query, **base_request_args)
     except litellm.InternalServerError:
         pytest.skip("Skipping test due to litellm.InternalServerError")
 

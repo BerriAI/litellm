@@ -18,9 +18,7 @@ async def test_azure_text_moderation_guardrail_pre_call_hook():
         api_key="azure_text_moderation_api_key",
         api_base="azure_text_moderation_api_base",
     )
-    with patch.object(
-        azure_text_moderation_guardrail, "async_make_request"
-    ) as mock_async_make_request:
+    with patch.object(azure_text_moderation_guardrail, "async_make_request") as mock_async_make_request:
         mock_async_make_request.return_value = {
             "blocklistsMatch": [],
             "categoriesAnalysis": [
@@ -59,20 +57,14 @@ async def test_azure_text_moderation_guardrail_violation_detected():
         api_key="azure_text_moderation_api_key",
         api_base="azure_text_moderation_api_base",
     )
-    with patch.object(
-        azure_text_moderation_guardrail, "async_make_request"
-    ) as mock_async_make_request:
+    with patch.object(azure_text_moderation_guardrail, "async_make_request") as mock_async_make_request:
         mock_async_make_request.side_effect = HTTPException(
             status_code=400,
-            detail={
-                "error": "Azure Content Safety Guardrail: Hate crossed severity 2, Got severity: 2"
-            },
+            detail={"error": "Azure Content Safety Guardrail: Hate crossed severity 2, Got severity: 2"},
         )
         with pytest.raises(HTTPException):
             await azure_text_moderation_guardrail.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="azure_text_moderation_api_key"
-                ),
+                user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
                 cache=None,
                 data={
                     "messages": [
@@ -181,9 +173,7 @@ async def test_azure_text_moderation_violation_in_chunk():
     ):
         with pytest.raises(HTTPException):
             await azure_text_moderation_guardrail.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="azure_text_moderation_api_key"
-                ),
+                user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
                 cache=None,
                 data={
                     "messages": [
@@ -205,9 +195,7 @@ async def test_azure_text_moderation_guardrail_post_call_success_hook():
         api_key="azure_text_moderation_api_key",
         api_base="azure_text_moderation_api_base",
     )
-    with patch.object(
-        azure_text_moderation_guardrail, "async_make_request"
-    ) as mock_async_make_request:
+    with patch.object(azure_text_moderation_guardrail, "async_make_request") as mock_async_make_request:
         mock_async_make_request.return_value = {
             "blocklistsMatch": [],
             "categoriesAnalysis": [
@@ -239,9 +227,7 @@ async def test_azure_text_moderation_guardrail_post_call_checks_all_choices():
         api_key="azure_text_moderation_api_key",
         api_base="azure_text_moderation_api_base",
     )
-    with patch.object(
-        azure_text_moderation_guardrail, "async_make_request"
-    ) as mock_async_make_request:
+    with patch.object(azure_text_moderation_guardrail, "async_make_request") as mock_async_make_request:
         mock_async_make_request.side_effect = [
             {
                 "blocklistsMatch": [],
@@ -256,9 +242,7 @@ async def test_azure_text_moderation_guardrail_post_call_checks_all_choices():
         with pytest.raises(HTTPException):
             await azure_text_moderation_guardrail.async_post_call_success_hook(
                 data={},
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="azure_text_moderation_api_key"
-                ),
+                user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
                 response=ModelResponse(
                     choices=[
                         Choices(
@@ -273,9 +257,10 @@ async def test_azure_text_moderation_guardrail_post_call_checks_all_choices():
                 ),
             )
 
-        assert [
-            call.kwargs["text"] for call in mock_async_make_request.call_args_list
-        ] == ["safe response", "unsafe response"]
+        assert [call.kwargs["text"] for call in mock_async_make_request.call_args_list] == [
+            "safe response",
+            "unsafe response",
+        ]
 
 
 @pytest.mark.asyncio
@@ -286,9 +271,7 @@ async def test_azure_text_moderation_guardrail_post_call_streaming_hook():
         api_key="azure_text_moderation_api_key",
         api_base="azure_text_moderation_api_base",
     )
-    with patch.object(
-        azure_text_moderation_guardrail, "async_make_request"
-    ) as mock_async_make_request:
+    with patch.object(azure_text_moderation_guardrail, "async_make_request") as mock_async_make_request:
         mock_async_make_request.return_value = {
             "blocklistsMatch": [],
             "categoriesAnalysis": [
@@ -325,13 +308,7 @@ def test_split_text_by_words():
     assert len(chunks) > 1
     # Verify no word is broken
     for chunk in chunks:
-        assert (
-            "word1" in chunk
-            or "word2" in chunk
-            or "word3" in chunk
-            or "word4" in chunk
-            or "word5" in chunk
-        )
+        assert "word1" in chunk or "word2" in chunk or "word3" in chunk or "word4" in chunk or "word5" in chunk
 
     # Test with very long single word (edge case)
     long_word = "supercalifragilisticexpialidocious" * 10

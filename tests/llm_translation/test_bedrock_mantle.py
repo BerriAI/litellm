@@ -52,9 +52,7 @@ def test_mantle_request_url_and_body():
     """Verify the correct URL is called and model appears in the request body."""
     client = HTTPHandler()
 
-    with patch.object(
-        client, "post", return_value=_make_fake_response(FAKE_ANTHROPIC_RESPONSE)
-    ) as mock_post:
+    with patch.object(client, "post", return_value=_make_fake_response(FAKE_ANTHROPIC_RESPONSE)) as mock_post:
         try:
             litellm.completion(
                 model=MODEL,
@@ -72,34 +70,28 @@ def test_mantle_request_url_and_body():
         call_kwargs = mock_post.call_args.kwargs
 
         # Correct endpoint
-        assert (
-            call_kwargs["url"] == EXPECTED_URL
-        ), f"Expected {EXPECTED_URL}, got {call_kwargs['url']}"
+        assert call_kwargs["url"] == EXPECTED_URL, f"Expected {EXPECTED_URL}, got {call_kwargs['url']}"
 
         # Request body has model ID (without "mantle/" prefix)
         raw_data = call_kwargs.get("data") or call_kwargs.get("json")
         body = json.loads(raw_data) if isinstance(raw_data, (str, bytes)) else raw_data
-        assert (
-            body["model"] == "anthropic.claude-mythos-preview"
-        ), f"body['model'] = {body.get('model')}"
+        assert body["model"] == "anthropic.claude-mythos-preview", f"body['model'] = {body.get('model')}"
         assert "messages" in body
         assert body["max_tokens"] == 50
 
         # AWS SigV4 Authorization header must be present
         headers = call_kwargs.get("headers", {})
         assert "Authorization" in headers, f"No Authorization header in {headers}"
-        assert headers["Authorization"].startswith(
-            "AWS4-HMAC-SHA256"
-        ), f"Expected SigV4 auth, got: {headers['Authorization'][:50]}"
+        assert headers["Authorization"].startswith("AWS4-HMAC-SHA256"), (
+            f"Expected SigV4 auth, got: {headers['Authorization'][:50]}"
+        )
 
 
 def test_mantle_request_does_not_include_mantle_prefix_in_body():
     """Ensure 'mantle/' never leaks into the request body."""
     client = HTTPHandler()
 
-    with patch.object(
-        client, "post", return_value=_make_fake_response(FAKE_ANTHROPIC_RESPONSE)
-    ) as mock_post:
+    with patch.object(client, "post", return_value=_make_fake_response(FAKE_ANTHROPIC_RESPONSE)) as mock_post:
         try:
             litellm.completion(
                 model=MODEL,
@@ -126,9 +118,7 @@ def test_mantle_region_reflected_in_url():
     client = HTTPHandler()
 
     for region in ["us-east-1", "us-west-2", "eu-west-1"]:
-        with patch.object(
-            client, "post", return_value=_make_fake_response(FAKE_ANTHROPIC_RESPONSE)
-        ) as mock_post:
+        with patch.object(client, "post", return_value=_make_fake_response(FAKE_ANTHROPIC_RESPONSE)) as mock_post:
             try:
                 litellm.completion(
                     model=MODEL,
@@ -144,6 +134,4 @@ def test_mantle_region_reflected_in_url():
 
             call_kwargs = mock_post.call_args.kwargs
             expected = f"https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages"
-            assert (
-                call_kwargs["url"] == expected
-            ), f"region={region}: expected URL {expected}, got {call_kwargs['url']}"
+            assert call_kwargs["url"] == expected, f"region={region}: expected URL {expected}, got {call_kwargs['url']}"

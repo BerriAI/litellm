@@ -256,11 +256,7 @@ async def test_async_send_batch():
     logger.async_httpx_client.post.return_value = mock_response
 
     # Add test data to queue
-    logger.log_queue = [
-        LangsmithQueueObject(
-            data={"test": "data"}, credentials=logger.default_credentials
-        )
-    ]
+    logger.log_queue = [LangsmithQueueObject(data={"test": "data"}, credentials=logger.default_credentials)]
 
     await logger.async_send_batch()
 
@@ -275,9 +271,7 @@ async def test_async_send_batch():
 
 @pytest.mark.asyncio
 async def test_async_send_batch_with_tenant_id():
-    logger = LangsmithLogger(
-        langsmith_api_key="test-key", langsmith_tenant_id="test-tenant-id"
-    )
+    logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_tenant_id="test-tenant-id")
 
     # Mock the httpx client
     mock_response = AsyncMock()
@@ -286,11 +280,7 @@ async def test_async_send_batch_with_tenant_id():
     logger.async_httpx_client.post.return_value = mock_response
 
     # Add test data to queue
-    logger.log_queue = [
-        LangsmithQueueObject(
-            data={"test": "data"}, credentials=logger.default_credentials
-        )
-    ]
+    logger.log_queue = [LangsmithQueueObject(data={"test": "data"}, credentials=logger.default_credentials)]
 
     await logger.async_send_batch()
 
@@ -315,9 +305,7 @@ async def test_langsmith_key_based_logging():
         mock_async_httpx_handler = AsyncMock()
         mock_response = MagicMock()  # Use MagicMock for response to allow sync methods
         mock_response.status_code = 200
-        mock_response.raise_for_status = (
-            MagicMock()
-        )  # raise_for_status is sync in httpx
+        mock_response.raise_for_status = MagicMock()  # raise_for_status is sync in httpx
         mock_response.text = ""
         mock_async_httpx_handler.post = AsyncMock(return_value=mock_response)
 
@@ -417,21 +405,13 @@ async def test_langsmith_key_based_logging():
 
         # Assert only the critical parts we care about
         assert actual_body["post"][0]["name"] == expected_body["post"][0]["name"]
-        assert (
-            actual_body["post"][0]["run_type"] == expected_body["post"][0]["run_type"]
-        )
-        assert (
-            actual_body["post"][0]["inputs"]["messages"]
-            == expected_body["post"][0]["inputs"]["messages"]
-        )
+        assert actual_body["post"][0]["run_type"] == expected_body["post"][0]["run_type"]
+        assert actual_body["post"][0]["inputs"]["messages"] == expected_body["post"][0]["inputs"]["messages"]
         assert (
             actual_body["post"][0]["inputs"]["model_parameters"]
             == expected_body["post"][0]["inputs"]["model_parameters"]
         )
-        assert (
-            actual_body["post"][0]["outputs"]["choices"]
-            == expected_body["post"][0]["outputs"]["choices"]
-        )
+        assert actual_body["post"][0]["outputs"]["choices"] == expected_body["post"][0]["outputs"]["choices"]
         assert (
             actual_body["post"][0]["outputs"]["usage"]["completion_tokens"]
             == expected_body["post"][0]["outputs"]["usage"]["completion_tokens"]
@@ -444,10 +424,7 @@ async def test_langsmith_key_based_logging():
             actual_body["post"][0]["outputs"]["usage"]["total_tokens"]
             == expected_body["post"][0]["outputs"]["usage"]["total_tokens"]
         )
-        assert (
-            actual_body["post"][0]["session_name"]
-            == expected_body["post"][0]["session_name"]
-        )
+        assert actual_body["post"][0]["session_name"] == expected_body["post"][0]["session_name"]
 
         mock_get_client.stop()
 
@@ -500,11 +477,7 @@ async def test_langsmith_queue_logging():
                 break
             await asyncio.sleep(0.5)
 
-        print(
-            "Length of langsmith log queue: {}".format(
-                len(test_langsmith_logger.log_queue)
-            )
-        )
+        print("Length of langsmith log queue: {}".format(len(test_langsmith_logger.log_queue)))
         # Check that the queue was flushed after exceeding batch size
         assert len(test_langsmith_logger.log_queue) < 5
 

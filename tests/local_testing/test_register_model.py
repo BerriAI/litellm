@@ -8,9 +8,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 
 
@@ -56,9 +54,7 @@ def test_update_model_cost_via_completion():
             input_cost_per_token=0.3,
             output_cost_per_token=0.4,
         )
-        print(
-            f"litellm.model_cost for gpt-3.5-turbo: {litellm.model_cost['gpt-3.5-turbo']}"
-        )
+        print(f"litellm.model_cost for gpt-3.5-turbo: {litellm.model_cost['gpt-3.5-turbo']}")
         assert litellm.model_cost["gpt-3.5-turbo"]["input_cost_per_token"] == 0.3
         assert litellm.model_cost["gpt-3.5-turbo"]["output_cost_per_token"] == 0.4
     except Exception as e:
@@ -67,11 +63,7 @@ def test_update_model_cost_via_completion():
 
 def test_no_test_invocation_at_module_scope():
     tree = ast.parse(Path(__file__).read_text())
-    defined = {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    defined = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     invoked = [
         node.value.func.id
         for node in tree.body

@@ -4,9 +4,7 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.auth.litellm_license import LicenseCheck
 
@@ -14,9 +12,9 @@ from litellm.proxy.auth.litellm_license import LicenseCheck
 def test_read_public_key_loads_successfully():
     """Ensure public_key.pem is valid PEM with no leading whitespace."""
     license_check = LicenseCheck()
-    assert (
-        license_check.public_key is not None
-    ), "public_key.pem could not be loaded — check for leading whitespace or malformed PEM header"
+    assert license_check.public_key is not None, (
+        "public_key.pem could not be loaded — check for leading whitespace or malformed PEM header"
+    )
 
 
 def test_is_over_limit():

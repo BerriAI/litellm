@@ -41,9 +41,7 @@ class TestCoroutineChecker:
     )
     def test_is_async_callable_basic_and_non_callable(self, obj, expected, description):
         """Test is_async_callable with basic types and non-callable objects."""
-        assert (
-            self.checker.is_async_callable(obj) is expected
-        ), f"Failed for {description}: {obj}"
+        assert self.checker.is_async_callable(obj) is expected, f"Failed for {description}: {obj}"
 
     def test_is_async_callable_async_and_sync_callables(self):
         """Test is_async_callable with various async and sync callable types."""
@@ -111,9 +109,7 @@ class TestCoroutineChecker:
             def __getattr__(self, name):
                 if name == "__call__":
                     raise Exception("Cannot access __call__")
-                raise AttributeError(
-                    f"'{self.__class__.__name__}' object has no attribute '{name}'"
-                )
+                raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
         class UnstringableCallable:
             def __str__(self):
@@ -153,9 +149,7 @@ class TestCoroutineChecker:
 
     def test_error_handling_in_inspect(self):
         """Test error handling when inspect.iscoroutinefunction raises exception."""
-        with patch(
-            "inspect.iscoroutinefunction", side_effect=Exception("Inspect error")
-        ):
+        with patch("inspect.iscoroutinefunction", side_effect=Exception("Inspect error")):
 
             async def async_func():
                 return "async"

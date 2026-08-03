@@ -8,9 +8,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 from datetime import datetime as dt_object
 import time
 import pytest
@@ -155,9 +153,7 @@ def test_get_additional_headers():
         "llm_provider-x-ratelimit-limit-tokens": "160000",
         "llm_provider-x-ratelimit-remaining-tokens": "160000",
     }
-    additional_logging_headers = StandardLoggingPayloadSetup.get_additional_headers(
-        additional_headers
-    )
+    additional_logging_headers = StandardLoggingPayloadSetup.get_additional_headers(additional_headers)
     # Typed rate-limit fields are coerced to int
     assert additional_logging_headers is not None
     assert additional_logging_headers.get("x_ratelimit_limit_requests") == 2000
@@ -165,16 +161,8 @@ def test_get_additional_headers():
     assert additional_logging_headers.get("x_ratelimit_limit_tokens") == 160000
     assert additional_logging_headers.get("x_ratelimit_remaining_tokens") == 160000
     # Provider-specific headers are preserved verbatim (not dropped)
-    assert (
-        additional_logging_headers.get("llm_provider-request-id")
-        == "req_01F6CycZZPSHKRCCctcS1Vto"
-    )
-    assert (
-        additional_logging_headers.get(
-            "llm_provider-anthropic-ratelimit-requests-reset"
-        )
-        == "2024-10-29T23:57:40Z"
-    )
+    assert additional_logging_headers.get("llm_provider-request-id") == "req_01F6CycZZPSHKRCCctcS1Vto"
+    assert additional_logging_headers.get("llm_provider-anthropic-ratelimit-requests-reset") == "2024-10-29T23:57:40Z"
 
 
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
@@ -202,9 +190,7 @@ def test_get_standard_logging_metadata(metadata_key, metadata_value):
     All fields in StandardLoggingMetadata should ALWAYS be present.
     """
     metadata = {metadata_key: metadata_value}
-    standard_logging_metadata = (
-        StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
-    )
+    standard_logging_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
 
     print("standard_logging_metadata", standard_logging_metadata)
 
@@ -277,9 +263,7 @@ def test_cleanup_timestamps():
     end_float = start_float + 1
     completion_float = end_float
 
-    result = StandardLoggingPayloadSetup.cleanup_timestamps(
-        start_float, end_float, completion_float
-    )
+    result = StandardLoggingPayloadSetup.cleanup_timestamps(start_float, end_float, completion_float)
 
     assert all(isinstance(x, float) for x in result)
     assert result[0] == start_float
@@ -287,16 +271,12 @@ def test_cleanup_timestamps():
     assert result[2] == completion_float
 
     # Test with mixed types
-    result = StandardLoggingPayloadSetup.cleanup_timestamps(
-        start_float, end, completion_float
-    )
+    result = StandardLoggingPayloadSetup.cleanup_timestamps(start_float, end, completion_float)
     assert all(isinstance(x, float) for x in result)
 
     # Test invalid input
     with pytest.raises(ValueError):
-        StandardLoggingPayloadSetup.cleanup_timestamps(
-            "invalid", end_float, completion_float
-        )
+        StandardLoggingPayloadSetup.cleanup_timestamps("invalid", end_float, completion_float)
 
 
 def test_get_model_cost_information():
@@ -311,9 +291,7 @@ def test_get_model_cost_information():
     assert result["model_map_key"] == ""
     assert result["model_map_value"] is None  # this was not found in model cost map
     # assert all fields in StandardLoggingModelInformation are present
-    assert all(
-        field in result for field in StandardLoggingModelInformation.__annotations__
-    )
+    assert all(field in result for field in StandardLoggingModelInformation.__annotations__)
 
     # Test with valid model
     result = StandardLoggingPayloadSetup.get_model_cost_information(
@@ -330,9 +308,7 @@ def test_get_model_cost_information():
     assert result["model_map_value"] is not None
     assert result["model_map_value"] == litellm_info_gpt_3_5_turbo_model_map_value
     # assert all fields in StandardLoggingModelInformation are present
-    assert all(
-        field in result for field in StandardLoggingModelInformation.__annotations__
-    )
+    assert all(field in result for field in StandardLoggingModelInformation.__annotations__)
 
 
 def test_get_model_cost_information_custom_pricing_uses_base_model():
@@ -451,9 +427,7 @@ def test_get_final_response_obj():
     litellm.turn_off_message_logging = True
     try:
         model_response = litellm.ModelResponse(
-            choices=[
-                litellm.Choices(message=litellm.Message(content="sensitive content"))
-            ]
+            choices=[litellm.Choices(message=litellm.Message(content="sensitive content"))]
         )
         kwargs = {"messages": [{"role": "user", "content": "original message"}]}
         result = StandardLoggingPayloadSetup.get_final_response_obj(
@@ -515,9 +489,7 @@ def test_truncate_standard_logging_payload():
     2. the `messages`, `response`, and `error_str` in new standard_logging_payload should be truncated
     """
     _custom_logger = CustomLogger()
-    standard_logging_payload: StandardLoggingPayload = (
-        create_standard_logging_payload_with_long_content()
-    )
+    standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload_with_long_content()
     original_messages = standard_logging_payload["messages"]
     len_original_messages = len(str(original_messages))
     original_response = standard_logging_payload["response"]
@@ -551,14 +523,8 @@ def test_truncate_standard_logging_payload():
 
 def test_strip_trailing_slash():
     common_api_base = "https://api.test.com"
-    assert (
-        StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base + "/")
-        == common_api_base
-    )
-    assert (
-        StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base)
-        == common_api_base
-    )
+    assert StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base + "/") == common_api_base
+    assert StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base) == common_api_base
 
 
 def test_get_error_information():
@@ -649,9 +615,7 @@ def test_get_response_time():
         ),
     ],
 )
-def test_standard_logging_metadata_requester_metadata(
-    metadata, expected_requester_metadata
-):
+def test_standard_logging_metadata_requester_metadata(metadata, expected_requester_metadata):
     result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
     assert result["requester_metadata"] == expected_requester_metadata
 
@@ -859,9 +823,7 @@ def test_usage_dict_roundtrip_in_payload(use_combined_usage_object):
     }
 
     if use_combined_usage_object:
-        kwargs["combined_usage_object"] = Usage(
-            prompt_tokens=42, completion_tokens=58, total_tokens=100
-        )
+        kwargs["combined_usage_object"] = Usage(prompt_tokens=42, completion_tokens=58, total_tokens=100)
 
     start_time = datetime.now()
     end_time = datetime.now()

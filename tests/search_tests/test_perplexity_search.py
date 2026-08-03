@@ -58,7 +58,7 @@ class TestRouterSearch:
             max_results=3,
         )
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"Router Search Test Results:")
         print(f"Response type: {type(response)}")
         print(f"Response object: {response.object}")
@@ -67,9 +67,7 @@ class TestRouterSearch:
         # Validate response structure
         assert hasattr(response, "results"), "Response should have 'results' attribute"
         assert hasattr(response, "object"), "Response should have 'object' attribute"
-        assert (
-            response.object == "search"
-        ), f"Expected object='search', got '{response.object}'"
+        assert response.object == "search", f"Expected object='search', got '{response.object}'"
         assert isinstance(response.results, list), "results should be a list"
         assert len(response.results) > 0, "Should have at least one result"
         assert len(response.results) <= 3, "Should return at most 3 results"
@@ -78,12 +76,10 @@ class TestRouterSearch:
         first_result = response.results[0]
         assert hasattr(first_result, "title"), "Result should have 'title' attribute"
         assert hasattr(first_result, "url"), "Result should have 'url' attribute"
-        assert hasattr(
-            first_result, "snippet"
-        ), "Result should have 'snippet' attribute"
+        assert hasattr(first_result, "snippet"), "Result should have 'snippet' attribute"
 
         print(f"First result title: {first_result.title}")
         print(f"First result URL: {first_result.url}")
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
         print("✅ Router search test passed!")

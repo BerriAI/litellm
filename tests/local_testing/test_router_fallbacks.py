@@ -9,9 +9,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -28,18 +26,14 @@ class MyCustomHandler(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
-        print(
-            f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}"
-        )
+        print(f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}")
         self.previous_models = len(
             kwargs["litellm_params"]["metadata"].get("previous_models", [])
         )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
         print(f"self.previous_models: {self.previous_models}")
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-        print(
-            f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}"
-        )
+        print(f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}")
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Stream")
@@ -134,9 +128,7 @@ def test_sync_fallbacks():
         response = router.completion(**kwargs)
         print(f"response: {response}")
         time.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
-        assert (
-            customHandler.previous_models == 3
-        )  # 1 init call + 2 retries (fallback not counted as previous)
+        assert customHandler.previous_models == 3  # 1 init call + 2 retries (fallback not counted as previous)
 
         print("Passed ! Test router_fallbacks: test_sync_fallbacks()")
         router.reset()
@@ -221,12 +213,8 @@ async def test_async_fallbacks():
         kwargs["model"] = "azure/gpt-3.5-turbo"
         response = await router.acompletion(**kwargs)
         print(f"customHandler.previous_models: {customHandler.previous_models}")
-        await asyncio.sleep(
-            0.05
-        )  # allow a delay as success_callbacks are on a separate thread
-        assert (
-            customHandler.previous_models == 3
-        )  # 1 init call + 2 retries (fallback not counted as previous)
+        await asyncio.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
+        assert customHandler.previous_models == 3  # 1 init call + 2 retries (fallback not counted as previous)
         router.reset()
     except litellm.Timeout as e:
         pass
@@ -327,9 +315,7 @@ async def test_async_fallbacks_embeddings():
         kwargs = {"model": "bad-azure-embedding-model", "input": input}
         response = await router.aembedding(**kwargs)
         print(f"customHandler.previous_models: {customHandler.previous_models}")
-        await asyncio.sleep(
-            0.05
-        )  # allow a delay as success_callbacks are on a separate thread
+        await asyncio.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
         assert customHandler.previous_models == 1  # 1 init call with a bad key
         router.reset()
     except litellm.Timeout as e:
@@ -494,9 +480,7 @@ async def test_dynamic_fallbacks_async():
         kwargs["fallbacks"] = [{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}]
         response = await router.acompletion(**kwargs)
         print(f"RESPONSE: {response}")
-        await asyncio.sleep(
-            0.05
-        )  # allow a delay as success_callbacks are on a separate thread
+        await asyncio.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
         assert (
             customHandler.previous_models >= 3
         )  # 1 init call, retries, 1 fallback (count varies with cooldown timing)
@@ -719,9 +703,7 @@ async def test_async_fallbacks_max_retries_per_request():
         except Exception:
             pass
         print(f"customHandler.previous_models: {customHandler.previous_models}")
-        await asyncio.sleep(
-            0.05
-        )  # allow a delay as success_callbacks are on a separate thread
+        await asyncio.sleep(0.05)  # allow a delay as success_callbacks are on a separate thread
         assert customHandler.previous_models == 0  # 0 retries, 0 fallback
         router.reset()
     except litellm.Timeout as e:
@@ -910,9 +892,7 @@ def test_custom_cooldown_times():
         # expect 1 model to be in cooldown models
         cooldown_deployments = router._get_cooldown_deployments()
         print("cooldown_deployments after failed call: ", cooldown_deployments)
-        assert (
-            len(cooldown_deployments) == 1
-        ), "Expected 1 model to be in cooldown models"
+        assert len(cooldown_deployments) == 1, "Expected 1 model to be in cooldown models"
 
         selected_cooldown_model = cooldown_deployments[0]
 
@@ -921,24 +901,16 @@ def test_custom_cooldown_times():
 
         # expect cooldown model to still be in cooldown models
         cooldown_deployments = router._get_cooldown_deployments()
-        print(
-            "cooldown_deployments after waiting 1/2 of cooldown: ", cooldown_deployments
-        )
-        assert (
-            len(cooldown_deployments) == 1
-        ), "Expected 1 model to be in cooldown models"
+        print("cooldown_deployments after waiting 1/2 of cooldown: ", cooldown_deployments)
+        assert len(cooldown_deployments) == 1, "Expected 1 model to be in cooldown models"
 
         # wait for 1/2 of cooldown time again, now we've waited for full cooldown
         time.sleep(router.cooldown_time / 2)
 
         # expect cooldown model to be removed from cooldown models
         cooldown_deployments = router._get_cooldown_deployments()
-        print(
-            "cooldown_deployments after waiting cooldown time: ", cooldown_deployments
-        )
-        assert (
-            len(cooldown_deployments) == 0
-        ), "Expected 0 models to be in cooldown models"
+        print("cooldown_deployments after waiting cooldown time: ", cooldown_deployments)
+        assert len(cooldown_deployments) == 0, "Expected 0 models to be in cooldown models"
 
     except Exception as e:
         print(e)
@@ -1016,9 +988,7 @@ async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
                 },
             },
         ],
-        default_fallbacks=(
-            ["my-good-model"] if litellm_module_fallbacks is False else None
-        ),
+        default_fallbacks=(["my-good-model"] if litellm_module_fallbacks is False else None),
     )
 
     if sync_mode:
@@ -1094,9 +1064,7 @@ async def test_client_side_fallbacks_list(sync_mode):
 @pytest.mark.parametrize("content_filter_response_exception", [True, False])
 @pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
 @pytest.mark.asyncio
-async def test_router_content_policy_fallbacks(
-    sync_mode, content_filter_response_exception, fallback_type
-):
+async def test_router_content_policy_fallbacks(sync_mode, content_filter_response_exception, fallback_type):
     os.environ["LITELLM_LOG"] = "DEBUG"
 
     if content_filter_response_exception:
@@ -1151,13 +1119,9 @@ async def test_router_content_policy_fallbacks(
             },
         ],
         content_policy_fallbacks=(
-            [{"claude-sonnet-4-5-20250929": ["my-fallback-model"]}]
-            if fallback_type == "model-specific"
-            else None
+            [{"claude-sonnet-4-5-20250929": ["my-fallback-model"]}] if fallback_type == "model-specific" else None
         ),
-        default_fallbacks=(
-            ["my-default-fallback-model"] if fallback_type == "default" else None
-        ),
+        default_fallbacks=(["my-default-fallback-model"] if fallback_type == "default" else None),
     )
 
     if sync_mode is True:
@@ -1429,9 +1393,9 @@ async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
                 model="bad-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
             )
-    assert isinstance(
-        exc_info.value, litellm.AuthenticationError
-    ), f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"
+    assert isinstance(exc_info.value, litellm.AuthenticationError), (
+        f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"
+    )
 
 
 @pytest.mark.asyncio
@@ -1618,8 +1582,7 @@ async def test_router_attempted_fallbacks_in_response(expected_attempted_fallbac
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
         assert (
-            resp._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"]
-            == expected_attempted_fallbacks
+            resp._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == expected_attempted_fallbacks
         )
     elif expected_attempted_fallbacks == 1:
         resp = router.completion(
@@ -1627,6 +1590,5 @@ async def test_router_attempted_fallbacks_in_response(expected_attempted_fallbac
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
         assert (
-            resp._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"]
-            == expected_attempted_fallbacks
+            resp._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == expected_attempted_fallbacks
         )

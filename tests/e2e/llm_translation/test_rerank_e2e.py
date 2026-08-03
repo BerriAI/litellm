@@ -30,16 +30,12 @@ def _assert_top_n_scored(body: str) -> None:
     parsed = RerankResult.model_validate_json(body)
     assert parsed.results, f"/rerank returned no results: {body[:300]}"
     assert len(parsed.results) <= 3, f"top_n=3 not honored: {body[:300]}"
-    assert parsed.results[0].relevance_score is not None, (
-        f"top rerank result has no relevance_score: {body[:300]}"
-    )
+    assert parsed.results[0].relevance_score is not None, f"top rerank result has no relevance_score: {body[:300]}"
 
 
 class TestRerank:
     @pytest.mark.covers("llm.rerank.cohere.basic.nonstream.works")
-    def test_rerank_scores_top_n(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_rerank_scores_top_n(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model = f"e2e-rerank-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
@@ -53,9 +49,7 @@ class TestRerank:
         _assert_top_n_scored(result.body)
 
     @pytest.mark.covers("llm.rerank.bedrock.basic.nonstream.works", exercised_on=["rerank"])
-    def test_bedrock_rerank_scores_top_n(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_bedrock_rerank_scores_top_n(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model = f"e2e-bedrock-rerank-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,

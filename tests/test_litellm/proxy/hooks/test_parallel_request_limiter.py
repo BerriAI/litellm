@@ -39,9 +39,7 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
     team_id = "litellm-team"
     end_user_id = "customer-1"
 
-    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(DualCache())
-    )
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
 
     current_date = datetime.now().strftime("%Y-%m-%d")
     current_hour = datetime.now().strftime("%H")
@@ -80,7 +78,4 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
             key=f"{scope_id}::{precise_minute}::request_count",
             litellm_parent_otel_span=None,
         )
-        assert current["current_tpm"] == 50, (
-            f"expected 50 tokens counted for {scope_id}, "
-            f"got {current['current_tpm']}"
-        )
+        assert current["current_tpm"] == 50, f"expected 50 tokens counted for {scope_id}, got {current['current_tpm']}"

@@ -77,13 +77,9 @@ async def run_load_test(duration_seconds, requests_per_second):
     end_time = time.time() + duration_seconds
     vertex_times = []
 
-    print(
-        f"Running Load Test for {duration_seconds} seconds at {requests_per_second} RPS..."
-    )
+    print(f"Running Load Test for {duration_seconds} seconds at {requests_per_second} RPS...")
     while time.time() < end_time:
-        vertex_tasks = [
-            create_async_vertex_embedding_task() for _ in range(requests_per_second)
-        ]
+        vertex_tasks = [create_async_vertex_embedding_task() for _ in range(requests_per_second)]
 
         vertex_results = await asyncio.gather(*vertex_tasks)
 
@@ -100,9 +96,7 @@ def analyze_results(vertex_times):
     print(f"Vertex AI median response time: {median_vertex:.4f} seconds")
 
     if median_vertex > 3:
-        pytest.fail(
-            f"Vertex AI median response time is greater than 500ms: {median_vertex:.4f} seconds"
-        )
+        pytest.fail(f"Vertex AI median response time is greater than 500ms: {median_vertex:.4f} seconds")
     else:
         print("Performance is good")
         return True

@@ -70,9 +70,7 @@ async def test_authorize_endpoint_includes_response_type():
     mock_request.headers = {}
 
     # Mock the encryption functions to avoid needing a signing key
-    with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
-    ) as mock_encrypt:
+    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
         mock_encrypt.return_value = "mocked_encrypted_state"
 
         # Call authorize endpoint
@@ -136,9 +134,7 @@ async def test_authorize_endpoint_forwards_pkce_parameters():
     mock_request.headers = {}
 
     # Mock the encryption function
-    with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
-    ) as mock_encrypt:
+    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
         mock_encrypt.return_value = "mocked_encrypted_state_with_pkce"
 
         # Call authorize endpoint with PKCE parameters
@@ -245,10 +241,7 @@ async def test_token_endpoint_forwards_code_verifier():
     # Check the data parameter includes code_verifier
     assert call_args[1]["data"]["code_verifier"] == "test_code_verifier_from_client"
     assert call_args[1]["data"]["code"] == "4/test_authorization_code"
-    assert (
-        call_args[1]["data"]["client_id"]
-        == "669428968603-test.apps.googleusercontent.com"
-    )
+    assert call_args[1]["data"]["client_id"] == "669428968603-test.apps.googleusercontent.com"
     assert call_args[1]["data"]["client_secret"] == "GOCSPX-test_secret"
     assert call_args[1]["data"]["grant_type"] == "authorization_code"
 
@@ -332,9 +325,7 @@ async def test_register_client_returns_existing_server_credentials():
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
             new=AsyncMock(return_value={}),
         ):
-            result = await register_client(
-                request=mock_request, mcp_server_name=oauth2_server.server_name
-            )
+            result = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -408,9 +399,7 @@ async def test_register_client_remote_registration_success():
                 return_value=mock_async_client,
             ),
         ):
-            response = await register_client(
-                request=mock_request, mcp_server_name=oauth2_server.server_name
-            )
+            response = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -427,14 +416,9 @@ async def test_register_client_remote_registration_success():
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    assert call_args.kwargs["json"]["redirect_uris"] == [
-        "https://proxy.litellm.example/callback"
-    ]
+    assert call_args.kwargs["json"]["redirect_uris"] == ["https://proxy.litellm.example/callback"]
     assert call_args.kwargs["json"]["grant_types"] == request_payload["grant_types"]
-    assert (
-        call_args.kwargs["json"]["token_endpoint_auth_method"]
-        == request_payload["token_endpoint_auth_method"]
-    )
+    assert call_args.kwargs["json"]["token_endpoint_auth_method"] == request_payload["token_endpoint_auth_method"]
 
 
 @pytest.mark.asyncio
@@ -482,9 +466,7 @@ async def test_authorize_endpoint_respects_x_forwarded_proto(
     set_request_from_trusted_proxy(mock_request)
 
     # Mock the encryption functions
-    with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
-    ) as mock_encrypt:
+    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
         mock_encrypt.return_value = "mocked_encrypted_state"
 
         # Call authorize endpoint
@@ -581,10 +563,7 @@ async def test_token_endpoint_respects_x_forwarded_proto(
 
     # Verify that the redirect_uri sent to the provider uses HTTPS
     call_args = mock_async_client.post.call_args
-    assert (
-        call_args[1]["data"]["redirect_uri"]
-        == "https://litellm-proxy.example.com/callback"
-    )
+    assert call_args[1]["data"]["redirect_uri"] == "https://litellm-proxy.example.com/callback"
 
 
 @pytest.mark.asyncio
@@ -636,10 +615,7 @@ async def test_oauth_protected_resource_standard_pattern():
 
     # Verify response uses standard MCP pattern: /mcp/{server_name}
     assert response["resource"] == "https://litellm.example.com/mcp/test_server"
-    assert (
-        response["authorization_servers"][0]
-        == "https://litellm.example.com/test_server"
-    )
+    assert response["authorization_servers"][0] == "https://litellm.example.com/test_server"
     assert response["scopes_supported"] == oauth2_server.scopes
 
 
@@ -692,10 +668,7 @@ async def test_oauth_protected_resource_legacy_pattern():
 
     # Verify response uses legacy pattern: /{server_name}/mcp
     assert response["resource"] == "https://litellm.example.com/test_server/mcp"
-    assert (
-        response["authorization_servers"][0]
-        == "https://litellm.example.com/test_server"
-    )
+    assert response["authorization_servers"][0] == "https://litellm.example.com/test_server"
     assert response["scopes_supported"] == oauth2_server.scopes
 
 
@@ -749,9 +722,7 @@ async def test_oauth_protected_resource_respects_x_forwarded_proto(
     )
 
     # Verify response uses HTTPS URLs
-    assert response["authorization_servers"][0].startswith(
-        "https://litellm.example.com/"
-    )
+    assert response["authorization_servers"][0].startswith("https://litellm.example.com/")
     assert response["scopes_supported"] == oauth2_server.scopes
 
 
@@ -900,9 +871,7 @@ async def test_authorize_endpoint_respects_x_forwarded_host(
     set_request_from_trusted_proxy(mock_request)
 
     # Mock the encryption functions
-    with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
-    ) as mock_encrypt:
+    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
         mock_encrypt.return_value = "mocked_encrypted_state"
 
         # Call authorize endpoint
@@ -919,8 +888,7 @@ async def test_authorize_endpoint_respects_x_forwarded_host(
 
     # The redirect_uri parameter should use the external URL
     assert (
-        "redirect_uri=https%3A%2F%2Fproxy.example.com%2Fgithub%2Fmcp%2Fcallback"
-        in location
+        "redirect_uri=https%3A%2F%2Fproxy.example.com%2Fgithub%2Fmcp%2Fcallback" in location
         or "redirect_uri=https://proxy.example.com/github/mcp/callback" in location
     )
 
@@ -1003,10 +971,7 @@ async def test_token_endpoint_respects_x_forwarded_host(
 
     # Verify that the redirect_uri sent to the provider uses the external URL
     call_args = mock_async_client.post.call_args
-    assert (
-        call_args[1]["data"]["redirect_uri"]
-        == "https://proxy.example.com/github/mcp/callback"
-    )
+    assert call_args[1]["data"]["redirect_uri"] == "https://proxy.example.com/github/mcp/callback"
 
 
 @pytest.mark.parametrize(

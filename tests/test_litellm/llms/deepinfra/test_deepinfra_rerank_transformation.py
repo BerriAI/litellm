@@ -166,9 +166,7 @@ class TestDeepinfraRerankTransform:
         assert result._hidden_params["model"] == self.model
 
         # Verify logging was called
-        mock_logging.post_call.assert_called_once_with(
-            original_response=mock_response.text
-        )
+        mock_logging.post_call.assert_called_once_with(original_response=mock_response.text)
 
     def test_transform_rerank_response_minimal(self):
         """Test response transformation with minimal data."""
@@ -245,12 +243,8 @@ class TestDeepinfraRerankTransform:
                 query="query1",
                 documents=documents,
             )
-            assert (
-                params["queries"] == expected_queries
-            ), f"Failed for {len(documents)} documents"
-            assert len(params["queries"]) == len(
-                documents
-            ), "Queries length must match documents length"
+            assert params["queries"] == expected_queries, f"Failed for {len(documents)} documents"
+            assert len(params["queries"]) == len(documents), "Queries length must match documents length"
 
     def test_get_error_class_basic(self):
         """Test error class generation for basic error."""

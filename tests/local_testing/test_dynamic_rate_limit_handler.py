@@ -15,9 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -89,9 +87,7 @@ async def test_available_tpm(num_projects, dynamic_rate_limit_handler):
     ## SET CACHE W/ ACTIVE PROJECTS
     projects = [str(uuid.uuid4()) for _ in range(num_projects)]
 
-    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
-        model=model, value=projects
-    )
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(model=model, value=projects)
 
     model_tpm = 100
     llm_router = Router(
@@ -128,9 +124,7 @@ async def test_available_rpm(num_projects, dynamic_rate_limit_handler):
     ## SET CACHE W/ ACTIVE PROJECTS
     projects = [str(uuid.uuid4()) for _ in range(num_projects)]
 
-    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
-        model=model, value=projects
-    )
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(model=model, value=projects)
 
     model_rpm = 100
     llm_router = Router(
@@ -171,9 +165,7 @@ async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth, 
     ## SET CACHE W/ ACTIVE PROJECTS
     projects = [str(uuid.uuid4())]
 
-    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
-        model=model, value=projects
-    )
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(model=model, value=projects)
 
     model_usage = 0
     llm_router = Router(
@@ -266,11 +258,7 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
 
             availability = resp[0]
 
-            print(
-                "prev_availability={}, availability={}".format(
-                    prev_availability, availability
-                )
-            )
+            print("prev_availability={}, availability={}".format(prev_availability, availability))
 
             ## assert availability updated
             if prev_availability is not None and availability is not None:
@@ -279,9 +267,7 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
             prev_availability = availability
 
             # make call
-            await llm_router.acompletion(
-                model=model, messages=[{"role": "user", "content": "hey!"}]
-            )
+            await llm_router.acompletion(model=model, messages=[{"role": "user", "content": "hey!"}])
 
             await asyncio.sleep(3)
         except Exception:
@@ -293,9 +279,7 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_update_cache(
-    dynamic_rate_limit_handler, mock_response, user_api_key_auth
-):
+async def test_update_cache(dynamic_rate_limit_handler, mock_response, user_api_key_auth):
     """
     Check if active project correctly updated
     """
@@ -342,14 +326,10 @@ async def test_update_cache(
     assert active_projects == 1
 
 
-@pytest.mark.skip(
-    reason="Unstable on ci/cd due to curr minute changes. Refactor to handle minute changing"
-)
+@pytest.mark.skip(reason="Unstable on ci/cd due to curr minute changes. Refactor to handle minute changing")
 @pytest.mark.parametrize("num_projects", [2])
 @pytest.mark.asyncio
-async def test_multiple_projects(
-    dynamic_rate_limit_handler, mock_response, num_projects
-):
+async def test_multiple_projects(dynamic_rate_limit_handler, mock_response, num_projects):
     """
     If 2 active project
 
@@ -366,18 +346,14 @@ async def test_multiple_projects(
 
     ## SET CACHE W/ ACTIVE PROJECTS
     projects = [str(uuid.uuid4()) for _ in range(num_projects)]
-    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
-        model=model, value=projects
-    )
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(model=model, value=projects)
 
     expected_runs = int(available_tpm_per_project / step_tokens_per_call_per_project)
 
     setattr(
         mock_response,
         "usage",
-        litellm.Usage(
-            prompt_tokens=5, completion_tokens=5, total_tokens=total_tokens_per_call
-        ),
+        litellm.Usage(prompt_tokens=5, completion_tokens=5, total_tokens=total_tokens_per_call),
     )
 
     llm_router = Router(
@@ -409,28 +385,22 @@ async def test_multiple_projects(
 
         ## assert availability updated
         if prev_availability is not None and availability is not None:
-            assert (
-                availability == prev_availability - step_tokens_per_call_per_project
-            ), "Current Availability: Got={}, Expected={}, Step={}, Tokens per step={}, Initial model tpm={}".format(
-                availability,
-                prev_availability - 10,
-                i,
-                step_tokens_per_call_per_project,
-                model_tpm,
+            assert availability == prev_availability - step_tokens_per_call_per_project, (
+                "Current Availability: Got={}, Expected={}, Step={}, Tokens per step={}, Initial model tpm={}".format(
+                    availability,
+                    prev_availability - 10,
+                    i,
+                    step_tokens_per_call_per_project,
+                    model_tpm,
+                )
             )
 
-        print(
-            "prev_availability={}, availability={}".format(
-                prev_availability, availability
-            )
-        )
+        print("prev_availability={}, availability={}".format(prev_availability, availability))
 
         prev_availability = availability
 
         # make call
-        await llm_router.acompletion(
-            model=model, messages=[{"role": "user", "content": "hey!"}]
-        )
+        await llm_router.acompletion(model=model, messages=[{"role": "user", "content": "hey!"}])
 
         await asyncio.sleep(3)
 
@@ -454,9 +424,7 @@ async def test_priority_reservation(num_projects, dynamic_rate_limit_handler):
     ## SET CACHE W/ ACTIVE PROJECTS
     projects = [str(uuid.uuid4()) for _ in range(num_projects)]
 
-    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
-        model=model, value=projects
-    )
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(model=model, value=projects)
 
     litellm.priority_reservation = {"dev": 0.1, "prod": 0.9}
 
@@ -479,27 +447,19 @@ async def test_priority_reservation(num_projects, dynamic_rate_limit_handler):
 
     ## CHECK AVAILABLE TPM PER PROJECT
 
-    resp = await dynamic_rate_limit_handler.check_available_usage(
-        model=model, priority="prod"
-    )
+    resp = await dynamic_rate_limit_handler.check_available_usage(model=model, priority="prod")
 
     availability = resp[1]
 
-    expected_availability = int(
-        model_usage * litellm.priority_reservation["prod"] / num_projects
-    )
+    expected_availability = int(model_usage * litellm.priority_reservation["prod"] / num_projects)
 
     assert availability == expected_availability
 
 
-@pytest.mark.skip(
-    reason="Unstable on ci/cd due to curr minute changes. Refactor to handle minute changing"
-)
+@pytest.mark.skip(reason="Unstable on ci/cd due to curr minute changes. Refactor to handle minute changing")
 @pytest.mark.parametrize("num_projects", [2])
 @pytest.mark.asyncio
-async def test_multiple_projects_e2e(
-    dynamic_rate_limit_handler, mock_response, num_projects
-):
+async def test_multiple_projects_e2e(dynamic_rate_limit_handler, mock_response, num_projects):
     """
     2 parallel calls with different keys, same model
 
@@ -518,18 +478,14 @@ async def test_multiple_projects_e2e(
 
     ## SET CACHE W/ ACTIVE PROJECTS
     projects = [str(uuid.uuid4()) for _ in range(num_projects)]
-    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
-        model=model, value=projects
-    )
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(model=model, value=projects)
 
     expected_runs = int(available_tpm_per_project / step_tokens_per_call_per_project)
 
     setattr(
         mock_response,
         "usage",
-        litellm.Usage(
-            prompt_tokens=5, completion_tokens=5, total_tokens=total_tokens_per_call
-        ),
+        litellm.Usage(prompt_tokens=5, completion_tokens=5, total_tokens=total_tokens_per_call),
     )
 
     llm_router = Router(
@@ -559,28 +515,22 @@ async def test_multiple_projects_e2e(
 
         ## assert availability updated
         if prev_availability is not None and availability is not None:
-            assert (
-                availability == prev_availability - step_tokens_per_call_per_project
-            ), "Current Availability: Got={}, Expected={}, Step={}, Tokens per step={}, Initial model tpm={}".format(
-                availability,
-                prev_availability - 10,
-                i,
-                step_tokens_per_call_per_project,
-                model_tpm,
+            assert availability == prev_availability - step_tokens_per_call_per_project, (
+                "Current Availability: Got={}, Expected={}, Step={}, Tokens per step={}, Initial model tpm={}".format(
+                    availability,
+                    prev_availability - 10,
+                    i,
+                    step_tokens_per_call_per_project,
+                    model_tpm,
+                )
             )
 
-        print(
-            "prev_availability={}, availability={}".format(
-                prev_availability, availability
-            )
-        )
+        print("prev_availability={}, availability={}".format(prev_availability, availability))
 
         prev_availability = availability
 
         # make call
-        await llm_router.acompletion(
-            model=model, messages=[{"role": "user", "content": "hey!"}]
-        )
+        await llm_router.acompletion(model=model, messages=[{"role": "user", "content": "hey!"}])
 
         await asyncio.sleep(3)
 

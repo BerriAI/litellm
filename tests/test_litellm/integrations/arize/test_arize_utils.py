@@ -73,9 +73,7 @@ def test_arize_set_attributes():
     # Simulated LLM response object
     response_obj = ModelResponse(
         usage={"total_tokens": 100, "completion_tokens": 60, "prompt_tokens": 40},
-        choices=[
-            Choices(message={"role": "assistant", "content": "Basic Response Content"})
-        ],
+        choices=[Choices(message={"role": "assistant", "content": "Basic Response Content"})],
         model="gpt-4o",
         id="chatcmpl-ID",
     )
@@ -92,9 +90,7 @@ def test_arize_set_attributes():
     assert span.set_attribute.call_count == 26
 
     # Metadata attached to the span
-    span.set_attribute.assert_any_call(
-        SpanAttributes.METADATA, json.dumps({"key_1": "value_1", "key_2": None})
-    )
+    span.set_attribute.assert_any_call(SpanAttributes.METADATA, json.dumps({"key_1": "value_1", "key_2": None}))
 
     # Basic LLM information
     span.set_attribute.assert_any_call(SpanAttributes.LLM_MODEL_NAME, "gpt-4o")
@@ -117,16 +113,12 @@ def test_arize_set_attributes():
     span.set_attribute.assert_any_call(SpanAttributes.OPENINFERENCE_SPAN_KIND, "LLM")
     # And TOOL must never be written for an LLM chat completion call.
     span_kind_writes = [
-        c.args[1]
-        for c in span.set_attribute.call_args_list
-        if c.args[0] == SpanAttributes.OPENINFERENCE_SPAN_KIND
+        c.args[1] for c in span.set_attribute.call_args_list if c.args[0] == SpanAttributes.OPENINFERENCE_SPAN_KIND
     ]
     assert "TOOL" not in span_kind_writes
 
     # Request message content and metadata
-    span.set_attribute.assert_any_call(
-        SpanAttributes.INPUT_VALUE, "Basic Request Content"
-    )
+    span.set_attribute.assert_any_call(SpanAttributes.INPUT_VALUE, "Basic Request Content")
     span.set_attribute.assert_any_call(
         f"{SpanAttributes.LLM_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}",
         "user",
@@ -137,9 +129,7 @@ def test_arize_set_attributes():
     )
 
     # Tool call definitions and function names
-    span.set_attribute.assert_any_call(
-        f"{SpanAttributes.LLM_TOOLS}.0.name", "get_weather"
-    )
+    span.set_attribute.assert_any_call(f"{SpanAttributes.LLM_TOOLS}.0.name", "get_weather")
     span.set_attribute.assert_any_call(
         f"{SpanAttributes.LLM_TOOLS}.0.description",
         "Fetches weather details.",
@@ -149,26 +139,20 @@ def test_arize_set_attributes():
         json.dumps(
             {
                 "type": "object",
-                "properties": {
-                    "location": {"type": "string", "description": "City name"}
-                },
+                "properties": {"location": {"type": "string", "description": "City name"}},
                 "required": ["location"],
             }
         ),
     )
 
     # Invocation parameters
-    span.set_attribute.assert_any_call(
-        SpanAttributes.LLM_INVOCATION_PARAMETERS, '{"user": "test_user"}'
-    )
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_INVOCATION_PARAMETERS, '{"user": "test_user"}')
 
     # User ID
     span.set_attribute.assert_any_call(SpanAttributes.USER_ID, "test_user")
 
     # Output message content
-    span.set_attribute.assert_any_call(
-        SpanAttributes.OUTPUT_VALUE, "Basic Response Content"
-    )
+    span.set_attribute.assert_any_call(SpanAttributes.OUTPUT_VALUE, "Basic Response Content")
     span.set_attribute.assert_any_call(
         f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}",
         "assistant",
@@ -231,9 +215,7 @@ def test_arize_set_attributes_responses_api():
             ResponseReasoningItem(
                 id="reasoning-001",
                 type="reasoning",
-                summary=[
-                    Summary(text="First, I need to analyze...", type="summary_text")
-                ],
+                summary=[Summary(text="First, I need to analyze...", type="summary_text")],
             ),
             ResponseOutputMessage(
                 id="msg-001",
@@ -280,9 +262,7 @@ def test_arize_set_attributes_responses_api():
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 370)
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 250)
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 120)
-    span.set_attribute.assert_any_call(
-        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 180
-    )
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 180)
 
 
 def test_set_usage_outputs_pydantic_completion_usage():
@@ -330,9 +310,7 @@ def test_set_usage_outputs_pydantic_completion_usage():
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 40)
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 60)
     # reasoning_tokens for chat completions live in completion_tokens_details
-    span.set_attribute.assert_any_call(
-        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 25
-    )
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 25)
 
 
 def test_set_usage_outputs_pydantic_response_api_usage():
@@ -365,9 +343,7 @@ def test_set_usage_outputs_pydantic_response_api_usage():
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 370)
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 120)
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 250)
-    span.set_attribute.assert_any_call(
-        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 180
-    )
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 180)
 
 
 class TestArizeLogger(CustomLogger):
@@ -378,16 +354,12 @@ class TestArizeLogger(CustomLogger):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = None
+        self.standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Capture dynamic params and print them for verification
         print("logged kwargs", json.dumps(kwargs, indent=4, default=str))
-        self.standard_callback_dynamic_params = kwargs.get(
-            "standard_callback_dynamic_params"
-        )
+        self.standard_callback_dynamic_params = kwargs.get("standard_callback_dynamic_params")
 
 
 @pytest.mark.asyncio
@@ -413,14 +385,8 @@ async def test_arize_dynamic_params():
 
     # Assert dynamic parameters were received in the callback
     assert test_arize_logger.standard_callback_dynamic_params is not None
-    assert (
-        test_arize_logger.standard_callback_dynamic_params.get("arize_api_key")
-        == "test_api_key_dynamic"
-    )
-    assert (
-        test_arize_logger.standard_callback_dynamic_params.get("arize_space_key")
-        == "test_space_key_dynamic"
-    )
+    assert test_arize_logger.standard_callback_dynamic_params.get("arize_api_key") == "test_api_key_dynamic"
+    assert test_arize_logger.standard_callback_dynamic_params.get("arize_space_key") == "test_space_key_dynamic"
 
 
 def test_construct_dynamic_arize_headers():
@@ -431,9 +397,7 @@ def test_construct_dynamic_arize_headers():
     from litellm.types.utils import StandardCallbackDynamicParams
 
     # Test with all parameters present
-    dynamic_params_full = StandardCallbackDynamicParams(
-        arize_api_key="test_api_key", arize_space_id="test_space_id"
-    )
+    dynamic_params_full = StandardCallbackDynamicParams(arize_api_key="test_api_key", arize_space_id="test_space_id")
     arize_logger = ArizeLogger()
 
     headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_full)
@@ -441,9 +405,7 @@ def test_construct_dynamic_arize_headers():
     assert headers == expected_headers
 
     # Test with only space_id
-    dynamic_params_space_id_only = StandardCallbackDynamicParams(
-        arize_space_id="test_space_id"
-    )
+    dynamic_params_space_id_only = StandardCallbackDynamicParams(arize_space_id="test_space_id")
 
     headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_space_id_only)
     expected_headers = {"arize-space-id": "test_space_id"}
@@ -459,9 +421,7 @@ def test_construct_dynamic_arize_headers():
     dynamic_params_space_key_and_api_key = StandardCallbackDynamicParams(
         arize_space_key="test_space_key", arize_api_key="test_api_key"
     )
-    headers = arize_logger.construct_dynamic_otel_headers(
-        dynamic_params_space_key_and_api_key
-    )
+    headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_space_key_and_api_key)
     expected_headers = {"arize-space-id": "test_space_key", "api_key": "test_api_key"}
 
 
@@ -531,9 +491,7 @@ def test_arize_emits_no_cache_tokens_when_absent():
     from litellm.integrations.arize._utils import _set_usage_outputs
 
     span = MagicMock()
-    response_obj = {
-        "usage": {"total_tokens": 10, "completion_tokens": 4, "prompt_tokens": 6}
-    }
+    response_obj = {"usage": {"total_tokens": 10, "completion_tokens": 4, "prompt_tokens": 6}}
     _set_usage_outputs(span, response_obj, SpanAttributes)
     attrs = _collect_calls(span)
     assert SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ not in attrs
@@ -545,14 +503,8 @@ def test_passthrough_call_type_resolves_to_llm_span_kind():
     from litellm.integrations._types.open_inference import OpenInferenceSpanKindValues
     from litellm.integrations.arize._utils import _infer_open_inference_span_kind
 
-    assert (
-        _infer_open_inference_span_kind("allm_passthrough_route")
-        == OpenInferenceSpanKindValues.LLM.value
-    )
-    assert (
-        _infer_open_inference_span_kind("llm_passthrough_route")
-        == OpenInferenceSpanKindValues.LLM.value
-    )
+    assert _infer_open_inference_span_kind("allm_passthrough_route") == OpenInferenceSpanKindValues.LLM.value
+    assert _infer_open_inference_span_kind("llm_passthrough_route") == OpenInferenceSpanKindValues.LLM.value
 
 
 def test_arize_chat_completion_with_tools_stays_llm_span_kind():
@@ -608,9 +560,7 @@ def test_arize_chat_completion_with_tools_stays_llm_span_kind():
 
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
     span_kind_writes = [
-        c.args[1]
-        for c in span.set_attribute.call_args_list
-        if c.args[0] == SpanAttributes.OPENINFERENCE_SPAN_KIND
+        c.args[1] for c in span.set_attribute.call_args_list if c.args[0] == SpanAttributes.OPENINFERENCE_SPAN_KIND
     ]
     assert span_kind_writes, "span.kind must be written"
     assert all(v == "LLM" for v in span_kind_writes)
@@ -662,13 +612,8 @@ def test_arize_emits_assistant_tool_calls_on_output_message():
     attrs = _collect_calls(span)
     base = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_TOOL_CALLS}.0"
     assert attrs[f"{base}.{ToolCallAttributes.TOOL_CALL_ID}"] == "call_abc"
-    assert (
-        attrs[f"{base}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}"] == "get_weather"
-    )
-    assert (
-        attrs[f"{base}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}"]
-        == '{"location": "SF"}'
-    )
+    assert attrs[f"{base}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}"] == "get_weather"
+    assert attrs[f"{base}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}"] == '{"location": "SF"}'
 
 
 def test_arize_output_value_falls_back_to_tool_calls_summary():
@@ -821,9 +766,7 @@ def test_arize_emits_tool_call_id_and_name_on_input_tool_message():
     assert attrs[f"{assistant_base}.{ToolCallAttributes.TOOL_CALL_ID}"] == "call_abc"
     # Tool message at index 2
     tool_prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.2"
-    assert (
-        attrs[f"{tool_prefix}.{MessageAttributes.MESSAGE_TOOL_CALL_ID}"] == "call_abc"
-    )
+    assert attrs[f"{tool_prefix}.{MessageAttributes.MESSAGE_TOOL_CALL_ID}"] == "call_abc"
     assert attrs[f"{tool_prefix}.{MessageAttributes.MESSAGE_NAME}"] == "get_weather"
 
 
@@ -869,10 +812,7 @@ def test_arize_emits_multimodal_input_contents():
     assert attrs[f"{base}.0.message_content.type"] == "text"
     assert attrs[f"{base}.0.message_content.text"] == "What is in this image?"
     assert attrs[f"{base}.1.message_content.type"] == "image"
-    assert (
-        attrs[f"{base}.1.message_content.image.image.url"]
-        == "https://example.com/cat.png"
-    )
+    assert attrs[f"{base}.1.message_content.image.image.url"] == "https://example.com/cat.png"
 
 
 def test_arize_emits_session_and_user_attrs_from_metadata():
@@ -977,11 +917,7 @@ def test_arize_does_not_overwrite_user_id_from_optional_params():
         id="r2",
     )
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
-    user_id_writes = [
-        c.args[1]
-        for c in span.set_attribute.call_args_list
-        if c.args[0] == SpanAttributes.USER_ID
-    ]
+    user_id_writes = [c.args[1] for c in span.set_attribute.call_args_list if c.args[0] == SpanAttributes.USER_ID]
     assert "from_metadata" not in user_id_writes
 
 
@@ -1051,9 +987,7 @@ def test_arize_passthrough_bedrock_anthropic_normalization():
             "complete_input_dict": {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 64,
-                "messages": [
-                    {"role": "user", "content": "What is the capital of France?"}
-                ],
+                "messages": [{"role": "user", "content": "What is the capital of France?"}],
             }
         },
         "standard_logging_object": {
@@ -1071,19 +1005,13 @@ def test_arize_passthrough_bedrock_anthropic_normalization():
     assert attrs[SpanAttributes.INPUT_VALUE] == "What is the capital of France?"
     msg0 = f"{SpanAttributes.LLM_INPUT_MESSAGES}.0"
     assert attrs[f"{msg0}.{MessageAttributes.MESSAGE_ROLE}"] == "user"
-    assert (
-        attrs[f"{msg0}.{MessageAttributes.MESSAGE_CONTENT}"]
-        == "What is the capital of France?"
-    )
+    assert attrs[f"{msg0}.{MessageAttributes.MESSAGE_CONTENT}"] == "What is the capital of France?"
 
     # Output rendering (Anthropic content[].text)
     assert attrs[SpanAttributes.OUTPUT_VALUE] == "The capital of France is Paris."
     out0 = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0"
     assert attrs[f"{out0}.{MessageAttributes.MESSAGE_ROLE}"] == "assistant"
-    assert (
-        attrs[f"{out0}.{MessageAttributes.MESSAGE_CONTENT}"]
-        == "The capital of France is Paris."
-    )
+    assert attrs[f"{out0}.{MessageAttributes.MESSAGE_CONTENT}"] == "The capital of France is Paris."
 
     # Token counts (Bedrock input_tokens/output_tokens) — extracted via
     # coercion of the non-dict response.
@@ -1092,9 +1020,7 @@ def test_arize_passthrough_bedrock_anthropic_normalization():
 
     # Span kind defended even though the call_type is a passthrough variant.
     span_kind_writes = [
-        c.args[1]
-        for c in span.set_attribute.call_args_list
-        if c.args[0] == SpanAttributes.OPENINFERENCE_SPAN_KIND
+        c.args[1] for c in span.set_attribute.call_args_list if c.args[0] == SpanAttributes.OPENINFERENCE_SPAN_KIND
     ]
     assert span_kind_writes  # at least one
     assert all(v == "LLM" for v in span_kind_writes)
@@ -1112,11 +1038,7 @@ def test_arize_passthrough_call_type_does_not_run_on_chat_completion():
     span = MagicMock()
     _maybe_normalize_passthrough(
         span,
-        {
-            "additional_args": {
-                "complete_input_dict": {"messages": [{"role": "user", "content": "x"}]}
-            }
-        },
+        {"additional_args": {"complete_input_dict": {"messages": [{"role": "user", "content": "x"}]}}},
         {"choices": [{"message": {"role": "assistant", "content": "y"}}]},
         {"choices": [{"message": {"role": "assistant", "content": "y"}}]},
         {"call_type": "completion"},
@@ -1136,11 +1058,7 @@ def test_arize_passthrough_skipped_when_message_redaction_enabled():
     span = MagicMock()
     kwargs = {
         "additional_args": {
-            "complete_input_dict": {
-                "messages": [
-                    {"role": "user", "content": "Patient John Doe, SSN 123-45-6789"}
-                ]
-            }
+            "complete_input_dict": {"messages": [{"role": "user", "content": "Patient John Doe, SSN 123-45-6789"}]}
         },
         # Enables redaction via the dynamic-param path inside
         # should_redact_message_logging(), without touching globals.

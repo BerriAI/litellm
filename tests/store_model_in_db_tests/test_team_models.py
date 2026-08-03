@@ -60,9 +60,7 @@ async def test_team_model_alias():
     assert update_response.status_code == 200
 
     # Generate key for team
-    key_response = await client.post(
-        "/key/generate", json={"team_id": team_id}, headers=headers
-    )
+    key_response = await client.post("/key/generate", json={"team_id": team_id}, headers=headers)
     assert key_response.status_code == 200
     key = key_response.json()["key"]
 
@@ -137,9 +135,7 @@ async def test_team_model_association():
     print("team_info", json.dumps(team_info, indent=4))
 
     # Verify the model is in team_models
-    assert (
-        "gpt-4-team-test" in team_info["models"]
-    ), "Model should be associated with team"
+    assert "gpt-4-team-test" in team_info["models"], "Model should be associated with team"
 
     # Cleanup - delete the model
     model_id = model_response.json()["model_info"]["id"]
@@ -199,32 +195,24 @@ async def test_team_model_visibility_in_models_endpoint():
     assert model_response.status_code == 200
 
     # Generate keys for both teams
-    team1_key = (
-        await client.post("/key/generate", json={"team_id": team1_id}, headers=headers)
-    ).json()["key"]
-    team2_key = (
-        await client.post("/key/generate", json={"team_id": team2_id}, headers=headers)
-    ).json()["key"]
+    team1_key = (await client.post("/key/generate", json={"team_id": team1_id}, headers=headers)).json()["key"]
+    team2_key = (await client.post("/key/generate", json={"team_id": team2_id}, headers=headers)).json()["key"]
 
     # Check models visibility for team1's key
-    team1_models = await client.get(
-        "/models", headers={"Authorization": f"Bearer {team1_key}"}
-    )
+    team1_models = await client.get("/models", headers={"Authorization": f"Bearer {team1_key}"})
     assert team1_models.status_code == 200
     print("team1_models", json.dumps(team1_models.json(), indent=4))
-    assert any(
-        model["id"] == "gpt-4-team-test" for model in team1_models.json()["data"]
-    ), "Team1 should see their model"
+    assert any(model["id"] == "gpt-4-team-test" for model in team1_models.json()["data"]), (
+        "Team1 should see their model"
+    )
 
     # Check models visibility for team2's key
-    team2_models = await client.get(
-        "/models", headers={"Authorization": f"Bearer {team2_key}"}
-    )
+    team2_models = await client.get("/models", headers={"Authorization": f"Bearer {team2_key}"})
     assert team2_models.status_code == 200
     print("team2_models", json.dumps(team2_models.json(), indent=4))
-    assert not any(
-        model["id"] == "gpt-4-team-test" for model in team2_models.json()["data"]
-    ), "Team2 should not see team1's model"
+    assert not any(model["id"] == "gpt-4-team-test" for model in team2_models.json()["data"]), (
+        "Team2 should not see team1's model"
+    )
 
     # Cleanup
     model_id = model_response.json()["model_info"]["id"]
@@ -270,14 +258,10 @@ async def test_team_model_visibility_in_model_info_endpoint():
     assert model_response.status_code == 200
 
     # Generate team key
-    team_key = (
-        await client.post("/key/generate", json={"team_id": team_id}, headers=headers)
-    ).json()["key"]
+    team_key = (await client.post("/key/generate", json={"team_id": team_id}, headers=headers)).json()["key"]
 
     # Generate non-team key
-    non_team_key = (
-        await client.post("/key/generate", json={}, headers=headers)
-    ).json()["key"]
+    non_team_key = (await client.post("/key/generate", json={}, headers=headers)).json()["key"]
 
     # Check model info visibility with team key
     team_model_info = await client.get(
@@ -289,8 +273,7 @@ async def test_team_model_visibility_in_model_info_endpoint():
     team_model_info = team_model_info.json()
     print("Team 1 model info", json.dumps(team_model_info, indent=4))
     assert any(
-        model["model_info"].get("team_public_model_name") == "gpt-4-team-test"
-        for model in team_model_info["data"]
+        model["model_info"].get("team_public_model_name") == "gpt-4-team-test" for model in team_model_info["data"]
     ), "Team1 should see their model"
 
     # Check model info visibility with non-team key
@@ -303,8 +286,7 @@ async def test_team_model_visibility_in_model_info_endpoint():
     non_team_model_info = non_team_model_info.json()
     print("Non-team model info", json.dumps(non_team_model_info, indent=4))
     assert any(
-        model["model_info"].get("team_public_model_name") == "gpt-4-team-test"
-        for model in non_team_model_info["data"]
+        model["model_info"].get("team_public_model_name") == "gpt-4-team-test" for model in non_team_model_info["data"]
     ), "Non-team should see the model"
 
     # Cleanup

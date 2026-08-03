@@ -147,16 +147,10 @@ class TestMilvusVectorStore:
                 else:
                     # Fallback: check for json kwarg or in args
                     request_data = call_args.kwargs.get("json")
-                    if (
-                        request_data is None
-                        and len(call_args.args) > 0
-                        and isinstance(call_args.args[0], dict)
-                    ):
+                    if request_data is None and len(call_args.args) > 0 and isinstance(call_args.args[0], dict):
                         request_data = call_args.args[0]
 
-                assert (
-                    request_data is not None
-                ), f"Could not extract request data. Call args: {call_args}"
+                assert request_data is not None, f"Could not extract request data. Call args: {call_args}"
                 print("Request data:", json.dumps(request_data, indent=2, default=str))
 
                 # Validate request structure
@@ -213,9 +207,7 @@ class TestMilvusVectorStore:
         with patch("litellm.embedding") as mock_embedding:
             mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
 
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-            ) as mock_post:
+            with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
                 # Make the search request
@@ -252,16 +244,10 @@ class TestMilvusVectorStore:
                 else:
                     # Fallback: check for json kwarg or in args
                     request_data = call_args.kwargs.get("json")
-                    if (
-                        request_data is None
-                        and len(call_args.args) > 0
-                        and isinstance(call_args.args[0], dict)
-                    ):
+                    if request_data is None and len(call_args.args) > 0 and isinstance(call_args.args[0], dict):
                         request_data = call_args.args[0]
 
-                assert (
-                    request_data is not None
-                ), f"Could not extract request data. Call args: {call_args}"
+                assert request_data is not None, f"Could not extract request data. Call args: {call_args}"
 
                 # Validate request structure
                 assert "collectionName" in request_data
@@ -316,11 +302,7 @@ class TestMilvusVectorStore:
         if request_data_str:
             return json.loads(request_data_str)
         request_data = call_args.kwargs.get("json")
-        if (
-            request_data is None
-            and len(call_args.args) > 0
-            and isinstance(call_args.args[0], dict)
-        ):
+        if request_data is None and len(call_args.args) > 0 and isinstance(call_args.args[0], dict):
             request_data = call_args.args[0]
         return request_data
 
@@ -334,9 +316,7 @@ class TestMilvusVectorStore:
         with patch("litellm.embedding") as mock_embedding:
             mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
 
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-            ) as mock_post:
+            with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
                 vector_store_search(
@@ -375,9 +355,7 @@ class TestMilvusVectorStore:
         with patch("litellm.embedding") as mock_embedding:
             mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
 
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-            ) as mock_post:
+            with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
                 vector_store_search(
@@ -413,9 +391,7 @@ class TestMilvusVectorStore:
         with patch("litellm.embedding") as mock_embedding:
             mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
 
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-            ) as mock_post:
+            with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
                 vector_store_search(

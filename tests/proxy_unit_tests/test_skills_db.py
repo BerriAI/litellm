@@ -73,9 +73,7 @@ def prisma_client():
     modified_url = append_query_params(database_url, params)
     os.environ["DATABASE_URL"] = modified_url
 
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     return prisma_client
 

@@ -5,9 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy.common_utils.timezone_utils import (
@@ -158,9 +156,7 @@ def test_get_budget_reset_settings_reads_globals():
 
 
 def test_compute_budget_reset_at_applies_offset():
-    settings = BudgetResetSettings(
-        timezone="Asia/Jerusalem", reset_time_of_day=time(12, 0)
-    )
+    settings = BudgetResetSettings(timezone="Asia/Jerusalem", reset_time_of_day=time(12, 0))
     reset_at = compute_budget_reset_at("1d", settings)
     jerusalem = reset_at.astimezone(ZoneInfo("Asia/Jerusalem"))
     assert jerusalem.hour == 12

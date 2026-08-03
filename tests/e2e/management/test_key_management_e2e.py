@@ -130,9 +130,7 @@ class TestKeyManagementRoutes:
         assert info.rpm_limit == 141414, f"/key/info reports rpm_limit {info.rpm_limit}, configured 141414"
 
     @pytest.mark.covers("mgmt.key.unblock.persists")
-    def test_unblock_flips_key_info_blocked_back(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_unblock_flips_key_info_blocked_back(self, client: ManagementClient, resources: ResourceManager) -> None:
         key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 
         _block(client, key)
@@ -150,9 +148,7 @@ class TestKeyManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.key.health.happy_path")
-    def test_health_reports_the_calling_key_healthy(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_health_reports_the_calling_key_healthy(self, client: ManagementClient, resources: ResourceManager) -> None:
         key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 
         health = unwrap(
@@ -198,9 +194,7 @@ class TestKeyManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.key.generate.admin_only")
-    def test_generate_forbidden_for_non_admin_key(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_generate_forbidden_for_non_admin_key(self, client: ManagementClient, resources: ResourceManager) -> None:
         nonadmin = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 
         outcome = client.proxy.transport.send(
@@ -213,9 +207,7 @@ class TestKeyManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.key.delete.admin_only")
-    def test_delete_forbidden_for_non_admin_key(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_delete_forbidden_for_non_admin_key(self, client: ManagementClient, resources: ResourceManager) -> None:
         nonadmin = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
         victim = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 
@@ -232,9 +224,7 @@ class TestKeyManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.key.update.admin_only")
-    def test_update_forbidden_for_non_admin_key(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_update_forbidden_for_non_admin_key(self, client: ManagementClient, resources: ResourceManager) -> None:
         nonadmin = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
         target = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 

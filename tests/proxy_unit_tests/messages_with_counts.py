@@ -218,9 +218,7 @@ integer_enum = {
                 "description": "This is the main function description",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "integer_enum": {"type": "integer", "enum": [-1, 1]}
-                    },
+                    "properties": {"integer_enum": {"type": "integer", "enum": [-1, 1]}},
                 },
             },
         }
@@ -243,9 +241,7 @@ integer_enum_tool_choice_name = {
                 "description": "This is the main function description",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "integer_enum": {"type": "integer", "enum": [-1, 1]}
-                    },
+                    "properties": {"integer_enum": {"type": "integer", "enum": [-1, 1]}},
                 },
             },
         }

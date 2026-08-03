@@ -87,9 +87,7 @@ class TestUpdateMetadataFieldsPremiumCheck:
         "litellm.proxy.management_endpoints.common_utils._premium_user_check",
         side_effect=Exception("Should not be called"),
     )
-    def test_empty_string_team_member_key_duration_skips_premium_check(
-        self, mock_check
-    ):
+    def test_empty_string_team_member_key_duration_skips_premium_check(self, mock_check):
         """team_member_key_duration: '' should NOT trigger premium user check."""
         updated_kv = {
             "team_id": "team-123",
@@ -102,9 +100,7 @@ class TestUpdateMetadataFieldsPremiumCheck:
         "litellm.proxy.management_endpoints.common_utils._premium_user_check",
         side_effect=Exception("Should not be called"),
     )
-    def test_full_ui_payload_with_empty_premium_fields_skips_premium_check(
-        self, mock_check
-    ):
+    def test_full_ui_payload_with_empty_premium_fields_skips_premium_check(self, mock_check):
         """A realistic UI payload with all empty premium fields should not 403."""
         updated_kv = {
             "team_id": "team-123",
@@ -147,9 +143,7 @@ class TestUpdateMetadataFieldsPremiumCheck:
     @patch(
         "litellm.proxy.management_endpoints.common_utils._premium_user_check",
     )
-    def test_non_empty_team_member_key_duration_triggers_premium_check(
-        self, mock_check
-    ):
+    def test_non_empty_team_member_key_duration_triggers_premium_check(self, mock_check):
         """team_member_key_duration: '30d' SHOULD trigger premium user check."""
         updated_kv = {
             "team_id": "team-123",

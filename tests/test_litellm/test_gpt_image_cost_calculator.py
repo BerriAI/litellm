@@ -343,8 +343,7 @@ class TestGPTImage15OutputImageTokens:
         expected_cost = 169 * 5e-06 + 439 * 1e-05 + 4160 * 3.2e-05
 
         assert abs(cost - expected_cost) < 1e-6, (
-            f"Expected {expected_cost}, got {cost}. "
-            f"Image tokens may not be included in cost calculation."
+            f"Expected {expected_cost}, got {cost}. Image tokens may not be included in cost calculation."
         )
 
 

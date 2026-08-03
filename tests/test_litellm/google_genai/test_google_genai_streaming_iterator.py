@@ -53,9 +53,7 @@ async def test_async_streaming_iterator_yields_complete_sse_events():
     assert chunk.startswith(b"data: ")
     assert chunk.endswith(b"\n\n")
     assert (
-        json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][0][
-            "inlineData"
-        ]["mimeType"]
+        json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][0]["inlineData"]["mimeType"]
         == "image/jpeg"
     )
 
@@ -76,9 +74,9 @@ def test_sync_streaming_iterator_yields_complete_sse_events():
     chunk = next(iterator)
     assert chunk.startswith(b"data: ")
     assert chunk.endswith(b"\n\n")
-    assert json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][
-        0
-    ]["inlineData"]["data"].startswith("A")
+    assert json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][0]["inlineData"][
+        "data"
+    ].startswith("A")
 
 
 @pytest.mark.asyncio

@@ -116,9 +116,7 @@ def test_get_complete_url_cognitive_services(
     """
     api_base = "https://eastus.api.cognitive.microsoft.com"
 
-    url = azure_tts_config.get_complete_url(
-        model="azure-tts", api_base=api_base, litellm_params={}
-    )
+    url = azure_tts_config.get_complete_url(model="azure-tts", api_base=api_base, litellm_params={})
 
     assert url == "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1"
 
@@ -129,9 +127,7 @@ def test_get_complete_url_tts_endpoint(azure_tts_config: AzureAVATextToSpeechCon
     """
     api_base = "https://westus.tts.speech.microsoft.com"
 
-    url = azure_tts_config.get_complete_url(
-        model="azure-tts", api_base=api_base, litellm_params={}
-    )
+    url = azure_tts_config.get_complete_url(model="azure-tts", api_base=api_base, litellm_params={})
 
     assert url == "https://westus.tts.speech.microsoft.com/cognitiveservices/v1"
 
@@ -144,9 +140,7 @@ def test_get_complete_url_tts_endpoint_with_path(
     """
     api_base = "https://westus.tts.speech.microsoft.com/cognitiveservices/v1"
 
-    url = azure_tts_config.get_complete_url(
-        model="azure-tts", api_base=api_base, litellm_params={}
-    )
+    url = azure_tts_config.get_complete_url(model="azure-tts", api_base=api_base, litellm_params={})
 
     assert url == "https://westus.tts.speech.microsoft.com/cognitiveservices/v1"
 
@@ -157,9 +151,7 @@ def test_get_complete_url_custom_endpoint(azure_tts_config: AzureAVATextToSpeech
     """
     api_base = "https://custom.domain.com"
 
-    url = azure_tts_config.get_complete_url(
-        model="azure-tts", api_base=api_base, litellm_params={}
-    )
+    url = azure_tts_config.get_complete_url(model="azure-tts", api_base=api_base, litellm_params={})
 
     assert url == "https://custom.domain.com/cognitiveservices/v1"
 
@@ -171,9 +163,7 @@ def test_get_complete_url_missing_api_base(
     Test error when api_base is missing
     """
     with pytest.raises(ValueError, match="api_base is required"):
-        azure_tts_config.get_complete_url(
-            model="azure-tts", api_base=None, litellm_params={}
-        )
+        azure_tts_config.get_complete_url(model="azure-tts", api_base=None, litellm_params={})
 
 
 # Tests for transform_text_to_speech_request
@@ -260,10 +250,7 @@ def test_transform_text_to_speech_request_headers(
         headers={},
     )
 
-    assert (
-        result["headers"]["X-Microsoft-OutputFormat"]
-        == "audio-16khz-32kbitrate-mono-mp3"
-    )
+    assert result["headers"]["X-Microsoft-OutputFormat"] == "audio-16khz-32kbitrate-mono-mp3"
 
 
 # Tests for transform_text_to_speech_response
@@ -298,14 +285,9 @@ def test_build_express_as_element_with_style(
     """
     Test _build_express_as_element helper with style only
     """
-    result = azure_tts_config._build_express_as_element(
-        content="<prosody rate='+0%'>Test</prosody>", style="cheerful"
-    )
+    result = azure_tts_config._build_express_as_element(content="<prosody rate='+0%'>Test</prosody>", style="cheerful")
 
-    assert (
-        result
-        == "<mstts:express-as style='cheerful'><prosody rate='+0%'>Test</prosody></mstts:express-as>"
-    )
+    assert result == "<mstts:express-as style='cheerful'><prosody rate='+0%'>Test</prosody></mstts:express-as>"
 
 
 def test_build_express_as_element_with_all_attrs(
@@ -348,9 +330,7 @@ def test_get_voice_language_with_explicit_lang(
     """
     Test _get_voice_language returns explicit language when provided
     """
-    result = azure_tts_config._get_voice_language(
-        voice_name="en-US-AvaMultilingualNeural", explicit_lang="es-ES"
-    )
+    result = azure_tts_config._get_voice_language(voice_name="en-US-AvaMultilingualNeural", explicit_lang="es-ES")
 
     assert result == "es-ES"
 
@@ -361,9 +341,7 @@ def test_get_voice_language_without_explicit_lang(
     """
     Test _get_voice_language returns None when no explicit language provided
     """
-    result = azure_tts_config._get_voice_language(
-        voice_name="en-US-AriaNeural", explicit_lang=None
-    )
+    result = azure_tts_config._get_voice_language(voice_name="en-US-AriaNeural", explicit_lang=None)
 
     assert result is None
 
@@ -374,9 +352,7 @@ def test_get_voice_language_explicit_takes_precedence(
     """
     Test that explicit language takes precedence over voice name
     """
-    result = azure_tts_config._get_voice_language(
-        voice_name="en-US-AvaMultilingualNeural", explicit_lang="fr-FR"
-    )
+    result = azure_tts_config._get_voice_language(voice_name="en-US-AvaMultilingualNeural", explicit_lang="fr-FR")
 
     assert result == "fr-FR"
 
@@ -637,10 +613,7 @@ def test_transform_text_to_speech_request_with_raw_ssml_header(
     assert result["ssml_body"] == raw_ssml
 
     # Headers should still be set correctly
-    assert (
-        result["headers"]["X-Microsoft-OutputFormat"]
-        == "audio-16khz-32kbitrate-mono-mp3"
-    )
+    assert result["headers"]["X-Microsoft-OutputFormat"] == "audio-16khz-32kbitrate-mono-mp3"
 
 
 def test_transform_text_to_speech_request_ssml_with_mstts_namespace(

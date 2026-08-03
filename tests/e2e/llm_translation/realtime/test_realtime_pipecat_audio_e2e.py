@@ -170,9 +170,7 @@ async def _run_pipeline(
     context = LLMContext(tools=WEATHER_TOOL)
     aggregator = LLMContextAggregatorPair(context)
     capture = _CaptureFrames()
-    task = PipelineTask(
-        Pipeline([aggregator.user(), llm, capture, aggregator.assistant()])
-    )
+    task = PipelineTask(Pipeline([aggregator.user(), llm, capture, aggregator.assistant()]))
 
     await task.queue_frames(
         [
@@ -300,9 +298,7 @@ async def _run_audio_input_pipeline(
     context = LLMContext(tools=WEATHER_TOOL)
     aggregator = LLMContextAggregatorPair(context)
     capture = _CaptureFrames()
-    task = PipelineTask(
-        Pipeline([aggregator.user(), llm, capture, aggregator.assistant()])
-    )
+    task = PipelineTask(Pipeline([aggregator.user(), llm, capture, aggregator.assistant()]))
 
     async def _stream_audio() -> None:
         # Wait for the LLM session to be ready before streaming so audio
@@ -313,9 +309,7 @@ async def _run_audio_input_pipeline(
             await asyncio.sleep(0.1)
 
         for chunk in chunks:
-            await task.queue_frame(
-                InputAudioRawFrame(audio=chunk, sample_rate=sample_rate, num_channels=1)
-            )
+            await task.queue_frame(InputAudioRawFrame(audio=chunk, sample_rate=sample_rate, num_channels=1))
             await asyncio.sleep(chunk_duration_s)
 
     async def _run() -> None:
@@ -347,9 +341,7 @@ def test_pipecat_server_vad_audio_input(
     assert WEATHER_WAV.exists(), f"audio fixture not found: {WEATHER_WAV}"
     model = realtime_model(provider, realtime_models)
 
-    got_text, audio_bytes = asyncio.run(
-        _run_audio_input_pipeline(scoped_key, model)
-    )
+    got_text, audio_bytes = asyncio.run(_run_audio_input_pipeline(scoped_key, model))
 
     assert got_text, "server VAD did not trigger a response (no assistant text)"
     assert audio_bytes > 0, "no TTS audio bytes received"

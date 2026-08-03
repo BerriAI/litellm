@@ -12,9 +12,7 @@ import asyncio
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import openai
 import pytest
 from fastapi import Response
@@ -74,10 +72,7 @@ def test_chat_completion_exception(client):
         assert json_response.keys() == {"error"}
         print("ERROR=", json_response["error"])
         assert isinstance(json_response["error"]["message"], str)
-        assert (
-            "litellm.AuthenticationError: AuthenticationError"
-            in json_response["error"]["message"]
-        )
+        assert "litellm.AuthenticationError: AuthenticationError" in json_response["error"]["message"]
 
         code_in_error = json_response["error"]["code"]
         # OpenAI SDK required code to be STR, https://github.com/BerriAI/litellm/issues/4970
@@ -88,9 +83,7 @@ def test_chat_completion_exception(client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(
-            response=response
-        )
+        openai_exception = openai_client._make_status_error_from_response(response=response)
         assert isinstance(openai_exception, openai.AuthenticationError)
 
     except Exception as e:
@@ -131,9 +124,7 @@ def test_chat_completion_exception_azure(mock_acompletion, client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(
-            response=response
-        )
+        openai_exception = openai_client._make_status_error_from_response(response=response)
         print(openai_exception)
         assert isinstance(openai_exception, openai.AuthenticationError)
 
@@ -169,9 +160,7 @@ def test_embedding_auth_exception_azure(mock_aembedding, client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(
-            response=response
-        )
+        openai_exception = openai_client._make_status_error_from_response(response=response)
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.AuthenticationError)
 
@@ -200,9 +189,7 @@ def test_exception_openai_bad_model(client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(
-            response=response
-        )
+        openai_exception = openai_client._make_status_error_from_response(response=response)
         print("Type of exception=", type(openai_exception))
         assert isinstance(openai_exception, openai.BadRequestError)
 
@@ -229,15 +216,10 @@ def test_chat_completion_exception_any_model(client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(
-            response=response
-        )
+        openai_exception = openai_client._make_status_error_from_response(response=response)
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert (
-            "/chat/completions: Invalid model name passed in model=Lite-GPT-12"
-            in str(_error_message)
-        )
+        assert "/chat/completions: Invalid model name passed in model=Lite-GPT-12" in str(_error_message)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
@@ -259,15 +241,11 @@ def test_embedding_exception_any_model(client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(
-            response=response
-        )
+        openai_exception = openai_client._make_status_error_from_response(response=response)
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert "/embeddings: Invalid model name passed in model=Lite-GPT-12" in str(
-            _error_message
-        )
+        assert "/embeddings: Invalid model name passed in model=Lite-GPT-12" in str(_error_message)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
@@ -313,9 +291,7 @@ def test_chat_completion_exception_azure_context_window(mock_acompletion, client
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(
-            response=response
-        )
+        openai_exception = openai_client._make_status_error_from_response(response=response)
         print("exception from proxy", openai_exception)
         assert isinstance(openai_exception, openai.BadRequestError)
         print("passed exception is of type BadRequestError")

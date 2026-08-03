@@ -42,23 +42,17 @@ class TestBedrockGuardrail:
         version = os.environ["BEDROCK_GUARDRAIL_VERSION"]
 
         name = f"e2e-bedrock-guard-{unique_marker()}"
-        guardrail_id = client.create_bedrock_guardrail(
-            name, identifier=identifier, version=version
-        )
+        guardrail_id = client.create_bedrock_guardrail(name, identifier=identifier, version=version)
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
         # Selected per request rather than registered default_on, so an upstream
         # ApplyGuardrail failure surfaces here instead of 403ing every other suite
         # running against this proxy.
-        result = poll_until_blocked(
-            lambda: client.chat(scoped_key, MODEL, BLOCKED_PROMPT, guardrails=[name])
-        )
+        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, BLOCKED_PROMPT, guardrails=[name]))
 
         match result:
             case UnknownApiError(status_code=status, body=body):
-                assert status in {400, 403}, (
-                    f"expected a guardrail block status, got {status}: {body[:400]}"
-                )
+                assert status in {400, 403}, f"expected a guardrail block status, got {status}: {body[:400]}"
                 body_lower = body.lower()
                 assert any(
                     token in body_lower
@@ -72,6 +66,4 @@ class TestBedrockGuardrail:
                     )
                 ), f"block body should name the guardrail reason; got: {body[:400]}"
             case _:
-                pytest.fail(
-                    f"bedrock default-on guardrail did not block harmful prompt; got {result}"
-                )
+                pytest.fail(f"bedrock default-on guardrail did not block harmful prompt; got {result}")

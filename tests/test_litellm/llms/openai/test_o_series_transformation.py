@@ -40,6 +40,6 @@ def test_is_model_o_series_model(model_name: str, expected: bool):
         expected: The expected result (True if it should be identified as an O-series model)
     """
     config = OpenAIOSeriesConfig()
-    assert (
-        config.is_model_o_series_model(model_name) == expected
-    ), f"Expected {model_name} to be {'an O-series model' if expected else 'not an O-series model'}"
+    assert config.is_model_o_series_model(model_name) == expected, (
+        f"Expected {model_name} to be {'an O-series model' if expected else 'not an O-series model'}"
+    )

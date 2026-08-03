@@ -53,9 +53,7 @@ class TestCallbackManagementEndpoints:
         client = TestClient(app)
 
         # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
-        )
+        response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-1234"})
 
         # Verify response
         assert response.status_code == 200
@@ -94,9 +92,7 @@ class TestCallbackManagementEndpoints:
             litellm._async_success_callback.append("langfuse")
 
             # Make request to list callbacks endpoint
-            response = client.get(
-                "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
-            )
+            response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-1234"})
 
             # Verify response
             assert response.status_code == 200
@@ -125,9 +121,7 @@ class TestCallbackManagementEndpoints:
         litellm.callbacks.append("datadog")
 
         # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
-        )
+        response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-1234"})
 
         # Verify response
         assert response.status_code == 200
@@ -141,10 +135,7 @@ class TestCallbackManagementEndpoints:
         # The categorization logic should deduplicate properly
         assert len([cb for cb in response_data["success"] if cb == "datadog"]) <= 1
         assert len([cb for cb in response_data["failure"] if cb == "datadog"]) <= 1
-        assert (
-            len([cb for cb in response_data["success_and_failure"] if cb == "datadog"])
-            <= 1
-        )
+        assert len([cb for cb in response_data["success_and_failure"] if cb == "datadog"]) <= 1
 
         # Verify the response structure is correct
         assert isinstance(response_data["success"], list)
@@ -162,9 +153,7 @@ class TestCallbackManagementEndpoints:
         litellm.callbacks.append("prometheus")
 
         # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
-        )
+        response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-1234"})
 
         # Verify response
         assert response.status_code == 200
@@ -176,24 +165,16 @@ class TestCallbackManagementEndpoints:
         proxy_internal_callbacks = ["_PROXY_VirtualKeyModelMaxBudgetLimiter"]
 
         response_data["success_and_failure"] = [
-            cb
-            for cb in response_data["success_and_failure"]
-            if cb not in proxy_internal_callbacks
+            cb for cb in response_data["success_and_failure"] if cb not in proxy_internal_callbacks
         ]
 
         # Verify callbacks are properly categorized
-        assert (
-            "prometheus" in response_data["success_and_failure"]
-        )  # callbacks list items go to success_and_failure
+        assert "prometheus" in response_data["success_and_failure"]  # callbacks list items go to success_and_failure
         assert "langfuse" in response_data["success"]
         assert "datadog" in response_data["failure"]
 
         # Verify no duplicates
-        all_callbacks = (
-            response_data["success"]
-            + response_data["failure"]
-            + response_data["success_and_failure"]
-        )
+        all_callbacks = response_data["success"] + response_data["failure"] + response_data["success_and_failure"]
         assert len(set(all_callbacks)) == len(all_callbacks)
 
     def test_alist_callbacks_empty_response_structure(self):
@@ -202,9 +183,7 @@ class TestCallbackManagementEndpoints:
         client = TestClient(app)
 
         # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
-        )
+        response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-1234"})
 
         # Verify response structure
         assert response.status_code == 200
@@ -222,9 +201,7 @@ class TestCallbackManagementEndpoints:
         client = TestClient(app)
 
         # Make request to get callback configs endpoint
-        response = client.get(
-            "/callbacks/configs", headers={"Authorization": "Bearer sk-1234"}
-        )
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-1234"})
 
         # Verify response
         assert response.status_code == 200
@@ -251,12 +228,9 @@ class TestCallbackManagementEndpoints:
 
         # Check if at least one callback has detailed parameter configuration
         has_detailed_params = any(
-            config.get("dynamic_params") and len(config.get("dynamic_params", {})) > 0
-            for config in response_data
+            config.get("dynamic_params") and len(config.get("dynamic_params", {})) > 0 for config in response_data
         )
-        assert (
-            has_detailed_params
-        ), "Expected at least one callback to have detailed parameter configuration"
+        assert has_detailed_params, "Expected at least one callback to have detailed parameter configuration"
 
         galileo_config = next(
             (config for config in response_data if config.get("id") == "galileo"),

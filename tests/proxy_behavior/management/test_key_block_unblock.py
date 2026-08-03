@@ -42,9 +42,7 @@ _SCENARIOS = [
 
 async def _seed_target(proxy_client, seeder, scratch_prefix, world, shape, caller):
     if shape == "self":
-        return await create_scratch_key(
-            proxy_client, seeder, scratch_prefix, user_id=caller.user_id
-        )
+        return await create_scratch_key(proxy_client, seeder, scratch_prefix, user_id=caller.user_id)
     if shape == "owner":
         return await create_scratch_key(
             proxy_client,
@@ -82,29 +80,21 @@ async def test_key_block_unblock_authz_matrix(
 ):
     caller = world.keys[actor]
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
-    target_cleartext = await _seed_target(
-        proxy_client, seeder, scratch.prefix, world, shape, caller
-    )
+    target_cleartext = await _seed_target(proxy_client, seeder, scratch.prefix, world, shape, caller)
     target_hashed = hash_token(target_cleartext)
 
     # /unblock starts from a blocked row so a 200 is observable as True->False.
     if route == "unblock":
-        await prisma.db.litellm_verificationtoken.update(
-            where={"token": target_hashed}, data={"blocked": True}
-        )
+        await prisma.db.litellm_verificationtoken.update(where={"token": target_hashed}, data={"blocked": True})
 
     resp = await proxy_client.post(
         f"/key/{route}",
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"key": target_cleartext},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{route} {actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{route} {actor.value} {shape}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": target_hashed}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": target_hashed})
     assert row is not None
     # A never-blocked key reads back blocked=None; treat that as not-blocked.
     if expected_status == 200:
@@ -117,34 +107,24 @@ async def test_key_block_unblock_authz_matrix(
 async def test_key_block_unblock_round_trip(proxy_client, prisma, scratch, world):
     """PROXY_ADMIN block then unblock flips the blocked column True then False."""
     admin = world.keys[Actor.PROXY_ADMIN]
-    target = await create_scratch_key(
-        proxy_client, admin.cleartext, scratch.prefix, user_id=admin.user_id
-    )
+    target = await create_scratch_key(proxy_client, admin.cleartext, scratch.prefix, user_id=admin.user_id)
     hashed = hash_token(target)
     headers = {"Authorization": f"Bearer {admin.cleartext}"}
 
-    blocked = await proxy_client.post(
-        "/key/block", headers=headers, json={"key": target}
-    )
+    blocked = await proxy_client.post("/key/block", headers=headers, json={"key": target})
     assert blocked.status_code == 200, blocked.text
     row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hashed})
     assert row is not None and row.blocked is True
 
-    unblocked = await proxy_client.post(
-        "/key/unblock", headers=headers, json={"key": target}
-    )
+    unblocked = await proxy_client.post("/key/unblock", headers=headers, json={"key": target})
     assert unblocked.status_code == 200, unblocked.text
     row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hashed})
     assert row is not None and row.blocked is False
 
 
 @pytest.mark.parametrize("route", ["block", "unblock"])
-@pytest.mark.parametrize(
-    "actor", [Actor.PROXY_ADMIN, Actor.TEAM_ADMIN], ids=["proxy_admin", "team_admin"]
-)
-async def test_key_block_unblock_missing_key_returns_404(
-    route: str, actor: Actor, proxy_client, world
-):
+@pytest.mark.parametrize("actor", [Actor.PROXY_ADMIN, Actor.TEAM_ADMIN], ids=["proxy_admin", "team_admin"])
+async def test_key_block_unblock_missing_key_returns_404(route: str, actor: Actor, proxy_client, world):
     """A well-formed but unseeded key is 404 — not 401/403 — for both the
     PROXY_ADMIN existence check and the non-admin _check_key_admin_access path."""
     caller = world.keys[actor]
@@ -154,6 +134,4 @@ async def test_key_block_unblock_missing_key_returns_404(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"key": missing},
     )
-    assert (
-        resp.status_code == 404
-    ), f"{route} {actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == 404, f"{route} {actor.value}: {resp.status_code} {resp.text}"

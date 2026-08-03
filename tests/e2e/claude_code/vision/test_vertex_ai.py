@@ -44,14 +44,9 @@ VERTEX_AI_MODELS = [
 # Minimal 1x1 red PNG, base64-encoded. We embed it directly as the
 # `image` content block's source — no temp file or Files API upload
 # needed, the test stays hermetic.
-RED_PIXEL_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
-    "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-)
+RED_PIXEL_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
-VISION_PROMPT = (
-    "What single color do you see in the attached image? Answer in one word."
-)
+VISION_PROMPT = "What single color do you see in the attached image? Answer in one word."
 
 
 def _build_stdin_input() -> str:

@@ -48,25 +48,17 @@ def test_check_if_part_exists_in_parts_camel_case_snake_case():
     assert check_if_part_exists_in_parts(parts_with_snake_case, part_with_camel_case)
 
     # Test camelCase to snake_case matching
-    parts_with_camel_case = [
-        {"functionCall": {"name": "calculate_sum", "args": {"a": 1, "b": 2}}}
-    ]
+    parts_with_camel_case = [{"functionCall": {"name": "calculate_sum", "args": {"a": 1, "b": 2}}}]
 
-    part_with_snake_case = {
-        "function_call": {"name": "calculate_sum", "args": {"a": 1, "b": 2}}
-    }
+    part_with_snake_case = {"function_call": {"name": "calculate_sum", "args": {"a": 1, "b": 2}}}
 
     # Should find match between functionCall and function_call
     assert check_if_part_exists_in_parts(parts_with_camel_case, part_with_snake_case)
 
     # Test no match when values differ
-    part_with_different_values = {
-        "function_call": {"name": "different_function", "args": {"x": 5}}
-    }
+    part_with_different_values = {"function_call": {"name": "different_function", "args": {"x": 5}}}
 
-    assert not check_if_part_exists_in_parts(
-        parts_with_snake_case, part_with_different_values
-    )
+    assert not check_if_part_exists_in_parts(parts_with_snake_case, part_with_different_values)
 
     # Test multiple keys with mixed casing
     parts_mixed = [
@@ -363,11 +355,7 @@ def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
     messages = [{"role": "user", "content": "test"}]
     optional_params = {}
-    litellm_params = {
-        "metadata": {
-            "requester_metadata": {"user": "john_doe", "project": "test-project"}
-        }
-    }
+    litellm_params = {"metadata": {"requester_metadata": {"user": "john_doe", "project": "test-project"}}}
 
     # Google GenAI/AI Studio should not include labels from metadata
     result = _transform_request_body(
@@ -480,9 +468,9 @@ def test_thought_signature_parallel_function_calls():
     assert "provider_specific_fields" in tools[0]
     assert tools[0]["provider_specific_fields"]["thought_signature"] == test_signature
     # Second tool call should not have thought signature
-    assert "provider_specific_fields" not in tools[
-        1
-    ] or "thought_signature" not in tools[1].get("provider_specific_fields", {})
+    assert "provider_specific_fields" not in tools[1] or "thought_signature" not in tools[1].get(
+        "provider_specific_fields", {}
+    )
 
 
 def test_thought_signature_preservation_in_conversion():
@@ -657,9 +645,7 @@ def test_dummy_signature_added_for_gemini_3_conversation_history():
     }
 
     # Convert to Gemini format for gemini-3-pro-preview (should add dummy signature)
-    gemini_parts = convert_to_gemini_tool_call_invoke(
-        assistant_message_from_older_model, model="gemini-3-pro-preview"
-    )
+    gemini_parts = convert_to_gemini_tool_call_invoke(assistant_message_from_older_model, model="gemini-3-pro-preview")
 
     # Verify dummy signature is added
     assert len(gemini_parts) == 1
@@ -667,9 +653,7 @@ def test_dummy_signature_added_for_gemini_3_conversation_history():
     assert "thoughtSignature" in gemini_parts[0]
 
     # Verify it's the expected dummy signature (base64 encoded "skip_thought_signature_validator")
-    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
-        "utf-8"
-    )
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
 
 
@@ -698,9 +682,7 @@ def test_dummy_signature_not_added_for_gemini_2_5():
     }
 
     # Convert to Gemini format for gemini-2.5-flash (should NOT add dummy signature)
-    gemini_parts = convert_to_gemini_tool_call_invoke(
-        assistant_message, model="gemini-2.5-flash"
-    )
+    gemini_parts = convert_to_gemini_tool_call_invoke(assistant_message, model="gemini-2.5-flash")
 
     # Verify no dummy signature is added for non-gemini-3 models
     assert len(gemini_parts) == 1
@@ -737,9 +719,7 @@ def test_dummy_signature_not_added_when_signature_exists():
     }
 
     # Convert to Gemini format for gemini-3-pro-preview
-    gemini_parts = convert_to_gemini_tool_call_invoke(
-        assistant_message_with_signature, model="gemini-3-pro-preview"
-    )
+    gemini_parts = convert_to_gemini_tool_call_invoke(assistant_message_with_signature, model="gemini-3-pro-preview")
 
     # Verify real signature is preserved, not replaced with dummy
     assert len(gemini_parts) == 1
@@ -768,9 +748,7 @@ def test_dummy_signature_with_function_call_mode():
     }
 
     # Convert to Gemini format for gemini-3-pro-preview
-    gemini_parts = convert_to_gemini_tool_call_invoke(
-        assistant_message_function_call, model="gemini-3-pro-preview"
-    )
+    gemini_parts = convert_to_gemini_tool_call_invoke(assistant_message_function_call, model="gemini-3-pro-preview")
 
     # Verify dummy signature is added
     assert len(gemini_parts) == 1
@@ -778,9 +756,7 @@ def test_dummy_signature_with_function_call_mode():
     assert "thoughtSignature" in gemini_parts[0]
 
     # Verify it's the expected dummy signature
-    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
-        "utf-8"
-    )
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
 
 
@@ -1142,9 +1118,7 @@ class TestVideoMetadataAllGeminiModels:
     def test_video_metadata_fps_gemini_2_5_flash(self):
         """Gemini 2.5 Flash: fps in video_metadata should be forwarded (Issue #25474)"""
         messages = self._make_video_messages({"fps": 5})
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-2.5-flash"
-        )
+        contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         assert file_part["video_metadata"]["fps"] == 5
@@ -1152,21 +1126,15 @@ class TestVideoMetadataAllGeminiModels:
     def test_video_metadata_fps_gemini_2_5_pro(self):
         """Gemini 2.5 Pro: fps in video_metadata should be forwarded (Issue #25474)"""
         messages = self._make_video_messages({"fps": 10})
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-2.5-pro"
-        )
+        contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-pro")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         assert file_part["video_metadata"]["fps"] == 10
 
     def test_video_metadata_offsets_gemini_2_5_flash(self):
         """Gemini 2.5 Flash: start_offset/end_offset converted to camelCase (Issue #25474)"""
-        messages = self._make_video_messages(
-            {"start_offset": "5s", "end_offset": "30s"}
-        )
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-2.5-flash"
-        )
+        messages = self._make_video_messages({"start_offset": "5s", "end_offset": "30s"})
+        contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         vm = file_part["video_metadata"]
@@ -1175,12 +1143,8 @@ class TestVideoMetadataAllGeminiModels:
 
     def test_video_metadata_all_fields_gemini_2_5_flash(self):
         """Gemini 2.5 Flash: all video_metadata fields forwarded correctly (Issue #25474)"""
-        messages = self._make_video_messages(
-            {"fps": 5, "start_offset": "10s", "end_offset": "60s"}
-        )
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-2.5-flash"
-        )
+        messages = self._make_video_messages({"fps": 5, "start_offset": "10s", "end_offset": "60s"})
+        contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         vm = file_part["video_metadata"]
@@ -1191,9 +1155,7 @@ class TestVideoMetadataAllGeminiModels:
     def test_video_metadata_gemini_1_5_pro(self):
         """Gemini 1.5 Pro: video_metadata should also be forwarded (Issue #25474)"""
         messages = self._make_video_messages({"fps": 2})
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-1.5-pro"
-        )
+        contents = _gemini_convert_messages_with_history(messages=messages, model="gemini-1.5-pro")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         assert file_part["video_metadata"]["fps"] == 2
@@ -1202,7 +1164,9 @@ class TestVideoMetadataAllGeminiModels:
 def test_convert_tool_response_with_base64_image():
     """Test tool response with base64 data URI image."""
     # Create a small test image (1x1 red pixel PNG)
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
 
     # Create tool message with image
@@ -1229,9 +1193,7 @@ def test_convert_tool_response_with_base64_image():
     }
 
     # Convert tool response with nested multimodal functionResponse.parts.
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
@@ -1257,7 +1219,9 @@ def test_convert_tool_response_with_base64_image():
 
 def test_gemini_history_nests_multimodal_tool_response_parts():
     """Full history conversion should not emit sibling inline_data tool result parts."""
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     messages = [
         {"role": "user", "content": "Get me an image"},
         {
@@ -1333,13 +1297,9 @@ def test_convert_tool_response_with_url_image():
     }
 
     try:
-        result = convert_to_gemini_tool_call_result(
-            tool_message, last_message_with_tool_calls
-        )
+        result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
-        assert isinstance(
-            result, list
-        ), "Should return a parts list when media is present"
+        assert isinstance(result, list), "Should return a parts list when media is present"
         assert len(result) == 1, "Should return one function_response part"
         result_part = result[0]
         assert "function_response" in result_part
@@ -1363,9 +1323,7 @@ def test_convert_tool_response_text_only():
     tool_message = {
         "role": "tool",
         "tool_call_id": "call_test789",
-        "content": [
-            {"type": "text", "text": '{"status": "completed", "result": "success"}'}
-        ],
+        "content": [{"type": "text", "text": '{"status": "completed", "result": "success"}'}],
     }
 
     last_message_with_tool_calls = {
@@ -1377,9 +1335,7 @@ def test_convert_tool_response_text_only():
         ]
     }
 
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     # Should be a single part (no list) when no image
     assert not isinstance(result, list), "Should return single part when no image"
@@ -1430,17 +1386,15 @@ def test_file_data_field_order():
     # Verify field order by checking dictionary keys
     # In Python 3.7+, dict maintains insertion order
     file_data_keys = list(file_data.keys())
-    assert file_data_keys.index("mime_type") < file_data_keys.index(
-        "file_uri"
-    ), "mime_type must come before file_uri in the file_data dict"
+    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), (
+        "mime_type must come before file_uri in the file_data dict"
+    )
 
     # Also verify by serializing to JSON string
     json_str = json.dumps(file_data)
     mime_type_pos = json_str.find('"mime_type"')
     file_uri_pos = json_str.find('"file_uri"')
-    assert (
-        mime_type_pos < file_uri_pos
-    ), "mime_type must appear before file_uri in JSON serialization"
+    assert mime_type_pos < file_uri_pos, "mime_type must appear before file_uri in JSON serialization"
 
 
 def test_file_data_field_order_gcs_urls():
@@ -1464,9 +1418,9 @@ def test_file_data_field_order_gcs_urls():
 
     # Verify field order
     file_data_keys = list(file_data.keys())
-    assert file_data_keys.index("mime_type") < file_data_keys.index(
-        "file_uri"
-    ), "mime_type must come before file_uri in the file_data dict"
+    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), (
+        "mime_type must come before file_uri in the file_data dict"
+    )
 
 
 def test_gemini_files_api_uri_without_format():
@@ -1550,9 +1504,7 @@ def test_extract_file_data_with_path_object():
         assert extracted["filename"].endswith(".mp3")
 
         # Verify MIME type was correctly detected
-        assert (
-            extracted["content_type"] == "audio/mpeg"
-        ), f"Expected 'audio/mpeg' but got '{extracted['content_type']}'"
+        assert extracted["content_type"] == "audio/mpeg", f"Expected 'audio/mpeg' but got '{extracted['content_type']}'"
 
         # Verify content was read
         assert extracted["content"] == b"fake mp3 content"
@@ -1630,9 +1582,9 @@ def test_extract_file_data_fallback_to_octet_stream():
 
         assert extracted["filename"] is not None
         assert extracted["filename"].endswith(".xyz123")
-        assert (
-            extracted["content_type"] == "application/octet-stream"
-        ), f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
+        assert extracted["content_type"] == "application/octet-stream", (
+            f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
+        )
     finally:
         os.unlink(str(tmp_path))
 
@@ -1667,9 +1619,7 @@ def test_convert_tool_response_with_pdf_file():
     }
 
     # Convert tool response with nested multimodal functionResponse.parts.
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
@@ -1717,17 +1667,13 @@ def test_convert_tool_response_with_input_file_type():
     }
 
     # Convert tool response
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     # Check inline_data is nested under functionResponse.parts.
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
     function_response = result[0]["function_response"]
-    assert (
-        function_response["parts"][0]["inline_data"]["mime_type"] == "application/pdf"
-    )
+    assert function_response["parts"][0]["inline_data"]["mime_type"] == "application/pdf"
 
 
 def test_convert_tool_response_with_nested_file_object():
@@ -1754,9 +1700,7 @@ def test_convert_tool_response_with_nested_file_object():
     }
 
     # Convert tool response
-    result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
-    )
+    result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
     # Check inline_data is nested under functionResponse.parts.
     assert isinstance(result, list), "Should return a parts list when media is present"
@@ -1778,7 +1722,9 @@ def test_assistant_message_with_images_field():
     The images should be converted to inline_data parts in the Gemini format.
     """
     # Create a small test image (1x1 red pixel PNG)
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
 
     # Create messages with assistant message containing images field
@@ -1809,16 +1755,11 @@ def test_assistant_message_with_images_field():
     # Verify user message
     assert contents[0]["role"] == "user"
     assert len(contents[0]["parts"]) == 1
-    assert (
-        contents[0]["parts"][0]["text"]
-        == "Generate an image of a banana wearing a costume that says LiteLLM"
-    )
+    assert contents[0]["parts"][0]["text"] == "Generate an image of a banana wearing a costume that says LiteLLM"
 
     # Verify assistant message
     assert contents[1]["role"] == "model"
-    assert (
-        len(contents[1]["parts"]) == 2
-    ), f"Expected 2 parts (text + image), got {len(contents[1]['parts'])}"
+    assert len(contents[1]["parts"]) == 2, f"Expected 2 parts (text + image), got {len(contents[1]['parts'])}"
 
     # Find text part and inline_data part
     text_part = None
@@ -1845,8 +1786,12 @@ def test_assistant_message_with_images_field():
 def test_assistant_message_with_multiple_images():
     """Test that assistant messages with multiple images are properly converted."""
     # Create two test images
-    test_image1_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    test_image2_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    test_image1_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    test_image2_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    )
     image1_data_uri = f"data:image/png;base64,{test_image1_base64}"
     image2_data_uri = f"data:image/jpeg;base64,{test_image2_base64}"
 
@@ -1875,15 +1820,11 @@ def test_assistant_message_with_multiple_images():
 
     # Verify assistant message has 3 parts (1 text + 2 images)
     assert contents[1]["role"] == "model"
-    assert (
-        len(contents[1]["parts"]) == 3
-    ), f"Expected 3 parts (text + 2 images), got {len(contents[1]['parts'])}"
+    assert len(contents[1]["parts"]) == 3, f"Expected 3 parts (text + 2 images), got {len(contents[1]['parts'])}"
 
     # Count inline_data parts
     inline_data_parts = [part for part in contents[1]["parts"] if "inline_data" in part]
-    assert (
-        len(inline_data_parts) == 2
-    ), f"Expected 2 inline_data parts, got {len(inline_data_parts)}"
+    assert len(inline_data_parts) == 2, f"Expected 2 inline_data parts, got {len(inline_data_parts)}"
 
     # Verify first image
     assert inline_data_parts[0]["inline_data"]["mime_type"] == "image/png"
@@ -1897,7 +1838,9 @@ def test_assistant_message_with_multiple_images():
 def test_assistant_message_with_images_using_message_object():
     """Test that Message objects with images field are properly converted."""
     # Create a small test image
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
 
     # Create messages using Message object (as returned by LiteLLM)
@@ -1942,7 +1885,9 @@ def test_assistant_message_with_images_in_conversation_history():
     2. Assistant generates image (with images field)
     3. User asks follow-up question about the image
     """
-    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
 
     messages = [
@@ -2094,9 +2039,9 @@ def test_multi_turn_function_calling_roles():
     for i, content in enumerate(contents):
         for part in content["parts"]:
             if "function_response" in part:
-                assert (
-                    content["role"] == "user"
-                ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+                assert content["role"] == "user", (
+                    f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+                )
 
 
 def test_gemini_thought_signature_preservation_real_response():
@@ -2127,14 +2072,8 @@ def test_gemini_thought_signature_preservation_real_response():
 
     parts = real_candidate["content"]["parts"]
 
-    content, reasoning_content = (
-        VertexGeminiConfig().get_assistant_content_message(parts=parts)
-    )
-    thought_signatures = (
-        VertexGeminiConfig()._extract_thought_signatures_from_parts(
-            parts=parts
-        )
-    )
+    content, reasoning_content = VertexGeminiConfig().get_assistant_content_message(parts=parts)
+    thought_signatures = VertexGeminiConfig()._extract_thought_signatures_from_parts(parts=parts)
     functions, tools, _ = VertexGeminiConfig._transform_parts(
         parts=parts,
         cumulative_tool_call_idx=0,
@@ -2149,9 +2088,7 @@ def test_gemini_thought_signature_preservation_real_response():
     if functions is not None:
         msg["function_call"] = functions
     if thought_signatures is not None:
-        msg["provider_specific_fields"] = {
-            "thought_signatures": thought_signatures
-        }
+        msg["provider_specific_fields"] = {"thought_signatures": thought_signatures}
 
     converted_real = _gemini_convert_messages_with_history(
         messages=[msg],
@@ -2163,9 +2100,7 @@ def test_gemini_thought_signature_preservation_real_response():
     parts_out = converted_real[0]["parts"]
     assert len(parts_out) == 2
     assert "text" in parts_out[0]
-    assert (
-        parts_out[0]["thoughtSignature"] == "mock_signature_from_text_part"
-    )
+    assert parts_out[0]["thoughtSignature"] == "mock_signature_from_text_part"
     assert "function_call" in parts_out[1]
     assert "thoughtSignature" not in parts_out[1]
 
@@ -2179,17 +2114,13 @@ def test_gemini_thought_signature_deduplication_assumed_response():
     pr_assumed_msg = {
         "role": "assistant",
         "content": "I will list the directory.",
-        "provider_specific_fields": {
-            "thought_signatures": ["mock_signature_63k"]
-        },
+        "provider_specific_fields": {"thought_signatures": ["mock_signature_63k"]},
         "tool_calls": [
             {
                 "id": "call_1",
                 "type": "function",
                 "function": {"name": "list_files", "arguments": "{}"},
-                "provider_specific_fields": {
-                    "thought_signature": "mock_signature_63k"
-                },
+                "provider_specific_fields": {"thought_signature": "mock_signature_63k"},
             }
         ],
     }
@@ -2218,9 +2149,7 @@ def test_gemini_thought_signature_pure_text():
     msg = {
         "role": "assistant",
         "content": "Hello, I am a model.",
-        "provider_specific_fields": {
-            "thought_signatures": ["pure_text_signature"]
-        },
+        "provider_specific_fields": {"thought_signatures": ["pure_text_signature"]},
     }
 
     converted = _gemini_convert_messages_with_history(
@@ -2245,17 +2174,13 @@ def test_gemini_thought_signature_pure_tool_call():
     msg = {
         "role": "assistant",
         "content": None,
-        "provider_specific_fields": {
-            "thought_signatures": ["pure_tool_signature"]
-        },
+        "provider_specific_fields": {"thought_signatures": ["pure_tool_signature"]},
         "tool_calls": [
             {
                 "id": "call_1",
                 "type": "function",
                 "function": {"name": "list_files", "arguments": "{}"},
-                "provider_specific_fields": {
-                    "thought_signature": "pure_tool_signature"
-                },
+                "provider_specific_fields": {"thought_signature": "pure_tool_signature"},
             }
         ],
     }
@@ -2282,9 +2207,7 @@ def test_gemini_distinct_text_and_tool_signatures_are_both_preserved():
     msg = {
         "role": "assistant",
         "content": "Some analysis.",
-        "provider_specific_fields": {
-            "thought_signatures": ["text_signature", "tool_signature"]
-        },
+        "provider_specific_fields": {"thought_signatures": ["text_signature", "tool_signature"]},
         "tool_calls": [
             {
                 "id": "call_1",
@@ -2295,9 +2218,7 @@ def test_gemini_distinct_text_and_tool_signatures_are_both_preserved():
         ],
     }
 
-    parts = _gemini_convert_messages_with_history(
-        messages=[msg], model="gemini-2.5-pro"
-    )[0]["parts"]
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-2.5-pro")[0]["parts"]
 
     assert parts[0]["text"] == "Some analysis."
     assert parts[0]["thoughtSignature"] == "text_signature"
@@ -2328,9 +2249,7 @@ def test_gemini_25_text_signature_survives_replay_to_gemini_3():
         ],
     }
 
-    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
-        0
-    ]["parts"]
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[0]["parts"]
 
     assert parts[0]["text"] == "I will list the directory."
     assert parts[0]["thoughtSignature"] == "real_25_signature"
@@ -2358,9 +2277,7 @@ def test_gemini_function_call_signature_round_trip_no_duplicate():
 
     config = VertexGeminiConfig()
     content, _ = config.get_assistant_content_message(parts=response_parts)
-    thought_signatures = config._extract_thought_signatures_from_parts(
-        parts=response_parts
-    )
+    thought_signatures = config._extract_thought_signatures_from_parts(parts=response_parts)
     _, tools, _ = VertexGeminiConfig._transform_parts(
         parts=response_parts, cumulative_tool_call_idx=0, is_function_call=False
     )
@@ -2372,9 +2289,7 @@ def test_gemini_function_call_signature_round_trip_no_duplicate():
         "provider_specific_fields": {"thought_signatures": thought_signatures},
     }
 
-    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
-        0
-    ]["parts"]
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[0]["parts"]
 
     signatures = [p["thoughtSignature"] for p in parts if "thoughtSignature" in p]
     assert signatures == ["signature_from_function_call"]
@@ -2405,9 +2320,7 @@ def test_gemini_server_side_tool_signature_not_duplicated_on_text():
         },
     }
 
-    parts = _gemini_convert_messages_with_history(
-        messages=[msg], model="gemini-2.5-pro"
-    )[0]["parts"]
+    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-2.5-pro")[0]["parts"]
 
     text_part = next(p for p in parts if "text" in p)
     assert "thoughtSignature" not in text_part

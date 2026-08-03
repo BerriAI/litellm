@@ -113,7 +113,7 @@ def _run_path_filter(work: Path, tmp_path: Path, category: str, scripts_dir: Pat
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     stub = bin_dir / "circleci-agent"
-    stub.write_text("#!/usr/bin/env bash\necho \"[stub] circleci-agent $*\"\nexit 0\n")
+    stub.write_text('#!/usr/bin/env bash\necho "[stub] circleci-agent $*"\nexit 0\n')
     stub.chmod(0o755)
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"

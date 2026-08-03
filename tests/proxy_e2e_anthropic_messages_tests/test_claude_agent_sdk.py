@@ -51,18 +51,12 @@ async def _run_streaming_test(model_name: str) -> tuple[list[str], str]:
     Returns (received_chunks, full_response).
     """
     options = ClaudeAgentOptions(
-        system_prompt=(
-            "You are a helpful AI assistant. "
-            "Always follow the user's instructions exactly."
-        ),
+        system_prompt=("You are a helpful AI assistant. Always follow the user's instructions exactly."),
         model=model_name,
         max_turns=5,
     )
 
-    test_query = (
-        "Respond with exactly the following text and nothing else:\n"
-        "Hello from LiteLLM!"
-    )
+    test_query = "Respond with exactly the following text and nothing else:\nHello from LiteLLM!"
 
     received_chunks: list[str] = []
     full_response = ""
@@ -78,9 +72,7 @@ async def _run_streaming_test(model_name: str) -> tuple[list[str], str]:
                         received_chunks.append(chunk_text)
                         full_response += chunk_text
                 elif msg.type == "content_block_start":
-                    if hasattr(msg, "content_block") and hasattr(
-                        msg.content_block, "text"
-                    ):
+                    if hasattr(msg, "content_block") and hasattr(msg.content_block, "text"):
                         chunk_text = msg.content_block.text
                         received_chunks.append(chunk_text)
                         full_response += chunk_text
@@ -98,9 +90,7 @@ async def _run_streaming_test(model_name: str) -> tuple[list[str], str]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_name,model_description", TEST_MODELS)
-async def test_claude_agent_sdk_streaming(
-    litellm_proxy_config, model_name, model_description
-):
+async def test_claude_agent_sdk_streaming(litellm_proxy_config, model_name, model_description):
     """
     Test streaming messages with Claude Agent SDK through LiteLLM proxy.
 
@@ -109,9 +99,9 @@ async def test_claude_agent_sdk_streaming(
     2. Streaming works correctly
     3. Different Bedrock models (Invoke, Converse, Nova) work end-to-end
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Testing: {model_name} ({model_description})")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     last_error: Exception | None = None
 
@@ -131,9 +121,7 @@ async def test_claude_agent_sdk_streaming(
             assert len(received_chunks) > 0, f"No chunks received from {model_name}"
 
             # Verify response contains expected content (case insensitive)
-            assert (
-                "hello" in full_response.lower()
-            ), f"Response doesn't contain expected greeting: {full_response}"
+            assert "hello" in full_response.lower(), f"Response doesn't contain expected greeting: {full_response}"
 
             print(f"✅ Test passed for {model_name} (attempt {attempt})")
             return  # Success
@@ -144,9 +132,7 @@ async def test_claude_agent_sdk_streaming(
             if attempt < MAX_RETRIES:
                 await asyncio.sleep(2)
 
-    pytest.fail(
-        f"Test failed for {model_name} ({model_description}) after {MAX_RETRIES} attempts: {last_error}"
-    )
+    pytest.fail(f"Test failed for {model_name} ({model_description}) after {MAX_RETRIES} attempts: {last_error}")
 
     # Test query
     test_query = "Say 'Hello from LiteLLM!' and nothing else."
@@ -171,9 +157,7 @@ async def test_claude_agent_sdk_streaming(
                             full_response += chunk_text
                     elif msg.type == "content_block_start":
                         # Start of content block
-                        if hasattr(msg, "content_block") and hasattr(
-                            msg.content_block, "text"
-                        ):
+                        if hasattr(msg, "content_block") and hasattr(msg.content_block, "text"):
                             chunk_text = msg.content_block.text
                             received_chunks.append(chunk_text)
                             full_response += chunk_text
@@ -198,9 +182,7 @@ async def test_claude_agent_sdk_streaming(
         assert len(received_chunks) > 0, f"No chunks received from {model_name}"
 
         # Verify response is non-empty (don't assert on specific LLM content — it's non-deterministic)
-        assert (
-            len(full_response.strip()) > 0
-        ), f"Empty response received from {model_name}"
+        assert len(full_response.strip()) > 0, f"Empty response received from {model_name}"
 
         print(f"✅ Test passed for {model_name}")
 

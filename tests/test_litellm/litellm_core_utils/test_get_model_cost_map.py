@@ -27,17 +27,13 @@ from litellm.litellm_core_utils.get_model_cost_map import (
 
 
 def _load_root_cost_map() -> dict:
-    path = os.path.join(
-        os.path.dirname(__file__), "../../../model_prices_and_context_window.json"
-    )
+    path = os.path.join(os.path.dirname(__file__), "../../../model_prices_and_context_window.json")
     with open(path) as f:
         return json.load(f)
 
 
 def _make_models(n: int) -> dict:
-    return {
-        f"model-{i}": {"litellm_provider": "openai", "mode": "chat"} for i in range(n)
-    }
+    return {f"model-{i}": {"litellm_provider": "openai", "mode": "chat"} for i in range(n)}
 
 
 def test_count_model_entries_excludes_reserved_keys():
@@ -120,9 +116,7 @@ def test_finalize_pops_key_and_installs_rules():
 def test_finalize_with_no_block_clears_rules():
     previous = list(get_fallback_generalization_rules())
     try:
-        set_fallback_generalizations(
-            [{"name": "stale", "pattern": r"^x", "model_info": {"a": 1}}]
-        )
+        set_fallback_generalizations([{"name": "stale", "pattern": r"^x", "model_info": {"a": 1}}])
         _finalize_model_cost_map(_make_models(2))
         assert match_capability_generalizations("x-1") is None
     finally:

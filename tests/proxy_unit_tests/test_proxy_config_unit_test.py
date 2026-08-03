@@ -15,9 +15,7 @@ import os
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import logging
 
@@ -88,25 +86,14 @@ async def test_read_config_file_with_os_environ_vars():
     # Read config
     proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(
-        current_path, "example_config_yaml", "config_with_env_vars.yaml"
-    )
+    config_path = os.path.join(current_path, "example_config_yaml", "config_with_env_vars.yaml")
     config = await proxy_config_instance.get_config(config_file_path=config_path)
     print(config)
 
     # Add assertions
-    assert (
-        config["litellm_settings"]["default_internal_user_params"]["user_role"]
-        == "admin"
-    )
-    assert (
-        config["litellm_settings"]["s3_callback_params"]["s3_aws_access_key_id"]
-        == "1234567890"
-    )
-    assert (
-        config["litellm_settings"]["s3_callback_params"]["s3_aws_secret_access_key"]
-        == "1234567890"
-    )
+    assert config["litellm_settings"]["default_internal_user_params"]["user_role"] == "admin"
+    assert config["litellm_settings"]["s3_callback_params"]["s3_aws_access_key_id"] == "1234567890"
+    assert config["litellm_settings"]["s3_callback_params"]["s3_aws_secret_access_key"] == "1234567890"
 
     for model in config["model_list"]:
         if "azure" in model["litellm_params"]["model"]:
@@ -129,17 +116,13 @@ async def test_basic_include_directive():
     """
     proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(
-        current_path, "example_config_yaml", "config_with_include.yaml"
-    )
+    config_path = os.path.join(current_path, "example_config_yaml", "config_with_include.yaml")
 
     config = await proxy_config_instance.get_config(config_file_path=config_path)
 
     # Verify the included model list was merged
     assert len(config["model_list"]) > 0
-    assert any(
-        model["model_name"] == "included-model" for model in config["model_list"]
-    )
+    assert any(model["model_name"] == "included-model" for model in config["model_list"])
 
     # Verify original config settings remain
     assert config["litellm_settings"]["callbacks"] == ["prometheus"]
@@ -152,9 +135,7 @@ async def test_missing_include_file():
     """
     proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(
-        current_path, "example_config_yaml", "config_with_missing_include.yaml"
-    )
+    config_path = os.path.join(current_path, "example_config_yaml", "config_with_missing_include.yaml")
 
     with pytest.raises(FileNotFoundError):
         await proxy_config_instance.get_config(config_file_path=config_path)
@@ -167,20 +148,14 @@ async def test_multiple_includes():
     """
     proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(
-        current_path, "example_config_yaml", "config_with_multiple_includes.yaml"
-    )
+    config_path = os.path.join(current_path, "example_config_yaml", "config_with_multiple_includes.yaml")
 
     config = await proxy_config_instance.get_config(config_file_path=config_path)
 
     # Verify models from both included files are present
     assert len(config["model_list"]) == 2
-    assert any(
-        model["model_name"] == "included-model-1" for model in config["model_list"]
-    )
-    assert any(
-        model["model_name"] == "included-model-2" for model in config["model_list"]
-    )
+    assert any(model["model_name"] == "included-model-1" for model in config["model_list"])
+    assert any(model["model_name"] == "included-model-2" for model in config["model_list"])
 
     # Verify original config settings remain
     assert config["litellm_settings"]["callbacks"] == ["prometheus"]
@@ -211,8 +186,7 @@ def test_add_callbacks_from_db_config():
 
     # 1 instance of LangfusePromptManagement should exist in litellm.success_callback
     num_langfuse_instances = sum(
-        isinstance(callback, LangfusePromptManagement)
-        for callback in litellm.success_callback
+        isinstance(callback, LangfusePromptManagement) for callback in litellm.success_callback
     )
     assert num_langfuse_instances == 1
     assert len(litellm.success_callback) == 2
@@ -290,9 +264,7 @@ async def test_json_logs_calls_turn_on_json():
         "litellm_settings": {"json_logs": True},
     }
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False
-    ) as temp_file:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as temp_file:
         yaml.dump(config_content, temp_file)
         temp_file_path = temp_file.name
 

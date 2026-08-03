@@ -40,9 +40,7 @@ class TestSagemakerEmbeddingFactory:
 
     def test_get_model_config_hf_model(self):
         """Test that non-Voyage models return base SagemakerEmbeddingConfig"""
-        config = SagemakerEmbeddingConfig.get_model_config(
-            "sentence-transformers-model"
-        )
+        config = SagemakerEmbeddingConfig.get_model_config("sentence-transformers-model")
 
         assert isinstance(config, SagemakerEmbeddingConfig)
         assert config.get_supported_openai_params("sentence-transformers-model") == []
@@ -394,9 +392,7 @@ class TestSagemakerEmbeddingIntegration:
 
     def test_voyage_embedding_request_format(self):
         """Test that Voyage models use correct request format"""
-        with patch(
-            "litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding"
-        ) as mock_embedding:
+        with patch("litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding") as mock_embedding:
             # Mock the actual SageMaker call to avoid AWS credentials
             mock_embedding.return_value = EmbeddingResponse(
                 object="list",
@@ -424,15 +420,11 @@ class TestSagemakerEmbeddingIntegration:
             # Check that the parameters are in the optional_params
             optional_params = call_args[1].get("optional_params", {})
             assert optional_params.get("encoding_format") == "float"
-            assert (
-                optional_params.get("output_dimension") == 1024
-            )  # dimensions is mapped to output_dimension
+            assert optional_params.get("output_dimension") == 1024  # dimensions is mapped to output_dimension
 
     def test_hf_embedding_request_format(self):
         """Test that HF models use correct request format"""
-        with patch(
-            "litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding"
-        ) as mock_embedding:
+        with patch("litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding") as mock_embedding:
             # Mock the actual SageMaker call to avoid AWS credentials
             mock_embedding.return_value = EmbeddingResponse(
                 object="list",
@@ -460,14 +452,8 @@ class TestSagemakerEmbeddingIntegration:
             assert call_args[1]["input"] == ["Hello", "World"]
             # HF models should ignore these parameters in optional_params
             optional_params = call_args[1].get("optional_params", {})
-            assert (
-                "encoding_format" not in optional_params
-                or optional_params["encoding_format"] is None
-            )
-            assert (
-                "dimensions" not in optional_params
-                or optional_params["dimensions"] is None
-            )
+            assert "encoding_format" not in optional_params or optional_params["encoding_format"] is None
+            assert "dimensions" not in optional_params or optional_params["dimensions"] is None
 
     def test_parameter_validation_voyage(self):
         """Test parameter validation for Voyage models"""

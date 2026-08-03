@@ -55,9 +55,7 @@ class TestChatGPTAuthenticator:
             assert token == "token-new"
 
     def test_get_account_id_from_id_token(self, authenticator):
-        id_token = _make_jwt(
-            {"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}}
-        )
+        id_token = _make_jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}})
         auth_data = json.dumps({"id_token": id_token})
 
         with (

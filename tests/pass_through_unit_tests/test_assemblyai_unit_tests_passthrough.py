@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 
 import httpx
@@ -21,9 +19,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 import httpx
 import pytest
@@ -88,9 +84,7 @@ def test_get_assembly_transcript(assembly_handler, mock_transcript_response):
             )
 
 
-def test_poll_assembly_for_transcript_response(
-    assembly_handler, mock_transcript_response
-):
+def test_poll_assembly_for_transcript_response(assembly_handler, mock_transcript_response):
     """
     Test that the _poll_assembly_for_transcript_response method returns the correct transcript response
     """
@@ -109,9 +103,7 @@ def test_poll_assembly_for_transcript_response(
             transcript = assembly_handler._poll_assembly_for_transcript_response(
                 "test-transcript-id",
             )
-            assert transcript == AssemblyAITranscriptResponse(
-                **mock_transcript_response
-            )
+            assert transcript == AssemblyAITranscriptResponse(**mock_transcript_response)
 
 
 def test_is_assemblyai_route():
@@ -121,18 +113,13 @@ def test_is_assemblyai_route():
     handler = PassThroughEndpointLogging()
 
     # Test positive cases
-    assert (
-        handler.is_assemblyai_route("https://api.assemblyai.com/v2/transcript") == True
-    )
+    assert handler.is_assemblyai_route("https://api.assemblyai.com/v2/transcript") == True
     assert handler.is_assemblyai_route("https://api.assemblyai.com/other/path") == True
     assert handler.is_assemblyai_route("https://api.assemblyai.com/transcript") == True
 
     # Test negative cases
     assert handler.is_assemblyai_route("https://example.com/other") == False
-    assert (
-        handler.is_assemblyai_route("https://api.openai.com/v1/chat/completions")
-        == False
-    )
+    assert handler.is_assemblyai_route("https://api.openai.com/v1/chat/completions") == False
     assert handler.is_assemblyai_route("") == False
 
 
@@ -175,9 +162,7 @@ def test_get_assembly_transcript_rejects_query_in_id(assembly_handler):
             assembly_handler._get_assembly_transcript("abc?x=1")
 
 
-def test_get_assembly_transcript_allows_valid_id(
-    assembly_handler, mock_transcript_response
-):
+def test_get_assembly_transcript_allows_valid_id(assembly_handler, mock_transcript_response):
     with patch(
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
         return_value="test-key",
@@ -186,9 +171,7 @@ def test_get_assembly_transcript_allows_valid_id(
             mock_get.return_value.json.return_value = mock_transcript_response
             mock_get.return_value.raise_for_status.return_value = None
 
-            transcript = assembly_handler._get_assembly_transcript(
-                "abc123-valid-id_xyz"
-            )
+            transcript = assembly_handler._get_assembly_transcript("abc123-valid-id_xyz")
             assert transcript == mock_transcript_response
             called_url = mock_get.call_args[0][0]
             assert "abc123-valid-id_xyz" in called_url

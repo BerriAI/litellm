@@ -374,10 +374,7 @@ async def test_litellm_call_info_fallback_to_response_attribute():
         assert inspector.called is True
         assert inspector.received_call_info is not None
         assert inspector.received_call_info["custom_llm_provider"] == "bedrock"
-        assert (
-            inspector.received_call_info["api_base"]
-            == "https://bedrock.us-east-1.amazonaws.com"
-        )
+        assert inspector.received_call_info["api_base"] == "https://bedrock.us-east-1.amazonaws.com"
         assert inspector.received_call_info["model_id"] == "model-xyz"
 
 
@@ -438,7 +435,4 @@ async def test_litellm_call_info_hidden_params_takes_priority():
             response=MockResponse(),
         )
 
-        assert (
-            inspector.received_call_info["custom_llm_provider"]
-            == "hidden_params_value"
-        )
+        assert inspector.received_call_info["custom_llm_provider"] == "hidden_params_value"

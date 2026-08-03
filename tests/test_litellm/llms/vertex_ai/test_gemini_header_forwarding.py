@@ -60,35 +60,28 @@ class TestGeminiHeaderForwarding:
                 )
 
                 # Verify that the completion handler was called
-                assert (
-                    mock_vertex_completion.called
-                ), "Vertex completion handler should be called"
+                assert mock_vertex_completion.called, "Vertex completion handler should be called"
 
                 # Get the actual call arguments
                 call_kwargs = mock_vertex_completion.call_args.kwargs
 
                 # Verify that extra_headers parameter contains our custom headers
-                assert (
-                    "extra_headers" in call_kwargs
-                ), "extra_headers should be passed to completion"
+                assert "extra_headers" in call_kwargs, "extra_headers should be passed to completion"
 
                 passed_headers = call_kwargs["extra_headers"]
                 assert passed_headers is not None, "extra_headers should not be None"
 
                 # Verify our custom headers are present in the passed headers
                 for header_key, header_value in custom_headers.items():
-                    assert (
-                        header_key in passed_headers
-                        or header_key.lower() in passed_headers
-                    ), f"Header {header_key} should be in extra_headers"
+                    assert header_key in passed_headers or header_key.lower() in passed_headers, (
+                        f"Header {header_key} should be in extra_headers"
+                    )
 
                 print(f"✓ Test passed for {custom_llm_provider}/{model}")
                 print(f"  Headers correctly forwarded: {passed_headers}")
 
             except Exception as e:
-                pytest.fail(
-                    f"Failed to forward headers to {custom_llm_provider}/{model}: {str(e)}"
-                )
+                pytest.fail(f"Failed to forward headers to {custom_llm_provider}/{model}: {str(e)}")
 
     def test_extra_headers_and_headers_merge(self):
         """
@@ -127,15 +120,13 @@ class TestGeminiHeaderForwarding:
                 passed_headers = call_kwargs.get("extra_headers", {})
 
                 # Both sets of headers should be present
-                assert (
-                    "X-Forwarded-Header" in passed_headers
-                    or "x-forwarded-header" in passed_headers
-                ), "Proxy forwarded header should be present"
+                assert "X-Forwarded-Header" in passed_headers or "x-forwarded-header" in passed_headers, (
+                    "Proxy forwarded header should be present"
+                )
 
-                assert (
-                    "X-Explicit-Header" in passed_headers
-                    or "x-explicit-header" in passed_headers
-                ), "Explicitly passed header should be present"
+                assert "X-Explicit-Header" in passed_headers or "x-explicit-header" in passed_headers, (
+                    "Explicitly passed header should be present"
+                )
 
                 print("✓ Both header sources correctly merged and forwarded")
                 print(f"  Final headers: {passed_headers}")

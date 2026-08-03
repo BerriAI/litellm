@@ -42,9 +42,7 @@ class TestRAGS3Vectors(BaseRAGTest):
         Chunking is configured via chunking_strategy (unified interface).
         Embeddings are generated using LiteLLM's embedding API.
         """
-        vector_bucket_name = os.environ.get(
-            "S3_VECTOR_BUCKET_NAME", "test-litellm-vectors"
-        )
+        vector_bucket_name = os.environ.get("S3_VECTOR_BUCKET_NAME", "test-litellm-vectors")
         aws_region = os.environ.get("AWS_REGION_NAME", "us-west-2")
 
         return {
@@ -80,9 +78,7 @@ class TestRAGS3Vectors(BaseRAGTest):
         except ImportError:
             pytest.skip("S3 Vectors ingestion not available")
 
-        vector_bucket_name = os.environ.get(
-            "S3_VECTOR_BUCKET_NAME", "test-litellm-vectors"
-        )
+        vector_bucket_name = os.environ.get("S3_VECTOR_BUCKET_NAME", "test-litellm-vectors")
         aws_region = os.environ.get("AWS_REGION_NAME", "us-west-2")
 
         # Create ingestion instance to use query method

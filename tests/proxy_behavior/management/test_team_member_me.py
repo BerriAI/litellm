@@ -37,9 +37,7 @@ _CASES = [
     [(a, t, s) for (_id, a, t, s) in _CASES],
     ids=[c[0] for c in _CASES],
 )
-async def test_team_member_me_matrix(
-    actor: Actor, team: str, expected_status: int, proxy_client, world
-):
+async def test_team_member_me_matrix(actor: Actor, team: str, expected_status: int, proxy_client, world):
     team_id = {
         "alpha": world.team_alpha_id,
         "beta": world.team_beta_id,
@@ -51,9 +49,7 @@ async def test_team_member_me_matrix(
         f"/team/{team_id}/members/me",
         headers={"Authorization": f"Bearer {caller.cleartext}"},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} -> {team}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} -> {team}: {resp.status_code} {resp.text}"
 
     if expected_status == 200:
         body = resp.json()
@@ -61,9 +57,7 @@ async def test_team_member_me_matrix(
         assert body["team_id"] == team_id
 
 
-async def test_team_member_me_team_key_without_user_id_is_400(
-    proxy_client, prisma, scratch, world
-):
+async def test_team_member_me_team_key_without_user_id_is_400(proxy_client, prisma, scratch, world):
     """A key with no associated user_id (a team / service-account key) cannot
     resolve 'me' — the caller has no identity to look up — so it is 400."""
     cleartext = "sk-" + uuid.uuid4().hex

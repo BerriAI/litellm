@@ -381,9 +381,7 @@ def test_all_providers_transformation_scenarios():
     for scenario in test_scenarios:
         print(f"\nTesting: {scenario['name']}")
 
-        completion_response = create_mock_completion_response(
-            model=scenario["model"], **scenario["kwargs"]
-        )
+        completion_response = create_mock_completion_response(model=scenario["model"], **scenario["kwargs"])
 
         # This should not raise any errors
         responses_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
@@ -401,9 +399,7 @@ def test_all_providers_transformation_scenarios():
 
         # If output_tokens_details exists, reasoning_tokens must be an int
         if responses_usage.output_tokens_details is not None:
-            assert isinstance(
-                responses_usage.output_tokens_details.reasoning_tokens, int
-            )
+            assert isinstance(responses_usage.output_tokens_details.reasoning_tokens, int)
 
         print(f"  ✓ {scenario['name']} transformation successful")
 

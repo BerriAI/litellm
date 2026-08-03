@@ -40,9 +40,7 @@ class TestAnthropicResponsesAPITest(BaseResponsesAPITest):
     async def test_basic_openai_responses_delete_endpoint(self, sync_mode=False):
         pytest.skip("DELETE responses is not supported for anthropic")
 
-    async def test_basic_openai_responses_streaming_delete_endpoint(
-        self, sync_mode=False
-    ):
+    async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode=False):
         pytest.skip("DELETE responses is not supported for anthropic")
 
     async def test_basic_openai_responses_get_endpoint(self, sync_mode=False):
@@ -83,9 +81,7 @@ def test_multiturn_tool_calls():
         input=[
             {
                 "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "make a hello world html file"}
-                ],
+                "content": [{"type": "input_text", "text": "make a hello world html file"}],
                 "type": "message",
             }
         ],
@@ -175,9 +171,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
             )
             # ensure acompletion called once with merged trace_id
             assert mock_acompletion.call_count == 1
-            assert (
-                mock_acompletion.call_args.kwargs["litellm_trace_id"] == "session-trace"
-            )
+            assert mock_acompletion.call_args.kwargs["litellm_trace_id"] == "session-trace"
 
 
 @pytest.mark.asyncio

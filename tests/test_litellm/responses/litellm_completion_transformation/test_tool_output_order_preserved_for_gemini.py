@@ -60,11 +60,7 @@ def test_function_call_output_stays_adjacent_to_tool_call():
                 assistant_ok_idx = i
             elif isinstance(content, list):
                 for block in content:
-                    if (
-                        isinstance(block, dict)
-                        and block.get("type") == "text"
-                        and block.get("text") == "Done."
-                    ):
+                    if isinstance(block, dict) and block.get("type") == "text" and block.get("text") == "Done.":
                         assistant_ok_idx = i
                         break
 

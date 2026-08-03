@@ -11,9 +11,7 @@ from unittest.mock import patch, AsyncMock
 import json
 from abc import ABC, abstractmethod
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.utils import ImageResponse
@@ -291,14 +289,10 @@ async def test_azure_image_edit_litellm_sdk():
         # Check the URL
         call_args = mock_post.call_args
         expected_url = f"{test_api_base}/openai/deployments/gpt-image-1/images/edits?api-version={test_api_version}"
-        actual_url = (
-            call_args.args[0] if call_args.args else call_args.kwargs.get("url")
-        )
+        actual_url = call_args.args[0] if call_args.args else call_args.kwargs.get("url")
         print(f"Expected URL: {expected_url}")
         print(f"Actual URL: {actual_url}")
-        assert (
-            actual_url == expected_url
-        ), f"URL mismatch. Expected: {expected_url}, Got: {actual_url}"
+        assert actual_url == expected_url, f"URL mismatch. Expected: {expected_url}, Got: {actual_url}"
 
         # Check the request body
         if "data" in call_args.kwargs:
@@ -310,24 +304,20 @@ async def test_azure_image_edit_litellm_sdk():
             )
 
             # Deployment is in the URL path; Azure rejects model in multipart for this route.
-            assert (
-                "model" not in form_data
-            ), "model must not be in form data for Azure /openai/deployments/.../images/edits"
+            assert "model" not in form_data, (
+                "model must not be in form data for Azure /openai/deployments/.../images/edits"
+            )
             assert "prompt" in form_data, "prompt should be in the form data"
-            assert (
-                prompt.strip() in form_data["prompt"]
-            ), f"Expected prompt to contain '{prompt.strip()}'"
+            assert prompt.strip() in form_data["prompt"], f"Expected prompt to contain '{prompt.strip()}'"
 
         # Check headers
         headers = call_args.kwargs.get("headers", {})
         print("Request headers:", headers)
-        assert (
-            "api-key" in headers
-        ), "Azure image edit must use the api-key header, not Authorization: Bearer"
+        assert "api-key" in headers, "Azure image edit must use the api-key header, not Authorization: Bearer"
         assert headers["api-key"] == test_api_key
-        assert (
-            "Authorization" not in headers
-        ), "Azure image edit must not send an Authorization header when an api_key is provided"
+        assert "Authorization" not in headers, (
+            "Azure image edit must not send an Authorization header when an api_key is provided"
+        )
 
         print("result from image edit", result)
 
@@ -417,17 +407,12 @@ async def test_openai_image_edit_cost_tracking():
         await asyncio.sleep(5)
         print(
             "standard logging payload",
-            json.dumps(
-                test_custom_logger.standard_logging_payload, indent=4, default=str
-            ),
+            json.dumps(test_custom_logger.standard_logging_payload, indent=4, default=str),
         )
 
         # check model
         assert test_custom_logger.standard_logging_payload["model"] == "gpt-image-1"
-        assert (
-            test_custom_logger.standard_logging_payload["custom_llm_provider"]
-            == "openai"
-        )
+        assert test_custom_logger.standard_logging_payload["custom_llm_provider"] == "openai"
 
         # check response_cost
         assert test_custom_logger.standard_logging_payload["response_cost"] is not None
@@ -508,20 +493,12 @@ async def test_azure_image_edit_cost_tracking():
         await asyncio.sleep(5)
         print(
             "standard logging payload",
-            json.dumps(
-                test_custom_logger.standard_logging_payload, indent=4, default=str
-            ),
+            json.dumps(test_custom_logger.standard_logging_payload, indent=4, default=str),
         )
 
         # check model
-        assert (
-            test_custom_logger.standard_logging_payload["model"]
-            == "CUSTOM_AZURE_DEPLOYMENT_NAME"
-        )
-        assert (
-            test_custom_logger.standard_logging_payload["custom_llm_provider"]
-            == "azure"
-        )
+        assert test_custom_logger.standard_logging_payload["model"] == "CUSTOM_AZURE_DEPLOYMENT_NAME"
+        assert test_custom_logger.standard_logging_payload["custom_llm_provider"] == "azure"
 
         # check response_cost
         assert test_custom_logger.standard_logging_payload["response_cost"] is not None
@@ -586,9 +563,7 @@ def test_recraft_image_edit_config():
         }
     )
 
-    mapped_params = config.map_openai_params(
-        image_edit_params, "recraftv3", drop_params=True
-    )
+    mapped_params = config.map_openai_params(image_edit_params, "recraftv3", drop_params=True)
 
     # Should only contain supported params
     assert mapped_params["n"] == 2

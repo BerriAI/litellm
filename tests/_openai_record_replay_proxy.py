@@ -99,9 +99,7 @@ def _canonical_body(body: bytes) -> bytes:
     if not body:
         return b""
     try:
-        return json.dumps(
-            json.loads(body), sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
+        return json.dumps(json.loads(body), sort_keys=True, separators=(",", ":")).encode("utf-8")
     except (ValueError, TypeError):
         return body
 
@@ -158,9 +156,7 @@ class OpenAIRecordReplay:
         *,
         upstream_base_url: Optional[str] = None,
     ) -> UpstreamResult:
-        key = self.record_key(
-            method, path, body, upstream_base_url or self.upstream_base_url
-        )
+        key = self.record_key(method, path, body, upstream_base_url or self.upstream_base_url)
         cached = self._cache_get(key)
         if cached is not None:
             _LOGGER.info("HIT replayed from cassette: %s %s", method, path)
@@ -267,9 +263,7 @@ def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
     if recorder is None:
         recorder = OpenAIRecordReplay(
             redis_client=_build_default_redis_client(),
-            upstream_base_url=os.environ.get(
-                UPSTREAM_BASE_URL_ENV, DEFAULT_UPSTREAM_BASE_URL
-            ),
+            upstream_base_url=os.environ.get(UPSTREAM_BASE_URL_ENV, DEFAULT_UPSTREAM_BASE_URL),
         )
     owns_client = http_client is None
     client = http_client or httpx.AsyncClient(timeout=httpx.Timeout(120.0))
@@ -288,18 +282,12 @@ def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
 
     async def proxy(request):
         body = await request.body()
-        upstream_base_url, real_path = _resolve_upstream(
-            request.url.path, recorder.upstream_base_url
-        )
+        upstream_base_url, real_path = _resolve_upstream(request.url.path, recorder.upstream_base_url)
         upstream_base_url = upstream_base_url.rstrip("/")
-        full_path = (
-            f"{real_path}?{request.url.query}" if request.url.query else real_path
-        )
+        full_path = f"{real_path}?{request.url.query}" if request.url.query else real_path
 
         async def fetch_upstream() -> UpstreamResult:
-            fwd_headers = {
-                k: v for k, v in request.headers.items() if k.lower() != "host"
-            }
+            fwd_headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
             upstream = await client.request(
                 request.method,
                 f"{upstream_base_url}{full_path}",
@@ -324,9 +312,7 @@ def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
     return Starlette(
         routes=[
             Route("/__recorder_health", health, methods=["GET"]),
-            Route(
-                "/{path:path}", proxy, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
-            ),
+            Route("/{path:path}", proxy, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
         ],
         lifespan=lifespan,
     )
@@ -337,9 +323,7 @@ if __name__ == "__main__":
 
     import uvicorn
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8090)

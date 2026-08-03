@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 import httpx
@@ -21,9 +19,7 @@ import requests
 
 def check_non_streaming_response(completion):
     assert completion.choices[0].message.audio is not None, "Audio response is missing"
-    assert isinstance(
-        completion.choices[0].message.audio, ChatCompletionAudioResponse
-    ), "Invalid audio response type"
+    assert isinstance(completion.choices[0].message.audio, ChatCompletionAudioResponse), "Invalid audio response type"
     assert len(completion.choices[0].message.audio.data) > 0, "Audio data is empty"
 
 
@@ -70,11 +66,7 @@ async def test_audio_output_from_model(stream):
         pytest.skip("Skipping test due to timeout")
     except Exception as e:
         err = str(e).lower()
-        if (
-            "model_not_found" in err
-            or "does not exist" in err
-            or "openai-internal" in err
-        ):
+        if "model_not_found" in err or "does not exist" in err or "openai-internal" in err:
             pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
         raise
 
@@ -128,11 +120,7 @@ async def test_audio_input_to_model(stream, model):
         pytest.skip("Skipping test due to timeout")
     except Exception as e:
         err = str(e).lower()
-        if (
-            "model_not_found" in err
-            or "does not exist" in err
-            or "openai-internal" in err
-        ):
+        if "model_not_found" in err or "does not exist" in err or "openai-internal" in err:
             pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
         raise
     if stream is True:

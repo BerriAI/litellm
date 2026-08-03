@@ -2,6 +2,8 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
+import contextlib
+import re
 from collections.abc import Coroutine
 from typing import Any, Literal, cast, overload
 
@@ -14,6 +16,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+KIMI_VERSION_PATTERN = re.compile(r"kimi-k(\d+)(?:\.(\d+))?")
 
 
 class MoonshotChatConfig(OpenAIGPTConfig):
@@ -85,6 +89,36 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
         return api_base
 
+    @staticmethod
+    def _kimi_version(model: str) -> tuple[int, int] | None:
+        """Parse the ``kimi-k<major>[.<minor>]`` version out of a Moonshot model id.
+
+        Returns ``None`` for ids that don't follow that shape (``moonshot-v1-*``,
+        ``kimi-thinking-preview``, ``kimi-latest``, ...).
+        """
+        match = KIMI_VERSION_PATTERN.match(model.split("/")[-1].lower())
+        return (int(match[1]), int(match[2] or 0)) if match else None
+
+    @classmethod
+    def _is_reasoning_model(cls, model: str) -> bool:
+        """kimi-k2.5 and newer always reason; the moonshot-v1 family never does.
+
+        The model map is authoritative when it knows the id (it is the only thing
+        that marks kimi-k2-thinking), and the version check keeps freshly released
+        kimi ids correct before they land in the map.
+        """
+        with contextlib.suppress(Exception):
+            if supports_reasoning(model=model, custom_llm_provider="moonshot"):
+                return True
+        version = cls._kimi_version(model)
+        return version is not None and version >= (2, 5)
+
+    @classmethod
+    def _uses_reasoning_effort(cls, model: str) -> bool:
+        """kimi-k3 replaced the ``thinking`` object with ``reasoning_effort``."""
+        version = cls._kimi_version(model)
+        return version is not None and version >= (3, 0)
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get the supported OpenAI params for Moonshot AI models
@@ -93,18 +127,28 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - functions parameter is not supported (use tools instead)
         - tool_choice doesn't support "required" value
         - kimi-thinking-preview doesn't support tool calls at all
+        - reasoning models (kimi-k2.5+) reject the sampling params outright
         """
         excluded_params: list[str] = ["functions"]
+        reasoning_param = None
 
         # kimi-thinking-preview has additional limitations
         if "kimi-thinking-preview" in model:
             excluded_params.extend(["tools", "tool_choice"])
+
+        if self._is_reasoning_model(model):
+            # The Kimi reasoning models 400 on any of these rather than ignoring
+            # them, so they must not survive `drop_params`.
+            excluded_params.extend(("temperature", "top_p", "n", "presence_penalty", "frequency_penalty"))
+            reasoning_param = "reasoning_effort" if self._uses_reasoning_effort(model) else "thinking"
 
         base_openai_params = super().get_supported_openai_params(model=model)
         final_params: list[str] = []
         for param in base_openai_params:
             if param not in excluded_params:
                 final_params.append(param)
+        if reasoning_param is not None:
+            final_params.append(reasoning_param)
 
         return final_params
 
@@ -137,7 +181,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         # 3. If temperature < 0.3 and n > 1, KIMI will raise an exception.
         #       If we enter this condition, we set the temperature to 0.3 as suggested by Moonshot AI
         ##########################################
-        if supports_reasoning(model=model, custom_llm_provider="moonshot"):
+        if self._is_reasoning_model(model):
             optional_params.pop("temperature", None)
         elif "temperature" in optional_params:
             optional_params["temperature"] = min(optional_params["temperature"], 1)

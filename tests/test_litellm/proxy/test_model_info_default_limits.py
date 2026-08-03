@@ -158,9 +158,7 @@ class TestModelInfoEndpointWithRouter:
             patch("litellm.proxy.proxy_server.user_model", None),
             patch("litellm.proxy.proxy_server.prisma_client", None),
             patch("litellm.proxy.proxy_server.get_key_models", return_value=["model1"]),
-            patch(
-                "litellm.proxy.proxy_server.get_team_models", return_value=["model1"]
-            ),
+            patch("litellm.proxy.proxy_server.get_team_models", return_value=["model1"]),
             patch(
                 "litellm.proxy.proxy_server.get_complete_model_list",
                 return_value=["model1"],

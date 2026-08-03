@@ -184,14 +184,9 @@ async def poll_key_spend_until(session, key: str, expected: float) -> float:
             continue
         last_spend = key_info["info"]["spend"]
         if abs(last_spend - expected) < TOLERANCE:
-            print(
-                f"Key spend reached expected {expected} after {time.time() - start:.1f}s"
-            )
+            print(f"Key spend reached expected {expected} after {time.time() - start:.1f}s")
             return last_spend
-        print(
-            f"Key spend {last_spend}, expected {expected}, waiting... "
-            f"({time.time() - start:.1f}s elapsed)"
-        )
+        print(f"Key spend {last_spend}, expected {expected}, waiting... ({time.time() - start:.1f}s elapsed)")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
     return last_spend
 
@@ -221,9 +216,7 @@ async def test_basic_spend_accuracy():
     async with _make_test_session() as session:
         await assert_proxy_healthy(session)
 
-        org_response = await create_organization(
-            session=session, organization_alias=f"test-org-{uuid.uuid4()}"
-        )
+        org_response = await create_organization(session=session, organization_alias=f"test-org-{uuid.uuid4()}")
         print("org_response: ", org_response)
         org_id = org_response["organization_id"]
 
@@ -274,21 +267,21 @@ async def test_basic_spend_accuracy():
         org_info = await get_spend_info(session, "organization", org_id)
         print("org_info: ", org_info)
 
-        assert (
-            abs(key_info["info"]["spend"] - expected_spend) < TOLERANCE
-        ), f"Key spend {key_info['info']['spend']} does not match expected {expected_spend}"
+        assert abs(key_info["info"]["spend"] - expected_spend) < TOLERANCE, (
+            f"Key spend {key_info['info']['spend']} does not match expected {expected_spend}"
+        )
 
-        assert (
-            abs(user_info["user_info"]["spend"] - expected_spend) < TOLERANCE
-        ), f"User spend {user_info['user_info']['spend']} does not match expected {expected_spend}"
+        assert abs(user_info["user_info"]["spend"] - expected_spend) < TOLERANCE, (
+            f"User spend {user_info['user_info']['spend']} does not match expected {expected_spend}"
+        )
 
-        assert (
-            abs(team_info["team_info"]["spend"] - expected_spend) < TOLERANCE
-        ), f"Team spend {team_info['team_info']['spend']} does not match expected {expected_spend}"
+        assert abs(team_info["team_info"]["spend"] - expected_spend) < TOLERANCE, (
+            f"Team spend {team_info['team_info']['spend']} does not match expected {expected_spend}"
+        )
 
-        assert (
-            abs(org_info["spend"] - expected_spend) < TOLERANCE
-        ), f"Organization spend {org_info['spend']} does not match expected {expected_spend}"
+        assert abs(org_info["spend"] - expected_spend) < TOLERANCE, (
+            f"Organization spend {org_info['spend']} does not match expected {expected_spend}"
+        )
 
 
 @pytest.mark.asyncio
@@ -306,9 +299,7 @@ async def test_long_term_spend_accuracy_with_bursts():
     async with _make_test_session() as session:
         await assert_proxy_healthy(session)
 
-        org_response = await create_organization(
-            session=session, organization_alias=f"test-org-{uuid.uuid4()}"
-        )
+        org_response = await create_organization(session=session, organization_alias=f"test-org-{uuid.uuid4()}")
         print("org_response: ", org_response)
         org_id = org_response["organization_id"]
 
@@ -333,8 +324,7 @@ async def test_long_term_spend_accuracy_with_bursts():
 
         burst_1_expected = compute_expected_spend(burst_1_responses)
         assert burst_1_expected > 0, (
-            f"Burst 1 expected spend is {burst_1_expected}. "
-            f"Usage: {[r.usage.model_dump() for r in burst_1_responses]}"
+            f"Burst 1 expected spend is {burst_1_expected}. Usage: {[r.usage.model_dump() for r in burst_1_responses]}"
         )
         print(f"Burst 1 expected spend: {burst_1_expected}")
 
@@ -378,18 +368,18 @@ async def test_long_term_spend_accuracy_with_bursts():
         print(f"Final user spend: {user_info['user_info']['spend']}")
         print(f"Final org spend: {org_info['spend']}")
 
-        assert (
-            abs(key_info["info"]["spend"] - total_expected) < TOLERANCE
-        ), f"Key spend {key_info['info']['spend']} does not match expected {total_expected}"
+        assert abs(key_info["info"]["spend"] - total_expected) < TOLERANCE, (
+            f"Key spend {key_info['info']['spend']} does not match expected {total_expected}"
+        )
 
-        assert (
-            abs(user_info["user_info"]["spend"] - total_expected) < TOLERANCE
-        ), f"User spend {user_info['user_info']['spend']} does not match expected {total_expected}"
+        assert abs(user_info["user_info"]["spend"] - total_expected) < TOLERANCE, (
+            f"User spend {user_info['user_info']['spend']} does not match expected {total_expected}"
+        )
 
-        assert (
-            abs(team_info["team_info"]["spend"] - total_expected) < TOLERANCE
-        ), f"Team spend {team_info['team_info']['spend']} does not match expected {total_expected}"
+        assert abs(team_info["team_info"]["spend"] - total_expected) < TOLERANCE, (
+            f"Team spend {team_info['team_info']['spend']} does not match expected {total_expected}"
+        )
 
-        assert (
-            abs(org_info["spend"] - total_expected) < TOLERANCE
-        ), f"Organization spend {org_info['spend']} does not match expected {total_expected}"
+        assert abs(org_info["spend"] - total_expected) < TOLERANCE, (
+            f"Organization spend {org_info['spend']} does not match expected {total_expected}"
+        )

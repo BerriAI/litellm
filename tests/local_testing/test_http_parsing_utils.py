@@ -6,9 +6,7 @@ from starlette.requests import HTTPConnection
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy._types import ProxyException

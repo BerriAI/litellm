@@ -324,12 +324,8 @@ async def test_post_call_stream_guardrail_keeps_own_iterator_on_chat_completions
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
     async def fake_stream():
-        yield ModelResponseStream(
-            choices=[StreamingChoices(index=0, delta=Delta(content="the zebra runs"))]
-        )
-        yield ModelResponseStream(
-            choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")]
-        )
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="the zebra runs"))])
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")])
 
     delivered_text = ""
     async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
@@ -453,9 +449,7 @@ async def test_post_call_stream_masking_guardrail_keeps_own_iterator_on_anthropi
             async for item in response:
                 yield item
 
-    guardrail = _content_filter_guardrail(
-        "BLOCK", guardrail_cls=_MasksViaOwnRawStreamHook, mask_response_content=True
-    )
+    guardrail = _content_filter_guardrail("BLOCK", guardrail_cls=_MasksViaOwnRawStreamHook, mask_response_content=True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())

@@ -1,9 +1,7 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 import json
 from unittest.mock import MagicMock, patch
@@ -25,9 +23,7 @@ class TestAzureAnthropicChatCompletion:
 
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_uses_azure_anthropic_config(
-        self, mock_azure_config, mock_provider_manager
-    ):
+    def test_completion_uses_azure_anthropic_config(self, mock_azure_config, mock_provider_manager):
         """Test that completion method uses AzureAnthropicConfig"""
         handler = AzureAnthropicChatCompletion()
         mock_config = MagicMock()
@@ -63,9 +59,7 @@ class TestAzureAnthropicChatCompletion:
         litellm_params = {"api_key": "test-api-key"}
         headers = {}
 
-        with patch.object(
-            handler, "acompletion_function", return_value=ModelResponse()
-        ) as mock_acompletion:
+        with patch.object(handler, "acompletion_function", return_value=ModelResponse()) as mock_acompletion:
             handler.completion(
                 model=model,
                 messages=messages,
@@ -91,9 +85,7 @@ class TestAzureAnthropicChatCompletion:
     @patch("litellm.llms.anthropic.chat.handler.make_sync_call")
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_streaming(
-        self, mock_azure_config, mock_provider_manager, mock_make_sync_call
-    ):
+    def test_completion_streaming(self, mock_azure_config, mock_provider_manager, mock_make_sync_call):
         # Note: decorators are applied in reverse order
         """Test completion with streaming"""
         handler = AzureAnthropicChatCompletion()
@@ -161,9 +153,7 @@ class TestAzureAnthropicChatCompletion:
     @patch("litellm.llms.custom_httpx.http_handler._get_httpx_client")
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_non_streaming(
-        self, mock_azure_config, mock_provider_manager, mock_get_client
-    ):
+    def test_completion_non_streaming(self, mock_azure_config, mock_provider_manager, mock_get_client):
         # Note: decorators are applied in reverse order
         """Test completion without streaming"""
         handler = AzureAnthropicChatCompletion()

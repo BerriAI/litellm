@@ -196,9 +196,7 @@ async def test_async_assistants_data_generator_hook_failure_yields_error_chunk(
     async def _noop_failure(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(
-        ps.proxy_logging_obj, "async_post_call_streaming_hook", _boom_hook
-    )
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _boom_hook)
     monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
 
     stream = _FakeAssistantsStream([_simple_chunk()])
@@ -385,9 +383,7 @@ def test_get_streaming_fallback_metadata_no_additional_headers():
 def test_get_streaming_fallback_metadata_zero_fallback_count():
     stream = _FakeStream(
         [],
-        hidden_params={
-            "additional_headers": {"x-litellm-attempted-fallbacks": 0}
-        },
+        hidden_params={"additional_headers": {"x-litellm-attempted-fallbacks": 0}},
     )
     assert _get_streaming_fallback_metadata(stream) == (False, None, [])
 
@@ -558,9 +554,7 @@ async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
     async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None):
         return response
 
-    monkeypatch.setattr(
-        ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough
-    )
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
 
     new_chunk, new_str = await _apply_streaming_chunk_hooks(
         chunk=chunk,
@@ -870,9 +864,7 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
         out.append(line)
 
     # First entry is the successful "partial" chunk (bytes), last is the error.
-    assert any(
-        isinstance(item, str) and item.startswith('data: {"error":') for item in out
-    )
+    assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
 # ---------------------------------------------------------------------------

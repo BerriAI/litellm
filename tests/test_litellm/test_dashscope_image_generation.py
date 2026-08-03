@@ -49,9 +49,7 @@ def test_get_llm_provider_returns_dashscope(model_string: str):
         ("dashscope/qwen-image-2.0-pro", "dashscope"),
     ],
 )
-def test_get_model_info_mode_is_image_generation(
-    model_string: str, custom_provider: str
-):
+def test_get_model_info_mode_is_image_generation(model_string: str, custom_provider: str):
     import os
 
     prev_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
@@ -60,12 +58,8 @@ def test_get_model_info_mode_is_image_generation(
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        info = litellm.get_model_info(
-            model=model_string, custom_llm_provider=custom_provider
-        )
-        assert (
-            info["mode"] == "image_generation"
-        ), f"Expected mode='image_generation', got '{info['mode']}'"
+        info = litellm.get_model_info(model=model_string, custom_llm_provider=custom_provider)
+        assert info["mode"] == "image_generation", f"Expected mode='image_generation', got '{info['mode']}'"
     finally:
         if prev_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
@@ -345,11 +339,7 @@ def test_litellm_image_generation_dashscope_end_to_end():
                     "finish_reason": "stop",
                     "message": {
                         "role": "assistant",
-                        "content": [
-                            {
-                                "image": "https://dashscope-result.oss.aliyuncs.com/test.png"
-                            }
-                        ],
+                        "content": [{"image": "https://dashscope-result.oss.aliyuncs.com/test.png"}],
                     },
                 }
             ]
@@ -363,9 +353,7 @@ def test_litellm_image_generation_dashscope_end_to_end():
         },
     }
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = mock_response_body
         mock_http_response.status_code = 200
@@ -382,15 +370,11 @@ def test_litellm_image_generation_dashscope_end_to_end():
         assert response is not None
         assert response.data is not None
         assert len(response.data) == 1
-        assert (
-            response.data[0].url == "https://dashscope-result.oss.aliyuncs.com/test.png"
-        )
+        assert response.data[0].url == "https://dashscope-result.oss.aliyuncs.com/test.png"
 
         # Verify the HTTP call was made to the DashScope endpoint
         call_args = mock_post.call_args
-        called_url = (
-            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
-        )
+        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
         assert "dashscope" in called_url or "aliyuncs" in called_url
 
         # Verify request body contains DashScope format

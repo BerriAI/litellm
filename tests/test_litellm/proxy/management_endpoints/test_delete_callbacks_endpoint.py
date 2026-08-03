@@ -89,9 +89,7 @@ class MockPrismaClient:
 @pytest.fixture
 def mock_auth():
     """Mock admin user authentication"""
-    return UserAPIKeyAuth(
-        user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
-    )
+    return UserAPIKeyAuth(user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234")
 
 
 @pytest.fixture

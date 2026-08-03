@@ -58,9 +58,7 @@ def pytest_runtest_logreport(report):
 
 
 def pytest_collection_modifyitems(config, items):
-    apply_vcr_auto_marker_to_items(
-        items, skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES
-    )
+    apply_vcr_auto_marker_to_items(items, skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):

@@ -21,9 +21,7 @@ def _make_router(name: str = "r1") -> AdaptiveRouter:
     cfg = AdaptiveRouterConfig(available_models=["fast", "smart"])
     prefs = {
         "fast": AdaptiveRouterPreferences(quality_tier=1, strengths=[]),
-        "smart": AdaptiveRouterPreferences(
-            quality_tier=3, strengths=[RequestType.CODE_GENERATION]
-        ),
+        "smart": AdaptiveRouterPreferences(quality_tier=3, strengths=[RequestType.CODE_GENERATION]),
     }
     costs = {"fast": 0.0001, "smart": 0.001}
     return AdaptiveRouter(
@@ -84,11 +82,7 @@ async def test_get_state_snapshot_quality_mean_matches_alpha_over_total():
     expected_mean = expected.alpha / (expected.alpha + expected.beta)
 
     snap = await r.get_state_snapshot()
-    cell = next(
-        c
-        for c in snap["cells"]
-        if c["request_type"] == "code_generation" and c["model"] == "smart"
-    )
+    cell = next(c for c in snap["cells"] if c["request_type"] == "code_generation" and c["model"] == "smart")
     assert cell["alpha"] == expected.alpha
     assert cell["beta"] == expected.beta
     # `samples` reports net observations after subtracting the cold-start
@@ -135,9 +129,7 @@ async def test_endpoint_rejects_non_admin_role(monkeypatch):
     fake_router.adaptive_routers = {"r1": _entry()}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
-    non_admin = UserAPIKeyAuth(
-        api_key="sk-user", user_role=LitellmUserRoles.INTERNAL_USER
-    )
+    non_admin = UserAPIKeyAuth(api_key="sk-user", user_role=LitellmUserRoles.INTERNAL_USER)
     with pytest.raises(HTTPException) as exc:
         await proxy_server.get_adaptive_router_state(user_api_key_dict=non_admin)
     assert exc.value.status_code == 403

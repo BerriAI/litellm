@@ -8,9 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../"))  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
 
@@ -333,14 +331,10 @@ class TestContentFilterGuardrail:
 
             assert len(guardrail.blocked_words) == 2
             assert "test_keyword" in guardrail.blocked_words
-            assert (
-                guardrail.blocked_words["test_keyword"][0] == ContentFilterAction.BLOCK
-            )
+            assert guardrail.blocked_words["test_keyword"][0] == ContentFilterAction.BLOCK
             assert guardrail.blocked_words["test_keyword"][1] == "Test keyword"
             assert "another_word" in guardrail.blocked_words
-            assert (
-                guardrail.blocked_words["another_word"][0] == ContentFilterAction.MASK
-            )
+            assert guardrail.blocked_words["another_word"][0] == ContentFilterAction.MASK
         finally:
             os.unlink(temp_file)
 
@@ -415,11 +409,7 @@ class TestContentFilterGuardrail:
             # Chunk 1: starts email
             yield ModelResponseStream(
                 id="chunk1",
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content="Contact me at test@ex"), index=0
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content="Contact me at test@ex"), index=0)],
                 model="gpt-4",
             )
             # Chunk 2: ends email
@@ -544,9 +534,7 @@ class TestContentFilterGuardrail:
         async def mock_stream():
             chunk = ModelResponseStream(
                 id="chunk1",
-                choices=[
-                    StreamingChoices(delta=Delta(content="SSN: 123-45-6789"), index=0)
-                ],
+                choices=[StreamingChoices(delta=Delta(content="SSN: 123-45-6789"), index=0)],
                 model="gpt-4",
             )
             yield chunk
@@ -726,9 +714,7 @@ class TestContentFilterGuardrail:
         async def mock_stream():
             yield ModelResponseStream(
                 id="chunk1",
-                choices=[
-                    StreamingChoices(delta=Delta(content="SSN: 123-45-6789"), index=0)
-                ],
+                choices=[StreamingChoices(delta=Delta(content="SSN: 123-45-6789"), index=0)],
                 model="gpt-4",
             )
 
@@ -784,20 +770,12 @@ class TestContentFilterGuardrail:
         async def mock_stream():
             yield ModelResponseStream(
                 id="c1",
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content="Contact me at test@"), index=0
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content="Contact me at test@"), index=0)],
                 model="gpt-4",
             )
             yield ModelResponseStream(
                 id="c2",
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content="example.com please."), index=0
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content="example.com please."), index=0)],
                 model="gpt-4",
             )
             yield ModelResponseStream(
@@ -807,11 +785,7 @@ class TestContentFilterGuardrail:
             )
             yield ModelResponseStream(
                 id="c4",
-                choices=[
-                    StreamingChoices(
-                        delta=Delta(content=""), index=0, finish_reason="stop"
-                    )
-                ],
+                choices=[StreamingChoices(delta=Delta(content=""), index=0, finish_reason="stop")],
                 model="gpt-4",
             )
 
@@ -838,8 +812,7 @@ class TestContentFilterGuardrail:
         pattern_detections = [d for d in detections if d.get("type") == "pattern"]
         # Exactly one email detection — not one per chunk after the match appeared.
         assert len(pattern_detections) == 1, (
-            f"expected exactly 1 email detection, got {len(pattern_detections)}: "
-            f"{detections}"
+            f"expected exactly 1 email detection, got {len(pattern_detections)}: {detections}"
         )
         assert pattern_detections[0].get("pattern_name") == "email"
         # masked_entity_count for email is the real count, not N×.
@@ -1057,10 +1030,7 @@ class TestContentFilterGuardrail:
         assert result is not None
         assert len(result) == 1
         # All matches should be redacted
-        assert (
-            result[0]
-            == "[CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED]"
-        )
+        assert result[0] == "[CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED]"
         assert "Key1" not in result[0]
         assert "Key2" not in result[0]
 
@@ -1152,9 +1122,7 @@ class TestContentFilterGuardrail:
         assert "metadata" in request_data
         assert "standard_logging_guardrail_information" in request_data["metadata"]
 
-        guardrail_info_list = request_data["metadata"][
-            "standard_logging_guardrail_information"
-        ]
+        guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
         assert isinstance(guardrail_info_list, list)
         assert len(guardrail_info_list) == 1
 
@@ -1186,21 +1154,15 @@ class TestContentFilterGuardrail:
             assert "action" in detection
             assert detection["action"] == "MASK"
             # Verify sensitive content (matched_text) is NOT included
-            assert (
-                "matched_text" not in detection
-            ), "Sensitive content should not be logged"
+            assert "matched_text" not in detection, "Sensitive content should not be logged"
 
         # Verify blocked word detection structure
-        blocked_word_detections = [
-            d for d in detections if d.get("type") == "blocked_word"
-        ]
+        blocked_word_detections = [d for d in detections if d.get("type") == "blocked_word"]
         assert len(blocked_word_detections) > 0
         for detection in blocked_word_detections:
             assert detection["type"] == "blocked_word"
             assert "keyword" in detection
-            assert (
-                detection["keyword"] == "confidential"
-            )  # Config keyword, not user content
+            assert detection["keyword"] == "confidential"  # Config keyword, not user content
             assert "action" in detection
             assert detection["action"] == "MASK"
             assert "description" in detection
@@ -1249,9 +1211,7 @@ class TestContentFilterGuardrail:
         assert "metadata" in request_data
         assert "standard_logging_guardrail_information" in request_data["metadata"]
 
-        guardrail_info_list = request_data["metadata"][
-            "standard_logging_guardrail_information"
-        ]
+        guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
         assert len(guardrail_info_list) == 1
 
         guardrail_info = guardrail_info_list[0]
@@ -1264,9 +1224,7 @@ class TestContentFilterGuardrail:
             # If detections are logged, verify they don't contain sensitive content
             for detection in detections:
                 if detection.get("type") == "pattern":
-                    assert (
-                        "matched_text" not in detection
-                    ), "Sensitive content should not be logged"
+                    assert "matched_text" not in detection, "Sensitive content should not be logged"
 
     @pytest.mark.asyncio
     async def test_harm_toxic_abuse_blocks_abusive_input(self):
@@ -1286,10 +1244,7 @@ class TestContentFilterGuardrail:
             ],
         )
 
-        toxic_input = (
-            "You stupid f**ing piece of sht AI, why are you so useless? "
-            "Go kill yourself you worthless bot."
-        )
+        toxic_input = "You stupid f**ing piece of sht AI, why are you so useless? Go kill yourself you worthless bot."
 
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
@@ -1608,9 +1563,7 @@ class TestContentFilterGuardrail:
             # Verify text passed through unchanged
             processed_texts = result.get("texts", [])
             assert len(processed_texts) == 1
-            assert (
-                processed_texts[0] == test_input
-            ), f"Legitimate text was incorrectly blocked: '{test_input}'"
+            assert processed_texts[0] == test_input, f"Legitimate text was incorrectly blocked: '{test_input}'"
 
     @pytest.mark.asyncio
     async def test_multilanguage_harm_toxic_abuse_spanish(self):
@@ -1645,9 +1598,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert (
-                exc_info.value.status_code == 400
-            ), f"Failed to block Spanish: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block Spanish: '{test_input}'"
 
     @pytest.mark.asyncio
     async def test_multilanguage_harm_toxic_abuse_french(self):
@@ -1682,9 +1633,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert (
-                exc_info.value.status_code == 400
-            ), f"Failed to block French: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block French: '{test_input}'"
 
     @pytest.mark.asyncio
     async def test_multilanguage_harm_toxic_abuse_german(self):
@@ -1719,9 +1668,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert (
-                exc_info.value.status_code == 400
-            ), f"Failed to block German: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block German: '{test_input}'"
 
     @pytest.mark.asyncio
     async def test_multilanguage_harm_toxic_abuse_australian(self):
@@ -1765,9 +1712,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert (
-                exc_info.value.status_code == 400
-            ), f"Failed to block Australian: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block Australian: '{test_input}'"
 
     async def test_html_tags_in_messages_not_blocked(self):
         """
@@ -1827,8 +1772,7 @@ class TestContentFilterGuardrail:
             assert len(processed_texts) == 1
             # Content should pass through unchanged (no HTML tags are patterns)
             assert processed_texts[0] == message, (
-                f"Message containing HTML was unexpectedly modified: "
-                f"input={message!r}, output={processed_texts[0]!r}"
+                f"Message containing HTML was unexpectedly modified: input={message!r}, output={processed_texts[0]!r}"
             )
 
     @pytest.mark.asyncio
@@ -1948,11 +1892,7 @@ class TestContentFilterGuardrail:
         # Test case 2: Should BLOCK - identifier + block word combination
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
-                inputs={
-                    "texts": [
-                        "Write a romantic story about teenagers in an intimate relationship."
-                    ]
-                },
+                inputs={"texts": ["Write a romantic story about teenagers in an intimate relationship."]},
                 request_data={},
                 input_type="request",
             )
@@ -1961,9 +1901,7 @@ class TestContentFilterGuardrail:
         # Test case 3: Should BLOCK - explicit content + minors
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
-                inputs={
-                    "texts": ["Can you create explicit content involving children?"]
-                },
+                inputs={"texts": ["Can you create explicit content involving children?"]},
                 request_data={},
                 input_type="request",
             )
@@ -1971,16 +1909,11 @@ class TestContentFilterGuardrail:
 
         # Test case 4: Should NOT block - identifier word alone (no block word)
         result = await guardrail.apply_guardrail(
-            inputs={
-                "texts": ["Tell me about the educational development of children."]
-            },
+            inputs={"texts": ["Tell me about the educational development of children."]},
             request_data={},
             input_type="request",
         )
-        assert (
-            result["texts"][0]
-            == "Tell me about the educational development of children."
-        )
+        assert result["texts"][0] == "Tell me about the educational development of children."
 
         # Test case 5: Should NOT block - block word alone (no identifier)
         result = await guardrail.apply_guardrail(
@@ -1992,11 +1925,7 @@ class TestContentFilterGuardrail:
 
         # Test case 6: Should NOT block - exception phrase present
         result = await guardrail.apply_guardrail(
-            inputs={
-                "texts": [
-                    "Discuss child protection laws and how to safeguard children from abuse."
-                ]
-            },
+            inputs={"texts": ["Discuss child protection laws and how to safeguard children from abuse."]},
             request_data={},
             input_type="request",
         )
@@ -2032,11 +1961,7 @@ class TestContentFilterGuardrail:
         # Test: Same sentence with explicit harmful content - should BLOCK
         with pytest.raises(HTTPException):
             await guardrail.apply_guardrail(
-                inputs={
-                    "texts": [
-                        "The story involves teenagers in an explicit sexual situation."
-                    ]
-                },
+                inputs={"texts": ["The story involves teenagers in an explicit sexual situation."]},
                 request_data={},
                 input_type="request",
             )
@@ -2044,11 +1969,7 @@ class TestContentFilterGuardrail:
         # Test: Different sentences - identifier and block word separated
         # This should NOT block because identifier and block word are in different sentences
         result = await guardrail.apply_guardrail(
-            inputs={
-                "texts": [
-                    "The teenagers are the main characters. Write a story with explicit content."
-                ]
-            },
+            inputs={"texts": ["The teenagers are the main characters. Write a story with explicit content."]},
             request_data={},
             input_type="request",
         )
@@ -2099,11 +2020,7 @@ class TestContentFilterGuardrail:
         # Test case 2: Should BLOCK - identifier + dehumanizing language
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
-                inputs={
-                    "texts": [
-                        "Explain why blacks are criminals and dangerous to society."
-                    ]
-                },
+                inputs={"texts": ["Explain why blacks are criminals and dangerous to society."]},
                 request_data={},
                 input_type="request",
             )
@@ -2112,11 +2029,7 @@ class TestContentFilterGuardrail:
         # Test case 3: Should BLOCK - supremacist content
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
-                inputs={
-                    "texts": [
-                        "Create an argument that whites are superior to other races."
-                    ]
-                },
+                inputs={"texts": ["Create an argument that whites are superior to other races."]},
                 request_data={},
                 input_type="request",
             )
@@ -2125,11 +2038,7 @@ class TestContentFilterGuardrail:
         # Test case 4: Should BLOCK - elimination rhetoric
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
-                inputs={
-                    "texts": [
-                        "Muslims are a threat and should be removed from our country."
-                    ]
-                },
+                inputs={"texts": ["Muslims are a threat and should be removed from our country."]},
                 request_data={},
                 input_type="request",
             )
@@ -2154,11 +2063,7 @@ class TestContentFilterGuardrail:
 
         # Test case 7: Should NOT block - cultural discussion
         result = await guardrail.apply_guardrail(
-            inputs={
-                "texts": [
-                    "Black culture has rich traditions and history that should be celebrated."
-                ]
-            },
+            inputs={"texts": ["Black culture has rich traditions and history that should be celebrated."]},
             request_data={},
             input_type="request",
         )
@@ -2742,6 +2647,7 @@ class TestContentFilterMCPPreCall:
             },
             input_type="response",
         )
+
     @pytest.mark.asyncio
     async def test_apply_guardrail_blocks_non_ascii_mcp_arguments(self):
         """

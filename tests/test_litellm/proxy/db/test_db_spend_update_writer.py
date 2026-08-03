@@ -4,9 +4,7 @@ import json
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 
 from datetime import datetime, timezone
@@ -67,9 +65,7 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         assert db_writer.add_spend_log_transaction_to_daily_user_transaction.called
 
         # Verify the payload passed to add_spend_log_transaction_to_daily_user_transaction
-        call_args = (
-            db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]
-        )
+        call_args = db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]
         assert "payload" in call_args
         assert call_args["payload"]["spend"] == 0.1
         assert call_args["payload"]["model"] == "gpt-4"
@@ -406,7 +402,7 @@ async def test_update_daily_spend_sorting():
     upsert_calls = []
     for i in range(50):
         daily_spend_transactions[f"test_key_{i}"] = {
-            "user_id": f"user{60-i}",  # user60 ... user11, reverse order
+            "user_id": f"user{60 - i}",  # user60 ... user11, reverse order
             "date": "2024-01-01",
             "api_key": "test-api-key",
             "model": "gpt-4",
@@ -422,7 +418,7 @@ async def test_update_daily_spend_sorting():
             call(
                 where={
                     "user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
-                        "user_id": f"user{i+11}",  # user11 ... user60, sorted order
+                        "user_id": f"user{i + 11}",  # user11 ... user60, sorted order
                         "date": "2024-01-01",
                         "api_key": "test-api-key",
                         "model": "gpt-4",
@@ -433,7 +429,7 @@ async def test_update_daily_spend_sorting():
                 },
                 data={
                     "create": {
-                        "user_id": f"user{i+11}",
+                        "user_id": f"user{i + 11}",
                         "date": "2024-01-01",
                         "api_key": "test-api-key",
                         "model": "gpt-4",
@@ -1046,9 +1042,9 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
         transaction_dict = call[1]["update"]
         # Each transaction should have one key with the format tag_date_api_key_model_provider
         for key, transaction in transaction_dict.items():
-            assert (
-                transaction["request_id"] == request_id
-            ), f"request_id should be {request_id} but got {transaction.get('request_id')}"
+            assert transaction["request_id"] == request_id, (
+                f"request_id should be {request_id} but got {transaction.get('request_id')}"
+            )
 
 
 @pytest.mark.asyncio
@@ -1274,21 +1270,15 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_calls_common
     }
 
     writer.daily_agent_spend_update_queue.add_update = AsyncMock()
-    original_common_helper = (
-        writer._common_add_spend_log_transaction_to_daily_transaction
-    )
-    writer._common_add_spend_log_transaction_to_daily_transaction = AsyncMock(
-        wraps=original_common_helper
-    )
+    original_common_helper = writer._common_add_spend_log_transaction_to_daily_transaction
+    writer._common_add_spend_log_transaction_to_daily_transaction = AsyncMock(wraps=original_common_helper)
 
     await writer.add_spend_log_transaction_to_daily_agent_transaction(
         payload=payload,
         prisma_client=mock_prisma,
     )
 
-    assert (
-        writer._common_add_spend_log_transaction_to_daily_transaction.await_count == 1
-    )
+    assert writer._common_add_spend_log_transaction_to_daily_transaction.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -1445,8 +1435,7 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
         assert "Daily user spend batch upsert failed" in formatted
         assert "Table: litellm_dailyuserspend" in formatted
         assert (
-            "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
-            in formatted
+            "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint" in formatted
         )
         assert "Batch size: 1" in formatted
         assert "Unique constraint violation" in formatted
@@ -1602,9 +1591,7 @@ async def test_update_database_creates_single_task():
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
-        patch(
-            "litellm.proxy.db.db_spend_update_writer.asyncio.create_task"
-        ) as mock_create_task,
+        patch("litellm.proxy.db.db_spend_update_writer.asyncio.create_task") as mock_create_task,
     ):
         await db_writer.update_database(
             token="test-token",
@@ -1703,9 +1690,7 @@ async def test_daily_agent_receives_deepcopied_payload():
     db_writer._update_agent_db = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(
-        side_effect=capture_agent_payload
-    )
+    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(side_effect=capture_agent_payload)
     db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
@@ -1767,8 +1752,8 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit)
-    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
-        AsyncMock(return_value=(None, None, None, None, None, None, None))
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
@@ -1977,9 +1962,7 @@ async def test_update_database_does_not_deepcopy_on_request_path():
     db_writer._update_org_db = AsyncMock()
     db_writer._update_tag_db = AsyncMock()
     db_writer._update_agent_db = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock(
-        side_effect=capture_batch_payload
-    )
+    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock(side_effect=capture_batch_payload)
     db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
@@ -2071,9 +2054,7 @@ async def test_spend_update_path_never_queries_user_cache_with_none_user_id():
     db_writer = DBSpendUpdateWriter()
 
     strict_redis_backed_cache = MagicMock()
-    strict_redis_backed_cache.async_get_cache = AsyncMock(
-        side_effect=DataError("Invalid input of type: 'NoneType'")
-    )
+    strict_redis_backed_cache.async_get_cache = AsyncMock(side_effect=DataError("Invalid input of type: 'NoneType'"))
 
     with (
         patch.object(litellm, "max_budget", 0),
@@ -2197,9 +2178,7 @@ async def test_daily_transaction_carries_compression_saved_tokens():
     input_cost = model_info["input_cost_per_token"] or 0.0
     cache_read_cost = model_info.get("cache_read_input_token_cost") or input_cost
     assert transaction["compression_savings_spend"] == pytest.approx(7600 * input_cost)
-    assert transaction["prompt_caching_savings_spend"] == pytest.approx(
-        40 * max(input_cost - cache_read_cost, 0.0)
-    )
+    assert transaction["prompt_caching_savings_spend"] == pytest.approx(40 * max(input_cost - cache_read_cost, 0.0))
     assert transaction["compression_savings_spend"] > 0
     assert transaction["prompt_caching_savings_spend"] > 0
 

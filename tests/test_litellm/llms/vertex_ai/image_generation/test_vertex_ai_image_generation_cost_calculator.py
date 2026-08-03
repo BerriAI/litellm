@@ -46,9 +46,7 @@ def test_vertex_image_generation_cost_adds_web_search_grounding():
     )
 
     expected_web_search_cost = cost_per_web_search_request(
-        usage=Usage(
-            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=3)
-        ),
+        usage=Usage(prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=3)),
         model_info=model_info,
     )
     assert expected_web_search_cost > 0

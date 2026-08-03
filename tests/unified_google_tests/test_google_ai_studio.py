@@ -3,9 +3,7 @@ from base_google_test import BaseGoogleGenAITest
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 import unittest.mock
@@ -36,9 +34,7 @@ async def test_mock_stream_generate_content_with_tools():
         {
             "role": "user",
             "parts": [
-                {
-                    "text": "Schedule a meeting with Bob and Alice for 03/27/2025 at 10:00 AM about the Q3 planning"
-                }
+                {"text": "Schedule a meeting with Bob and Alice for 03/27/2025 at 10:00 AM about the Q3 planning"}
             ],
         }
     ]
@@ -95,9 +91,7 @@ async def test_mock_stream_generate_content_with_tools():
         mock_response.aiter_lines = mock_aiter_lines
         mock_post.return_value = mock_response
 
-        print(
-            "\n--- Testing async agenerate_content_stream with function call parsing ---"
-        )
+        print("\n--- Testing async agenerate_content_stream with function call parsing ---")
         response = await litellm.google_genai.agenerate_content_stream(
             model="gemini/gemini-2.5-flash-lite",
             contents=contents,
@@ -158,9 +152,7 @@ async def test_mock_stream_generate_content_with_tools():
                     print(f"Decoded chunk: {chunk_str}")
 
                     # Extract JSON from Server-Sent Events format (data: {...})
-                    if chunk_str.startswith("data: ") and not chunk_str.startswith(
-                        "data: [DONE]"
-                    ):
+                    if chunk_str.startswith("data: ") and not chunk_str.startswith("data: [DONE]"):
                         json_str = chunk_str[6:].strip()  # Remove 'data: ' prefix
                         try:
                             parsed_json = json.loads(json_str)
@@ -169,25 +161,16 @@ async def test_mock_stream_generate_content_with_tools():
                             # Parse function calls from the JSON
                             if "candidates" in parsed_json:
                                 for candidate in parsed_json["candidates"]:
-                                    if (
-                                        "content" in candidate
-                                        and "parts" in candidate["content"]
-                                    ):
+                                    if "content" in candidate and "parts" in candidate["content"]:
                                         for part in candidate["content"]["parts"]:
                                             if "functionCall" in part:
                                                 function_calls.append(
                                                     {
-                                                        "name": part["functionCall"][
-                                                            "name"
-                                                        ],
-                                                        "args": part["functionCall"][
-                                                            "args"
-                                                        ],
+                                                        "name": part["functionCall"]["name"],
+                                                        "args": part["functionCall"]["args"],
                                                     }
                                                 )
-                                                print(
-                                                    f"Found function call: {part['functionCall']}"
-                                                )
+                                                print(f"Found function call: {part['functionCall']}")
                         except json.JSONDecodeError as e:
                             print(f"Failed to parse JSON: {e}")
                 except UnicodeDecodeError as e:
@@ -212,15 +195,9 @@ async def test_mock_stream_generate_content_with_tools():
             elif hasattr(chunk, "candidates") and chunk.candidates:
                 for candidate in chunk.candidates:
                     if hasattr(candidate, "content") and candidate.content:
-                        if (
-                            hasattr(candidate.content, "parts")
-                            and candidate.content.parts
-                        ):
+                        if hasattr(candidate.content, "parts") and candidate.content.parts:
                             for part in candidate.content.parts:
-                                if (
-                                    hasattr(part, "function_call")
-                                    and part.function_call
-                                ):
+                                if hasattr(part, "function_call") and part.function_call:
                                     function_calls.append(
                                         {
                                             "name": part.function_call.name,
@@ -233,17 +210,15 @@ async def test_mock_stream_generate_content_with_tools():
         print(f"Total chunks received: {chunk_count}")
 
         # Assert we found at least one function call
-        assert (
-            len(function_calls) > 0
-        ), "Expected at least one function call in the streaming response"
+        assert len(function_calls) > 0, "Expected at least one function call in the streaming response"
 
         # Check the first function call
         function_call = function_calls[0]
 
         # Assert function name
-        assert (
-            function_call["name"] == "schedule_meeting"
-        ), f"Expected function name 'schedule_meeting', got '{function_call['name']}'"
+        assert function_call["name"] == "schedule_meeting", (
+            f"Expected function name 'schedule_meeting', got '{function_call['name']}'"
+        )
 
         # Assert function arguments
         args = function_call["args"]
@@ -257,13 +232,9 @@ async def test_mock_stream_generate_content_with_tools():
             "Bob",
             "Alice",
         ], f"Expected attendees ['Bob', 'Alice'], got {args['attendees']}"
-        assert (
-            args["date"] == "2025-03-27"
-        ), f"Expected date '2025-03-27', got {args['date']}"
+        assert args["date"] == "2025-03-27", f"Expected date '2025-03-27', got {args['date']}"
         assert args["time"] == "10:00", f"Expected time '10:00', got {args['time']}"
-        assert (
-            args["topic"] == "Q3 planning"
-        ), f"Expected topic 'Q3 planning', got {args['topic']}"
+        assert args["topic"] == "Q3 planning", f"Expected topic 'Q3 planning', got {args['topic']}"
 
         print("✅ All function call assertions passed!")
 
@@ -284,9 +255,7 @@ async def test_validate_post_request_parameters():
         {
             "role": "user",
             "parts": [
-                {
-                    "text": "Schedule a meeting with Bob and Alice for 03/27/2025 at 10:00 AM about the Q3 planning"
-                }
+                {"text": "Schedule a meeting with Bob and Alice for 03/27/2025 at 10:00 AM about the Q3 planning"}
             ],
         }
     ]
@@ -368,12 +337,8 @@ async def test_validate_post_request_parameters():
         if call_args:
             url = call_args[0] if len(call_args) > 0 else call_kwargs.get("url")
             assert url is not None, "Expected URL to be provided"
-            assert (
-                "generativelanguage.googleapis.com" in url
-            ), f"Expected Google API URL, got: {url}"
-            assert (
-                "streamGenerateContent" in url
-            ), f"Expected streamGenerateContent endpoint, got: {url}"
+            assert "generativelanguage.googleapis.com" in url, f"Expected Google API URL, got: {url}"
+            assert "streamGenerateContent" in url, f"Expected streamGenerateContent endpoint, got: {url}"
             print(f"✅ URL validation passed: {url}")
 
         # Get the request data/json from the call
@@ -394,9 +359,9 @@ async def test_validate_post_request_parameters():
         assert "model" in request_data, "Expected 'model' field in request data"
         # Model might be transformed, but should contain gemini-2.5-flash-lite
         model_value = request_data["model"]
-        assert (
-            "gemini-2.5-flash-lite" in model_value
-        ), f"Expected model to contain 'gemini-2.5-flash-lite', got: {model_value}"
+        assert "gemini-2.5-flash-lite" in model_value, (
+            f"Expected model to contain 'gemini-2.5-flash-lite', got: {model_value}"
+        )
         print(f"✅ Model validation passed: {model_value}")
 
         # Validate contents field
@@ -408,9 +373,7 @@ async def test_validate_post_request_parameters():
         # Check the first content item
         first_content = request_contents[0]
         assert "role" in first_content, "Expected 'role' in content item"
-        assert (
-            first_content["role"] == "user"
-        ), f"Expected role 'user', got: {first_content['role']}"
+        assert first_content["role"] == "user", f"Expected role 'user', got: {first_content['role']}"
         assert "parts" in first_content, "Expected 'parts' in content item"
         assert isinstance(first_content["parts"], list), "Expected parts to be a list"
         assert len(first_content["parts"]) > 0, "Expected at least one part"
@@ -419,9 +382,7 @@ async def test_validate_post_request_parameters():
         first_part = first_content["parts"][0]
         assert "text" in first_part, "Expected 'text' in part"
         expected_text = "Schedule a meeting with Bob and Alice for 03/27/2025 at 10:00 AM about the Q3 planning"
-        assert (
-            first_part["text"] == expected_text
-        ), f"Expected text '{expected_text}', got: {first_part['text']}"
+        assert first_part["text"] == expected_text, f"Expected text '{expected_text}', got: {first_part['text']}"
         print(f"✅ Contents validation passed")
 
         # Validate tools field
@@ -432,45 +393,33 @@ async def test_validate_post_request_parameters():
 
         # Check the first tool
         first_tool = request_tools[0]
-        assert (
-            "functionDeclarations" in first_tool
-        ), "Expected 'functionDeclarations' in tool"
+        assert "functionDeclarations" in first_tool, "Expected 'functionDeclarations' in tool"
         function_declarations = first_tool["functionDeclarations"]
-        assert isinstance(
-            function_declarations, list
-        ), "Expected functionDeclarations to be a list"
-        assert (
-            len(function_declarations) > 0
-        ), "Expected at least one function declaration"
+        assert isinstance(function_declarations, list), "Expected functionDeclarations to be a list"
+        assert len(function_declarations) > 0, "Expected at least one function declaration"
 
         # Check the function declaration
         func_decl = function_declarations[0]
         assert "name" in func_decl, "Expected 'name' in function declaration"
-        assert (
-            func_decl["name"] == "schedule_meeting"
-        ), f"Expected function name 'schedule_meeting', got: {func_decl['name']}"
-        assert (
-            "description" in func_decl
-        ), "Expected 'description' in function declaration"
-        assert (
-            "parameters" in func_decl
-        ), "Expected 'parameters' in function declaration"
+        assert func_decl["name"] == "schedule_meeting", (
+            f"Expected function name 'schedule_meeting', got: {func_decl['name']}"
+        )
+        assert "description" in func_decl, "Expected 'description' in function declaration"
+        assert "parameters" in func_decl, "Expected 'parameters' in function declaration"
 
         # Check function parameters
         params = func_decl["parameters"]
         assert "type" in params, "Expected 'type' in parameters"
-        assert (
-            params["type"] == "object"
-        ), f"Expected parameters type 'object', got: {params['type']}"
+        assert params["type"] == "object", f"Expected parameters type 'object', got: {params['type']}"
         assert "properties" in params, "Expected 'properties' in parameters"
         assert "required" in params, "Expected 'required' in parameters"
 
         # Check required fields
         required_fields = params["required"]
         expected_required = ["attendees", "date", "time", "topic"]
-        assert set(required_fields) == set(
-            expected_required
-        ), f"Expected required fields {expected_required}, got: {required_fields}"
+        assert set(required_fields) == set(expected_required), (
+            f"Expected required fields {expected_required}, got: {required_fields}"
+        )
         print(f"✅ Tools validation passed")
 
         print("✅ All POST request parameter validations passed!")

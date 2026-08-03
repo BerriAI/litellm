@@ -66,9 +66,7 @@ class TestContentFilterPathTraversal:
         guardrail.category_keywords = {}
         guardrail.always_block_category_keywords = {}
         guardrail.conditional_categories = {}
-        guardrail._load_categories(
-            [{"category": "foo/../../etc/passwd", "enabled": True}]
-        )
+        guardrail._load_categories([{"category": "foo/../../etc/passwd", "enabled": True}])
         assert "foo/../../etc/passwd" not in guardrail.loaded_categories
 
     def test_assert_within_categories_dir_blocks_parent_traversal(self):
@@ -86,9 +84,7 @@ class TestContentFilterPathTraversal:
             "categories",
         )
         with pytest.raises(ValueError, match="outside the allowed categories"):
-            ContentFilterGuardrail._assert_within_categories_dir(
-                "/etc/passwd", categories_dir
-            )
+            ContentFilterGuardrail._assert_within_categories_dir("/etc/passwd", categories_dir)
 
     def test_assert_within_categories_dir_allows_valid_file(self, tmp_path):
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
@@ -108,15 +104,9 @@ class TestContentFilterPathTraversal:
 
         categories_dir = str(tmp_path)
         valid_file = str(tmp_path / "test.yaml")
-        with patch(
-            "os.path.commonpath", side_effect=ValueError("Paths on different drives")
-        ):
-            with pytest.raises(
-                ValueError, match="outside the allowed categories directory"
-            ):
-                ContentFilterGuardrail._assert_within_categories_dir(
-                    valid_file, categories_dir
-                )
+        with patch("os.path.commonpath", side_effect=ValueError("Paths on different drives")):
+            with pytest.raises(ValueError, match="outside the allowed categories directory"):
+                ContentFilterGuardrail._assert_within_categories_dir(valid_file, categories_dir)
 
     def test_resolve_category_file_path_direct_join_hit(self):
         """Cover the first-join-attempt success branch (lines 383-384)."""
@@ -195,9 +185,7 @@ class TestContentFilterPathTraversal:
         external_file = tmp_path / "external_categories.yaml"
         external_file.write_text("category_name: test\n")
 
-        with patch.dict(
-            _os.environ, {"LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS": "true"}
-        ):
+        with patch.dict(_os.environ, {"LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS": "true"}):
             # Should return the path without raising ValueError.
             result = guardrail._resolve_category_file_path(str(external_file))
         assert result == str(external_file)

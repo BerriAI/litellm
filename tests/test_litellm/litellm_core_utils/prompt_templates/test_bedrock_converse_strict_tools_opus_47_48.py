@@ -56,12 +56,10 @@ def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     """Opus 4.7/4.8 and Sonnet 4 reject toolSpec.strict and additionalProperties."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
-    assert (
-        "strict" not in tool_spec
-    ), f"strict leaked into toolSpec for {model_id}: {tool_spec}"
-    assert (
-        "additionalProperties" not in tool_spec["inputSchema"]["json"]
-    ), f"additionalProperties leaked into toolSpec for {model_id}: {tool_spec}"
+    assert "strict" not in tool_spec, f"strict leaked into toolSpec for {model_id}: {tool_spec}"
+    assert "additionalProperties" not in tool_spec["inputSchema"]["json"], (
+        f"additionalProperties leaked into toolSpec for {model_id}: {tool_spec}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -76,9 +74,7 @@ def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
 def test_bedrock_tools_pt_strict_kept_for_other_anthropic(model_id: str) -> None:
     """Sonnet 4.5/4.6 and Opus <=4.6 accept toolSpec.strict — keep forwarding it."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
-    assert (
-        result[0]["toolSpec"]["strict"] is True
-    ), f"strict missing for {model_id}: {result[0]['toolSpec']}"
+    assert result[0]["toolSpec"]["strict"] is True, f"strict missing for {model_id}: {result[0]['toolSpec']}"
 
 
 @pytest.mark.parametrize(
@@ -96,39 +92,15 @@ def test_bedrock_tools_pt_strict_dropped_for_non_anthropic(model_id: str) -> Non
 
 def test_bedrock_converse_supports_strict_tools_helper() -> None:
     """Direct check for the gate helper used by factory.py."""
-    assert (
-        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-7")
-        is False
-    )
-    assert (
-        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-8")
-        is False
-    )
-    assert (
-        bedrock_converse_supports_strict_tools(
-            "anthropic.claude-sonnet-4-5-20250929-v1:0"
-        )
-        is True
-    )
-    assert (
-        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-6")
-        is True
-    )
+    assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-7") is False
+    assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-8") is False
+    assert bedrock_converse_supports_strict_tools("anthropic.claude-sonnet-4-5-20250929-v1:0") is True
+    assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-6") is True
     assert bedrock_converse_supports_strict_tools("us.amazon.nova-micro-v1:0") is False
     assert bedrock_converse_supports_strict_tools("") is False
     # Sonnet 4 also rejects strict on Bedrock Converse
-    assert (
-        bedrock_converse_supports_strict_tools(
-            "anthropic.claude-sonnet-4-20250514-v1:0"
-        )
-        is False
-    )
-    assert (
-        bedrock_converse_supports_strict_tools(
-            "bedrock/global.anthropic.claude-sonnet-4-20250514-v1:0"
-        )
-        is False
-    )
+    assert bedrock_converse_supports_strict_tools("anthropic.claude-sonnet-4-20250514-v1:0") is False
+    assert bedrock_converse_supports_strict_tools("bedrock/global.anthropic.claude-sonnet-4-20250514-v1:0") is False
 
 
 @pytest.mark.parametrize(

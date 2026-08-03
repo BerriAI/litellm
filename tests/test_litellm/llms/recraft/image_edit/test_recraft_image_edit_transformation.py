@@ -8,9 +8,7 @@ from unittest.mock import MagicMock, mock_open, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.recraft.image_edit.transformation import RecraftImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -72,9 +70,7 @@ class TestRecraftImageEditTransformation:
         # Check that files contains the image
         assert len(files) == 1
         assert files[0][0] == "image"  # field name
-        assert (
-            files[0][1][0] == "image.png"
-        )  # filename (default for non-BufferedReader)
+        assert files[0][1][0] == "image.png"  # filename (default for non-BufferedReader)
         assert files[0][1][1] == image  # file object
 
     def test_get_image_files_for_request_single_image(self):

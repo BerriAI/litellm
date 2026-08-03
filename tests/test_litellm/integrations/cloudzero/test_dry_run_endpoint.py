@@ -62,14 +62,9 @@ class TestCloudZeroDryRunEndpoint:
         )
 
         with (
-            patch(
-                "litellm.integrations.cloudzero.database.LiteLLMDatabase"
-            ) as mock_db_class,
-            patch(
-                "litellm.integrations.cloudzero.transform.CBFTransformer"
-            ) as mock_transformer_class,
+            patch("litellm.integrations.cloudzero.database.LiteLLMDatabase") as mock_db_class,
+            patch("litellm.integrations.cloudzero.transform.CBFTransformer") as mock_transformer_class,
         ):
-
             # Setup mocks
             mock_db = AsyncMock()
             mock_db.get_usage_data.return_value = mock_usage_data
@@ -119,10 +114,7 @@ class TestCloudZeroDryRunEndpoint:
         # Mock empty database data
         mock_empty_data = pl.DataFrame()
 
-        with patch(
-            "litellm.integrations.cloudzero.database.LiteLLMDatabase"
-        ) as mock_db_class:
-
+        with patch("litellm.integrations.cloudzero.database.LiteLLMDatabase") as mock_db_class:
             # Setup mocks
             mock_db = AsyncMock()
             mock_db.get_usage_data.return_value = mock_empty_data

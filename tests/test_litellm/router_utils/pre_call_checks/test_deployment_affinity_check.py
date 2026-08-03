@@ -45,9 +45,7 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello there!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello there!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -351,9 +349,7 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await router.cache.async_set_cache(
-            affinity_cache_key, {"model_id": other_model_id}, ttl=3600
-        )
+        await router.cache.async_set_cache(affinity_cache_key, {"model_id": other_model_id}, ttl=3600)
 
         # Even though user-key affinity points elsewhere, previous_response_id should pin
         # to the deployment that created the original response.
@@ -527,9 +523,7 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
         },
         {
             "model_name": stable_model_map_key,
-            "litellm_params": {
-                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
-            },
+            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -550,9 +544,7 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
         model="some-router-model-group",
         healthy_deployments=healthy_deployments,
         messages=None,
-        request_kwargs={
-            "metadata": {"user_api_key_hash": user_key, "model_group": "alias-group"}
-        },
+        request_kwargs={"metadata": {"user_api_key_hash": user_key, "model_group": "alias-group"}},
         parent_otel_span=None,
     )
 
@@ -588,9 +580,7 @@ async def test_async_filter_deployments_falls_back_when_cached_deployment_is_unh
         },
         {
             "model_name": stable_model_map_key,
-            "litellm_params": {
-                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
-            },
+            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -629,9 +619,7 @@ async def test_async_user_key_affinity_ttl_expiry_allows_reroute():
         },
         {
             "model_name": stable_model_map_key,
-            "litellm_params": {
-                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
-            },
+            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -675,9 +663,7 @@ def test_cache_key_does_not_double_hash_user_api_key_hash():
     The affinity cache key should not hash it again.
     """
 
-    user_api_key_hash = (
-        "b95b015b66dd02a1c14e1e0a8729211f8ee53ec962658764f4cf58546c2c68e1"
-    )
+    user_api_key_hash = "b95b015b66dd02a1c14e1e0a8729211f8ee53ec962658764f4cf58546c2c68e1"
     key = DeploymentAffinityCheck.get_affinity_cache_key(
         model_group="any-model-group",
         user_key=user_api_key_hash,
@@ -715,9 +701,7 @@ def test_get_effective_flags_returns_per_group_config():
     assert session_id is True
 
     # unconfigured-model: falls back to global flags
-    user_key, responses_api, session_id = callback._get_effective_flags(
-        "unconfigured-model"
-    )
+    user_key, responses_api, session_id = callback._get_effective_flags("unconfigured-model")
     assert user_key is True
     assert responses_api is True
     assert session_id is False
@@ -949,12 +933,8 @@ async def test_model_group_affinity_config_overrides_global():
     ]
 
     # Set up user-key affinity cache for claude-3
-    cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
-        model_group=stable_model_map_key, user_key=user_key
-    )
-    await callback.cache.async_set_cache(
-        cache_key, {"model_id": "deployment-1"}, ttl=60
-    )
+    cache_key = DeploymentAffinityCheck.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key)
+    await callback.cache.async_set_cache(cache_key, {"model_id": "deployment-1"}, ttl=60)
 
     # claude-3 has per-group config (session_affinity only), so user-key affinity
     # should NOT apply even though it's globally enabled

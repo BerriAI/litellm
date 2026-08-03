@@ -52,9 +52,7 @@ def prisma_client():
     modified_url = append_query_params(database_url, params)
     os.environ["DATABASE_URL"] = modified_url
 
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     return prisma_client
 
@@ -115,11 +113,7 @@ async def test_slack_gif_skill_creates_gif(prisma_client):
                     "content": "Create a simple bouncing red ball GIF for Slack emoji.",
                 }
             ],
-            "container": {
-                "skills": [
-                    {"type": "custom", "skill_id": f"litellm:{created_skill.skill_id}"}
-                ]
-            },
+            "container": {"skills": [{"type": "custom", "skill_id": f"litellm:{created_skill.skill_id}"}]},
         }
 
         # 3. Pre-call hook resolves skill
@@ -137,9 +131,7 @@ async def test_slack_gif_skill_creates_gif(prisma_client):
         # Hook returns Anthropic-format tools for messages API
         tool_names = [t.get("name") for t in transformed.get("tools", [])]
         print(f"\nTools after hook: {tool_names}")
-        assert (
-            "litellm_code_execution" in tool_names
-        ), "Should have litellm_code_execution tool"
+        assert "litellm_code_execution" in tool_names, "Should have litellm_code_execution tool"
 
         # 4. Make GPT-4o call via messages API (tools already in Anthropic format)
         print("\n--- Making GPT-4o call via messages API ---")

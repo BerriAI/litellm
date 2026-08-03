@@ -401,9 +401,7 @@ class TestFallbackManagement:
 
 class TestJwtKeyMapping:
     @pytest.mark.covers("mgmt.jwt_key_mapping.new.happy_path")
-    def test_new_persists_mapping_and_is_read_back(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_new_persists_mapping_and_is_read_back(self, client: ManagementClient, resources: ResourceManager) -> None:
         key = client.proxy.generate_key(KeyGenerateBody())
         resources.defer(lambda: client.proxy.delete_key(key))
         claim_value = f"e2e_jwt_{unique_marker()}"

@@ -7,9 +7,7 @@ import pytest
 import requests
 from click.testing import CliRunner
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 from litellm.proxy.client.cli.commands.agents import (
@@ -57,9 +55,7 @@ class TestAgentProfile:
 
 class TestBuildAgentEnv:
     def test_anthropic_profile_uses_bare_root_and_bearer(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"anthropic"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"anthropic"}))
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
         assert "OPENAI_BASE_URL" not in env
@@ -75,17 +71,13 @@ class TestBuildAgentEnv:
         assert "ANTHROPIC_API_KEY" not in env
 
     def test_openai_profile_appends_v1(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"openai"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}))
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["OPENAI_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in env
 
     def test_both_profiles_set_everything(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000", "sk-key", frozenset({"anthropic", "openai"})
-        )
+        env = build_agent_env({}, "http://localhost:4000", "sk-key", frozenset({"anthropic", "openai"}))
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
@@ -93,9 +85,7 @@ class TestBuildAgentEnv:
 
     def test_preserves_unrelated_env_and_does_not_mutate_input(self):
         base = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
-        env = build_agent_env(
-            base, "http://localhost:4000", "sk-key", frozenset({"anthropic"})
-        )
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"anthropic"}))
         assert env["PATH"] == "/usr/bin"
         assert base == {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
 
@@ -341,10 +331,7 @@ class TestAgentCommands:
         assert captured["api_key"] == "sk-key"
         assert captured["command"] == ["claude", "--resume", "-p", "hi"]
         assert captured["skip_verify"] is False
-        assert (
-            "routing Claude Code through proxy at http://localhost:4000"
-            in result.output
-        )
+        assert "routing Claude Code through proxy at http://localhost:4000" in result.output
 
     def test_codex_shows_friendly_name(self):
         captured = {}
@@ -403,14 +390,10 @@ class TestAgentCommands:
         with (
             patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
             patch(f"{AGENTS_MODULE}.login", fake_login),
-            patch(
-                f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login"
-            ) as mock_get,
+            patch(f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login") as mock_get,
             patch(
                 f"{AGENTS_MODULE}.run_agent",
-                side_effect=lambda base_url, api_key, command, **k: captured.update(
-                    api_key=api_key
-                ),
+                side_effect=lambda base_url, api_key, command, **k: captured.update(api_key=api_key),
             ),
         ):
             result = self.runner.invoke(

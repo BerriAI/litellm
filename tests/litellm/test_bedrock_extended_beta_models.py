@@ -92,9 +92,7 @@ class TestBedrockNewModels:
     """Unified test suite for all new Bedrock models"""
 
     @pytest.mark.parametrize("model_name,regions,max_input,max_output", MODEL_CONFIGS)
-    def test_model_info_primary_region(
-        self, model_name, regions, max_input, max_output
-    ):
+    def test_model_info_primary_region(self, model_name, regions, max_input, max_output):
         """Test model configuration in primary region (us-east-1)"""
         model = f"bedrock/us-east-1/{model_name}"
         model_info = get_model_info(model)
@@ -112,12 +110,8 @@ class TestBedrockNewModels:
         model = f"bedrock/us-east-1/{model_name}"
         model_info = get_model_info(model)
 
-        assert (
-            model_info["input_cost_per_token"] > 0
-        ), f"Missing input cost for {model_name}"
-        assert (
-            model_info["output_cost_per_token"] > 0
-        ), f"Missing output cost for {model_name}"
+        assert model_info["input_cost_per_token"] > 0, f"Missing input cost for {model_name}"
+        assert model_info["output_cost_per_token"] > 0, f"Missing output cost for {model_name}"
 
     @pytest.mark.parametrize("model_name,regions,max_input,max_output", MODEL_CONFIGS)
     def test_region_count(self, model_name, regions, max_input, max_output):
@@ -136,9 +130,7 @@ class TestBedrockNewModels:
             if region in regions:
                 model = f"bedrock/{region}/{model_name}"
                 model_info = get_model_info(model)
-                assert (
-                    model_info is not None
-                ), f"Model {model_name} not found in {region}"
+                assert model_info is not None, f"Model {model_name} not found in {region}"
                 assert model_info["max_input_tokens"] == max_input
                 assert model_info["litellm_provider"] == "bedrock"
 

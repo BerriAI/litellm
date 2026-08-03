@@ -184,9 +184,7 @@ class TestSelectModelByPriority:
             prefs = _prefs(speed=1.0)
             # The inverse-max_output proxy would pick "small-ctx" here; a
             # neutral score keeps the first candidate.
-            assert _select_model_by_priority(["big-ctx", "small-ctx"], prefs) == (
-                "big-ctx"
-            )
+            assert _select_model_by_priority(["big-ctx", "small-ctx"], prefs) == ("big-ctx")
 
 
 # ---------------------------------------------------------------------------

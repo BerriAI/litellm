@@ -5,9 +5,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
     add_policy_to_applied_policies_header,
@@ -150,9 +148,7 @@ def test_add_policy_to_applied_policies_header_uses_litellm_metadata_bucket():
         "litellm_metadata": {},
     }
 
-    add_policy_to_applied_policies_header(
-        request_data=request_data, policy_name="global-baseline"
-    )
+    add_policy_to_applied_policies_header(request_data=request_data, policy_name="global-baseline")
 
     assert request_data["litellm_metadata"]["applied_policies"] == ["global-baseline"]
     assert "applied_policies" not in request_data.get("metadata", {})
@@ -202,9 +198,7 @@ def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
         lambda litellm_settings, callback_specific_params: dummy_callback,
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         initialize_callbacks_on_proxy(
@@ -257,20 +251,11 @@ def test_encrypt_callback_vars_round_trip(monkeypatch):
     enc_vars = encrypted["logging"][0]["callback_vars"]
     assert enc_vars["langfuse_secret_key"] != "sk-lf-secret"
     assert enc_vars["langfuse_public_key"] != "pk-lf-public"
-    assert (
-        encrypted["callback_settings"]["callback_vars"]["langsmith_api_key"]
-        != "ls-api-key"
-    )
+    assert encrypted["callback_settings"]["callback_vars"]["langsmith_api_key"] != "ls-api-key"
 
     decrypted = decrypt_callback_vars(encrypted)
-    assert (
-        decrypted["logging"][0]["callback_vars"]
-        == original["logging"][0]["callback_vars"]
-    )
-    assert (
-        decrypted["callback_settings"]["callback_vars"]
-        == original["callback_settings"]["callback_vars"]
-    )
+    assert decrypted["logging"][0]["callback_vars"] == original["logging"][0]["callback_vars"]
+    assert decrypted["callback_settings"]["callback_vars"] == original["callback_settings"]["callback_vars"]
 
 
 def test_encrypt_callback_vars_is_idempotent(monkeypatch):
@@ -293,10 +278,7 @@ def test_decrypt_callback_vars_passes_through_legacy_plaintext(monkeypatch):
     plaintext = _sample_metadata()
     decrypted = decrypt_callback_vars(plaintext)
     # legacy rows decrypt-fail and fall through unchanged
-    assert (
-        decrypted["logging"][0]["callback_vars"]["langfuse_secret_key"]
-        == "sk-lf-secret"
-    )
+    assert decrypted["logging"][0]["callback_vars"]["langfuse_secret_key"] == "sk-lf-secret"
 
 
 def test_callback_vars_helpers_handle_edge_shapes(monkeypatch):
@@ -397,9 +379,7 @@ def test_initialize_callbacks_on_proxy_lakera_ignores_non_dict_callback_settings
         SimpleNamespace(prisma_client=None),
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         # A non-dict value must be ignored (init_params stays {}), not **-unpacked.
@@ -417,9 +397,7 @@ def test_initialize_callbacks_on_proxy_lakera_ignores_non_dict_callback_settings
 
 
 @pytest.mark.parametrize("bad_root", [None, True])
-def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
-    monkeypatch, bad_root
-):
+def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(monkeypatch, bad_root):
     """Regression: a blank `callback_settings:` key in YAML loads as None (and
     `callback_settings: true` as a bool); load_config forwards that value
     verbatim as callback_specific_params. Membership tests like
@@ -436,9 +414,7 @@ def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
         CompressionInterceptionLogger,
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         initialize_callbacks_on_proxy(
@@ -448,9 +424,7 @@ def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
             litellm_settings={},
             callback_specific_params=bad_root,
         )
-        assert any(
-            isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks
-        )
+        assert any(isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks)
     finally:
         litellm.callbacks = original_callbacks
 

@@ -104,12 +104,10 @@ def test_batch_cost_calculator_uses_custom_model_info():
 
     expected_prompt = 10 * 0.00125
     expected_completion = 5 * 0.005
-    assert prompt_cost == pytest.approx(
-        expected_prompt
-    ), f"Expected prompt cost {expected_prompt}, got {prompt_cost}"
-    assert completion_cost == pytest.approx(
-        expected_completion
-    ), f"Expected completion cost {expected_completion}, got {completion_cost}"
+    assert prompt_cost == pytest.approx(expected_prompt), f"Expected prompt cost {expected_prompt}, got {prompt_cost}"
+    assert completion_cost == pytest.approx(expected_completion), (
+        f"Expected completion cost {expected_completion}, got {completion_cost}"
+    )
 
 
 def test_aggregate_batch_cost_uses_custom_model_info():
@@ -123,15 +121,11 @@ def test_aggregate_batch_cost_uses_custom_model_info():
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert cost == pytest.approx(
-        expected
-    ), f"Expected total cost {expected}, got {cost}"
+    assert cost == pytest.approx(expected), f"Expected total cost {expected}, got {cost}"
 
 
 @pytest.mark.parametrize("data_residency", ["eu", "us"])
-def test_batch_cost_calculator_applies_data_residency_uplift(
-    data_residency, monkeypatch
-):
+def test_batch_cost_calculator_applies_data_residency_uplift(data_residency, monkeypatch):
     """batch_cost_calculator should apply the regional uplift multiplier when
     data_residency is set and the model carries a configured multiplier."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -171,8 +165,6 @@ async def test_calculate_batch_cost_and_usage_uses_custom_model_info():
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert batch_cost == pytest.approx(
-        expected
-    ), f"Expected total cost {expected}, got {batch_cost}"
+    assert batch_cost == pytest.approx(expected), f"Expected total cost {expected}, got {batch_cost}"
     assert batch_usage.prompt_tokens == 10
     assert batch_usage.completion_tokens == 5

@@ -7,9 +7,7 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock, patch
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -53,9 +51,7 @@ class BaseImageGenTest(ABC):
             litellm.callbacks = [custom_logger]
             base_image_generation_call_args = self.get_base_image_generation_call_args()
             litellm.set_verbose = True
-            response = await litellm.aimage_generation(
-                **base_image_generation_call_args, prompt="A image of a otter"
-            )
+            response = await litellm.aimage_generation(**base_image_generation_call_args, prompt="A image of a otter")
             print("FAL AI RESPONSE: ", response)
 
             await asyncio.sleep(1)

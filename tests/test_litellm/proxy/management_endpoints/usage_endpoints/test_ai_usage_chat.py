@@ -214,9 +214,7 @@ class TestStreamUsageAiChat:
             yield chunk
 
         with (
-            patch(
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-            ) as mock_litellm,
+            patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm,
             patch(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
                 new_callable=AsyncMock,
@@ -289,9 +287,7 @@ class TestStreamUsageAiChat:
             yield chunk
 
         with (
-            patch(
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-            ) as mock_litellm,
+            patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm,
             patch(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data",
                 new_callable=AsyncMock,
@@ -319,9 +315,7 @@ class TestStreamUsageAiChat:
 
     @pytest.mark.asyncio
     async def test_stream_handles_error(self):
-        with patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-        ) as mock_litellm:
+        with patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(side_effect=Exception("LLM error"))
 
             events = []
@@ -374,9 +368,7 @@ class TestStreamUsageAiChat:
         mock_fetch = AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE)
 
         with (
-            patch(
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-            ) as mock_litellm,
+            patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm,
             patch.dict(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
                 {

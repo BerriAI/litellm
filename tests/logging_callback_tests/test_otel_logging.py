@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 import pytest
 import litellm
@@ -172,9 +170,7 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
 
     litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
     if global_redact is False:
-        otel_logger = OpenTelemetry(
-            message_logging=False, config=OpenTelemetryConfig(exporter="console")
-        )
+        otel_logger = OpenTelemetry(message_logging=False, config=OpenTelemetryConfig(exporter="console"))
     else:
         # use global redaction
         litellm.turn_off_message_logging = True
@@ -227,12 +223,7 @@ def validate_redacted_message_span_attributes(span):
         "gen_ai.usage.input_tokens",
     ]
 
-    _all_attributes = set(
-        [
-            name.value if isinstance(name, SpanAttributes) else name
-            for name in span.attributes.keys()
-        ]
-    )
+    _all_attributes = set([name.value if isinstance(name, SpanAttributes) else name for name in span.attributes.keys()])
     print("all_attributes", _all_attributes)
 
     for attr in _all_attributes:
@@ -240,9 +231,7 @@ def validate_redacted_message_span_attributes(span):
 
     # Check that all required attributes are present
     required_set = set(required_attributes)
-    assert required_set.issubset(
-        _all_attributes
-    ), f"Missing required attributes: {required_set - _all_attributes}"
+    assert required_set.issubset(_all_attributes), f"Missing required attributes: {required_set - _all_attributes}"
 
     # Check that any additional attributes are metadata fields (start with "metadata.") or cost fields
     non_required_attrs = _all_attributes - required_set
@@ -313,15 +302,9 @@ async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
     # - "litellm_proxy_request" (parent) — created by _get_phoenix_context
     # - "litellm_request" (child)       — the LLM call span
     # - "raw_gen_ai_request"            — raw request sub-span
-    assert (
-        "litellm_proxy_request" in span_names
-    ), f"Expected proxy parent span, got: {span_names}"
-    assert (
-        LITELLM_REQUEST_SPAN_NAME in span_names
-    ), f"Expected request child span, got: {span_names}"
-    assert (
-        RAW_REQUEST_SPAN_NAME in span_names
-    ), f"Expected raw request span, got: {span_names}"
+    assert "litellm_proxy_request" in span_names, f"Expected proxy parent span, got: {span_names}"
+    assert LITELLM_REQUEST_SPAN_NAME in span_names, f"Expected request child span, got: {span_names}"
+    assert RAW_REQUEST_SPAN_NAME in span_names, f"Expected raw request span, got: {span_names}"
 
     # All spans should share the same trace ID (proper hierarchy)
     trace_ids = {s.context.trace_id for s in spans}

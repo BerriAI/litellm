@@ -5,9 +5,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import fastapi
 from fastapi import FastAPI
@@ -59,9 +57,7 @@ def mock_request():
             return self._dict.values()
 
     class MockRequest:
-        def __init__(
-            self, headers=None, method="POST", request_body: Optional[dict] = None
-        ):
+        def __init__(self, headers=None, method="POST", request_body: Optional[dict] = None):
             self.headers = headers or {}
             self.query_params = QueryParams()
             self.method = method
@@ -148,9 +144,7 @@ def test_get_response_headers_filters_excluded_custom_headers():
     assert "server" not in result
 
 
-def test_init_kwargs_for_pass_through_endpoint_basic(
-    mock_request, mock_user_api_key_dict
-):
+def test_init_kwargs_for_pass_through_endpoint_basic(mock_request, mock_user_api_key_dict):
     """
     Basic test for init_kwargs_for_pass_through_endpoint
 
@@ -193,9 +187,7 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
     assert result["litellm_params"]["metadata"]["user_api_key_team_id"] == "test-team"
     assert result["litellm_params"]["metadata"]["user_api_key_org_id"] is None
     assert result["litellm_params"]["metadata"]["user_api_key_team_alias"] is None
-    assert (
-        result["litellm_params"]["metadata"]["user_api_key_end_user_id"] == "test-user"
-    )
+    assert result["litellm_params"]["metadata"]["user_api_key_end_user_id"] == "test-user"
     assert result["litellm_params"]["metadata"]["user_api_key_request_route"] is None
 
 
@@ -206,9 +198,7 @@ def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict)
     see usage example here: https://docs.litellm.ai/docs/pass_through/anthropic_completion#send-litellm_metadata-tags
     """
     request = mock_request()
-    parsed_body = {
-        "litellm_metadata": {"custom_field": "custom_value", "tags": ["tag1", "tag2"]}
-    }
+    parsed_body = {"litellm_metadata": {"custom_field": "custom_value", "tags": ["tag1", "tag2"]}}
     passthrough_payload = PassthroughStandardLoggingPayload(
         url="https://test.com",
         request_body={},
@@ -280,9 +270,7 @@ athropic_request_body = {
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_logging_failure(
-    mock_request, mock_user_api_key_dict
-):
+async def test_pass_through_request_logging_failure(mock_request, mock_user_api_key_dict):
     """
     Test that pass_through_request still returns a response even if logging raises an Exception
     """
@@ -319,9 +307,7 @@ async def test_pass_through_request_logging_failure(
             return_value=mock_response,
         ),
     ):
-        request = mock_request(
-            headers={}, method="POST", request_body=athropic_request_body
-        )
+        request = mock_request(headers={}, method="POST", request_body=athropic_request_body)
         response = await pass_through_request(
             request=request,
             target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
@@ -338,9 +324,7 @@ async def test_pass_through_request_logging_failure(
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_logging_failure_with_stream(
-    mock_request, mock_user_api_key_dict
-):
+async def test_pass_through_request_logging_failure_with_stream(mock_request, mock_user_api_key_dict):
     """
     Test that pass_through_request still returns a response even if logging raises an Exception
     """
@@ -386,9 +370,7 @@ async def test_pass_through_request_logging_failure_with_stream(
             return_value=mock_response,
         ),
     ):
-        request = mock_request(
-            headers={}, method="POST", request_body=athropic_request_body
-        )
+        request = mock_request(headers={}, method="POST", request_body=athropic_request_body)
         response = await pass_through_request(
             request=request,
             target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
@@ -433,9 +415,9 @@ def test_pass_through_routes_support_all_methods():
                 methods = set(route.methods)
                 print("supported methods for route", path, "are", methods)
                 # Assert all expected methods are supported
-                assert (
-                    methods == expected_methods
-                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {expected_methods}"
+                assert methods == expected_methods, (
+                    f"Route {path} does not support all methods. Supported: {methods}, Expected: {expected_methods}"
+                )
 
     # Check both routers
     check_router_methods(llm_router)
@@ -451,19 +433,11 @@ def test_is_bedrock_agent_runtime_route():
 
     # Test agent runtime endpoints (should return True)
     assert _is_bedrock_agent_runtime_route("/knowledgebases/kb-123/retrieve") is True
-    assert (
-        _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve")
-        is True
-    )
+    assert _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve") is True
 
     # Test regular bedrock runtime endpoints (should return False)
-    assert (
-        _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply") is False
-    )
-    assert (
-        _is_bedrock_agent_runtime_route("/model/cohere.command-r-v1:0/converse")
-        is False
-    )
+    assert _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply") is False
+    assert _is_bedrock_agent_runtime_route("/model/cohere.command-r-v1:0/converse") is False
     assert _is_bedrock_agent_runtime_route("/some/random/endpoint") is False
 
 
@@ -629,9 +603,7 @@ def test_custom_pricing_used_in_cost_calculation():
 
     # Verify custom cost is different from standard cost (unless prices happen to match)
     # This confirms custom pricing is actually being applied
-    assert (
-        custom_cost != standard_cost
-    ), "Custom pricing should produce different cost than standard pricing"
+    assert custom_cost != standard_cost, "Custom pricing should produce different cost than standard pricing"
 
     # Test 3: Custom pricing with cache_read_input_token_cost and input_cost_per_token_batches
     # This specifically tests the parameters that were causing the original issue

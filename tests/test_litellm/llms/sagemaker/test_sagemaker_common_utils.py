@@ -35,9 +35,7 @@ def test_sagemaker_response_stream_shape_lazy_loads_once():
     import litellm.llms.sagemaker.common_utils as mod
 
     sentinel = MagicMock()
-    with patch.object(
-        mod, "_load_sagemaker_response_stream_shape", return_value=sentinel
-    ) as mock_load:
+    with patch.object(mod, "_load_sagemaker_response_stream_shape", return_value=sentinel) as mock_load:
         assert mod.get_sagemaker_response_stream_shape() is sentinel
         assert mod.get_sagemaker_response_stream_shape() is sentinel
         mock_load.assert_called_once()
@@ -84,9 +82,7 @@ def test_sagemaker_response_stream_shape_is_structure_shape():
     from litellm.llms.sagemaker.common_utils import get_sagemaker_response_stream_shape
 
     shape = get_sagemaker_response_stream_shape()
-    assert (
-        shape is not None
-    ), "get_sagemaker_response_stream_shape() is None — botocore may not be installed"
+    assert shape is not None, "get_sagemaker_response_stream_shape() is None — botocore may not be installed"
     shape: StructureShape = shape  # remove Optional
     assert isinstance(shape, StructureShape)
     assert shape.name == "InvokeEndpointWithResponseStreamOutput"

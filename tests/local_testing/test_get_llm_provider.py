@@ -9,9 +9,7 @@ import io
 
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.types.router import LiteLLM_Params
@@ -27,9 +25,7 @@ def test_get_llm_provider():
 
 
 def test_get_llm_provider_fireworks():  # tests finetuned fireworks models - https://github.com/BerriAI/litellm/issues/4923
-    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-        model="fireworks_ai/accounts/my-test-1234"
-    )
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(model="fireworks_ai/accounts/my-test-1234")
 
     assert custom_llm_provider == "fireworks_ai"
     assert model == "accounts/my-test-1234"
@@ -53,10 +49,7 @@ def test_get_llm_provider_mistral_custom_api_base():
     )
     assert custom_llm_provider == "mistral"
     assert model == "mistral-large-fr"
-    assert (
-        api_base
-        == "https://mistral-large-fr-ishaan.francecentral.inference.ai.azure.com/v1"
-    )
+    assert api_base == "https://mistral-large-fr-ishaan.francecentral.inference.ai.azure.com/v1"
 
 
 def test_get_llm_provider_deepseek_custom_api_base():
@@ -152,9 +145,7 @@ def test_default_api_base():
                 continue
 
             for other_provider in LlmProviders:
-                if other_provider.value != provider and provider != "{}_chat".format(
-                    other_provider.value
-                ):
+                if other_provider.value != provider and provider != "{}_chat".format(other_provider.value):
                     if provider == "codestral" and other_provider.value == "mistral":
                         continue
                     elif provider == "github" and other_provider.value == "azure":
@@ -246,9 +237,7 @@ def test_xai_api_base(model):
         "api_key": "xai-my-specialkey",
         "litellm_params": None,
     }
-    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
-        **args
-    )
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(**args)
     assert custom_llm_provider == "xai"
     assert model == "grok-2-vision-latest"
     assert api_base == "https://api.x.ai/v1"
@@ -279,9 +268,7 @@ def test_get_litellm_proxy_custom_llm_provider():
             provider,
             key,
             base,
-        ) = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(
-            model=test_model
-        )
+        ) = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(model=test_model)
 
     assert model == test_model
     assert provider == "litellm_proxy"
@@ -342,9 +329,7 @@ def test_get_litellm_proxy_model_prefix_stripping():
             provider,
             key,
             base,
-        ) = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(
-            model=original_model
-        )
+        ) = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(model=original_model)
 
     assert model == expected_model
     assert provider == "litellm_proxy"
@@ -414,9 +399,7 @@ def test_get_llm_provider_use_proxy_arg_true():
     Tests get_llm_provider uses litellm_proxy when use_proxy=True argument is passed.
     """
     test_model_input = "mistral/mistral-large"
-    expected_model_output = (
-        "mistral/mistral-large"  # force_use_litellm_proxy keep the model name
-    )
+    expected_model_output = "mistral/mistral-large"  # force_use_litellm_proxy keep the model name
     proxy_api_base = "http://my-arg-proxy.com"
     proxy_api_key = "arg_proxy_key"
 
@@ -431,9 +414,7 @@ def test_get_llm_provider_use_proxy_arg_true():
     ):  # clear=True removes LITELLM_PROXY_ALWAYS if it was set by other tests
         model, provider, key, base = litellm.get_llm_provider(
             model=test_model_input,
-            litellm_params=LiteLLM_Params(
-                use_litellm_proxy=True, model=test_model_input
-            ),
+            litellm_params=LiteLLM_Params(use_litellm_proxy=True, model=test_model_input),
         )
 
     assert model == expected_model_output
@@ -469,9 +450,7 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
             model=test_model_input,
             api_base=arg_api_base,
             api_key=arg_api_key,
-            litellm_params=LiteLLM_Params(
-                use_litellm_proxy=True, model=test_model_input
-            ),
+            litellm_params=LiteLLM_Params(use_litellm_proxy=True, model=test_model_input),
         )
 
     assert model == expected_model_output
@@ -552,9 +531,7 @@ class TestClaudeModelPatternMatching:
             "claude-3-opus-20240229",
         ],
     )
-    def test_non_matching_models_do_not_match_rule(
-        self, model, shipped_generalizations
-    ):
+    def test_non_matching_models_do_not_match_rule(self, model, shipped_generalizations):
         from litellm.litellm_core_utils.fallback_generalizations import (
             match_routing_generalization,
         )

@@ -180,9 +180,7 @@ def test_fable_5_all_variants_carry_adaptive_thinking_flag(cost_map):
     so adaptive is the only valid thinking shape LiteLLM can emit for it."""
     variants = [k for k in cost_map if "claude-fable-5" in k]
     assert variants, "no claude-fable-5 entries found in cost map"
-    missing = [
-        k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True
-    ]
+    missing = [k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True]
     assert not missing, f"missing supports_adaptive_thinking: {missing}"
 
 
@@ -224,7 +222,5 @@ def test_sampling_params_flag_on_all_models_that_removed_them(cost_map):
         and not k.startswith("perplexity/")
     ]
     assert variants, "no matching entries found in cost map"
-    missing = [
-        k for k in variants if cost_map[k].get("supports_sampling_params") is not False
-    ]
+    missing = [k for k in variants if cost_map[k].get("supports_sampling_params") is not False]
     assert not missing, f"missing supports_sampling_params=false: {missing}"

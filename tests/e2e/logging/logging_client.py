@@ -479,12 +479,8 @@ class LoggingClient:
             stream=True if stream else None,
         )
         if stream:
-            return self.proxy.transport.stream(
-                "/v1/messages", headers=self.proxy.transport.bearer(key), json=body
-            )
-        return self.proxy.transport.send(
-            "/v1/messages", headers=self.proxy.transport.bearer(key), json=body
-        )
+            return self.proxy.transport.stream("/v1/messages", headers=self.proxy.transport.bearer(key), json=body)
+        return self.proxy.transport.send("/v1/messages", headers=self.proxy.transport.bearer(key), json=body)
 
     def responses_raw(
         self, key: str, model: str, text: str, *, max_output_tokens: int = 64, stream: bool = False
@@ -498,12 +494,8 @@ class LoggingClient:
             model=model, input=text, max_output_tokens=max_output_tokens, stream=True if stream else None
         )
         if stream:
-            return self.proxy.transport.stream(
-                "/v1/responses", headers=self.proxy.transport.bearer(key), json=body
-            )
-        return self.proxy.transport.send(
-            "/v1/responses", headers=self.proxy.transport.bearer(key), json=body
-        )
+            return self.proxy.transport.stream("/v1/responses", headers=self.proxy.transport.bearer(key), json=body)
+        return self.proxy.transport.send("/v1/responses", headers=self.proxy.transport.bearer(key), json=body)
 
     def scrape_metrics(self) -> str:
         return self.proxy.probe("/metrics", params=NoBody()).body
@@ -529,9 +521,7 @@ class LoggingClient:
                 return False
             return True
 
-        rows = self.proxy.poll_logs_for_key(
-            key, min_rows=1, predicate=lambda rs: any(_matches(r) for r in rs)
-        )
+        rows = self.proxy.poll_logs_for_key(key, min_rows=1, predicate=lambda rs: any(_matches(r) for r in rs))
         for row in rows:
             if _matches(row):
                 return row
@@ -592,9 +582,7 @@ class LoggingClient:
         deadline = time.monotonic() + POLL_TIMEOUT
         last: LangfuseObservation | None = None
         while time.monotonic() < deadline:
-            last = self.find_langfuse_observation(
-                creds, key_alias=key_alias, prompt_marker=prompt_marker
-            )
+            last = self.find_langfuse_observation(creds, key_alias=key_alias, prompt_marker=prompt_marker)
             if last is not None:
                 cost = observation_spend(last)
                 if not require_positive_cost or (cost is not None and cost > 0):
@@ -610,9 +598,7 @@ class LoggingClient:
         prompt_marker: str,
     ) -> list[LangfuseObservation]:
         """Generation plus any sibling/child observations (guardrail spans, etc.)."""
-        gen = self.poll_langfuse_observation(
-            creds, key_alias=key_alias, prompt_marker=prompt_marker
-        )
+        gen = self.poll_langfuse_observation(creds, key_alias=key_alias, prompt_marker=prompt_marker)
         if gen is None or not gen.trace_id:
             return [] if gen is None else [gen]
         return self.list_langfuse_observations(creds, trace_id=gen.trace_id) or [gen]

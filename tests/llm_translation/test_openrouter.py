@@ -2,9 +2,7 @@ import os
 import sys
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system paths
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system paths
 import litellm
 
 
@@ -27,9 +25,7 @@ def test_completion_openrouter_image_generation():
         modalities=["image", "text"],
     )
     print(resp)
-    assert (
-        resp.choices[0].message.images[0]["image_url"]["url"].startswith("data:image/")
-    )
+    assert resp.choices[0].message.images[0]["image_url"]["url"].startswith("data:image/")
 
 
 def test_openrouter_embedding():

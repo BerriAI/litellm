@@ -7,9 +7,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -54,16 +52,12 @@ class BaseLoggingCallbackTest(ABC):
                         role="assistant",
                         tool_calls=[
                             ChatCompletionMessageToolCall(
-                                function=Function(
-                                    arguments='{"city": "New York"}', name="get_weather"
-                                ),
+                                function=Function(arguments='{"city": "New York"}', name="get_weather"),
                                 id="call_PngsQS5YGmIZKnswhnUOnOVb",
                                 type="function",
                             ),
                             ChatCompletionMessageToolCall(
-                                function=Function(
-                                    arguments='{"city": "New York"}', name="get_news"
-                                ),
+                                function=Function(arguments='{"city": "New York"}', name="get_news"),
                                 id="call_1zsDThBu0VSK7KuY7eCcJBnq",
                                 type="function",
                             ),

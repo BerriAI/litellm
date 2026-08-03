@@ -23,9 +23,7 @@ from litellm.llms.vertex_ai.vertex_model_garden.main import (
         ("gpt-oss-20b-maas", False),
     ],
 )
-def test_create_vertex_url_openapi_vs_deployed_endpoint(
-    model: str, expect_openapi_base: bool
-) -> None:
+def test_create_vertex_url_openapi_vs_deployed_endpoint(model: str, expect_openapi_base: bool) -> None:
     url = create_vertex_url(
         vertex_location="us-central1",
         vertex_project="my-project",
@@ -35,18 +33,12 @@ def test_create_vertex_url_openapi_vs_deployed_endpoint(
     if expect_openapi_base:
         assert "/v1/projects/my-project/locations/us-central1/endpoints/openapi" in url
     else:
-        assert (
-            "/v1beta1/projects/my-project/locations/us-central1/endpoints/"
-            f"{model}" in url
-        )
+        assert f"/v1beta1/projects/my-project/locations/us-central1/endpoints/{model}" in url
         assert "openapi" not in url
 
 
 def test_model_id_in_json_body_heuristic() -> None:
-    assert (
-        _vertex_model_garden_model_id_in_json_body("xai/grok-4.1-fast-reasoning")
-        is True
-    )
+    assert _vertex_model_garden_model_id_in_json_body("xai/grok-4.1-fast-reasoning") is True
     assert _vertex_model_garden_model_id_in_json_body("5464397967697903616") is False
 
 
@@ -117,9 +109,7 @@ async def _invoke_model_garden_completion(
     mock_vertexai.preview.language_models = MagicMock()
 
     with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-        ) as mock_http_handler,
+        patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler,
         patch(
             "litellm.llms.vertex_ai.vertex_model_garden.main.VertexAIModelGardenModels._ensure_access_token",
             return_value=("fake-token", "test-project"),
@@ -146,9 +136,7 @@ async def _invoke_model_garden_completion(
 
 
 @pytest.mark.asyncio
-async def test_user_supplied_api_base_passes_through_unchanged(
-    clean_vertex_env, _reset_litellm_http_client_cache
-):
+async def test_user_supplied_api_base_passes_through_unchanged(clean_vertex_env, _reset_litellm_http_client_cache):
     """A user-supplied api_base must reach the OpenAI-like handler unchanged,
     with only its own '/chat/completions' suffix appended."""
     user_api_base = "https://my-endpoint.example.com/v1"
@@ -193,9 +181,7 @@ async def test_user_supplied_api_base_passthrough_for_publisher_model(
 
 
 @pytest.mark.asyncio
-async def test_default_api_base_when_none_provided_single_segment(
-    clean_vertex_env, _reset_litellm_http_client_cache
-):
+async def test_default_api_base_when_none_provided_single_segment(clean_vertex_env, _reset_litellm_http_client_cache):
     """With no api_base, single-segment endpoint ids must hit the per-endpoint
     Vertex URL and send an empty model field in the body."""
     mock_http_handler = await _invoke_model_garden_completion(
@@ -217,9 +203,7 @@ async def test_default_api_base_when_none_provided_single_segment(
 
 
 @pytest.mark.asyncio
-async def test_default_api_base_when_none_provided_publisher_model(
-    clean_vertex_env, _reset_litellm_http_client_cache
-):
+async def test_default_api_base_when_none_provided_publisher_model(clean_vertex_env, _reset_litellm_http_client_cache):
     """With no api_base, publisher/catalog models must hit the shared OpenAPI
     URL and send the publisher model id in the body."""
     mock_http_handler = await _invoke_model_garden_completion(

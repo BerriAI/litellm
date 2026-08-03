@@ -2,9 +2,7 @@ import os
 import sys
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.passthrough.transformation import BedrockPassthroughConfig
 
@@ -43,10 +41,7 @@ def test_bedrock_passthrough_get_complete_url_default_endpoint():
         )
 
         # Verify URL construction
-        assert (
-            str(url)
-            == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-sonnet/invoke"
-        )
+        assert str(url) == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-sonnet/invoke"
         assert api_base == "https://bedrock-runtime.us-east-1.amazonaws.com"
 
 
@@ -105,9 +100,7 @@ def test_bedrock_passthrough_get_complete_url_custom_endpoint_with_path():
             model="anthropic.claude-3-sonnet",
             endpoint="/model/anthropic.claude-3-sonnet/invoke",
             request_query_params=None,
-            litellm_params={
-                "aws_bedrock_runtime_endpoint": "http://proxy.com/bedrockproxy"
-            },
+            litellm_params={"aws_bedrock_runtime_endpoint": "http://proxy.com/bedrockproxy"},
         )
 
         # Verify get_runtime_endpoint was called with correct parameters
@@ -119,10 +112,7 @@ def test_bedrock_passthrough_get_complete_url_custom_endpoint_with_path():
         )
 
         # Verify URL construction preserves the proxy path
-        assert (
-            str(url)
-            == "http://proxy.com/bedrockproxy/model/anthropic.claude-3-sonnet/invoke"
-        )
+        assert str(url) == "http://proxy.com/bedrockproxy/model/anthropic.claude-3-sonnet/invoke"
         assert api_base == "http://proxy.com/bedrockproxy"
 
 
@@ -204,9 +194,7 @@ def test_bedrock_passthrough_with_application_inference_profile():
     config = BedrockPassthroughConfig()
 
     model = "anthropic.claude-sonnet-4-20250514-v1:0"
-    model_id = (
-        "arn:aws:bedrock:eu-west-1:123456789:application-inference-profile/abcdefgh1234"
-    )
+    model_id = "arn:aws:bedrock:eu-west-1:123456789:application-inference-profile/abcdefgh1234"
     endpoint = f"model/{model}/invoke"
 
     with (
@@ -232,12 +220,8 @@ def test_bedrock_passthrough_with_application_inference_profile():
         # Verify that the URL contains the encoded model_id (ARN) instead of the model name
         url_str = str(url)
         # The ARN slash should be encoded as %2F
-        assert (
-            "application-inference-profile%2F" in url_str
-        ), f"Expected encoded ARN in URL, but got: {url_str}"
-        assert (
-            model not in url_str
-        ), f"Model name should be replaced by model_id, but got: {url_str}"
+        assert "application-inference-profile%2F" in url_str, f"Expected encoded ARN in URL, but got: {url_str}"
+        assert model not in url_str, f"Model name should be replaced by model_id, but got: {url_str}"
         assert "/invoke" in url_str, "Expected /invoke action in URL"
 
         # Verify the complete URL structure with encoded ARN
@@ -251,9 +235,7 @@ def test_bedrock_passthrough_with_inference_profile_converse_endpoint():
     config = BedrockPassthroughConfig()
 
     model = "anthropic.claude-sonnet-4-20250514-v1:0"
-    model_id = (
-        "arn:aws:bedrock:us-east-1:123456789:application-inference-profile/xyz123"
-    )
+    model_id = "arn:aws:bedrock:us-east-1:123456789:application-inference-profile/xyz123"
     endpoint = f"model/{model}/converse"
 
     with (
@@ -316,12 +298,8 @@ def test_bedrock_passthrough_without_model_id_backward_compatibility():
 
         # Verify that the URL contains the model name (not replaced)
         url_str = str(url)
-        assert (
-            model in url_str
-        ), f"Expected model name in URL when model_id not provided, but got: {url_str}"
-        expected_url = (
-            f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/invoke"
-        )
+        assert model in url_str, f"Expected model name in URL when model_id not provided, but got: {url_str}"
+        expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/invoke"
         assert url_str == expected_url
 
 
@@ -331,9 +309,7 @@ def test_bedrock_passthrough_region_extraction_from_inference_profile_arn():
 
     model = "anthropic.claude-sonnet-4-20250514-v1:0"
     # ARN contains us-west-2 region
-    model_id = (
-        "arn:aws:bedrock:us-west-2:123456789:application-inference-profile/test123"
-    )
+    model_id = "arn:aws:bedrock:us-west-2:123456789:application-inference-profile/test123"
     endpoint = f"model/{model}/invoke"
 
     # Don't provide aws_region_name in litellm_params to test ARN extraction
@@ -351,15 +327,11 @@ def test_bedrock_passthrough_region_extraction_from_inference_profile_arn():
             model=model,
             endpoint=endpoint,
             request_query_params=None,
-            litellm_params={
-                "model_id": model_id
-            },  # Region should be extracted from ARN
+            litellm_params={"model_id": model_id},  # Region should be extracted from ARN
         )
 
         # Verify that the region from ARN is used in the base URL
-        assert (
-            "us-west-2" in api_base
-        ), f"Expected region 'us-west-2' from ARN in base URL, but got: {api_base}"
+        assert "us-west-2" in api_base, f"Expected region 'us-west-2' from ARN in base URL, but got: {api_base}"
 
 
 def test_bedrock_passthrough_model_id_arn_encoding():
@@ -404,17 +376,19 @@ def test_bedrock_passthrough_model_id_arn_encoding():
         url_str = str(url)
 
         # The slash in the ARN after application-inference-profile should be encoded as %2F
-        assert (
-            "application-inference-profile%2F" in url_str
-        ), f"Expected encoded ARN with %2F in URL, but got: {url_str}"
+        assert "application-inference-profile%2F" in url_str, (
+            f"Expected encoded ARN with %2F in URL, but got: {url_str}"
+        )
 
         # The unencoded version should NOT be in the URL
-        assert (
-            "application-inference-profile/" not in url_str
-        ), f"ARN slash should be encoded, but found unencoded version in: {url_str}"
+        assert "application-inference-profile/" not in url_str, (
+            f"ARN slash should be encoded, but found unencoded version in: {url_str}"
+        )
 
         # Verify the complete expected URL structure
-        expected_encoded_model_id = "arn:aws:bedrock:us-east-1:590183661440:application-inference-profile%2Fb943q2qbl3m7"
+        expected_encoded_model_id = (
+            "arn:aws:bedrock:us-east-1:590183661440:application-inference-profile%2Fb943q2qbl3m7"
+        )
         expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{expected_encoded_model_id}/converse"
         assert url_str == expected_url, f"Expected {expected_url}, but got: {url_str}"
 
@@ -426,9 +400,7 @@ def test_bedrock_passthrough_model_id_arn_encoding_invoke_endpoint():
     config = BedrockPassthroughConfig()
 
     model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
-    model_id = (
-        "arn:aws:bedrock:us-east-1:123456789:application-inference-profile/xyz789"
-    )
+    model_id = "arn:aws:bedrock:us-east-1:123456789:application-inference-profile/xyz789"
     endpoint = f"/model/{model}/invoke"
 
     with (
@@ -457,9 +429,7 @@ def test_bedrock_passthrough_model_id_arn_encoding_invoke_endpoint():
         assert "application-inference-profile%2F" in url_str
         assert "/invoke" in url_str
 
-        expected_encoded_model_id = (
-            "arn:aws:bedrock:us-east-1:123456789:application-inference-profile%2Fxyz789"
-        )
+        expected_encoded_model_id = "arn:aws:bedrock:us-east-1:123456789:application-inference-profile%2Fxyz789"
         expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{expected_encoded_model_id}/invoke"
         assert url_str == expected_url
 
@@ -501,7 +471,5 @@ def test_bedrock_passthrough_model_id_without_arn():
         assert model_id in url_str
         assert "%2F" not in url_str, "Non-ARN model IDs should not be encoded"
 
-        expected_url = (
-            f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/converse"
-        )
+        expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/converse"
         assert url_str == expected_url

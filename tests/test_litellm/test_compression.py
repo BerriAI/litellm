@@ -248,9 +248,7 @@ def test_compress_preserves_system_message():
         {"role": "user", "content": "Large file content. " * 5000},
         {"role": "user", "content": "Fix the bug"},
     ]
-    result = litellm.compress(
-        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
-    )
+    result = litellm.compress(messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000)
     assert result["messages"][0]["role"] == "system"
     assert "System prompt" in result["messages"][0]["content"]
 
@@ -260,9 +258,7 @@ def test_compress_preserves_last_user_message():
         {"role": "user", "content": "Big context " * 5000},
         {"role": "user", "content": "Fix the bug in auth.py"},
     ]
-    result = litellm.compress(
-        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
-    )
+    result = litellm.compress(messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000)
     last_user = [m for m in result["messages"] if m["role"] == "user"][-1]
     assert "Fix the bug in auth.py" in last_user["content"]
 
@@ -273,9 +269,7 @@ def test_compress_preserves_last_assistant_message():
         {"role": "assistant", "content": "I'll help with that. " * 2000},
         {"role": "user", "content": "Now fix the bug"},
     ]
-    result = litellm.compress(
-        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
-    )
+    result = litellm.compress(messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000)
     assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
     assert len(assistant_msgs) >= 1
     # The last assistant message should be preserved (not stubbed)
@@ -288,9 +282,7 @@ def test_cache_keys_match_stubs():
         {"role": "user", "content": "# auth.py\n" + "code " * 5000},
         {"role": "user", "content": "Fix it"},
     ]
-    result = litellm.compress(
-        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
-    )
+    result = litellm.compress(messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000)
     if result["tools"]:
         tool_desc = result["tools"][0]["function"]["description"]
         for key in result["cache"]:
@@ -303,9 +295,7 @@ def test_compress_default_target():
         {"role": "user", "content": "content " * 5000},
         {"role": "user", "content": "query"},
     ]
-    result = litellm.compress(
-        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=2000
-    )
+    result = litellm.compress(messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=2000)
     # Should have compressed — target = 1000
     assert result["compressed_tokens"] <= result["original_tokens"]
 
@@ -375,9 +365,7 @@ def test_compress_default_call_type_is_completion():
 def test_compress_forwards_embedding_model_params(monkeypatch):
     captured = {}
 
-    def fake_embedding_score_messages(
-        query, messages, model, cache=None, embedding_model_params=None
-    ):
+    def fake_embedding_score_messages(query, messages, model, cache=None, embedding_model_params=None):
         captured["query"] = query
         captured["model"] = model
         captured["embedding_model_params"] = embedding_model_params
@@ -402,9 +390,7 @@ def test_compress_forwards_embedding_model_params(monkeypatch):
 
     assert result["compressed_tokens"] <= result["original_tokens"]
     assert captured["model"] == "text-embedding-3-small"
-    assert captured["embedding_model_params"] == {
-        "api_base": "https://example-embeddings.test"
-    }
+    assert captured["embedding_model_params"] == {"api_base": "https://example-embeddings.test"}
 
 
 def test_embedding_scorer_forwards_embedding_model_params(monkeypatch):
@@ -473,9 +459,7 @@ def test_simple_compression(final_user_message, expected_content):
         {"role": "user", "content": "Unrelated cooking recipes " * 2000},
         {"role": "user", "content": final_user_message},
     ]
-    result = litellm.compress(
-        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
-    )
+    result = litellm.compress(messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000)
     if expected_content == "Unrelated cooking recipes ":
         assert "Unrelated cooking recipes " in result["messages"][1]["content"]
         assert "Authentication code " not in result["messages"][0]["content"]
@@ -512,9 +496,7 @@ def test_compress_anthropic_drops_irrelevant_tool_exchange_span(monkeypatch):
             return 1
         return 10
 
-    monkeypatch.setattr(
-        compress_module, "bm25_score_messages", fake_bm25_score_messages
-    )
+    monkeypatch.setattr(compress_module, "bm25_score_messages", fake_bm25_score_messages)
     monkeypatch.setattr(compress_module, "token_counter", fake_token_counter)
 
     messages = [
@@ -587,9 +569,7 @@ def test_compress_anthropic_keeps_relevant_tool_exchange_span(monkeypatch):
             return 1
         return 10
 
-    monkeypatch.setattr(
-        compress_module, "bm25_score_messages", fake_bm25_score_messages
-    )
+    monkeypatch.setattr(compress_module, "bm25_score_messages", fake_bm25_score_messages)
     monkeypatch.setattr(compress_module, "token_counter", fake_token_counter)
 
     messages = [

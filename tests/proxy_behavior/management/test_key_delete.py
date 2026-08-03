@@ -55,9 +55,7 @@ async def test_key_delete_authz_matrix(
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
 
     if target_shape == "self":
-        target_cleartext = await create_scratch_key(
-            proxy_client, seeder, scratch.prefix, user_id=caller.user_id
-        )
+        target_cleartext = await create_scratch_key(proxy_client, seeder, scratch.prefix, user_id=caller.user_id)
     elif target_shape == "owner":
         target_cleartext = await create_scratch_key(
             proxy_client,
@@ -84,16 +82,10 @@ async def test_key_delete_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"keys": [target_cleartext]},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_verificationtoken.find_unique(
-        where={"token": target_hashed}
-    )
-    auth_check = await proxy_client.get(
-        "/key/info", headers={"Authorization": f"Bearer {target_cleartext}"}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": target_hashed})
+    auth_check = await proxy_client.get("/key/info", headers={"Authorization": f"Bearer {target_cleartext}"})
 
     if expected_status == 200:
         # Hard- or soft-delete both produce a 401 on subsequent auth.

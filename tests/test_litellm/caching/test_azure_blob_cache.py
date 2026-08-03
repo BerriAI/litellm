@@ -5,9 +5,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.caching.azure_blob_cache import AzureBlobCache
 
@@ -30,9 +28,7 @@ def mock_azure_dependencies():
 
     mock_async_blob_service_client = AsyncMock()
     # For AsyncMock, we need to make get_container_client return the mock directly, not a coroutine
-    mock_async_blob_service_client.get_container_client = MagicMock(
-        return_value=mock_async_container_client
-    )
+    mock_async_blob_service_client.get_container_client = MagicMock(return_value=mock_async_container_client)
 
     # Patch Azure dependencies at their source locations
     with (
@@ -51,7 +47,6 @@ def mock_azure_dependencies():
         ),
         patch("azure.core.exceptions.ResourceExistsError"),
     ):
-
         yield {
             "container_client": mock_container_client,
             "async_container_client": mock_async_container_client,
@@ -97,17 +92,13 @@ async def test_blob_cache_async_get_cache_not_found(mock_azure_dependencies):
     cache = AzureBlobCache("https://my-test-host", "test-container")
 
     # Mock ResourceNotFoundError
-    cache.async_container_client.download_blob.side_effect = ResourceNotFoundError(
-        "Blob not found"
-    )
+    cache.async_container_client.download_blob.side_effect = ResourceNotFoundError("Blob not found")
 
     # Test cache miss
     result = await cache.async_get_cache("nonexistent_key")
 
     # Verify the call was made and result is None
-    cache.async_container_client.download_blob.assert_called_once_with(
-        "nonexistent_key"
-    )
+    cache.async_container_client.download_blob.assert_called_once_with("nonexistent_key")
     assert result is None
 
 
@@ -174,9 +165,7 @@ def test_blob_cache_sync_get_cache_not_found(mock_azure_dependencies):
     cache = AzureBlobCache("https://my-test-host", "test-container")
 
     # Mock ResourceNotFoundError
-    cache.container_client.download_blob.side_effect = ResourceNotFoundError(
-        "Blob not found"
-    )
+    cache.container_client.download_blob.side_effect = ResourceNotFoundError("Blob not found")
 
     # Test cache miss
     result = cache.get_cache("nonexistent_key")
@@ -211,6 +200,4 @@ async def test_blob_cache_async_set_cache_pipeline(mock_azure_dependencies):
 
     assert cache.async_container_client.upload_blob.call_count == 3
     for expected_call in expected_calls:
-        cache.async_container_client.upload_blob.assert_any_call(
-            *expected_call[0], **expected_call[1]
-        )
+        cache.async_container_client.upload_blob.assert_any_call(*expected_call[0], **expected_call[1])

@@ -31,24 +31,18 @@ async def make_calls_until_budget_exceeded(session, key: str, call_function, **k
         print("error_dict: ", error_dict)
 
         # Check error structure and values that should be consistent
-        assert (
-            error_dict["code"] == "429"
-        ), f"Expected error code 429, got: {error_dict['code']}"
-        assert (
-            error_dict["type"] == "budget_exceeded"
-        ), f"Expected error type budget_exceeded, got: {error_dict['type']}"
+        assert error_dict["code"] == "429", f"Expected error code 429, got: {error_dict['code']}"
+        assert error_dict["type"] == "budget_exceeded", (
+            f"Expected error type budget_exceeded, got: {error_dict['type']}"
+        )
 
         # Check message contains required parts without checking specific values
         message = error_dict["message"]
-        assert (
-            "Budget has been exceeded!" in message
-        ), f"Expected message to start with 'Budget has been exceeded!', got: {message}"
-        assert (
-            "Current cost:" in message
-        ), f"Expected message to contain 'Current cost:', got: {message}"
-        assert (
-            "Max budget:" in message
-        ), f"Expected message to contain 'Max budget:', got: {message}"
+        assert "Budget has been exceeded!" in message, (
+            f"Expected message to start with 'Budget has been exceeded!', got: {message}"
+        )
+        assert "Current cost:" in message, f"Expected message to contain 'Current cost:', got: {message}"
+        assert "Max budget:" in message, f"Expected message to contain 'Max budget:', got: {message}"
 
         return call_count
 
@@ -72,7 +66,8 @@ async def chat_completion(session, key: str, model: str):
     from litellm._uuid import uuid
 
     client = AsyncOpenAI(
-        api_key=key, base_url="http://0.0.0.0:4000/v1"  # Point to our local proxy
+        api_key=key,
+        base_url="http://0.0.0.0:4000/v1",  # Point to our local proxy
     )
 
     response = await client.chat.completions.create(
@@ -116,9 +111,7 @@ async def test_chat_completion_low_budget():
             model="fake-openai-endpoint",
         )
 
-        assert (
-            calls_made > 0
-        ), "Should make at least one successful call before budget exceeded"
+        assert calls_made > 0, "Should make at least one successful call before budget exceeded"
 
 
 @pytest.mark.asyncio
@@ -168,9 +161,7 @@ async def test_chat_completion_high_budget():
             model="fake-openai-endpoint",
         )
 
-        assert (
-            calls_made > 0
-        ), "Should make at least one successful call before budget exceeded"
+        assert calls_made > 0, "Should make at least one successful call before budget exceeded"
 
 
 @pytest.mark.asyncio
@@ -195,9 +186,7 @@ async def test_chat_completion_budget_update():
             model="fake-openai-endpoint",
         )
 
-        assert (
-            calls_made > 0
-        ), "Should make at least one successful call before budget exceeded"
+        assert calls_made > 0, "Should make at least one successful call before budget exceeded"
 
         # Update key with higher budget
         await update_key_budget(session, key, max_budget=0.001)
@@ -205,17 +194,11 @@ async def test_chat_completion_budget_update():
         # Verify calls work again
         for _ in range(3):
             try:
-                response = await chat_completion(
-                    session=session, key=key, model="fake-openai-endpoint"
-                )
+                response = await chat_completion(session=session, key=key, model="fake-openai-endpoint")
                 print("response: ", response)
-                assert (
-                    response is not None
-                ), "Should get valid response after budget update"
+                assert response is not None, "Should get valid response after budget update"
             except Exception as e:
-                pytest.fail(
-                    f"Request should succeed after budget update but got error: {e}"
-                )
+                pytest.fail(f"Request should succeed after budget update but got error: {e}")
 
 
 @pytest.mark.parametrize(
@@ -543,9 +526,7 @@ async def test_team_budget_enforcement():
             model="fake-openai-endpoint",
         )
 
-        assert (
-            calls_made > 0
-        ), "Should make at least one successful call before team budget exceeded"
+        assert calls_made > 0, "Should make at least one successful call before team budget exceeded"
 
 
 @pytest.mark.asyncio
@@ -593,9 +574,7 @@ async def test_team_budget_enforcement_cli_sso_token():
             team_alias=team_alias,
             models=[CLI_SSO_MODEL],
         )
-        assert not cli_token.startswith(
-            "sk-"
-        ), "CLI SSO token must not be a virtual key"
+        assert not cli_token.startswith("sk-"), "CLI SSO token must not be a virtual key"
 
         calls_made = await make_calls_until_team_budget_exceeded_cli_sso(
             session=session,
@@ -604,9 +583,7 @@ async def test_team_budget_enforcement_cli_sso_token():
             model=CLI_SSO_MODEL,
         )
 
-        assert (
-            calls_made > 0
-        ), "Should make at least one successful call before team budget exceeded"
+        assert calls_made > 0, "Should make at least one successful call before team budget exceeded"
 
 
 @pytest.mark.asyncio
@@ -638,20 +615,16 @@ async def test_team_and_key_budget_enforcement():
             model="fake-openai-endpoint",
         )
 
-        assert (
-            calls_made > 0
-        ), "Should make at least one successful call before team budget exceeded"
+        assert calls_made > 0, "Should make at least one successful call before team budget exceeded"
 
         # Verify it was the team budget that was exceeded
         try:
-            await chat_completion(
-                session=session, key=key, model="fake-openai-endpoint"
-            )
+            await chat_completion(session=session, key=key, model="fake-openai-endpoint")
         except Exception as e:
             error_dict = e.body
-            assert (
-                "Budget has been exceeded! Team=" in error_dict["message"]
-            ), "Error should mention team budget being exceeded"
+            assert "Budget has been exceeded! Team=" in error_dict["message"], (
+                "Error should mention team budget being exceeded"
+            )
 
             assert team_id in error_dict["message"], "Error should mention team id"
 
@@ -695,9 +668,7 @@ async def test_team_budget_update():
             model="fake-openai-endpoint",
         )
 
-        assert (
-            calls_made > 0
-        ), "Should make at least one successful call before team budget exceeded"
+        assert calls_made > 0, "Should make at least one successful call before team budget exceeded"
 
         # Update team with higher budget
         await update_team_budget(session, team_id, max_budget=0.001)
@@ -705,16 +676,10 @@ async def test_team_budget_update():
         # Verify calls work again
         for _ in range(3):
             try:
-                response = await chat_completion(
-                    session=session, key=key, model="fake-openai-endpoint"
-                )
+                response = await chat_completion(session=session, key=key, model="fake-openai-endpoint")
                 print("response: ", response)
-                assert (
-                    response is not None
-                ), "Should get valid response after budget update"
+                assert response is not None, "Should get valid response after budget update"
             except Exception as e:
-                pytest.fail(
-                    f"Request should succeed after team budget update but got error: {e}"
-                )
+                pytest.fail(f"Request should succeed after team budget update but got error: {e}")
 
         # Verify it was the team budget that was exceeded

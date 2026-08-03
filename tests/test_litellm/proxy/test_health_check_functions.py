@@ -24,12 +24,8 @@ from litellm.proxy.utils import PrismaClient
 def mock_prisma():
     """Simplified mock PrismaClient with bound methods"""
     client = MagicMock()
-    client.db.litellm_healthchecktable.create = AsyncMock(
-        return_value={"id": "test-id"}
-    )
-    client.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[{"id": "1", "model_name": "test"}]
-    )
+    client.db.litellm_healthchecktable.create = AsyncMock(return_value={"id": "test-id"})
+    client.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[{"id": "1", "model_name": "test"}])
 
     # Bind actual methods
     import types
@@ -55,14 +51,10 @@ def mock_prisma():
         ("healthy", 1, 0, False),  # Database error case
     ],
 )
-async def test_save_health_check_result(
-    mock_prisma, status, healthy, unhealthy, should_succeed
-):
+async def test_save_health_check_result(mock_prisma, status, healthy, unhealthy, should_succeed):
     """Test health check result saving with various scenarios"""
     if not should_succeed:
-        mock_prisma.db.litellm_healthchecktable.create.side_effect = Exception(
-            "DB Error"
-        )
+        mock_prisma.db.litellm_healthchecktable.create.side_effect = Exception("DB Error")
 
     result = await mock_prisma.save_health_check_result(
         model_name="test-model",
@@ -190,9 +182,7 @@ def test_aggregate_health_check_results():
         {"model": "gpt-4", "error": "Rate limit exceeded"},
     ]
 
-    result = _aggregate_health_check_results(
-        model_param_to_info, healthy_endpoints, unhealthy_endpoints
-    )
+    result = _aggregate_health_check_results(model_param_to_info, healthy_endpoints, unhealthy_endpoints)
 
     # Check gpt-3.5-turbo is healthy
     gpt35_key = ("model-123", "gpt-3.5-turbo")
@@ -223,9 +213,7 @@ def test_aggregate_health_check_results_multiple_endpoints():
     ]
     unhealthy_endpoints = []
 
-    result = _aggregate_health_check_results(
-        model_param_to_info, healthy_endpoints, unhealthy_endpoints
-    )
+    result = _aggregate_health_check_results(model_param_to_info, healthy_endpoints, unhealthy_endpoints)
 
     key = ("model-123", "gpt-3.5-turbo")
     assert result[key]["healthy_count"] == 2
@@ -424,9 +412,7 @@ async def test_save_background_health_checks_to_db():
 @pytest.mark.asyncio
 async def test_save_background_health_checks_to_db_no_prisma():
     """Test graceful handling when no prisma client"""
-    result = await _save_background_health_checks_to_db(
-        None, [], [], [], 0.0, "background_health_check"
-    )
+    result = await _save_background_health_checks_to_db(None, [], [], [], 0.0, "background_health_check")
     assert result is None
 
 
@@ -434,9 +420,7 @@ async def test_save_background_health_checks_to_db_no_prisma():
 async def test_save_background_health_checks_to_db_exception_handling():
     """Test exception handling in background health check save"""
     mock_prisma = MagicMock()
-    mock_prisma.get_all_latest_health_checks = AsyncMock(
-        side_effect=Exception("DB Error")
-    )
+    mock_prisma.get_all_latest_health_checks = AsyncMock(side_effect=Exception("DB Error"))
 
     model_list = [
         {
@@ -447,9 +431,7 @@ async def test_save_background_health_checks_to_db_exception_handling():
     ]
 
     # Should not raise exception, should handle gracefully
-    await _save_background_health_checks_to_db(
-        mock_prisma, model_list, [], [], 0.0, "background_health_check"
-    )
+    await _save_background_health_checks_to_db(mock_prisma, model_list, [], [], 0.0, "background_health_check")
 
     # Function should complete without raising
 
@@ -465,14 +447,10 @@ async def test_get_all_latest_health_checks_with_model_id(mock_prisma):
     mock_check3 = MagicMock()
     mock_check3.model_id = "model-123"
     mock_check3.model_name = "gpt-3.5-turbo"
-    mock_check3.checked_at = datetime.now(timezone.utc) - timedelta(
-        minutes=1
-    )  # Latest for model-123
+    mock_check3.checked_at = datetime.now(timezone.utc) - timedelta(minutes=1)  # Latest for model-123
 
     # Order by checked_at desc
-    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[mock_check3, mock_check2]
-    )
+    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[mock_check3, mock_check2])
 
     result = await mock_prisma.get_all_latest_health_checks()
 
@@ -497,9 +475,7 @@ async def test_get_all_latest_health_checks_without_model_id(mock_prisma):
     mock_check2.model_name = "gpt-3.5-turbo"
     mock_check2.checked_at = datetime.now(timezone.utc) - timedelta(minutes=1)  # Latest
 
-    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[mock_check2]
-    )
+    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[mock_check2])
 
     result = await mock_prisma.get_all_latest_health_checks()
 
@@ -528,9 +504,7 @@ async def test_get_all_latest_health_checks_same_name_with_and_without_model_id(
     without_id.model_name = "gpt-4"
     without_id.checked_at = now - timedelta(minutes=1)
 
-    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[without_id, with_id]
-    )
+    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[without_id, with_id])
 
     result = await mock_prisma.get_all_latest_health_checks()
 

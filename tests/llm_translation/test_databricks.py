@@ -8,9 +8,7 @@ from unittest.mock import MagicMock, Mock, patch, ANY
 
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -385,9 +383,7 @@ def mock_embedding_response() -> Dict[str, Any]:
 
 
 @pytest.mark.parametrize("set_base", [True, False])
-def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
-    monkeypatch, set_base
-):
+def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(monkeypatch, set_base):
     # Simulate that the databricks SDK is not installed
     monkeypatch.setitem(sys.modules, "databricks.sdk", None)
 
@@ -451,19 +447,12 @@ def test_completions_with_sync_http_handler(monkeypatch):
             extraparam="testpassingextraparam",
         )
 
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
-        actual_data = json.loads(
-            mock_post.call_args.kwargs["data"]
-        )  # Deserialize the actual data
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])  # Deserialize the actual data
         expected_data = {
             "model": "dbrx-instruct-071224",
             "messages": messages,
@@ -493,9 +482,7 @@ def test_completions_with_async_http_handler(monkeypatch):
 
     messages = [{"role": "user", "content": "How are you?"}]
 
-    with patch.object(
-        AsyncHTTPHandler, "post", return_value=mock_response
-    ) as mock_post:
+    with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
         response = asyncio.run(
             litellm.acompletion(
                 model="databricks/dbrx-instruct-071224",
@@ -506,19 +493,12 @@ def test_completions_with_async_http_handler(monkeypatch):
             )
         )
 
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
-        actual_data = json.loads(
-            mock_post.call_args.kwargs["data"]
-        )  # Deserialize the actual data
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])  # Deserialize the actual data
         expected_data = {
             "model": "dbrx-instruct-071224",
             "messages": messages,
@@ -553,19 +533,12 @@ def test_completions_streaming_with_sync_http_handler(monkeypatch):
         assert "chatcmpl" in str(response)
         assert len(response) == 4
 
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == True
 
-        actual_data = json.loads(
-            mock_post.call_args.kwargs["data"]
-        )  # Deserialize the actual data
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])  # Deserialize the actual data
         expected_data = {
             "model": "dbrx-instruct-071224",
             "messages": messages,
@@ -587,9 +560,7 @@ def test_completions_streaming_with_async_http_handler(monkeypatch):
     messages = [{"role": "user", "content": "How are you?"}]
     mock_response = mock_http_handler_chat_async_streaming_response()
 
-    with patch.object(
-        AsyncHTTPHandler, "post", return_value=mock_response
-    ) as mock_post:
+    with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
         response_stream: CustomStreamWrapper = asyncio.run(
             litellm.acompletion(
                 model="databricks/dbrx-instruct-071224",
@@ -610,19 +581,12 @@ def test_completions_streaming_with_async_http_handler(monkeypatch):
         assert "chatcmpl" in str(response)
         assert len(response) == 4
 
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == True
 
-        actual_data = json.loads(
-            mock_post.call_args.kwargs["data"]
-        )  # Deserialize the actual data
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])  # Deserialize the actual data
         expected_data = {
             "model": "dbrx-instruct-071224",
             "messages": messages,
@@ -679,17 +643,9 @@ def test_completions_uses_databricks_sdk_if_api_key_and_base_not_specified(monke
         )
         assert response.to_dict() == expected_response_json
 
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
-        assert (
-            mock_post.call_args.kwargs["url"]
-            == f"{base_url}/serving-endpoints/chat/completions"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/serving-endpoints/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
         sent_data = json.loads(mock_post.call_args.kwargs["data"])
         assert sent_data["model"] == "dbrx-instruct-071224"
@@ -750,9 +706,7 @@ def test_embeddings_with_async_http_handler(monkeypatch):
 
     inputs = ["Hello", "World"]
 
-    with patch.object(
-        AsyncHTTPHandler, "post", return_value=mock_response
-    ) as mock_post:
+    with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
         response = asyncio.run(
             litellm.aembedding(
                 model="databricks/bge-large-en-v1.5",
@@ -890,9 +844,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
                 client=sync_handler,
             )
 
-            openai.types.CreateEmbeddingResponse.model_validate(
-                response.model_dump(), strict=True
-            )
+            openai.types.CreateEmbeddingResponse.model_validate(response.model_dump(), strict=True)
 
             mock_post.assert_called_once_with(
                 f"{base_url}/embeddings",
@@ -911,9 +863,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
             )
     else:
         async_handler = AsyncHTTPHandler()
-        with patch.object(
-            AsyncHTTPHandler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
             response = await litellm.aembedding(
                 model="databricks/databricks-bge-large-en",
                 input=inputs,
@@ -921,9 +871,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
                 client=async_handler,
             )
 
-            openai.types.CreateEmbeddingResponse.model_validate(
-                response.model_dump(), strict=True
-            )
+            openai.types.CreateEmbeddingResponse.model_validate(response.model_dump(), strict=True)
 
             mock_post.assert_called_once_with(
                 f"{base_url}/embeddings",
@@ -983,13 +931,8 @@ def test_completion_with_prompt_caching_anthropic_model(monkeypatch):
             client=sync_handler,
             temperature=0.5,
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
@@ -1012,9 +955,7 @@ def test_completion_with_prompt_caching_anthropic_model_repeat(monkeypatch):
     sync_handler = HTTPHandler()
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
-    mock_response.json.return_value = (
-        mock_chat_response_anthropic_prompt_caching_repeat()
-    )
+    mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching_repeat()
 
     mock_text = "example text" * 512
     messages = [
@@ -1047,13 +988,8 @@ def test_completion_with_prompt_caching_anthropic_model_repeat(monkeypatch):
             temperature=0.5,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
@@ -1109,25 +1045,21 @@ def test_completion_with_prompt_caching_nonanthropic_model(monkeypatch):
             temperature=0.5,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
         # TODO: add test for entire expected output schema in the future
         # Check the response object returned from litellm.completion()
         assert "gpt-oss-20b" in response["model"]
-        assert ("cache_read_input_tokens" not in response["usage"]) or response[
-            "usage"
-        ]["cache_read_input_tokens"] in [0, None]
-        assert ("cache_creation_input_tokens" not in response["usage"]) or response[
-            "usage"
-        ]["cache_creation_input_tokens"] in [0, None]
+        assert ("cache_read_input_tokens" not in response["usage"]) or response["usage"]["cache_read_input_tokens"] in [
+            0,
+            None,
+        ]
+        assert ("cache_creation_input_tokens" not in response["usage"]) or response["usage"][
+            "cache_creation_input_tokens"
+        ] in [0, None]
         assert response["usage"]["prompt_tokens"] == 1638
         assert response["usage"]["completion_tokens"] == 500
         assert response["usage"]["total_tokens"] == 2138
@@ -1195,9 +1127,7 @@ def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
             },
         }
     ]
-    messages = [
-        {"role": "user", "content": "What is the current temperature in New York?"}
-    ]
+    messages = [{"role": "user", "content": "What is the current temperature in New York?"}]
 
     with patch.object(HTTPHandler, "post", return_value=mock_response):
         response = litellm.completion(
@@ -1210,10 +1140,7 @@ def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
 
         assert response.choices[0].message.tool_calls is not None
         assert len(response.choices[0].message.tool_calls) == 1
-        assert (
-            response.choices[0].message.tool_calls[0].function.name
-            == "get_current_weather"
-        )
+        assert response.choices[0].message.tool_calls[0].function.name == "get_current_weather"
 
 
 def test_databricks_anthropic_user_string_content_cache_injection(monkeypatch):
@@ -1243,13 +1170,8 @@ def test_databricks_anthropic_user_string_content_cache_injection(monkeypatch):
             cache_control_injection_points=cache_control_injection_points,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
@@ -1290,13 +1212,8 @@ def test_databricks_anthropic_system_string_content_cache_injection(monkeypatch)
             cache_control_injection_points=cache_control_injection_points,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
@@ -1321,9 +1238,7 @@ def test_databricks_anthropic_system_string_content_cache_injection_not_enough_t
     sync_handler = HTTPHandler()
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
-    mock_response.json.return_value = (
-        mock_chat_response_anthropic_prompt_caching_not_enough_tokens()
-    )
+    mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching_not_enough_tokens()
 
     mock_text = "example text" * 512
     messages = [
@@ -1344,13 +1259,8 @@ def test_databricks_anthropic_system_string_content_cache_injection_not_enough_t
             cache_control_injection_points=cache_control_injection_points,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 

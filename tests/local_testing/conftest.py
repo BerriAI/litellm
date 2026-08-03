@@ -17,9 +17,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 
 # ``litellm.model_cost`` is loaded at import time from the URL pinned to ``main``
@@ -90,9 +88,7 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
 #   blows past MAX_EPISODES_PER_CASSETTE (50) so the cassette is refused on
 #   every run (MISS:OVERFLOW). The endpoint is a free mock, so the live calls
 #   carry no real provider cost.
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
-    "test_router.py::test_router_text_completion_client",
-)
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ("test_router.py::test_router_text_completion_client",)
 
 
 _verbose_state = VerboseReporterState()
@@ -149,9 +145,7 @@ _SCALAR_DEFAULTS = {
     "cache": getattr(litellm, "cache", None),
     "allowed_fails": getattr(litellm, "allowed_fails", 3),
     "default_fallbacks": getattr(litellm, "default_fallbacks", None),
-    "enable_azure_ad_token_refresh": getattr(
-        litellm, "enable_azure_ad_token_refresh", None
-    ),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
     "tag_budget_config": getattr(litellm, "tag_budget_config", None),
     "model_cost": getattr(litellm, "model_cost", None),
     "token_counter": getattr(litellm, "token_counter", None),
@@ -268,9 +262,7 @@ def pytest_collection_modifyitems(config, items):
     )
 
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
-    custom_logger_tests = [
-        item for item in items if "custom_logger" in item.parent.name
-    ]
+    custom_logger_tests = [item for item in items if "custom_logger" in item.parent.name]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
     # Sort tests based on their names

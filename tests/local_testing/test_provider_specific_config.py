@@ -8,9 +8,7 @@ import traceback
 import json
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -470,10 +468,7 @@ def test_sagemaker_default_region():
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         print("url=", kwargs["url"])
 
-        assert (
-            kwargs["url"]
-            == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/mock-endpoint/invocations"
-        )
+        assert kwargs["url"] == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/mock-endpoint/invocations"
 
 
 # test_sagemaker_default_region()
@@ -566,7 +561,6 @@ def test_sagemaker_config_region():
         "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
         return_value=mock_response,
     ) as mock_post:
-
         response = litellm.completion(
             model="sagemaker/mock-endpoint",
             messages=[{"content": "Hello, world!", "role": "user"}],

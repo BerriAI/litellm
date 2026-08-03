@@ -40,9 +40,7 @@ class TestProviderSpecificHeaderUtils:
         assert result == {}
 
         # Test case 2: provider_specific_header is None
-        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            None, "openai"
-        )
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(None, "openai")
         assert result == {}
 
     def test_get_provider_specific_headers_multi_provider_anthropic_to_bedrock(self):
@@ -53,27 +51,19 @@ class TestProviderSpecificHeaderUtils:
         }
 
         # Test bedrock provider
-        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            provider_specific_header, "bedrock"
-        )
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(provider_specific_header, "bedrock")
         assert result == {"anthropic-beta": "context-1m-2025-08-07"}
 
         # Test anthropic provider
-        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            provider_specific_header, "anthropic"
-        )
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(provider_specific_header, "anthropic")
         assert result == {"anthropic-beta": "context-1m-2025-08-07"}
 
         # Test bedrock_converse provider
-        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            provider_specific_header, "bedrock_converse"
-        )
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(provider_specific_header, "bedrock_converse")
         assert result == {"anthropic-beta": "context-1m-2025-08-07"}
 
         # Test vertex_ai provider
-        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            provider_specific_header, "vertex_ai"
-        )
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(provider_specific_header, "vertex_ai")
         assert result == {"anthropic-beta": "context-1m-2025-08-07"}
 
     def test_get_provider_specific_headers_multi_provider_no_match(self):
@@ -84,9 +74,7 @@ class TestProviderSpecificHeaderUtils:
         }
 
         # Test provider not in list
-        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            provider_specific_header, "openai"
-        )
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(provider_specific_header, "openai")
         assert result == {}
 
     def test_get_provider_specific_headers_with_spaces(self):
@@ -96,9 +84,7 @@ class TestProviderSpecificHeaderUtils:
             "extra_headers": {"anthropic-beta": "test"},
         }
 
-        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            provider_specific_header, "bedrock"
-        )
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(provider_specific_header, "bedrock")
         assert result == {"anthropic-beta": "test"}
 
     def test_get_provider_specific_headers_none_custom_llm_provider(self):
@@ -108,7 +94,5 @@ class TestProviderSpecificHeaderUtils:
             "extra_headers": {"anthropic-beta": "test"},
         }
 
-        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            provider_specific_header, None
-        )
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(provider_specific_header, None)
         assert result == {}

@@ -49,10 +49,7 @@ class TestInitialization:
     def test_init_success(self, mock_env):
         with patch("asyncio.create_task", Mock()):
             handler = RubrikLogger()
-            assert (
-                handler.tool_blocking_endpoint
-                == "http://localhost:8080/v1/after_completion/openai/v1"
-            )
+            assert handler.tool_blocking_endpoint == "http://localhost:8080/v1/after_completion/openai/v1"
             assert handler.logging_endpoint == "http://localhost:8080/v1/litellm/batch"
             assert handler.key == "test-api-key"
             assert isinstance(handler.tool_blocking_client, AsyncHTTPHandler)
@@ -61,10 +58,7 @@ class TestInitialization:
         with patch("asyncio.create_task", Mock()):
             handler = RubrikLogger(api_key="ctor-key", api_base="http://ctor-host:9090")
             assert handler.key == "ctor-key"
-            assert (
-                handler.tool_blocking_endpoint
-                == "http://ctor-host:9090/v1/after_completion/openai/v1"
-            )
+            assert handler.tool_blocking_endpoint == "http://ctor-host:9090/v1/after_completion/openai/v1"
 
     def test_init_without_url(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -72,33 +66,22 @@ class TestInitialization:
                 RubrikLogger()
 
     def test_init_without_api_key(self):
-        with patch.dict(
-            os.environ, {"RUBRIK_WEBHOOK_URL": "http://localhost:8080"}, clear=True
-        ):
+        with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://localhost:8080"}, clear=True):
             with patch("asyncio.create_task", Mock()):
                 assert RubrikLogger().key is None
 
     def test_trailing_slash_removed(self):
         with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://localhost:8080/"}):
             with patch("asyncio.create_task", Mock()):
-                assert (
-                    RubrikLogger().tool_blocking_endpoint
-                    == "http://localhost:8080/v1/after_completion/openai/v1"
-                )
+                assert RubrikLogger().tool_blocking_endpoint == "http://localhost:8080/v1/after_completion/openai/v1"
 
     def test_v1_suffix_stripped_as_substring_not_charset(self):
         with patch("asyncio.create_task", Mock()):
             with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host/v1"}):
-                assert (
-                    RubrikLogger().tool_blocking_endpoint
-                    == "http://host/v1/after_completion/openai/v1"
-                )
+                assert RubrikLogger().tool_blocking_endpoint == "http://host/v1/after_completion/openai/v1"
 
             with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host/v11"}):
-                assert (
-                    RubrikLogger().tool_blocking_endpoint
-                    == "http://host/v11/v1/after_completion/openai/v1"
-                )
+                assert RubrikLogger().tool_blocking_endpoint == "http://host/v11/v1/after_completion/openai/v1"
 
     def test_sampling_rate_fractional(self):
         with patch("asyncio.create_task", Mock()):
@@ -248,9 +231,7 @@ class TestBatchLogging:
                 "response": "hello",
             },
         }
-        await handler.async_log_success_event(
-            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
         assert len(handler.log_queue) == 1
 
     async def test_log_failure_event_appends_to_queue(self, handler):
@@ -260,9 +241,7 @@ class TestBatchLogging:
                 "response": "error",
             },
         }
-        await handler.async_log_failure_event(
-            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await handler.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
         assert len(handler.log_queue) == 1
 
     async def test_log_success_event_sampling_skips(self, handler):
@@ -273,9 +252,7 @@ class TestBatchLogging:
                 "response": "hello",
             },
         }
-        await handler.async_log_success_event(
-            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
         assert len(handler.log_queue) == 0
 
     async def test_flush_queue_sends_batch(self, handler):
@@ -330,9 +307,7 @@ class TestBatchLogging:
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
         mock_response.raise_for_status = Mock(
-            side_effect=httpx.HTTPStatusError(
-                "err", request=Mock(), response=mock_response
-            )
+            side_effect=httpx.HTTPStatusError("err", request=Mock(), response=mock_response)
         )
         handler.async_httpx_client = AsyncMock()
         handler.async_httpx_client.post = AsyncMock(return_value=mock_response)
@@ -343,9 +318,7 @@ class TestBatchLogging:
         """Network/timeout errors must also preserve the in-flight events."""
         handler.log_queue = [{"msg": "a"}, {"msg": "b"}]
         handler.async_httpx_client = AsyncMock()
-        handler.async_httpx_client.post = AsyncMock(
-            side_effect=httpx.TimeoutException("timeout")
-        )
+        handler.async_httpx_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
         await handler.flush_queue()
         assert handler.log_queue == [{"msg": "a"}, {"msg": "b"}]
 
@@ -380,9 +353,7 @@ class TestBatchLogging:
             mock_response.status_code = 500
             mock_response.text = "boom"
             mock_response.raise_for_status = Mock(
-                side_effect=httpx.HTTPStatusError(
-                    "err", request=Mock(), response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("err", request=Mock(), response=mock_response)
             )
             return mock_response
 
@@ -400,9 +371,7 @@ class TestBatchLogging:
             },
             "system": "You are a helpful assistant.",
         }
-        await handler.async_log_success_event(
-            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
         assert len(handler.log_queue) == 1
         msgs = handler.log_queue[0]["messages"]
         assert msgs[0]["role"] == "system"
@@ -416,9 +385,7 @@ class TestBatchLogging:
             },
             "system": "Be concise.",
         }
-        await handler.async_log_success_event(
-            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
         assert len(handler.log_queue) == 1
         msgs = handler.log_queue[0]["messages"]
         assert isinstance(msgs, list)
@@ -439,9 +406,7 @@ class TestBatchLogging:
             },
             "litellm_call_id": "litellm-call-123",
         }
-        await handler.async_log_success_event(
-            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
         assert handler.log_queue[0]["id"] == "litellm-call-123"
 
     async def test_non_anthropic_id_unchanged(self, handler):
@@ -458,9 +423,7 @@ class TestBatchLogging:
             },
             "litellm_call_id": "litellm-call-123",
         }
-        await handler.async_log_success_event(
-            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
         assert handler.log_queue[0]["id"] == "chatcmpl-original"
 
     async def test_payload_deep_copied_not_mutated(self, handler):
@@ -474,9 +437,7 @@ class TestBatchLogging:
             "standard_logging_object": original_payload,
             "system": "System prompt.",
         }
-        await handler.async_log_success_event(
-            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
-        )
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
         # Original payload should NOT have been mutated
         assert original_payload["id"] == "original-id"
         assert len(original_payload["messages"]) == 1
@@ -517,18 +478,14 @@ def _echo_service():
 class TestApplyGuardrail:
     async def test_skips_requests(self, handler):
         inputs = make_inputs_with_tools([make_tool_call_dict("call_1", "test_tool")])
-        result = await handler.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="request"
-        )
+        result = await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
         assert result is inputs
 
     async def test_no_tool_calls(self, handler):
         from litellm.types.utils import GenericGuardrailAPIInputs
 
         inputs = GenericGuardrailAPIInputs(texts=["hello"])
-        result = await handler.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="response"
-        )
+        result = await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
         assert result is inputs
 
     async def test_all_allowed(self, handler):
@@ -538,9 +495,7 @@ class TestApplyGuardrail:
 
         handler.tool_blocking_client = _echo_service()
 
-        result = await handler.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="response"
-        )
+        result = await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
         assert result is inputs
 
     async def test_all_blocked(self, handler):
@@ -563,9 +518,7 @@ class TestApplyGuardrail:
         )
 
         with pytest.raises(ModifyResponseException) as exc_info:
-            await handler.apply_guardrail(
-                inputs=inputs, request_data={}, input_type="response"
-            )
+            await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
         assert "Tool blocked by policy" in exc_info.value.message
 
     async def test_partial_blocking(self, handler):
@@ -597,9 +550,7 @@ class TestApplyGuardrail:
         handler.tool_blocking_client = mock_client
 
         with pytest.raises(ModifyResponseException):
-            await handler.apply_guardrail(
-                inputs=inputs, request_data={}, input_type="response"
-            )
+            await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
 
     async def test_service_failure_fail_open(self, handler):
         tc1 = make_tool_call_dict("call_1", "test_tool")
@@ -609,9 +560,7 @@ class TestApplyGuardrail:
         mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
         handler.tool_blocking_client = mock_client
 
-        result = await handler.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="response"
-        )
+        result = await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
         assert result is inputs
 
     async def test_service_empty_choices_fail_open(self, handler):
@@ -620,9 +569,7 @@ class TestApplyGuardrail:
 
         handler.tool_blocking_client = _mock_service_response({"choices": []})
 
-        result = await handler.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="response"
-        )
+        result = await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
         assert result is inputs
 
     async def test_blocking_service_payload_format(self, handler):
@@ -643,9 +590,7 @@ class TestApplyGuardrail:
         mock_client.post = mock_post
         handler.tool_blocking_client = mock_client
 
-        await handler.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="response"
-        )
+        await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
 
         # Verify envelope structure
         assert "request" in captured_payload
@@ -755,16 +700,12 @@ class TestApplyGuardrailAnthropicFormat:
     """
 
     async def test_single_tool_allowed(self, handler):
-        tc = make_tool_call_dict(
-            "toolu_123", "get_weather", '{"location": "Portland, OR"}'
-        )
+        tc = make_tool_call_dict("toolu_123", "get_weather", '{"location": "Portland, OR"}')
         inputs = make_inputs_with_tools([tc], texts=["I'll check the weather."])
 
         handler.tool_blocking_client = _echo_service()
 
-        result = await handler.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="response"
-        )
+        result = await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
         assert result is inputs
 
     async def test_single_tool_blocked(self, handler):
@@ -786,9 +727,7 @@ class TestApplyGuardrailAnthropicFormat:
         )
 
         with pytest.raises(ModifyResponseException):
-            await handler.apply_guardrail(
-                inputs=inputs, request_data={}, input_type="response"
-            )
+            await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
 
     async def test_text_only_response_no_blocking(self, handler):
         from litellm.types.utils import GenericGuardrailAPIInputs
@@ -799,9 +738,7 @@ class TestApplyGuardrailAnthropicFormat:
         mock_client.post = AsyncMock()
         handler.tool_blocking_client = mock_client
 
-        result = await handler.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="response"
-        )
+        result = await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
 
         assert result is inputs
         mock_client.post.assert_not_called()
@@ -814,9 +751,7 @@ class TestApplyGuardrailAnthropicFormat:
         mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
         handler.tool_blocking_client = mock_client
 
-        result = await handler.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="response"
-        )
+        result = await handler.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
         assert result is inputs
 
 
@@ -857,9 +792,7 @@ class TestExtractBlockedTools:
     def test_all_allowed_returns_none(self):
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
-        tc = ChatCompletionMessageToolCall(
-            id="call_1", type="function", function=Function(name="fn", arguments="{}")
-        )
+        tc = ChatCompletionMessageToolCall(id="call_1", type="function", function=Function(name="fn", arguments="{}"))
         service_resp = {
             "choices": [
                 {
@@ -907,9 +840,7 @@ class TestExtractBlockedTools:
     def test_null_tool_calls_treated_as_all_blocked(self):
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
-        tc = ChatCompletionMessageToolCall(
-            id="call_1", type="function", function=Function(name="fn", arguments="{}")
-        )
+        tc = ChatCompletionMessageToolCall(id="call_1", type="function", function=Function(name="fn", arguments="{}"))
         service_resp = {
             "choices": [
                 {
@@ -1006,7 +937,5 @@ class TestResolveModel:
 
         response = Mock()
         response.model = ""
-        result = RubrikLogger._resolve_model(
-            {"response": response}, {"model": "fallback"}
-        )
+        result = RubrikLogger._resolve_model({"response": response}, {"model": "fallback"})
         assert result == "unknown"

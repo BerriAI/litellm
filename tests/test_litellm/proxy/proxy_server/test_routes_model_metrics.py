@@ -53,9 +53,7 @@ def test_model_streaming_metrics_happy(client, auth_as, prisma_with_query_raw):
     pin can rely on the exact response shape.
     """
     with auth_as():
-        response = client.get(
-            "/model/streaming_metrics", params={"_selected_model_group": "gpt-4"}
-        )
+        response = client.get("/model/streaming_metrics", params={"_selected_model_group": "gpt-4"})
     assert response.status_code == 200
     assert normalize(response.json()) == {"data": [], "all_api_bases": []}
 
@@ -94,9 +92,7 @@ def test_model_metrics_no_prisma_error(client, auth_as, no_prisma):
 # ---------------------------------------------------------------------------
 
 
-def test_model_metrics_slow_responses_happy(
-    client, auth_as, prisma_with_query_raw, monkeypatch
-):
+def test_model_metrics_slow_responses_happy(client, auth_as, prisma_with_query_raw, monkeypatch):
     """Pins ``GET /model/metrics/slow_responses`` (happy: empty list)."""
     logging_obj = MagicMock()
     logging_obj.slack_alerting_instance.alerting_threshold = 30

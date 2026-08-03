@@ -94,9 +94,7 @@ class TestDataDogLoggerCredentialKwargs:
         assert logger.DD_API_KEY is None
         assert "attacker.example.com" in logger.intake_url
 
-    def test_direct_api_mode_does_not_leak_env_api_key_when_disallowed(
-        self, datadog_env
-    ):
+    def test_direct_api_mode_does_not_leak_env_api_key_when_disallowed(self, datadog_env):
         """With allow_env_credentials=False and no explicit key, init must fail rather than reuse env key."""
         with pytest.raises(Exception, match="DD_API_KEY"):
             with patch("asyncio.create_task"):

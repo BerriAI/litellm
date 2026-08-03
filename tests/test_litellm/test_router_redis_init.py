@@ -42,9 +42,9 @@ async def test_router_uses_correct_redis_db():
             # Redis client stores connection args in connection_pool.connection_kwargs
             conn_kwargs = cache_client.connection_pool.connection_kwargs
 
-            assert str(conn_kwargs.get("db")) == str(
-                test_db_index
-            ), f"Router Internal Check Failed: Expected DB {test_db_index}, got {conn_kwargs.get('db')}"
+            assert str(conn_kwargs.get("db")) == str(test_db_index), (
+                f"Router Internal Check Failed: Expected DB {test_db_index}, got {conn_kwargs.get('db')}"
+            )
         else:
             pytest.fail("Redis cache was not initialized in Router")
 

@@ -3,9 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.client import ChatClient, Client, ModelsManagementClient
 from litellm.proxy.client.http_client import HTTPClient

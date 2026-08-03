@@ -94,9 +94,7 @@ def get_bedrock_pricing(url, providers):
             pricing_data[provider] = extract_amazon_pricing(amazon_section)
         else:
             # General logic for other providers
-            section = soup.find(
-                "h2", text=lambda t: t and provider.lower() in t.lower()
-            )
+            section = soup.find("h2", text=lambda t: t and provider.lower() in t.lower())
             if not section:
                 pricing_data[provider] = "Provider section not found"
                 continue
@@ -160,7 +158,9 @@ def _handle_cohere_model_name(model_name: str) -> str:
 
 
 def _create_bedrock_model_name(provider: str, model_name: str):
-    complete_model_name = f"{provider.lower()}.{model_name.replace(' ', '-').replace('.', '-').replace('*', '').lower()}"
+    complete_model_name = (
+        f"{provider.lower()}.{model_name.replace(' ', '-').replace('.', '-').replace('*', '').lower()}"
+    )
     for provider_key, map in model_substring_map.items():
         if provider_key == provider:
             for model_substring, replacement in map.items():
@@ -169,9 +169,7 @@ def _create_bedrock_model_name(provider: str, model_name: str):
                 )
                 if model_substring in complete_model_name:
                     print(f"model_name: {complete_model_name}")
-                    complete_model_name = complete_model_name.replace(
-                        model_substring, replacement
-                    )
+                    complete_model_name = complete_model_name.replace(model_substring, replacement)
                     print(f"model_name: {complete_model_name}")
     if provider == "meta":
         complete_model_name = _handle_meta_model_name(complete_model_name)
@@ -196,18 +194,14 @@ def _check_if_model_name_in_pricing(
 
     for model, value in litellm.model_cost.items():
         if model.startswith(bedrock_model_name):
-            input_cost_per_token = (
-                _convert_str_to_float(input_cost_per_1k_tokens) / 1000
+            input_cost_per_token = _convert_str_to_float(input_cost_per_1k_tokens) / 1000
+            output_cost_per_token = _convert_str_to_float(output_cost_per_1k_tokens) / 1000
+            assert round(value["input_cost_per_token"], 10) == round(input_cost_per_token, 10), (
+                f"Invalid input cost per token for {model} \n Bedrock pricing page name={bedrock_model_name} \n Got={value['input_cost_per_token']}, Expected={input_cost_per_token}"
             )
-            output_cost_per_token = (
-                _convert_str_to_float(output_cost_per_1k_tokens) / 1000
+            assert round(value["output_cost_per_token"], 10) == round(output_cost_per_token, 10), (
+                f"Invalid output cost per token for {model} \n Bedrock pricing page name={bedrock_model_name} \n Got={value['output_cost_per_token']}, Expected={output_cost_per_token}"
             )
-            assert round(value["input_cost_per_token"], 10) == round(
-                input_cost_per_token, 10
-            ), f"Invalid input cost per token for {model} \n Bedrock pricing page name={bedrock_model_name} \n Got={value['input_cost_per_token']}, Expected={input_cost_per_token}"
-            assert round(value["output_cost_per_token"], 10) == round(
-                output_cost_per_token, 10
-            ), f"Invalid output cost per token for {model} \n Bedrock pricing page name={bedrock_model_name} \n Got={value['output_cost_per_token']}, Expected={output_cost_per_token}"
             return True
     return False
 
@@ -224,12 +218,8 @@ if __name__ == "__main__":
                     print(f"details: {details}")
                     assert _check_if_model_name_in_pricing(
                         bedrock_model_name=complete_model_name,
-                        input_cost_per_1k_tokens=details[
-                            "Price per 1,000 input tokens"
-                        ],
-                        output_cost_per_1k_tokens=details[
-                            "Price per 1,000 output tokens"
-                        ],
+                        input_cost_per_1k_tokens=details["Price per 1,000 input tokens"],
+                        output_cost_per_1k_tokens=details["Price per 1,000 output tokens"],
                     ), f"Model {complete_model_name} not found in litellm.model_cost"
                     print(f"  {complete_model_name}:")
                     if isinstance(details, dict):

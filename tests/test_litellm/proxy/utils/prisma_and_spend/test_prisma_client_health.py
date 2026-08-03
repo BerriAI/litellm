@@ -68,9 +68,7 @@ async def test_get_spend_logs_row_count_returns_int_from_pg_class(
     assert actual == {
         "result": 12345,
         "query_count": 1,
-        "query_kwargs": {
-            "query": prisma_client.db.query_raw.await_args.kwargs["query"]
-        },
+        "query_kwargs": {"query": prisma_client.db.query_raw.await_args.kwargs["query"]},
         "type": "int",
     }
 
@@ -215,12 +213,8 @@ async def test_save_health_check_result_creates_record(
 async def test_save_health_check_result_db_failure_returns_none(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_healthchecktable.create = AsyncMock(
-        side_effect=RuntimeError("db down")
-    )
-    result = await prisma_client.save_health_check_result(
-        model_name="gpt-4o", status="healthy"
-    )
+    prisma_client.db.litellm_healthchecktable.create = AsyncMock(side_effect=RuntimeError("db down"))
+    result = await prisma_client.save_health_check_result(model_name="gpt-4o", status="healthy")
     assert result is None
 
 
@@ -254,9 +248,7 @@ async def test_get_health_check_history_filters_by_model_and_status(
 async def test_get_health_check_history_db_error_returns_empty_list(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(
-        side_effect=RuntimeError("network down")
-    )
+    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(side_effect=RuntimeError("network down"))
     assert await prisma_client.get_health_check_history() == []
 
 
@@ -286,7 +278,5 @@ async def test_get_all_latest_health_checks_uses_distinct(
 async def test_get_all_latest_health_checks_db_error_returns_empty_list(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(
-        side_effect=RuntimeError("oops")
-    )
+    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(side_effect=RuntimeError("oops"))
     assert await prisma_client.get_all_latest_health_checks() == []

@@ -8,16 +8,12 @@ from openai import AsyncOpenAI
 import sys, os
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../"))  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy._types import LitellmUserRoles
 
 
-async def generate_team(
-    session, models: Optional[list] = None, team_id: Optional[str] = None
-):
+async def generate_team(session, models: Optional[list] = None, team_id: Optional[str] = None):
     url = "http://0.0.0.0:4000/team/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     if team_id is None:
@@ -129,12 +125,8 @@ async def test_key_gen_bad_key():
     async with aiohttp.ClientSession() as session:
         ## LOGIN TO UI
         form_data = {"username": "admin", "password": "sk-1234"}
-        async with session.post(
-            "http://0.0.0.0:4000/login", data=form_data
-        ) as response:
-            assert (
-                response.status == 200
-            )  # Assuming the endpoint returns a 500 status code for error handling
+        async with session.post("http://0.0.0.0:4000/login", data=form_data) as response:
+            assert response.status == 200  # Assuming the endpoint returns a 500 status code for error handling
             text = await response.text()
             print(text)
         ## create user key with admin key -> expect to work
@@ -142,9 +134,7 @@ async def test_key_gen_bad_key():
         key = key_data["key"]
         ## create new key with user key -> expect to fail
         try:
-            await generate_key(
-                session=session, i=0, user_id="user-1234", calling_key=key
-            )
+            await generate_key(session=session, i=0, user_id="user-1234", calling_key=key)
             pytest.fail("Expected to fail")
         except Exception as e:
             pass
@@ -223,9 +213,7 @@ async def chat_completion(session, key, model="gpt-4"):
                 print()
 
                 if status != 200:
-                    raise Exception(
-                        f"Request did not return a 200 status code: {status}. Response: {response_text}"
-                    )
+                    raise Exception(f"Request did not return a 200 status code: {status}. Response: {response_text}")
 
                 return await response.json()
         except Exception as e:
@@ -256,9 +244,7 @@ async def image_generation(session, key, model="gpt-image-1"):
                 print()
 
                 if status != 200:
-                    raise Exception(
-                        f"Request did not return a 200 status code: {status}. Response: {response_text}"
-                    )
+                    raise Exception(f"Request did not return a 200 status code: {status}. Response: {response_text}")
 
                 return await response.json()
         except Exception as e:
@@ -288,9 +274,7 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
 
     print(f"content: {content}")
 
-    completion_tokens = litellm.token_counter(
-        model="gpt-35-turbo", text=content, count_response_tokens=True
-    )
+    completion_tokens = litellm.token_counter(model="gpt-35-turbo", text=content, count_response_tokens=True)
 
     return prompt_tokens, completion_tokens
 
@@ -378,9 +362,7 @@ async def get_key_info(session, call_key, get_key=None):
                 return status
             else:
                 print(f"call_key: {call_key}; get_key: {get_key}")
-                raise Exception(
-                    f"Request did not return a 200 status code: {status}. Responses {response_text}"
-                )
+                raise Exception(f"Request did not return a 200 status code: {status}. Responses {response_text}")
         return await response.json()
 
 
@@ -401,9 +383,7 @@ async def get_model_list(session, call_key, endpoint: str = "/v1/models"):
         print()
 
         if status != 200:
-            raise Exception(
-                f"Request did not return a 200 status code: {status}. Responses {response_text}"
-            )
+            raise Exception(f"Request did not return a 200 status code: {status}. Responses {response_text}")
         return await response.json()
 
 
@@ -424,9 +404,7 @@ async def get_model_info(session, call_key):
         print()
 
         if status != 200:
-            raise Exception(
-                f"Request did not return a 200 status code: {status}. Responses {response_text}"
-            )
+            raise Exception(f"Request did not return a 200 status code: {status}. Responses {response_text}")
         return await response.json()
 
 
@@ -506,7 +484,7 @@ async def test_key_info_spend_values():
             except aiohttp.client_exceptions.ClientOSError as e:
                 if attempt + 1 == _max_attempts:
                     raise  # re-raise the last ClientOSError if all attempts failed
-                print(f"Attempt {attempt+1} failed, retrying...")
+                print(f"Attempt {attempt + 1} failed, retrying...")
 
     async with aiohttp.ClientSession() as session:
         ## Test Spend Update ##
@@ -515,9 +493,7 @@ async def test_key_info_spend_values():
         key = key_gen["key"]
         response = await chat_completion(session=session, key=key)
         await asyncio.sleep(5)
-        spend_logs = await retry_request(
-            get_spend_logs, session=session, request_id=response["id"]
-        )
+        spend_logs = await retry_request(get_spend_logs, session=session, request_id=response["id"])
         print(f"spend_logs: {spend_logs}")
         completion_tokens = spend_logs[0]["completion_tokens"]
         prompt_tokens = spend_logs[0]["prompt_tokens"]
@@ -535,21 +511,17 @@ async def test_key_info_spend_values():
         print(f"response_cost: {response_cost}")
         await asyncio.sleep(5)  # allow db log to be updated
         key_info = await get_key_info(session=session, get_key=key, call_key=key)
-        print(
-            f"response_cost: {response_cost}; key_info spend: {key_info['info']['spend']}"
-        )
+        print(f"response_cost: {response_cost}; key_info spend: {key_info['info']['spend']}")
         rounded_response_cost = round(response_cost, 8)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
-        assert (
-            rounded_response_cost == rounded_key_info_spend
-        ), f"Expected cost= {rounded_response_cost} != Tracked Cost={rounded_key_info_spend}"
+        assert rounded_response_cost == rounded_key_info_spend, (
+            f"Expected cost= {rounded_response_cost} != Tracked Cost={rounded_key_info_spend}"
+        )
 
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.skip(
-    reason="Temporarily skipping due to model change. Will be updated soon."
-)
+@pytest.mark.skip(reason="Temporarily skipping due to model change. Will be updated soon.")
 async def test_aaaaakey_info_spend_values_streaming():
     """
     Test to ensure spend is correctly calculated.
@@ -561,9 +533,7 @@ async def test_aaaaakey_info_spend_values_streaming():
         ## streaming - azure
         key_gen = await generate_key(session=session, i=0)
         new_key = key_gen["key"]
-        prompt_tokens, completion_tokens = await chat_completion_streaming(
-            session=session, key=new_key
-        )
+        prompt_tokens, completion_tokens = await chat_completion_streaming(session=session, key=new_key)
         print(f"prompt_tokens: {prompt_tokens}, completion_tokens: {completion_tokens}")
         prompt_cost, completion_cost = litellm.cost_per_token(
             model="azure/gpt-4o",
@@ -573,17 +543,13 @@ async def test_aaaaakey_info_spend_values_streaming():
         response_cost = prompt_cost + completion_cost
         await asyncio.sleep(8)  # allow db log to be updated
         print(f"new_key: {new_key}")
-        key_info = await get_key_info(
-            session=session, get_key=new_key, call_key=new_key
-        )
-        print(
-            f"response_cost: {response_cost}; key_info spend: {key_info['info']['spend']}"
-        )
+        key_info = await get_key_info(session=session, get_key=new_key, call_key=new_key)
+        print(f"response_cost: {response_cost}; key_info spend: {key_info['info']['spend']}")
         rounded_response_cost = round(response_cost, 8)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
-        assert (
-            rounded_response_cost == rounded_key_info_spend
-        ), f"Expected={rounded_response_cost}, Got={rounded_key_info_spend}"
+        assert rounded_response_cost == rounded_key_info_spend, (
+            f"Expected={rounded_response_cost}, Got={rounded_key_info_spend}"
+        )
 
 
 @pytest.mark.flaky(retries=3, delay=1)
@@ -603,20 +569,16 @@ async def test_key_info_spend_values_image_generation():
             except aiohttp.client_exceptions.ClientOSError as e:
                 if attempt + 1 == _max_attempts:
                     raise  # re-raise the last ClientOSError if all attempts failed
-                print(f"Attempt {attempt+1} failed, retrying...")
+                print(f"Attempt {attempt + 1} failed, retrying...")
 
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=600)
-    ) as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
         ## Test Spend Update ##
         # completion
         key_gen = await generate_key(session=session, i=0)
         key = key_gen["key"]
         response = await image_generation(session=session, key=key)
         await asyncio.sleep(5)
-        key_info = await retry_request(
-            get_key_info, session=session, get_key=key, call_key=key
-        )
+        key_info = await retry_request(get_key_info, session=session, get_key=key, call_key=key)
         spend = key_info["info"]["spend"]
         assert spend > 0
 
@@ -629,9 +591,7 @@ async def test_key_info_spend_values_image_generation():
         spend_after = spend
         for _ in range(12):
             await asyncio.sleep(5)
-            key_info = await retry_request(
-                get_key_info, session=session, get_key=key, call_key=key
-            )
+            key_info = await retry_request(get_key_info, session=session, get_key=key, call_key=key)
             spend_after = key_info["info"]["spend"]
             if spend_after > spend:
                 break
@@ -659,12 +619,10 @@ async def test_key_with_budgets():
             except aiohttp.client_exceptions.ClientOSError as e:
                 if attempt + 1 == _max_attempts:
                     raise  # re-raise the last ClientOSError if all attempts failed
-                print(f"Attempt {attempt+1} failed, retrying...")
+                print(f"Attempt {attempt + 1} failed, retrying...")
 
     async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(
-            session=session, i=0, budget=10, budget_duration="5s"
-        )
+        key_gen = await generate_key(session=session, i=0, budget=10, budget_duration="5s")
         key = key_gen["key"]
         hashed_token = hash_token(token=key)
         print(f"hashed_token: {hashed_token}")
@@ -674,9 +632,7 @@ async def test_key_with_budgets():
         i = 0
         for i in range(3):
             await asyncio.sleep(70)
-            key_info = await retry_request(
-                get_key_info, session=session, get_key=key, call_key=key
-            )
+            key_info = await retry_request(get_key_info, session=session, get_key=key, call_key=key)
             reset_at_new_value = key_info["info"]["budget_reset_at"]
             try:
                 assert reset_at_init_value != reset_at_new_value
@@ -732,9 +688,7 @@ async def test_key_info_spend_values_sagemaker():
             session=session, key=new_key, model="sagemaker-completion-model"
         )
         await asyncio.sleep(5)  # allow db log to be updated
-        key_info = await get_key_info(
-            session=session, get_key=new_key, call_key=new_key
-        )
+        key_info = await get_key_info(session=session, get_key=new_key, call_key=new_key)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
         assert rounded_key_info_spend > 0
         # assert rounded_response_cost == rounded_key_info_spend
@@ -780,9 +734,7 @@ async def test_key_delete_ui():
 
         # generate a admin UI key
         team = await generate_team(session=session)
-        admin_ui_key = await generate_user(
-            session=session, user_role=LitellmUserRoles.PROXY_ADMIN.value
-        )
+        admin_ui_key = await generate_user(session=session, user_role=LitellmUserRoles.PROXY_ADMIN.value)
         print(
             "trying to delete key=",
             key,
@@ -823,9 +775,7 @@ async def test_key_model_list(model_access, model_access_level, model_endpoint):
         key = key_gen["key"]
         print(f"key: {key}")
 
-        model_list = await get_model_list(
-            session=session, call_key=key, endpoint=model_endpoint
-        )
+        model_list = await get_model_list(session=session, call_key=key, endpoint=model_endpoint)
         print(f"model_list: {model_list}")
 
         if model_access == "all-team-models":
@@ -837,9 +787,7 @@ async def test_key_model_list(model_access, model_access_level, model_endpoint):
                 assert len(model_list["data"]) > 0
         if model_access == "gpt-3.5-turbo":
             if model_endpoint == "/v1/models":
-                assert (
-                    len(model_list["data"]) == 1
-                ), "model_access={}, model_access_level={}".format(
+                assert len(model_list["data"]) == 1, "model_access={}, model_access_level={}".format(
                     model_access, model_access_level
                 )
                 assert model_list["data"][0]["id"] == model_access

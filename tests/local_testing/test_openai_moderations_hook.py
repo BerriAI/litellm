@@ -11,9 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.proxy.enterprise.enterprise_hooks.openai_moderation import (
@@ -126,9 +124,7 @@ async def test_openai_moderation_responses_api_input_field():
         ],
     )
 
-    with patch.object(
-        openai_mod, "async_make_request", return_value=mock_moderation_response
-    ):
+    with patch.object(openai_mod, "async_make_request", return_value=mock_moderation_response):
         # Test 1: Responses API / Embeddings with texts (string input)
         try:
             inputs = GenericGuardrailAPIInputs(texts=["I want to hurt people"])
@@ -145,9 +141,7 @@ async def test_openai_moderation_responses_api_input_field():
         # Test 2: Responses API with structured_messages (list of message objects)
         try:
             inputs = GenericGuardrailAPIInputs(
-                structured_messages=[
-                    {"role": "user", "content": "I want to hurt people"}
-                ]
+                structured_messages=[{"role": "user", "content": "I want to hurt people"}]
             )
             await openai_mod.apply_guardrail(
                 inputs=inputs,
@@ -165,9 +159,7 @@ async def test_openai_moderation_responses_api_input_field():
         # Test 3: Chat Completions with structured_messages
         try:
             inputs = GenericGuardrailAPIInputs(
-                structured_messages=[
-                    {"role": "user", "content": "I want to hurt people"}
-                ]
+                structured_messages=[{"role": "user", "content": "I want to hurt people"}]
             )
             await openai_mod.apply_guardrail(
                 inputs=inputs,

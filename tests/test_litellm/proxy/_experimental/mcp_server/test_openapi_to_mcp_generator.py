@@ -76,9 +76,7 @@ class TestCreateToolFunction:
 
             # Verify URL was constructed correctly
             call_args = async_client.get.call_args
-            assert "repository-id" in str(call_args[0][0]) or "test-repo" in str(
-                call_args[0][0]
-            )
+            assert "repository-id" in str(call_args[0][0]) or "test-repo" in str(call_args[0][0])
 
     @pytest.mark.asyncio
     async def test_leading_digit_parameter(self):
@@ -423,9 +421,7 @@ class TestExtractParameters:
                 {"name": "filter", "in": "query"},
                 {"name": "data", "in": "body"},
             ],
-            "requestBody": {
-                "content": {"application/json": {"schema": {"type": "object"}}}
-            },
+            "requestBody": {"content": {"application/json": {"schema": {"type": "object"}}}},
         }
 
         path_params, query_params, body_params = extract_parameters(operation)
@@ -862,9 +858,7 @@ class TestResolveOperationParams:
             ],
         }
         path_item = {"parameters": path_level_params, "get": operation}
-        result = resolve_operation_params(
-            operation, path_item, {"parameters": component_params}
-        )
+        result = resolve_operation_params(operation, path_item, {"parameters": component_params})
         names = [p["name"] for p in result["parameters"]]
         assert "owner" in names
         assert "repo" in names
@@ -967,22 +961,16 @@ class TestRegisterToolsFromOpenAPI:
             }
         }
 
-        openapi_to_mcp_generator.register_tools_from_openapi(
-            spec, base_url="https://api.example.com"
-        )
+        openapi_to_mcp_generator.register_tools_from_openapi(spec, base_url="https://api.example.com")
 
         assert registered, "expected at least one registered tool"
         anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
         for name in registered:
-            assert anthropic_re.match(
-                name
-            ), f"tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+            assert anthropic_re.match(name), f"tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
         assert "actions_download-job-logs-for-workflow-run" in registered
         assert "pulls_list-files" in registered
 
-    def test_missing_operation_id_uses_sanitized_method_path_fallback(
-        self, monkeypatch
-    ):
+    def test_missing_operation_id_uses_sanitized_method_path_fallback(self, monkeypatch):
         import re
 
         from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
@@ -1005,15 +993,11 @@ class TestRegisterToolsFromOpenAPI:
                 }
             }
         }
-        openapi_to_mcp_generator.register_tools_from_openapi(
-            spec, base_url="https://api.example.com"
-        )
+        openapi_to_mcp_generator.register_tools_from_openapi(spec, base_url="https://api.example.com")
 
         assert registered
         for name in registered:
-            assert re.match(
-                r"^[a-zA-Z0-9_-]+$", name
-            ), f"fallback tool name {name!r} not sanitized"
+            assert re.match(r"^[a-zA-Z0-9_-]+$", name), f"fallback tool name {name!r} not sanitized"
 
 
 class TestRequestExtraHeaders:
@@ -1169,9 +1153,7 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "secure-data")
             mock_client.return_value = async_client
 
-            extra_token = _request_extra_headers.set(
-                {"Authorization": "Bearer extra", "X-TOKEN": "token-value"}
-            )
+            extra_token = _request_extra_headers.set({"Authorization": "Bearer extra", "X-TOKEN": "token-value"})
             auth_token = _request_auth_header.set("Bearer byok-credential")
             try:
                 result = await func()

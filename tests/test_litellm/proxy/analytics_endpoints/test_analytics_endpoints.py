@@ -67,9 +67,7 @@ def mock_prisma(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_returns_groups_totals_and_filter_options(mock_prisma: MagicMock):
-    response = await get_global_activity(
-        start_date="2026-07-01", end_date="2026-07-27", key_aliases=[], models=[]
-    )
+    response = await get_global_activity(start_date="2026-07-01", end_date="2026-07-27", key_aliases=[], models=[])
 
     assert [group.call_type for group in response.groups] == ["acompletion", "Unknown"]
     assert response.groups[0].api_requests == 1000
@@ -92,9 +90,7 @@ async def test_filters_are_passed_to_sql_as_json_arrays(mock_prisma: MagicMock):
         models=["gpt-5.1", "claude-opus-4-8"],
     )
 
-    groups_call = next(
-        call for call in mock_prisma.db.query_raw.call_args_list if "GROUP BY" in call.args[0]
-    )
+    groups_call = next(call for call in mock_prisma.db.query_raw.call_args_list if "GROUP BY" in call.args[0])
     assert groups_call.args[3] == json.dumps(["my-key"])
     assert groups_call.args[4] == json.dumps(["gpt-5.1", "claude-opus-4-8"])
 

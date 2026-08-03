@@ -6,9 +6,7 @@ from unittest.mock import patch
 from botocore.credentials import Credentials
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -124,7 +122,9 @@ def test_bedrock_completion_with_dynamic_authentication_params():
         _authorization_header = mock_post.call_args.kwargs["headers"]["Authorization"]
 
         # Check for exact credential pattern
-        pattern = r"AWS4-HMAC-SHA256 Credential=dynamically_generated_access_key_id/\d{8}/[a-z0-9-]+/bedrock/aws4_request"
+        pattern = (
+            r"AWS4-HMAC-SHA256 Credential=dynamically_generated_access_key_id/\d{8}/[a-z0-9-]+/bedrock/aws4_request"
+        )
         assert re.search(pattern, _authorization_header) is not None
 
 
@@ -165,10 +165,7 @@ def test_bedrock_completion_with_dynamic_bedrock_runtime_endpoint():
 
         # Ensure our post method has been called.
         mock_post.assert_called_once()
-        assert (
-            mock_post.call_args.kwargs["url"]
-            == "https://my-fake-endpoint.com/model/cohere.command-r-v1:0/invoke"
-        )
+        assert mock_post.call_args.kwargs["url"] == "https://my-fake-endpoint.com/model/cohere.command-r-v1:0/invoke"
 
 
 # ------------------------------------------------------------------------------
@@ -245,9 +242,7 @@ def test_dynamic_aws_params_propagation(model, param_name, param_value):
             dummy_get_credentials.called_kwargs = kwargs  # type: ignore[attr-defined]
             return DummyCredentials()
 
-        with patch.object(
-            BaseAWSLLM, "get_credentials", side_effect=dummy_get_credentials
-        ):
+        with patch.object(BaseAWSLLM, "get_credentials", side_effect=dummy_get_credentials):
             # Patch the HTTP client's post method to avoid an actual HTTP call.
             with patch.object(client, "post") as mock_post:
                 mock_response = Mock()
@@ -292,6 +287,4 @@ def test_dynamic_aws_params_propagation(model, param_name, param_value):
                 )
 
                 # We now assert that get_credentials() was called with the dynamic param.
-                assert (
-                    dummy_get_credentials.called_kwargs.get(param_name) == param_value
-                )
+                assert dummy_get_credentials.called_kwargs.get(param_name) == param_value

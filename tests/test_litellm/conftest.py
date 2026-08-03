@@ -13,9 +13,7 @@ import sys
 from pathlib import Path
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 
 import litellm
@@ -81,9 +79,7 @@ def isolated_aws_credentials_dir(tmp_path_factory):
 @pytest.fixture(scope="function", autouse=True)
 def isolate_host_aws_config(monkeypatch, isolated_aws_credentials_dir):
     """Prevent botocore from reading host AWS profiles during unit tests."""
-    monkeypatch.setenv(
-        "AWS_SHARED_CREDENTIALS_FILE", isolated_aws_credentials_dir["credentials"]
-    )
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", isolated_aws_credentials_dir["credentials"])
     monkeypatch.setenv("AWS_CONFIG_FILE", isolated_aws_credentials_dir["config"])
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
@@ -151,38 +147,24 @@ def isolate_litellm_state():
     # Store original callback state (all callback lists)
     original_state = {}
     if hasattr(litellm, "callbacks"):
-        original_state["callbacks"] = (
-            litellm.callbacks.copy() if litellm.callbacks else []
-        )
+        original_state["callbacks"] = litellm.callbacks.copy() if litellm.callbacks else []
     if hasattr(litellm, "success_callback"):
-        original_state["success_callback"] = (
-            litellm.success_callback.copy() if litellm.success_callback else []
-        )
+        original_state["success_callback"] = litellm.success_callback.copy() if litellm.success_callback else []
     if hasattr(litellm, "failure_callback"):
-        original_state["failure_callback"] = (
-            litellm.failure_callback.copy() if litellm.failure_callback else []
-        )
+        original_state["failure_callback"] = litellm.failure_callback.copy() if litellm.failure_callback else []
     if hasattr(litellm, "input_callback"):
-        original_state["input_callback"] = (
-            litellm.input_callback.copy() if litellm.input_callback else []
-        )
+        original_state["input_callback"] = litellm.input_callback.copy() if litellm.input_callback else []
     if hasattr(litellm, "_async_success_callback"):
         original_state["_async_success_callback"] = (
-            litellm._async_success_callback.copy()
-            if litellm._async_success_callback
-            else []
+            litellm._async_success_callback.copy() if litellm._async_success_callback else []
         )
     if hasattr(litellm, "_async_failure_callback"):
         original_state["_async_failure_callback"] = (
-            litellm._async_failure_callback.copy()
-            if litellm._async_failure_callback
-            else []
+            litellm._async_failure_callback.copy() if litellm._async_failure_callback else []
         )
     if hasattr(litellm, "_async_input_callback"):
         original_state["_async_input_callback"] = (
-            litellm._async_input_callback.copy()
-            if litellm._async_input_callback
-            else []
+            litellm._async_input_callback.copy() if litellm._async_input_callback else []
         )
 
     # Store routing globals — leaked model_fallbacks causes tests to route
@@ -376,25 +358,15 @@ def pytest_collection_modifyitems(config, items):
     - Sort custom_logger tests first (they tend to interfere with other tests)
     """
     # Separate no_parallel tests
-    no_parallel_tests = [
-        item
-        for item in items
-        if any(mark.name == "no_parallel" for mark in item.iter_markers())
-    ]
+    no_parallel_tests = [item for item in items if any(mark.name == "no_parallel" for mark in item.iter_markers())]
 
     # Separate custom_logger tests
     custom_logger_tests = [
-        item
-        for item in items
-        if "custom_logger" in item.parent.name and item not in no_parallel_tests
+        item for item in items if "custom_logger" in item.parent.name and item not in no_parallel_tests
     ]
 
     # Everything else
-    other_tests = [
-        item
-        for item in items
-        if item not in no_parallel_tests and item not in custom_logger_tests
-    ]
+    other_tests = [item for item in items if item not in no_parallel_tests and item not in custom_logger_tests]
 
     # Sort each group
     custom_logger_tests.sort(key=lambda x: x.name)
@@ -410,9 +382,7 @@ def pytest_configure(config):
     Configure pytest with custom settings.
     """
     # Add marker for flaky tests (for documentation purposes)
-    config.addinivalue_line(
-        "markers", "flaky: mark test as potentially flaky (should use --reruns)"
-    )
+    config.addinivalue_line("markers", "flaky: mark test as potentially flaky (should use --reruns)")
 
     # Detect if running in CI
     is_ci = os.environ.get("CI") == "true" or os.environ.get("LITELLM_CI") == "true"

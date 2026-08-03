@@ -153,10 +153,7 @@ class TestPGVectorStoreConfig:
             litellm_params={},
         )
 
-        assert (
-            url
-            == "https://example.com/v1/vector_stores/..%2F..%2Ffiles%3Fx%3D1%23frag/search"
-        )
+        assert url == "https://example.com/v1/vector_stores/..%2F..%2Ffiles%3Fx%3D1%23frag/search"
         assert request_body["query"] == "hello"
 
     def test_environment_variable_support(self):
@@ -180,9 +177,7 @@ class TestPGVectorStoreConfig:
             assert headers["Content-Type"] == "application/json"
 
         # Test API base from environment variable
-        with patch.dict(
-            os.environ, {"PG_VECTOR_API_BASE": "https://env-pg-vector.example.com"}
-        ):
+        with patch.dict(os.environ, {"PG_VECTOR_API_BASE": "https://env-pg-vector.example.com"}):
             url = config.get_complete_url(None, {})
 
             assert url == "https://env-pg-vector.example.com/v1/vector_stores"
@@ -238,9 +233,7 @@ class TestPGVectorStoreConfig:
             # Test parameters - use a different vector store ID than test registry
             api_base = "http://localhost:8001"
             api_key = "sk-1234"
-            vector_store_id = (
-                "pg-vector-test-store-123"  # Different from test registry IDs
-            )
+            vector_store_id = "pg-vector-test-store-123"  # Different from test registry IDs
             query = "what are remote working hours for BerriAI"
 
             # Call litellm vector store search
@@ -276,9 +269,7 @@ class TestPGVectorStoreConfig:
                 # but we should still verify the mock was called before the exception
 
             # Validate that the mock was called correctly
-            assert (
-                mock_post.called
-            ), f"HTTPHandler.post should have been called. Exception: {exception_raised}"
+            assert mock_post.called, f"HTTPHandler.post should have been called. Exception: {exception_raised}"
 
             # Get the call arguments
             call_args, call_kwargs = mock_post.call_args
@@ -286,9 +277,7 @@ class TestPGVectorStoreConfig:
             # Validate URL
             expected_url = f"{api_base}/v1/vector_stores/{vector_store_id}/search"
             actual_url = call_kwargs.get("url")
-            assert (
-                actual_url == expected_url
-            ), f"Expected URL {expected_url}, got {actual_url}"
+            assert actual_url == expected_url, f"Expected URL {expected_url}, got {actual_url}"
 
             # Validate headers
             headers = call_kwargs.get("headers", {})
@@ -299,11 +288,7 @@ class TestPGVectorStoreConfig:
             json_data_str = call_kwargs.get("data", "{}")
             import json
 
-            json_data = (
-                json.loads(json_data_str)
-                if isinstance(json_data_str, str)
-                else json_data_str
-            )
+            json_data = json.loads(json_data_str) if isinstance(json_data_str, str) else json_data_str
             assert json_data.get("query") == query
 
             print("✅ PG Vector search request validation passed:")

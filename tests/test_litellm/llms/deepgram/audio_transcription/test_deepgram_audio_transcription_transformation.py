@@ -6,9 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -216,9 +214,7 @@ def test_get_complete_url_with_detect_language():
         optional_params={"detect_language": True},
         litellm_params={},
     )
-    expected_url = (
-        "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true"
-    )
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true"
     assert url == expected_url
 
 
@@ -339,9 +335,7 @@ def test_transform_response_with_diarization_and_paragraphs():
 
     assert isinstance(result, TranscriptionResponse)
     # Should use the pre-formatted paragraphs transcript
-    assert (
-        result.text == "\nSpeaker 0: Hello how are you\n\nSpeaker 1: I am fine thanks\n"
-    )
+    assert result.text == "\nSpeaker 0: Hello how are you\n\nSpeaker 1: I am fine thanks\n"
     assert result["task"] == "transcribe"
     assert result["duration"] == 15.0
 

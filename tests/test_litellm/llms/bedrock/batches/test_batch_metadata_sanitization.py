@@ -28,11 +28,7 @@ class TestGetOpenaiCompatibleBatchMetadata:
         assert result == {"user_key": "user_value", "run_id": "abc123"}
 
     def test_dict_values_serialized_to_json_string(self):
-        metadata = {
-            "_model_armor_response": {
-                "sanitizationResult": {"filterMatchState": "MATCH_FOUND"}
-            }
-        }
+        metadata = {"_model_armor_response": {"sanitizationResult": {"filterMatchState": "MATCH_FOUND"}}}
         result = BedrockBatchesConfig._get_openai_compatible_batch_metadata(metadata)
         assert "_model_armor_response" in result
         assert isinstance(result["_model_armor_response"], str)

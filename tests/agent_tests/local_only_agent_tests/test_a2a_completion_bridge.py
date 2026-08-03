@@ -105,9 +105,7 @@ async def test_a2a_completion_bridge_streaming():
         print(f"Chunk: {chunk}")
 
     # Validate we received proper A2A streaming events
-    assert (
-        len(chunks) >= 4
-    ), f"Expected at least 4 chunks (task, working, artifact, completed), got {len(chunks)}"
+    assert len(chunks) >= 4, f"Expected at least 4 chunks (task, working, artifact, completed), got {len(chunks)}"
 
     # Validate chunk structure follows A2A spec
     for chunk in chunks:
@@ -126,9 +124,7 @@ async def test_a2a_completion_bridge_streaming():
 
     # Validate second chunk is working status update
     working_chunk = chunks[1]
-    assert (
-        working_chunk["result"]["kind"] == "status-update"
-    ), "Second chunk should be status-update"
+    assert working_chunk["result"]["kind"] == "status-update", "Second chunk should be status-update"
     assert working_chunk["result"]["status"]["state"] == "working"
     assert "taskId" in working_chunk["result"]
     assert "contextId" in working_chunk["result"]
@@ -136,9 +132,7 @@ async def test_a2a_completion_bridge_streaming():
 
     # Validate artifact update chunk
     artifact_chunk = chunks[2]
-    assert (
-        artifact_chunk["result"]["kind"] == "artifact-update"
-    ), "Third chunk should be artifact-update"
+    assert artifact_chunk["result"]["kind"] == "artifact-update", "Third chunk should be artifact-update"
     assert "artifact" in artifact_chunk["result"]
     assert "artifactId" in artifact_chunk["result"]["artifact"]
     assert "parts" in artifact_chunk["result"]["artifact"]
@@ -147,9 +141,7 @@ async def test_a2a_completion_bridge_streaming():
 
     # Validate final chunk is completed status update
     final_chunk = chunks[-1]
-    assert (
-        final_chunk["result"]["kind"] == "status-update"
-    ), "Last chunk should be status-update"
+    assert final_chunk["result"]["kind"] == "status-update", "Last chunk should be status-update"
     assert final_chunk["result"]["status"]["state"] == "completed"
     assert final_chunk["result"]["final"] is True
 
@@ -173,9 +165,7 @@ async def test_a2a_completion_bridge_bedrock_agentcore():
     send_message_payload = {
         "message": {
             "role": "user",
-            "parts": [
-                {"kind": "text", "text": "Explain machine learning in simple terms"}
-            ],
+            "parts": [{"kind": "text", "text": "Explain machine learning in simple terms"}],
             "messageId": uuid4().hex,
         }
     }
@@ -217,9 +207,7 @@ async def test_a2a_completion_bridge_bedrock_agentcore():
 # ============================================================
 
 # Configuration - update these for your Vertex AI Reasoning Engine
-VERTEX_AGENT_RESOURCE_NAME = (
-    "projects/1060139831167/locations/us-central1/reasoningEngines/8263861224643493888"
-)
+VERTEX_AGENT_RESOURCE_NAME = "projects/1060139831167/locations/us-central1/reasoningEngines/8263861224643493888"
 
 
 @pytest.mark.asyncio

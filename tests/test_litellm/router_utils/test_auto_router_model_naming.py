@@ -6,9 +6,7 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 
 COMPLEXITY_FIELDS = frozenset({"complexity_router_config"})
-SEMANTIC_FIELDS = frozenset(
-    {"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"}
-)
+SEMANTIC_FIELDS = frozenset({"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"})
 
 
 @pytest.mark.parametrize(

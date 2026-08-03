@@ -52,9 +52,7 @@ class ResourceManager:
     """
 
     client: ResourceClient
-    _cleanups: List[Callable[[], None]] = field(
-        default_factory=list
-    )  # mutable-ok: append-only teardown registry
+    _cleanups: List[Callable[[], None]] = field(default_factory=list)  # mutable-ok: append-only teardown registry
 
     def init(self) -> None:
         """No global setup needed today; present for lifecycle symmetry."""

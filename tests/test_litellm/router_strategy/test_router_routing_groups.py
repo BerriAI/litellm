@@ -228,17 +228,11 @@ async def test_async_dispatch_uses_group_strategy_for_grouped_model():
             "async_get_available_deployments",
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
-        patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
-        ) as shuffle_spy,
+        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
     ):
-        await router.async_get_available_deployment(
-            model="filtered-model", request_kwargs={}
-        )
+        await router.async_get_available_deployment(model="filtered-model", request_kwargs={})
 
-        assert (
-            latency_spy.called
-        ), "group's latency selector should run for grouped model"
+        assert latency_spy.called, "group's latency selector should run for grouped model"
         assert not shuffle_spy.called
 
 
@@ -263,13 +257,9 @@ async def test_async_dispatch_falls_back_to_default_for_ungrouped_models():
             "async_get_available_deployments",
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
-        patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
-        ) as shuffle_spy,
+        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
     ):
-        await router.async_get_available_deployment(
-            model="other-model", request_kwargs={}
-        )
+        await router.async_get_available_deployment(model="other-model", request_kwargs={})
 
         assert shuffle_spy.called, "default group's simple-shuffle should run"
         assert not latency_spy.called
@@ -323,17 +313,11 @@ async def test_async_dispatch_uses_default_selector_when_constructed_with_enum()
             "async_get_available_deployments",
             wraps=default_selector.async_get_available_deployments,
         ) as latency_spy,
-        patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
-        ) as shuffle_spy,
+        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
     ):
-        await router.async_get_available_deployment(
-            model="filtered-model", request_kwargs={}
-        )
+        await router.async_get_available_deployment(model="filtered-model", request_kwargs={})
 
-        assert (
-            latency_spy.called
-        ), "default group's latency selector must run when constructed with the enum"
+        assert latency_spy.called, "default group's latency selector must run when constructed with the enum"
         assert not shuffle_spy.called
 
 
@@ -350,9 +334,9 @@ def test_update_settings_does_not_leak_strategy_callbacks(monkeypatch):
     router = _build_router(routing_strategy="latency-based-routing")
     initial_default_selector = router.lowestlatency_logger
     assert initial_default_selector is not None
-    assert any(
-        c is initial_default_selector for c in litellm.callbacks
-    ), "fresh router should register its default selector"
+    assert any(c is initial_default_selector for c in litellm.callbacks), (
+        "fresh router should register its default selector"
+    )
 
     # Flip strategies back and forth — each transition triggers
     # routing_strategy_init and must replace, not accumulate.
@@ -360,9 +344,9 @@ def test_update_settings_does_not_leak_strategy_callbacks(monkeypatch):
         router.update_settings(routing_strategy="usage-based-routing")
         router.update_settings(routing_strategy="latency-based-routing")
 
-    assert all(
-        c is not initial_default_selector for c in litellm.callbacks
-    ), "old default selector instance leaked into litellm.callbacks"
+    assert all(c is not initial_default_selector for c in litellm.callbacks), (
+        "old default selector instance leaked into litellm.callbacks"
+    )
 
     # The set of router-owned selectors should be bounded — at most one per
     # strategy class. Without the cleanup fix this grows by one per toggle.
@@ -373,12 +357,10 @@ def test_update_settings_does_not_leak_strategy_callbacks(monkeypatch):
         "LowestLatencyLoggingHandler",
         "LowestCostLoggingHandler",
     )
-    router_owned = [
-        c for c in litellm.callbacks if type(c).__name__ in router_owned_classes
-    ]
-    assert len(router_owned) <= len(
-        router_owned_classes
-    ), f"router selectors leaked: {[type(c).__name__ for c in router_owned]}"
+    router_owned = [c for c in litellm.callbacks if type(c).__name__ in router_owned_classes]
+    assert len(router_owned) <= len(router_owned_classes), (
+        f"router selectors leaked: {[type(c).__name__ for c in router_owned]}"
+    )
 
     # Group selectors: capture the v1 instance, swap, confirm v1 is gone by id.
     router.update_settings(
@@ -403,9 +385,9 @@ def test_update_settings_does_not_leak_strategy_callbacks(monkeypatch):
             }
         ]
     )
-    assert all(
-        c is not group_selector_v1 for c in litellm.callbacks
-    ), "old group selector instance leaked into litellm.callbacks"
+    assert all(c is not group_selector_v1 for c in litellm.callbacks), (
+        "old group selector instance leaked into litellm.callbacks"
+    )
     group_selector_v2 = router._group_selectors["fast"]["latency-based-routing"]
     assert group_selector_v2 is not group_selector_v1
 
@@ -446,10 +428,7 @@ def test_update_settings_unregisters_group_selectors_when_groups_removed(monkeyp
 def test_normalize_strategy_handles_string_enum_and_none():
     assert Router._normalize_strategy(None) is None
     assert Router._normalize_strategy("simple-shuffle") == "simple-shuffle"
-    assert (
-        Router._normalize_strategy(RoutingStrategy.LATENCY_BASED)
-        == RoutingStrategy.LATENCY_BASED.value
-    )
+    assert Router._normalize_strategy(RoutingStrategy.LATENCY_BASED) == RoutingStrategy.LATENCY_BASED.value
 
 
 def test_validate_routing_strategy_accepts_valid_and_rejects_invalid():
@@ -568,8 +547,7 @@ def test_select_deployment_sync_does_not_dispatch_cost_based_routing():
     )
     cost_selector = router._group_selectors["cheap"]["cost-based-routing"]
     assert not hasattr(cost_selector, "get_available_deployments"), (
-        "test premise broken: LowestCostLoggingHandler unexpectedly grew a "
-        "sync method — revisit the sync dispatch arm."
+        "test premise broken: LowestCostLoggingHandler unexpectedly grew a sync method — revisit the sync dispatch arm."
     )
 
     result = router._select_deployment_sync(
@@ -633,9 +611,7 @@ async def test_async_dispatch_falls_back_to_sync_for_usage_based_routing_v1():
 
 def test_request_routing_strategy_override_beats_top_level():
     router = _build_router(routing_strategy="least-busy")
-    strategy, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "simple-shuffle"}
-    )
+    strategy, selector = router._get_routing_context("other-model", {"routing_strategy": "simple-shuffle"})
     assert strategy == "simple-shuffle"
     assert selector is None
 
@@ -651,39 +627,29 @@ def test_request_routing_strategy_override_beats_explicit_group():
             }
         ],
     )
-    strategy, _ = router._get_routing_context(
-        "filtered-model", {"routing_strategy": "least-busy"}
-    )
+    strategy, _ = router._get_routing_context("filtered-model", {"routing_strategy": "least-busy"})
     assert strategy == "least-busy"
 
 
 def test_request_routing_strategy_override_builds_and_caches_selector():
     router = _build_router(routing_strategy="simple-shuffle")
-    strategy, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "latency-based-routing"}
-    )
+    strategy, selector = router._get_routing_context("other-model", {"routing_strategy": "latency-based-routing"})
     assert strategy == "latency-based-routing"
     assert selector is not None
-    _, selector_again = router._get_routing_context(
-        "other-model", {"routing_strategy": "latency-based-routing"}
-    )
+    _, selector_again = router._get_routing_context("other-model", {"routing_strategy": "latency-based-routing"})
     assert selector_again is selector
 
 
 def test_request_routing_strategy_override_matching_global_reuses_default_selector():
     router = _build_router(routing_strategy="least-busy")
-    _, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "least-busy"}
-    )
+    _, selector = router._get_routing_context("other-model", {"routing_strategy": "least-busy"})
     assert selector is router.leastbusy_logger
     assert router._override_selectors == {}
 
 
 def test_invalid_request_routing_strategy_override_falls_back():
     router = _build_router(routing_strategy="least-busy")
-    strategy, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "not-a-real-strategy"}
-    )
+    strategy, selector = router._get_routing_context("other-model", {"routing_strategy": "not-a-real-strategy"})
     assert strategy == "least-busy"
     assert selector is router.leastbusy_logger
 
@@ -699,7 +665,9 @@ def test_no_override_key_keeps_existing_behavior():
 def test_request_routing_strategy_override_helper_validates_directly():
     router = _build_router(routing_strategy="least-busy")
     assert router._get_request_routing_strategy_override({"routing_strategy": "simple-shuffle"}) == "simple-shuffle"
-    assert router._get_request_routing_strategy_override({"routing_strategy": RoutingStrategy.LEAST_BUSY}) == "least-busy"
+    assert (
+        router._get_request_routing_strategy_override({"routing_strategy": RoutingStrategy.LEAST_BUSY}) == "least-busy"
+    )
     assert router._get_request_routing_strategy_override({"routing_strategy": "lar1"}) is None
     assert router._get_request_routing_strategy_override({"routing_strategy": {"bad": "type"}}) is None
     assert router._get_request_routing_strategy_override({}) is None

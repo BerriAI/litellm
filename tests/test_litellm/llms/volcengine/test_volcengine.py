@@ -36,9 +36,7 @@ class TestVolcEngineConfig:
             drop_params=False,
         )
 
-        assert "thinking" in e2e_mapped_params["extra_body"] and e2e_mapped_params[
-            "extra_body"
-        ]["thinking"] == {
+        assert "thinking" in e2e_mapped_params["extra_body"] and e2e_mapped_params["extra_body"]["thinking"] == {
             "type": "enabled",
         }
 
@@ -126,9 +124,7 @@ class TestVolcEngineConfig:
         }
         mock_raw_response.parse.return_value = ModelResponse()
 
-        with patch.object(
-            client.chat.completions.with_raw_response, "create", mock_raw_response
-        ) as mock_create:
+        with patch.object(client.chat.completions.with_raw_response, "create", mock_raw_response) as mock_create:
             completion(
                 model="volcengine/doubao-seed-1.6",
                 messages=[
@@ -149,6 +145,5 @@ class TestVolcEngineConfig:
             assert (
                 "extra_body" in mock_create.call_args.kwargs
                 and "thinking" in mock_create.call_args.kwargs.get("extra_body", {})
-                and mock_create.call_args.kwargs.get("extra_body", {})["thinking"]
-                == {"type": "disabled"}
+                and mock_create.call_args.kwargs.get("extra_body", {})["thinking"] == {"type": "disabled"}
             )

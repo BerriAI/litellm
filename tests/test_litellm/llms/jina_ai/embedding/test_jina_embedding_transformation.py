@@ -2,9 +2,7 @@ import os
 import sys
 from unittest.mock import MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 
@@ -54,9 +52,7 @@ class TestJinaAIEmbeddingTransform:
             headers={},
         )
         expected_input = [
-            {
-                "image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-            }
+            {"image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="}
         ]
         expected_result = {
             "model": self.model,
@@ -77,9 +73,7 @@ class TestJinaAIEmbeddingTransform:
         )
         expected_input = [
             {"text": "hello world"},
-            {
-                "image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-            },
+            {"image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="},
         ]
         expected_result = {
             "model": self.model,

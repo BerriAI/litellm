@@ -15,9 +15,7 @@ import warnings
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.caching.llm_caching_handler import LLMClientCache
 
@@ -102,12 +100,8 @@ async def test_eviction_does_not_close_async_clients():
         cache.set_cache("key-new", "new-value")
         await asyncio.sleep(0.1)
 
-    coroutine_warnings = [
-        w for w in caught_warnings if "coroutine" in str(w.message).lower()
-    ]
-    assert (
-        len(coroutine_warnings) == 0
-    ), f"Got unawaited coroutine warnings: {coroutine_warnings}"
+    coroutine_warnings = [w for w in caught_warnings if "coroutine" in str(w.message).lower()]
+    assert len(coroutine_warnings) == 0, f"Got unawaited coroutine warnings: {coroutine_warnings}"
 
     # Evicted clients must NOT be closed
     for client in clients:
@@ -133,12 +127,8 @@ async def test_eviction_no_unawaited_coroutine_warning():
         cache._remove_key("test-key")
         await asyncio.sleep(0.1)
 
-    coroutine_warnings = [
-        w for w in caught_warnings if "coroutine" in str(w.message).lower()
-    ]
-    assert (
-        len(coroutine_warnings) == 0
-    ), f"Got unawaited coroutine warnings: {coroutine_warnings}"
+    coroutine_warnings = [w for w in caught_warnings if "coroutine" in str(w.message).lower()]
+    assert len(coroutine_warnings) == 0, f"Got unawaited coroutine warnings: {coroutine_warnings}"
 
 
 def test_remove_key_no_event_loop():

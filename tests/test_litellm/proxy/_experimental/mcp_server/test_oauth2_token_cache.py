@@ -150,12 +150,7 @@ def test_needs_user_oauth_token_property():
     assert _server().needs_user_oauth_token is False
 
     # OAuth2 without credentials → needs per-user token
-    assert (
-        _server(
-            client_id=None, client_secret=None, token_url=None, oauth2_flow=None
-        ).needs_user_oauth_token
-        is True
-    )
+    assert _server(client_id=None, client_secret=None, token_url=None, oauth2_flow=None).needs_user_oauth_token is True
 
     # Non-OAuth2 → never needs user OAuth token
     assert _server(auth_type=MCPAuth.bearer_token).needs_user_oauth_token is False

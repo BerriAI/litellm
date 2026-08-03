@@ -15,9 +15,7 @@ load_dotenv()
 import copy
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -72,9 +70,7 @@ async def test_latency_memory_leak(sync_mode):
                 end_time=end_time,
             )
     latency_key = f"{model_group}_map"
-    cache_value = copy.deepcopy(
-        test_cache.get_cache(key=latency_key)
-    )  # MAKE SURE NO MEMORY LEAK IN CACHING OBJECT
+    cache_value = copy.deepcopy(test_cache.get_cache(key=latency_key))  # MAKE SURE NO MEMORY LEAK IN CACHING OBJECT
 
     if sync_mode:
         lowest_latency_logger.log_success_event(
@@ -92,9 +88,9 @@ async def test_latency_memory_leak(sync_mode):
         )
     new_cache_value = test_cache.get_cache(key=latency_key)
     # Assert that the size of the cache doesn't grow unreasonably
-    assert get_size(new_cache_value) <= get_size(
-        cache_value
-    ), f"Memory leak detected in function call! new_cache size={get_size(new_cache_value)}, old cache size={get_size(cache_value)}"
+    assert get_size(new_cache_value) <= get_size(cache_value), (
+        f"Memory leak detected in function call! new_cache size={get_size(new_cache_value)}, old cache size={get_size(cache_value)}"
+    )
 
 
 def get_size(obj, seen=None):
@@ -142,10 +138,7 @@ def test_latency_updated():
         end_time=end_time,
     )
     latency_key = f"{model_group}_map"
-    assert (
-        end_time - start_time
-        == test_cache.get_cache(key=latency_key)[deployment_id]["latency"][0]
-    )
+    assert end_time - start_time == test_cache.get_cache(key=latency_key)[deployment_id]["latency"][0]
 
 
 # test_tpm_rpm_updated()
@@ -160,9 +153,7 @@ def test_latency_updated_custom_ttl():
     test_cache = DualCache()
     model_list = []
     cache_time = 3
-    lowest_latency_logger = LowestLatencyLoggingHandler(
-        router_cache=test_cache, routing_args={"ttl": cache_time}
-    )
+    lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache, routing_args={"ttl": cache_time})
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
     kwargs = {
@@ -251,15 +242,11 @@ def test_get_available_deployments():
     )
 
     ## CHECK WHAT'S SELECTED ##
-    print(
-        lowest_latency_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
-        )
-    )
+    print(lowest_latency_logger.get_available_deployments(model_group=model_group, healthy_deployments=model_list))
     assert (
-        lowest_latency_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
-        )["model_info"]["id"]
+        lowest_latency_logger.get_available_deployments(model_group=model_group, healthy_deployments=model_list)[
+            "model_info"
+        ]["id"]
         == "5678"
     )
 
@@ -290,9 +277,7 @@ async def _gather_deploy(all_deploys):
     return await asyncio.gather(*[_deploy(*t) for t in all_deploys])
 
 
-@pytest.mark.parametrize(
-    "ans_rpm", [1, 5]
-)  # 1 should produce nothing, 10 should select first
+@pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
 @pytest.mark.flaky(retries=3, delay=1)
 def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     """
@@ -327,9 +312,7 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     asyncio.run(_gather_deploy([*d1, *d2]))
     time.sleep(3)
     ## CHECK WHAT'S SELECTED ##
-    d_ans = lowest_latency_logger.get_available_deployments(
-        model_group=model_group, healthy_deployments=model_list
-    )
+    d_ans = lowest_latency_logger.get_available_deployments(model_group=model_group, healthy_deployments=model_list)
     print(d_ans)
     assert (d_ans and d_ans["model_info"]["id"]) == ans
 
@@ -337,9 +320,7 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
 # test_get_available_endpoints_tpm_rpm_check_async()
 
 
-@pytest.mark.parametrize(
-    "ans_rpm", [1, 5]
-)  # 1 should produce nothing, 10 should select first
+@pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
 @pytest.mark.flaky(retries=3, delay=1)
 def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
     """
@@ -415,9 +396,7 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
         )
 
     ## CHECK WHAT'S SELECTED ##
-    d_ans = lowest_latency_logger.get_available_deployments(
-        model_group=model_group, healthy_deployments=model_list
-    )
+    d_ans = lowest_latency_logger.get_available_deployments(model_group=model_group, healthy_deployments=model_list)
     print(d_ans)
     assert (d_ans and d_ans["model_info"]["id"]) == ans
 
@@ -499,9 +478,7 @@ def test_router_get_available_deployments():
     ## CHECK WHAT'S SELECTED ##
     # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
     print(router.get_available_deployment(model="azure-model"))
-    assert (
-        router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
-    )
+    assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
 
 
 # test_router_get_available_deployments()
@@ -509,9 +486,7 @@ def test_router_get_available_deployments():
 
 @pytest.mark.asyncio
 async def test_router_completion_streaming():
-    messages = [
-        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
-    ]
+    messages = [{"role": "user", "content": "Hello, can you generate a 500 words poem?"}]
     model = "azure-model"
     model_list = [
         {
@@ -563,10 +538,7 @@ async def test_router_completion_streaming():
         final_response = await router.acompletion(model=model, messages=messages)
         print(f"min deployment id: {picked_deployment}")
         print(f"model id: {final_response._hidden_params['model_id']}")
-        assert (
-            final_response._hidden_params["model_id"]
-            == picked_deployment["model_info"]["id"]
-        )
+        assert final_response._hidden_params["model_id"] == picked_deployment["model_info"]["id"]
 
 
 # asyncio.run(test_router_completion_streaming())
@@ -617,9 +589,7 @@ async def test_lowest_latency_routing_with_timeouts():
     # make 4 requests
     for _ in range(4):
         try:
-            response = await router.acompletion(
-                model="azure-model", messages=[{"role": "user", "content": "hello"}]
-            )
+            response = await router.acompletion(model="azure-model", messages=[{"role": "user", "content": "hello"}])
             print(response)
         except Exception as e:
             print("got exception", e)
@@ -635,9 +605,7 @@ async def test_lowest_latency_routing_with_timeouts():
     deployments = {}
     # make 10 requests
     for _ in range(10):
-        response = await router.acompletion(
-            model="azure-model", messages=[{"role": "user", "content": "hello"}]
-        )
+        response = await router.acompletion(model="azure-model", messages=[{"role": "user", "content": "hello"}])
         print(response)
         _picked_model_id = response._hidden_params["model_id"]
         if _picked_model_id not in deployments:
@@ -709,9 +677,7 @@ async def test_lowest_latency_routing_first_pick():
 
     deployments = {}
     for _ in range(10):
-        response = await router.acompletion(
-            model="azure-model", messages=[{"role": "user", "content": "hello"}]
-        )
+        response = await router.acompletion(model="azure-model", messages=[{"role": "user", "content": "hello"}])
         print(response)
         _picked_model_id = response._hidden_params["model_id"]
         if _picked_model_id not in deployments:
@@ -808,9 +774,7 @@ async def test_lowest_latency_routing_buffer(buffer):
     selected_deployments = {}
     for _ in range(50):
         print(router.get_available_deployment(model="azure-model"))
-        selected_deployments[
-            router.get_available_deployment(model="azure-model")["model_info"]["id"]
-        ] = 1
+        selected_deployments[router.get_available_deployment(model="azure-model")["model_info"]["id"]] = 1
 
     if buffer == 0:
         assert len(selected_deployments.keys()) == 1
@@ -876,9 +840,7 @@ async def test_lowest_latency_routing_time_to_first_token(sync_mode):
         "completion_start_time": one_second_later,
     }
 
-    response_obj = litellm.ModelResponse(
-        usage=litellm.Usage(completion_tokens=50, total_tokens=50)
-    )
+    response_obj = litellm.ModelResponse(usage=litellm.Usage(completion_tokens=50, total_tokens=50))
     end_time = four_seconds_later
 
     if sync_mode:
@@ -907,9 +869,7 @@ async def test_lowest_latency_routing_time_to_first_token(sync_mode):
         "stream": True,
         "completion_start_time": three_seconds_later,
     }
-    response_obj = litellm.ModelResponse(
-        usage=litellm.Usage(completion_tokens=50, total_tokens=50)
-    )
+    response_obj = litellm.ModelResponse(usage=litellm.Usage(completion_tokens=50, total_tokens=50))
     end_time = three_seconds_later
     if sync_mode:
         router.lowestlatency_logger.log_success_event(
@@ -937,9 +897,7 @@ async def test_lowest_latency_routing_time_to_first_token(sync_mode):
     for _ in range(3):
         print(router.get_available_deployment(model="azure-model"))
         ## for non-streaming
-        selected_deployments[
-            router.get_available_deployment(model="azure-model")["model_info"]["id"]
-        ] = 1
+        selected_deployments[router.get_available_deployment(model="azure-model")["model_info"]["id"]] = 1
 
     assert len(selected_deployments.keys()) == 1
     assert "2" in list(selected_deployments.keys())
@@ -949,9 +907,7 @@ async def test_lowest_latency_routing_time_to_first_token(sync_mode):
         print(router.get_available_deployment(model="azure-model"))
         ## for non-streaming
         selected_deployments[
-            router.get_available_deployment(
-                model="azure-model", request_kwargs={"stream": True}
-            )["model_info"]["id"]
+            router.get_available_deployment(model="azure-model", request_kwargs={"stream": True})["model_info"]["id"]
         ] = 1
 
     assert len(selected_deployments.keys()) == 1
@@ -1003,24 +959,22 @@ def test_latency_list_trimming_discards_oldest_entry():
     cached_data = test_cache.get_cache(key=latency_key)
     latency_list = cached_data[deployment_id]["latency"]
 
-    assert (
-        len(latency_list) == max_size
-    ), f"Expected {max_size} entries, got {len(latency_list)}"
+    assert len(latency_list) == max_size, f"Expected {max_size} entries, got {len(latency_list)}"
 
     newest_latency = latencies_to_add[-1]  # 4.0
     oldest_latency = latencies_to_add[0]  # 1.0
     tolerance = 0.1
 
     # Newest entry is at the end of the list.
-    assert (
-        abs(latency_list[-1] - newest_latency) < tolerance
-    ), f"Newest latency {newest_latency} should be at end, got {latency_list[-1]}"
+    assert abs(latency_list[-1] - newest_latency) < tolerance, (
+        f"Newest latency {newest_latency} should be at end, got {latency_list[-1]}"
+    )
 
     # Oldest entry is no longer in the list.
     for latency in latency_list:
-        assert (
-            abs(latency - oldest_latency) > tolerance
-        ), f"Oldest latency {oldest_latency} should have been discarded, found {latency}"
+        assert abs(latency - oldest_latency) > tolerance, (
+            f"Oldest latency {oldest_latency} should have been discarded, found {latency}"
+        )
 
 
 @pytest.mark.asyncio
@@ -1072,14 +1026,12 @@ async def test_latency_list_trimming_discards_oldest_entry_async():
     oldest_latency = latencies_to_add[0]
     tolerance = 0.1
 
-    assert (
-        abs(latency_list[-1] - newest_latency) < tolerance
-    ), f"Newest latency {newest_latency} should be at end of list"
+    assert abs(latency_list[-1] - newest_latency) < tolerance, (
+        f"Newest latency {newest_latency} should be at end of list"
+    )
 
     for latency in latency_list:
-        assert (
-            abs(latency - oldest_latency) > tolerance
-        ), f"Oldest latency {oldest_latency} should have been discarded"
+        assert abs(latency - oldest_latency) > tolerance, f"Oldest latency {oldest_latency} should have been discarded"
 
 
 def test_ttft_list_trimming_discards_oldest_entry():
@@ -1116,9 +1068,7 @@ def test_ttft_list_trimming_discards_oldest_entry():
             "completion_start_time": completion_start_time,
         }
         # TTFT is only recorded when response_obj is a ModelResponse.
-        response_obj = litellm.ModelResponse(
-            usage=litellm.Usage(completion_tokens=1, total_tokens=1)
-        )
+        response_obj = litellm.ModelResponse(usage=litellm.Usage(completion_tokens=1, total_tokens=1))
 
         lowest_latency_logger.log_success_event(
             response_obj=response_obj,
@@ -1131,22 +1081,16 @@ def test_ttft_list_trimming_discards_oldest_entry():
     cached_data = test_cache.get_cache(key=latency_key)
     ttft_list = cached_data[deployment_id].get("time_to_first_token", [])
 
-    assert (
-        len(ttft_list) == max_size
-    ), f"Expected {max_size} entries, got {len(ttft_list)}"
+    assert len(ttft_list) == max_size, f"Expected {max_size} entries, got {len(ttft_list)}"
 
     newest_ttft = ttft_values[-1]
     oldest_ttft = ttft_values[0]
     tolerance = 0.05
 
-    assert (
-        abs(ttft_list[-1] - newest_ttft) < tolerance
-    ), f"Newest TTFT {newest_ttft} should be at end of list"
+    assert abs(ttft_list[-1] - newest_ttft) < tolerance, f"Newest TTFT {newest_ttft} should be at end of list"
 
     for ttft in ttft_list:
-        assert (
-            abs(ttft - oldest_ttft) > tolerance
-        ), f"Oldest TTFT {oldest_ttft} should have been discarded"
+        assert abs(ttft - oldest_ttft) > tolerance, f"Oldest TTFT {oldest_ttft} should have been discarded"
 
 
 @pytest.mark.asyncio
@@ -1190,9 +1134,7 @@ async def test_timeout_penalty_discards_oldest_entry():
     # oldest normal entry (1.0).
     timeout_kwargs = {
         **kwargs,
-        "exception": litellm.Timeout(
-            message="Request timed out", model="test-model", llm_provider="test"
-        ),
+        "exception": litellm.Timeout(message="Request timed out", model="test-model", llm_provider="test"),
     }
 
     await lowest_latency_logger.async_log_failure_event(
@@ -1209,16 +1151,12 @@ async def test_timeout_penalty_discards_oldest_entry():
     assert len(latency_list) == max_size
 
     # Timeout penalty is the newest entry.
-    assert (
-        latency_list[-1] == 1000.0
-    ), f"Timeout penalty should be at end of list, got {latency_list[-1]}"
+    assert latency_list[-1] == 1000.0, f"Timeout penalty should be at end of list, got {latency_list[-1]}"
 
     # Oldest normal entry (1.0) has been discarded.
     tolerance = 0.1
     for latency in latency_list[:-1]:
-        assert (
-            abs(latency - 1.0) > tolerance
-        ), f"Oldest latency 1.0 should have been discarded, found {latency}"
+        assert abs(latency - 1.0) > tolerance, f"Oldest latency 1.0 should have been discarded, found {latency}"
 
 
 def test_list_order_preserved_after_multiple_trims():
@@ -1271,9 +1209,7 @@ def test_list_order_preserved_after_multiple_trims():
     tolerance = 0.1
 
     for i, expected in enumerate(expected_remaining):
-        assert (
-            abs(latency_list[i] - expected) < tolerance
-        ), f"At index {i}, expected ~{expected}, got {latency_list[i]}"
+        assert abs(latency_list[i] - expected) < tolerance, f"At index {i}, expected ~{expected}, got {latency_list[i]}"
 
 
 @pytest.mark.asyncio
@@ -1312,9 +1248,7 @@ async def test_ttft_list_trimming_discards_oldest_entry_async():
             "stream": True,
             "completion_start_time": completion_start_time,
         }
-        response_obj = litellm.ModelResponse(
-            usage=litellm.Usage(completion_tokens=1, total_tokens=1)
-        )
+        response_obj = litellm.ModelResponse(usage=litellm.Usage(completion_tokens=1, total_tokens=1))
 
         await lowest_latency_logger.async_log_success_event(
             response_obj=response_obj,
@@ -1327,19 +1261,13 @@ async def test_ttft_list_trimming_discards_oldest_entry_async():
     cached_data = await test_cache.async_get_cache(key=latency_key)
     ttft_list = cached_data[deployment_id].get("time_to_first_token", [])
 
-    assert (
-        len(ttft_list) == max_size
-    ), f"Expected {max_size} entries, got {len(ttft_list)}"
+    assert len(ttft_list) == max_size, f"Expected {max_size} entries, got {len(ttft_list)}"
 
     newest_ttft = ttft_values[-1]
     oldest_ttft = ttft_values[0]
     tolerance = 0.05
 
-    assert (
-        abs(ttft_list[-1] - newest_ttft) < tolerance
-    ), f"Newest TTFT {newest_ttft} should be at end of list"
+    assert abs(ttft_list[-1] - newest_ttft) < tolerance, f"Newest TTFT {newest_ttft} should be at end of list"
 
     for ttft in ttft_list:
-        assert (
-            abs(ttft - oldest_ttft) > tolerance
-        ), f"Oldest TTFT {oldest_ttft} should have been discarded"
+        assert abs(ttft - oldest_ttft) > tolerance, f"Oldest TTFT {oldest_ttft} should have been discarded"

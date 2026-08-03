@@ -10,9 +10,7 @@ from litellm.constants import MAX_SIZE_IN_MEMORY_QUEUE
 from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 @pytest.fixture
@@ -43,9 +41,7 @@ async def test_missing_response_cost(spend_queue):
     }
 
     await spend_queue.add_update(update)
-    aggregated = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
 
     # Should have created entry with 0 cost
     assert aggregated["user_list_transactions"]["user123"] == 0
@@ -60,9 +56,7 @@ async def test_missing_entity_id(spend_queue):
     }
 
     await spend_queue.add_update(update)
-    aggregated = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
 
     # Should use empty string as key
     assert aggregated["user_list_transactions"][""] == 1.0
@@ -78,9 +72,7 @@ async def test_none_values(spend_queue):
     }
 
     await spend_queue.add_update(update)
-    aggregated = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
 
     # Should handle None values gracefully
     assert aggregated["user_list_transactions"][""] == 0
@@ -108,17 +100,11 @@ async def test_multiple_updates_with_missing_fields(spend_queue):
     for update in updates:
         await spend_queue.add_update(update)
 
-    aggregated = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
 
     # Verify aggregation
-    assert (
-        aggregated["user_list_transactions"]["user123"] == 0.5
-    )  # only the first update with valid cost
-    assert (
-        aggregated["user_list_transactions"][""] == 1.5
-    )  # update with missing entity_id
+    assert aggregated["user_list_transactions"]["user123"] == 0.5  # only the first update with valid cost
+    assert aggregated["user_list_transactions"][""] == 1.5  # update with missing entity_id
 
 
 @pytest.mark.asyncio
@@ -131,9 +117,7 @@ async def test_unknown_entity_type(spend_queue):
     }
 
     await spend_queue.add_update(update)
-    aggregated = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
 
     # Should ignore unknown entity type
     assert all(len(transactions) == 0 for transactions in aggregated.values())
@@ -145,9 +129,7 @@ async def test_missing_entity_type(spend_queue):
     update: SpendUpdateQueueItem = {"entity_id": "123", "response_cost": 0.5}
 
     await spend_queue.add_update(update)
-    aggregated = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
 
     # Should ignore updates without entity type
     assert all(len(transactions) == 0 for transactions in aggregated.values())
@@ -172,9 +154,7 @@ async def test_queue_max_size_triggers_aggregation(monkeypatch, spend_queue):
     assert spend_queue.update_queue.qsize() == 1
 
     # Verify the aggregated cost is correct
-    aggregated = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
     assert aggregated["user_list_transactions"]["user123"] == 6.0
 
 
@@ -215,9 +195,7 @@ async def test_aggregate_queue_updates_accuracy(spend_queue):
     assert spend_queue.update_queue.qsize() == 3
 
     # Flush and verify aggregated values
-    aggregated = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
     print("aggregated values", aggregated)
 
     assert aggregated["user_list_transactions"]["user1"] == 4.0  # 1.5 + 2.5
@@ -239,15 +217,12 @@ def test_get_aggregated_spend_update_queue_item_does_not_mutate_original_updates
         "response_cost": 20.0,
     }
 
-    aggregated_updates = spend_queue._get_aggregated_spend_update_queue_item(
-        [original_update, duplicate_key_update]
-    )
+    aggregated_updates = spend_queue._get_aggregated_spend_update_queue_item([original_update, duplicate_key_update])
     user1_aggregated_update = next(
         (
             update
             for update in aggregated_updates
-            if update.get("entity_type") == Litellm_EntityType.USER
-            and update.get("entity_id") == "user1"
+            if update.get("entity_type") == Litellm_EntityType.USER and update.get("entity_id") == "user1"
         ),
         None,
     )
@@ -291,8 +266,6 @@ async def test_queue_size_reduction_with_large_volume(monkeypatch, spend_queue):
     assert spend_queue.update_queue.qsize() <= 10
 
     # Verify total costs are correct
-    aggregated = (
-        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
     assert aggregated["user_list_transactions"]["user1"] == 200 * 0.5
     assert aggregated["key_list_transactions"]["key1"] == 300 * 1.0

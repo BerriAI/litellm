@@ -32,9 +32,7 @@ class TestTeamModelAddAtomicAppend:
         from litellm.proxy.management_endpoints.team_endpoints import team_model_add
 
         mock_request = MagicMock()
-        mock_user = UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user"
-        )
+        mock_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user")
 
         existing_team = MagicMock()
         existing_team.model_dump.return_value = {
@@ -58,13 +56,9 @@ class TestTeamModelAddAtomicAppend:
             patch("litellm.proxy.proxy_server.user_api_key_cache"),
             patch("litellm.proxy.proxy_server.proxy_logging_obj"),
         ):
-            mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
-                return_value=existing_team
-            )
+            mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
             mock_prisma.db.execute_raw = AsyncMock(return_value=None)
-            mock_prisma.db.litellm_teamtable.update = AsyncMock(
-                return_value=updated_team
-            )
+            mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
 
             await team_model_add(
                 data=TeamModelAddRequest(team_id="team-1", models=["new-model"]),

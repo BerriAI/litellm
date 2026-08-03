@@ -30,10 +30,7 @@ class TestGDCGeminiConfig:
             },
             litellm_params={},
         )
-        assert (
-            url
-            == f"{TEST_API_BASE}/v1/projects/{TEST_PROJECT}/locations/{TEST_LOCATION}/chat/completions"
-        )
+        assert url == f"{TEST_API_BASE}/v1/projects/{TEST_PROJECT}/locations/{TEST_LOCATION}/chat/completions"
 
     def test_get_complete_url_adds_https_scheme(self):
         config = GDCGeminiConfig()
@@ -109,10 +106,7 @@ class TestGDCGeminiConfig:
                 "vertex_ai_location": TEST_LOCATION,
             },
         )
-        assert (
-            url
-            == f"{TEST_API_BASE}/v1/projects/{TEST_PROJECT}/locations/{TEST_LOCATION}/chat/completions"
-        )
+        assert url == f"{TEST_API_BASE}/v1/projects/{TEST_PROJECT}/locations/{TEST_LOCATION}/chat/completions"
 
     def test_get_complete_url_preformed_base_is_authoritative_over_litellm_params(self):
         config = GDCGeminiConfig()
@@ -156,10 +150,7 @@ class TestGDCGeminiConfig:
                 "vertex_location": "deployment-location",
             },
         )
-        assert url == (
-            f"{TEST_API_BASE}/v1/projects/deployment-project"
-            "/locations/deployment-location/chat/completions"
-        )
+        assert url == (f"{TEST_API_BASE}/v1/projects/deployment-project/locations/deployment-location/chat/completions")
 
     @patch("google.auth.load_credentials_from_dict")
     @patch("requests.Session")
@@ -200,9 +191,10 @@ class TestGDCGeminiConfig:
         mock_creds.token = "mock-token"
         mock_creds.with_gdch_audience.return_value = mock_creds
 
-        with patch(
-            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
-        ), patch("requests.Session"):
+        with (
+            patch("google.auth.load_credentials_from_dict", return_value=(mock_creds, None)),
+            patch("requests.Session"),
+        ):
             config.validate_environment(
                 headers={},
                 model=TEST_MODEL,
@@ -221,9 +213,10 @@ class TestGDCGeminiConfig:
         mock_creds.token = "mock-token"
         mock_creds.with_gdch_audience.return_value = mock_creds
 
-        with patch(
-            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
-        ), patch("requests.Session"):
+        with (
+            patch("google.auth.load_credentials_from_dict", return_value=(mock_creds, None)),
+            patch("requests.Session"),
+        ):
             config.validate_environment(
                 headers={},
                 model=TEST_MODEL,
@@ -300,9 +293,7 @@ class TestGDCGeminiConfig:
             "google.auth.load_credentials_from_dict",
             side_effect=ValueError("bad creds"),
         ):
-            with pytest.raises(
-                Exception, match="Failed to load service account credentials"
-            ):
+            with pytest.raises(Exception, match="Failed to load service account credentials"):
                 config.validate_environment(
                     headers={},
                     model=TEST_MODEL,
@@ -319,11 +310,11 @@ class TestGDCGeminiConfig:
         mock_creds.token = "mock-token"
         mock_creds.with_gdch_audience.return_value = mock_creds
 
-        with patch(
-            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
-        ), patch("requests.Session"), patch.object(
-            config, "_cached_fetch_token"
-        ) as mock_cached:
+        with (
+            patch("google.auth.load_credentials_from_dict", return_value=(mock_creds, None)),
+            patch("requests.Session"),
+            patch.object(config, "_cached_fetch_token") as mock_cached,
+        ):
             config.validate_environment(
                 headers={},
                 model=TEST_MODEL,
@@ -346,9 +337,7 @@ class TestGDCGeminiConfig:
         mock_creds.valid = True
         mock_creds.with_gdch_audience.return_value = mock_creds
 
-        with patch(
-            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
-        ):
+        with patch("google.auth.load_credentials_from_dict", return_value=(mock_creds, None)):
             headers = config.validate_environment(
                 headers={},
                 model=TEST_MODEL,
@@ -382,18 +371,14 @@ class TestGDCGeminiConfig:
         assert headers["Content-Type"] == "text/plain"
         assert headers["x-goog-user-project"] == f"projects/{TEST_PROJECT}"
 
-    @pytest.mark.parametrize(
-        "header_name", ["x-goog-user-project", "X-Goog-User-Project", "X-GOOG-USER-PROJECT"]
-    )
+    @pytest.mark.parametrize("header_name", ["x-goog-user-project", "X-Goog-User-Project", "X-GOOG-USER-PROJECT"])
     def test_validate_environment_strips_caller_forwarded_quota_header(self, header_name):
         config = GDCGeminiConfig()
         mock_creds = MagicMock()
         mock_creds.token = "tok"
         mock_creds.with_gdch_audience.return_value = mock_creds
         preformed = f"{TEST_API_BASE}/v1/projects/deployment-proj/locations/us-central1/chat/completions"
-        with patch(
-            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
-        ):
+        with patch("google.auth.load_credentials_from_dict", return_value=(mock_creds, None)):
             headers = config.validate_environment(
                 headers={header_name: "projects/attacker"},
                 model=TEST_MODEL,
@@ -463,9 +448,7 @@ class TestGDCGeminiConfig:
         mock_creds.token = "tok"
         mock_creds.with_gdch_audience.return_value = mock_creds
         preformed = f"{TEST_API_BASE}/v1/projects/deployment-proj/locations/us-central1/chat/completions"
-        with patch(
-            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
-        ):
+        with patch("google.auth.load_credentials_from_dict", return_value=(mock_creds, None)):
             headers = config.validate_environment(
                 headers={},
                 model=TEST_MODEL,
@@ -483,9 +466,7 @@ class TestGDCGeminiConfig:
         mock_creds.token = "tok"
         mock_creds.with_gdch_audience.return_value = mock_creds
         preformed = f"{TEST_API_BASE}/v1/projects/url-proj/locations/us-central1/chat/completions"
-        with patch(
-            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
-        ):
+        with patch("google.auth.load_credentials_from_dict", return_value=(mock_creds, None)):
             headers = config.validate_environment(
                 headers={},
                 model=TEST_MODEL,
@@ -517,9 +498,7 @@ class TestGDCGeminiConfig:
     def test_load_creds_from_key_ignores_file_paths(self, tmp_path):
         config = GDCGeminiConfig()
         creds_file = tmp_path / "service_account.json"
-        creds_file.write_text(
-            '{"type": "gdch_service_account", "project_id": "host-only-project"}'
-        )
+        creds_file.write_text('{"type": "gdch_service_account", "project_id": "host-only-project"}')
 
         creds, is_service_account = config._load_creds_from_key(str(creds_file))
 
@@ -546,18 +525,16 @@ class TestGDCGeminiConfig:
         mock_creds = MagicMock()
         mock_creds.token = "leaked-token"
         mock_creds.with_gdch_audience.return_value = mock_creds
-        malicious = (
-            '{"type": "external_account", '
-            '"token_url": "http://169.254.169.254/latest/api/token"}'
-        )
+        malicious = '{"type": "external_account", "token_url": "http://169.254.169.254/latest/api/token"}'
 
-        with patch(
-            "google.auth.load_credentials_from_dict",
-            return_value=(mock_creds, None),
-        ) as mock_load, patch("requests.Session") as mock_session:
-            with pytest.raises(
-                Exception, match="Failed to load service account credentials"
-            ):
+        with (
+            patch(
+                "google.auth.load_credentials_from_dict",
+                return_value=(mock_creds, None),
+            ) as mock_load,
+            patch("requests.Session") as mock_session,
+        ):
+            with pytest.raises(Exception, match="Failed to load service account credentials"):
                 config.validate_environment(
                     headers={},
                     model=TEST_MODEL,
@@ -575,9 +552,7 @@ class TestGDCGeminiConfig:
     def test_validate_environment_does_not_read_api_key_file_path(self, tmp_path):
         config = GDCGeminiConfig()
         creds_file = tmp_path / "service_account.json"
-        creds_file.write_text(
-            '{"type": "service_account", "project_id": "host-only-project"}'
-        )
+        creds_file.write_text('{"type": "service_account", "project_id": "host-only-project"}')
 
         headers = config.validate_environment(
             headers={},
@@ -634,14 +609,8 @@ class TestGDCGeminiConfig:
         creds_a = make_creds("token-a")
         creds_b = make_creds("token-b")
 
-        assert (
-            config._cached_fetch_token(creds_a, TEST_API_BASE, True, api_key="key-a")
-            == "token-a"
-        )
-        assert (
-            config._cached_fetch_token(creds_b, TEST_API_BASE, True, api_key="key-b")
-            == "token-b"
-        )
+        assert config._cached_fetch_token(creds_a, TEST_API_BASE, True, api_key="key-a") == "token-a"
+        assert config._cached_fetch_token(creds_b, TEST_API_BASE, True, api_key="key-b") == "token-b"
         # same credential identity reuses the cached entry
         config._cached_fetch_token(creds_a, TEST_API_BASE, True, api_key="key-a")
         creds_a.with_gdch_audience.assert_called_once()
@@ -654,9 +623,7 @@ class TestGDCGeminiConfig:
         creds.token = "refreshed"
 
         with patch.object(config, "_fetch_auth") as mock_fetch:
-            token = config._cached_fetch_token(
-                creds, TEST_API_BASE, True, api_key="key"
-            )
+            token = config._cached_fetch_token(creds, TEST_API_BASE, True, api_key="key")
 
         assert token == "refreshed"
         mock_fetch.assert_called_once()
@@ -674,9 +641,7 @@ class TestCompleteGDC:
 
         mock_completion.return_value = MagicMock()
         monkeypatch.setattr(litellm, "gdc_key", "resolved-key", raising=False)
-        monkeypatch.setattr(
-            litellm, "gdc_api_base", "https://resolved-base.com", raising=False
-        )
+        monkeypatch.setattr(litellm, "gdc_api_base", "https://resolved-base.com", raising=False)
         monkeypatch.setattr(litellm, "api_base", None, raising=False)
 
         litellm.completion(
@@ -694,17 +659,11 @@ class TestCompleteGDC:
         assert kwargs["provider_config"] is gdc_transformation
 
     @patch("litellm.main.base_llm_http_handler.completion")
-    def test_complete_gdc_prefers_gdc_api_base_over_global(
-        self, mock_completion, monkeypatch
-    ):
+    def test_complete_gdc_prefers_gdc_api_base_over_global(self, mock_completion, monkeypatch):
         mock_completion.return_value = MagicMock()
         monkeypatch.setattr(litellm, "gdc_key", "resolved-key", raising=False)
-        monkeypatch.setattr(
-            litellm, "gdc_api_base", "https://gdc-specific.com", raising=False
-        )
-        monkeypatch.setattr(
-            litellm, "api_base", "https://other-provider.com", raising=False
-        )
+        monkeypatch.setattr(litellm, "gdc_api_base", "https://gdc-specific.com", raising=False)
+        monkeypatch.setattr(litellm, "api_base", "https://other-provider.com", raising=False)
 
         litellm.completion(
             model="gdc/gemini-2.5-flash",

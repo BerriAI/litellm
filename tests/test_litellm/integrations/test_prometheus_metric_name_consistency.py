@@ -23,9 +23,9 @@ def test_remaining_requests_metric_name_in_defined_metrics():
     from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS
 
     defined_metrics = get_args(DEFINED_PROMETHEUS_METRICS)
-    assert (
-        "litellm_remaining_requests_metric" in defined_metrics
-    ), "litellm_remaining_requests_metric should be in DEFINED_PROMETHEUS_METRICS"
+    assert "litellm_remaining_requests_metric" in defined_metrics, (
+        "litellm_remaining_requests_metric should be in DEFINED_PROMETHEUS_METRICS"
+    )
 
 
 def test_remaining_tokens_metric_name_in_defined_metrics():
@@ -38,9 +38,9 @@ def test_remaining_tokens_metric_name_in_defined_metrics():
     from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS
 
     defined_metrics = get_args(DEFINED_PROMETHEUS_METRICS)
-    assert (
-        "litellm_remaining_tokens_metric" in defined_metrics
-    ), "litellm_remaining_tokens_metric should be in DEFINED_PROMETHEUS_METRICS"
+    assert "litellm_remaining_tokens_metric" in defined_metrics, (
+        "litellm_remaining_tokens_metric should be in DEFINED_PROMETHEUS_METRICS"
+    )
 
 
 def test_prometheus_metric_labels_have_remaining_metrics():
@@ -52,33 +52,19 @@ def test_prometheus_metric_labels_have_remaining_metrics():
     from litellm.types.integrations.prometheus import PrometheusMetricLabels
 
     # Test that labels can be retrieved for remaining metrics
-    remaining_requests_labels = PrometheusMetricLabels.get_labels(
-        "litellm_remaining_requests_metric"
-    )
-    remaining_tokens_labels = PrometheusMetricLabels.get_labels(
-        "litellm_remaining_tokens_metric"
-    )
+    remaining_requests_labels = PrometheusMetricLabels.get_labels("litellm_remaining_requests_metric")
+    remaining_tokens_labels = PrometheusMetricLabels.get_labels("litellm_remaining_tokens_metric")
 
-    assert isinstance(
-        remaining_requests_labels, list
-    ), "Labels for litellm_remaining_requests_metric should be a list"
-    assert isinstance(
-        remaining_tokens_labels, list
-    ), "Labels for litellm_remaining_tokens_metric should be a list"
+    assert isinstance(remaining_requests_labels, list), "Labels for litellm_remaining_requests_metric should be a list"
+    assert isinstance(remaining_tokens_labels, list), "Labels for litellm_remaining_tokens_metric should be a list"
 
     # These metrics should have api_provider and api_base labels
-    assert (
-        "api_provider" in remaining_requests_labels
-    ), "litellm_remaining_requests_metric should have api_provider label"
-    assert (
-        "api_base" in remaining_requests_labels
-    ), "litellm_remaining_requests_metric should have api_base label"
-    assert (
-        "api_provider" in remaining_tokens_labels
-    ), "litellm_remaining_tokens_metric should have api_provider label"
-    assert (
-        "api_base" in remaining_tokens_labels
-    ), "litellm_remaining_tokens_metric should have api_base label"
+    assert "api_provider" in remaining_requests_labels, (
+        "litellm_remaining_requests_metric should have api_provider label"
+    )
+    assert "api_base" in remaining_requests_labels, "litellm_remaining_requests_metric should have api_base label"
+    assert "api_provider" in remaining_tokens_labels, "litellm_remaining_tokens_metric should have api_provider label"
+    assert "api_base" in remaining_tokens_labels, "litellm_remaining_tokens_metric should have api_base label"
 
 
 def test_all_defined_metrics_have_consistent_naming():
@@ -94,9 +80,7 @@ def test_all_defined_metrics_have_consistent_naming():
 
     for metric_name in defined_metrics:
         # All metrics should start with 'litellm_'
-        assert metric_name.startswith(
-            "litellm_"
-        ), f"Metric {metric_name} should start with 'litellm_'"
+        assert metric_name.startswith("litellm_"), f"Metric {metric_name} should start with 'litellm_'"
 
 
 if __name__ == "__main__":

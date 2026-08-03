@@ -38,12 +38,8 @@ def test_is_a2a_streaming_response_truth_matrix(proxy_logging):
         "all_three_keys_present": proxy_logging.is_a2a_streaming_response(
             {"jsonrpc": "2.0", "id": "1", "result": {"x": 1}, "extra": "y"}
         ),
-        "missing_result": proxy_logging.is_a2a_streaming_response(
-            {"jsonrpc": "2.0", "id": "1"}
-        ),
-        "missing_jsonrpc": proxy_logging.is_a2a_streaming_response(
-            {"id": "1", "result": {}}
-        ),
+        "missing_result": proxy_logging.is_a2a_streaming_response({"jsonrpc": "2.0", "id": "1"}),
+        "missing_jsonrpc": proxy_logging.is_a2a_streaming_response({"id": "1", "result": {}}),
         "empty_dict": proxy_logging.is_a2a_streaming_response({}),
     }
     assert snapshot == {
@@ -206,7 +202,9 @@ async def test_wrap_streaming_iterator_with_enrichment_enriches_http_exception_r
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_hook_fast_path_returns_response(proxy_logging, mock_callbacks_disabled, make_user_api_key_auth):
+async def test_async_post_call_streaming_hook_fast_path_returns_response(
+    proxy_logging, mock_callbacks_disabled, make_user_api_key_auth
+):
     resp = "chunk-1"
     out = await proxy_logging.async_post_call_streaming_hook(
         data={}, response=resp, user_api_key_dict=make_user_api_key_auth()
@@ -226,7 +224,9 @@ async def test_async_post_call_streaming_hook_fast_path_returns_response(proxy_l
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_hook_invokes_per_chunk_callback(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_async_post_call_streaming_hook_invokes_per_chunk_callback(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     class _Per(CustomLogger):
         async def async_post_call_streaming_hook(self, **kwargs):  # type: ignore[override]
             return "modified-" + str(kwargs.get("response", ""))
@@ -283,7 +283,9 @@ async def test_async_post_call_streaming_hook_callback_error_raises(proxy_loggin
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_iterator_hook_no_overrides_passes_through(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_async_post_call_streaming_iterator_hook_no_overrides_passes_through(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     async def gen():
         for ch in ("a", "b"):
             yield ch
@@ -308,7 +310,9 @@ async def test_async_post_call_streaming_iterator_hook_no_overrides_passes_throu
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_iterator_hook_with_override_chains_callback(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_async_post_call_streaming_iterator_hook_with_override_chains_callback(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     class _IterOverride(CustomLogger):
         async def async_post_call_streaming_iterator_hook(self, **kwargs):  # type: ignore[override]
             async for ch in kwargs["response"]:
@@ -331,7 +335,9 @@ async def test_async_post_call_streaming_iterator_hook_with_override_chains_call
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_streaming_iterator_hook_upstream_error_raises(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
+async def test_async_post_call_streaming_iterator_hook_upstream_error_raises(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
     async def gen():
         if False:
             yield  # pragma: no cover
@@ -397,7 +403,9 @@ async def test_post_call_response_headers_hook_returns_empty_when_no_callbacks(
 
 
 @pytest.mark.asyncio
-async def test_post_call_response_headers_hook_merges_callback_headers(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_post_call_response_headers_hook_merges_callback_headers(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     class _Cb(CustomLogger):
         async def async_post_call_response_headers_hook(self, **kwargs):  # type: ignore[override]
             return {"X-One": "1", "X-Two": "2", "X-Common": "first"}
@@ -416,7 +424,9 @@ async def test_post_call_response_headers_hook_merges_callback_headers(proxy_log
 
 
 @pytest.mark.asyncio
-async def test_post_call_response_headers_hook_swallows_callback_error(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_post_call_response_headers_hook_swallows_callback_error(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     """Errors inside the hook are caught — function returns merged so-far."""
 
     class _Cb(CustomLogger):

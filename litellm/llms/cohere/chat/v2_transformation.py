@@ -1,10 +1,17 @@
 import time
 from collections.abc import AsyncIterator, Iterator
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 import litellm
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.cohere import CohereV2ChatResponse
@@ -25,6 +32,39 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+#: Params Cohere v2 accepts under their OpenAI names.
+PASSTHROUGH_PARAMS = frozenset(
+    {
+        "stream",
+        "temperature",
+        "frequency_penalty",
+        "presence_penalty",
+        "tools",
+        "seed",
+        "logprobs",
+        "response_format",
+        "thinking",
+    }
+)
+
+#: Cohere only accepts these two; `auto` is what it does when the field is absent.
+TOOL_CHOICE_BY_OPENAI_NAME = MappingProxyType({"required": "REQUIRED", "none": "NONE"})
+
+#: OpenAI `reasoning_effort` -> Cohere `thinking`. Unlisted efforts stay unset.
+THINKING_BY_REASONING_EFFORT = MappingProxyType(
+    {
+        "none": MappingProxyType({"type": "disabled"}),
+        "minimal": MappingProxyType(
+            {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET}
+        ),
+        "low": MappingProxyType({"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}),
+        "medium": MappingProxyType(
+            {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET}
+        ),
+        "high": MappingProxyType({"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET}),
+    }
+)
 
 
 class CohereV2ChatConfig(OpenAIGPTConfig):
@@ -116,7 +156,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         )
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        return [
+        supported_params = [
             "stream",
             "temperature",
             "max_tokens",
@@ -129,8 +169,24 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             "tools",
             "tool_choice",
             "seed",
+            "logprobs",
+            "response_format",
             "extra_headers",
         ]
+
+        if self._is_reasoning_model(model):
+            supported_params.extend(("thinking", "reasoning_effort"))
+
+        return supported_params
+
+    @staticmethod
+    def _is_reasoning_model(model: str) -> bool:
+        """Cohere exposes ``thinking`` on the command-a-reasoning family.
+
+        Read from the id: no Cohere entry in the model map carries
+        ``supports_reasoning``, so there is nothing to consult.
+        """
+        return "command-a-reasoning" in model.split("/")[-1].lower()
 
     def map_openai_params(
         self,
@@ -140,10 +196,8 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict:
         for param, value in non_default_params.items():
-            if param == "stream":
-                optional_params["stream"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
+            if param in PASSTHROUGH_PARAMS:
+                optional_params[param] = value
             if param == "max_tokens" and "max_completion_tokens" not in non_default_params:
                 optional_params["max_tokens"] = value
             if param == "max_completion_tokens":
@@ -152,16 +206,16 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                 optional_params["num_generations"] = value
             if param == "top_p":
                 optional_params["p"] = value
-            if param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
-            if param == "presence_penalty":
-                optional_params["presence_penalty"] = value
             if param == "stop":
                 optional_params["stop_sequences"] = value
-            if param == "tools":
-                optional_params["tools"] = value
-            if param == "seed":
-                optional_params["seed"] = value
+            if param == "tool_choice" and isinstance(value, str):
+                mapped_tool_choice = TOOL_CHOICE_BY_OPENAI_NAME.get(value)
+                if mapped_tool_choice is not None:
+                    optional_params["tool_choice"] = mapped_tool_choice
+            if param == "reasoning_effort" and isinstance(value, str):
+                thinking = THINKING_BY_REASONING_EFFORT.get(value)
+                if thinking is not None:
+                    optional_params["thinking"] = thinking
         return optional_params
 
     def transform_request(
@@ -175,6 +229,11 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         """
         Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
         """
+        # `top_k` is a provider-specific kwarg, so it bypasses `map_openai_params`
+        # and arrives under its OpenAI name. Cohere calls the field `k`.
+        if "top_k" in optional_params:
+            optional_params["k"] = optional_params.pop("top_k")
+
         data = super().transform_request(model, messages, optional_params, litellm_params, headers)
 
         return data

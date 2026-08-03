@@ -7,9 +7,7 @@ import sys
 import pytest
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 
 import litellm
@@ -83,9 +81,7 @@ async def test_openai_img_gen_health_check():
 # asyncio.run(test_openai_img_gen_health_check())
 
 
-@pytest.mark.skip(
-    reason="Azure DALL-E 3 model deployment is deprecated (410 ModelDeprecated)"
-)
+@pytest.mark.skip(reason="Azure DALL-E 3 model deployment is deprecated (410 ModelDeprecated)")
 @pytest.mark.asyncio
 async def test_azure_img_gen_health_check():
     """
@@ -122,9 +118,9 @@ async def test_azure_img_gen_health_check():
 
         # If it's the last attempt or not a transient error, fail the test
         if attempt == max_retries - 1 or not is_transient_error:
-            assert (
-                isinstance(response, dict) and "error" not in response
-            ), f"Health check failed: {response.get('error', 'Unknown error')}"
+            assert isinstance(response, dict) and "error" not in response, (
+                f"Health check failed: {response.get('error', 'Unknown error')}"
+            )
             return response
 
         # Wait before retrying with exponential backoff
@@ -352,12 +348,10 @@ def test_update_litellm_params_for_health_check():
             "model": f"bedrock/{prefix}anthropic.claude-3-haiku-20240307-v1:0",
             "api_key": "fake_key",
         }
-        updated_params = _update_litellm_params_for_health_check(
-            model_info, litellm_params
+        updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+        assert updated_params["model"] == f"{prefix}anthropic.claude-3-haiku-20240307-v1:0", (
+            f"Failed to preserve CRIS prefix: {prefix}"
         )
-        assert (
-            updated_params["model"] == f"{prefix}anthropic.claude-3-haiku-20240307-v1:0"
-        ), f"Failed to preserve CRIS prefix: {prefix}"
 
     # Test regional + CRIS combination - region should be stripped, CRIS preserved
     litellm_params = {
@@ -381,20 +375,14 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
-    )
+    assert updated_params["model"] == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
 
     litellm_params = {
         "model": "bedrock/deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
-    )
+    assert updated_params["model"] == "deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
 
     # Test route specifications - routes should be preserved
     litellm_params = {
@@ -402,10 +390,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
-    )
+    assert updated_params["model"] == "converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     litellm_params = {
         "model": "bedrock/invoke/us-west-2/anthropic.claude-instant-v1",
@@ -420,10 +405,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
-    )
+    assert updated_params["model"] == "arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
 
     # Test edge case: region + handler + ARN
     litellm_params = {
@@ -431,10 +413,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"]
-        == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
-    )
+    assert updated_params["model"] == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
 
     # Test edge case: route + region + CRIS
     litellm_params = {
@@ -442,9 +421,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert (
-        updated_params["model"] == "converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
-    )
+    assert updated_params["model"] == "converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
 
 
 @pytest.mark.asyncio
@@ -562,9 +539,7 @@ async def test_perform_health_check_with_health_check_model():
         return {"status": "healthy"}
 
     with patch("litellm.ahealth_check", side_effect=mock_health_check):
-        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
-            model_list
-        )
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(model_list)
         print("health check calls: ", health_check_calls)
 
         # Verify the health check used the override model
@@ -599,9 +574,7 @@ async def test_health_check_bad_model():
         },
     ]
     details = None
-    healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
-        model_list, details
-    )
+    healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(model_list, details)
     print(f"healthy_endpoints: {healthy_endpoints}")
     print(f"unhealthy_endpoints: {unhealthy_endpoints}")
 
@@ -613,30 +586,21 @@ async def test_health_check_bad_model():
         await asyncio.sleep(10)
         return {"status": "healthy"}
 
-    with patch(
-        "litellm.ahealth_check", side_effect=mock_health_check
-    ) as mock_health_check:
+    with patch("litellm.ahealth_check", side_effect=mock_health_check) as mock_health_check:
         start_time = time.time()
-        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
-            model_list
-        )
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(model_list)
         end_time = time.time()
         print("health check calls: ", health_check_calls)
         assert len(healthy_endpoints) == 0
         assert len(unhealthy_endpoints) == 1
-        assert (
-            end_time - start_time < 2
-        ), "Health check took longer than health_check_timeout"
+        assert end_time - start_time < 2, "Health check took longer than health_check_timeout"
 
 
 @pytest.mark.asyncio
 async def test_health_check_respects_concurrency_limit():
     from litellm.proxy.health_check import _perform_health_check
 
-    model_list = [
-        {"litellm_params": {"model": f"openai/gpt-4o-mini-{i}", "api_key": "fake-key"}}
-        for i in range(6)
-    ]
+    model_list = [{"litellm_params": {"model": f"openai/gpt-4o-mini-{i}", "api_key": "fake-key"}} for i in range(6)]
 
     active = 0
     max_active = 0
@@ -659,10 +623,7 @@ async def test_health_check_respects_concurrency_limit():
 async def test_health_check_creates_only_bounded_initial_tasks():
     from litellm.proxy.health_check import _perform_health_check
 
-    model_list = [
-        {"litellm_params": {"model": f"openai/gpt-4o-mini-{i}", "api_key": "fake-key"}}
-        for i in range(10)
-    ]
+    model_list = [{"litellm_params": {"model": f"openai/gpt-4o-mini-{i}", "api_key": "fake-key"}} for i in range(10)]
     release_event = asyncio.Event()
     create_task_call_count = 0
     real_create_task = asyncio.create_task
@@ -683,9 +644,7 @@ async def test_health_check_creates_only_bounded_initial_tasks():
             side_effect=tracked_create_task,
         ),
     ):
-        perform_task = real_create_task(
-            _perform_health_check(model_list, max_concurrency=2)
-        )
+        perform_task = real_create_task(_perform_health_check(model_list, max_concurrency=2))
         await asyncio.sleep(0.05)
         assert create_task_call_count == 2
         release_event.set()
@@ -715,9 +674,7 @@ async def test_timeout_does_not_cancel_other_health_checks():
         return {"status": "healthy"}
 
     with patch("litellm.ahealth_check", side_effect=mock_health_check):
-        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
-            model_list, max_concurrency=1
-        )
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(model_list, max_concurrency=1)
 
     healthy_models = {endpoint["model"] for endpoint in healthy_endpoints}
     unhealthy_models = {endpoint["model"] for endpoint in unhealthy_endpoints}
@@ -789,9 +746,7 @@ async def test_image_generation_health_check_prompt(monkeypatch):
     health_check_calls = await run_health_check(health_check)
 
     assert len(health_check_calls) == 1
-    assert (
-        health_check_calls[0]["prompt"] == litellm_constants.DEFAULT_HEALTH_CHECK_PROMPT
-    )
+    assert health_check_calls[0]["prompt"] == litellm_constants.DEFAULT_HEALTH_CHECK_PROMPT
 
     # Environment override should change the prompt without code changes
     override_prompt = "environment override prompt"

@@ -44,17 +44,11 @@ class TestExpiredUISessionKeyCleanupManager:
                 expires=now - timedelta(seconds=1),
             )
         ]
-        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = (
-            mock_keys
-        )
+        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = mock_keys
 
-        with patch(
-            "litellm.proxy.common_utils.expired_ui_session_key_cleanup_manager.datetime"
-        ) as mock_datetime:
+        with patch("litellm.proxy.common_utils.expired_ui_session_key_cleanup_manager.datetime") as mock_datetime:
             mock_datetime.now.return_value = now
-            mock_datetime.side_effect = lambda *args, **kwargs: datetime(
-                *args, **kwargs
-            )
+            mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
             keys = await manager._find_expired_ui_session_keys()
 
@@ -101,10 +95,7 @@ class TestExpiredUISessionKeyCleanupManager:
         call_kwargs = mock_delete_verification_tokens.call_args.kwargs
         assert call_kwargs["tokens"] == ["expired-dashboard-token"]
         assert call_kwargs["user_api_key_cache"] == mock_cache
-        assert (
-            call_kwargs["litellm_changed_by"]
-            == LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
-        )
+        assert call_kwargs["litellm_changed_by"] == LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
         assert call_kwargs["user_api_key_dict"].user_id == "system"
         mock_key_deleted_hook.assert_called_once()
         hook_kwargs = mock_key_deleted_hook.call_args.kwargs
@@ -114,10 +105,7 @@ class TestExpiredUISessionKeyCleanupManager:
             "deleted_keys": ["expired-dashboard-token"],
             "failed_tokens": [],
         }
-        assert (
-            hook_kwargs["litellm_changed_by"]
-            == LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
-        )
+        assert hook_kwargs["litellm_changed_by"] == LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
 
     @pytest.mark.asyncio
     async def test_cleanup_expired_keys_deletes_multiple_keys(self):

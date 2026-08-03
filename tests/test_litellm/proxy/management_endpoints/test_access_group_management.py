@@ -8,9 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm import Router
 
@@ -72,7 +70,6 @@ async def test_create_duplicate_access_group_fails():
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
-
         # Should raise 409 Conflict
         with pytest.raises(HTTPException) as exc_info:
             await create_model_group(data=request_data, user_api_key_dict=mock_user)
@@ -101,9 +98,7 @@ async def test_create_access_group_with_model_ids_tags_only_specific_deployments
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
-        return_value=deploy_a
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -124,15 +119,11 @@ async def test_create_access_group_with_model_ids_tags_only_specific_deployments
             new_callable=AsyncMock,
         ),
     ):
-        response = await create_model_group(
-            data=request_data, user_api_key_dict=mock_user
-        )
+        response = await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
     assert response.models_updated == 1
     assert response.model_ids == ["deploy-A"]
-    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-        where={"model_id": "deploy-A"}
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "deploy-A"})
     assert mock_prisma.db.litellm_proxymodeltable.update.call_count == 1
     update_call = mock_prisma.db.litellm_proxymodeltable.update.call_args
     assert update_call.kwargs["where"] == {"model_id": "deploy-A"}
@@ -167,9 +158,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
     )
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
-        side_effect=[[], [deploy_a, deploy_b, deploy_c]]
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=[[], [deploy_a, deploy_b, deploy_c]])
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -177,9 +166,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
 
-    request_data = NewModelGroupRequest(
-        access_group="production-models", model_names=["gpt-4o"]
-    )
+    request_data = NewModelGroupRequest(access_group="production-models", model_names=["gpt-4o"])
 
     with (
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
@@ -189,9 +176,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
             new_callable=AsyncMock,
         ),
     ):
-        response = await create_model_group(
-            data=request_data, user_api_key_dict=mock_user
-        )
+        response = await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
     assert response.models_updated == 3
     assert response.model_names == ["gpt-4o"]
@@ -215,9 +200,7 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
-        return_value=deploy_a
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -239,14 +222,10 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
             new_callable=AsyncMock,
         ),
     ):
-        response = await create_model_group(
-            data=request_data, user_api_key_dict=mock_user
-        )
+        response = await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
     assert response.models_updated == 1
-    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-        where={"model_id": "deploy-A"}
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "deploy-A"})
 
 
 @pytest.mark.asyncio

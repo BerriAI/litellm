@@ -122,9 +122,7 @@ class TestFireworksAIRerankTransform:
         }
 
         with pytest.raises(ValueError, match="query is required"):
-            self.config.transform_rerank_request(
-                model=self.model, optional_rerank_params=optional_params, headers={}
-            )
+            self.config.transform_rerank_request(model=self.model, optional_rerank_params=optional_params, headers={})
 
     def test_transform_rerank_request_missing_documents(self):
         """Test that transform_rerank_request raises error for missing documents."""
@@ -133,9 +131,7 @@ class TestFireworksAIRerankTransform:
         }
 
         with pytest.raises(ValueError, match="documents is required"):
-            self.config.transform_rerank_request(
-                model=self.model, optional_rerank_params=optional_params, headers={}
-            )
+            self.config.transform_rerank_request(model=self.model, optional_rerank_params=optional_params, headers={})
 
     def test_transform_rerank_response_success(self):
         """Test successful response transformation."""
@@ -186,9 +182,7 @@ class TestFireworksAIRerankTransform:
         assert len(result.results) == 2
         assert result.results[0]["index"] == 0
         assert result.results[0]["relevance_score"] == 0.95
-        assert (
-            result.results[0]["document"]["text"] == "Paris is the capital of France."
-        )
+        assert result.results[0]["document"]["text"] == "Paris is the capital of France."
         assert result.results[1]["index"] == 1
         assert result.results[1]["relevance_score"] == 0.75
         assert result.results[1]["document"]["text"] == "France is a country in Europe."

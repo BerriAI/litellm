@@ -27,9 +27,7 @@ async def test_acompletion_resource_cleanup():
         )
 
         # Check that response was received
-        assert (
-            response.choices[0].message.content == "Hi there! How can I help you today?"
-        )
+        assert response.choices[0].message.content == "Hi there! How can I help you today?"
 
         # Manually close async clients
         await litellm.close_litellm_async_clients()
@@ -42,16 +40,11 @@ async def test_acompletion_resource_cleanup():
             warning
             for warning in w
             if "Unclosed" in str(warning.message)
-            and (
-                "client session" in str(warning.message)
-                or "connector" in str(warning.message)
-            )
+            and ("client session" in str(warning.message) or "connector" in str(warning.message))
         ]
 
         # Should be no unclosed resource warnings
-        assert (
-            len(resource_warnings) == 0
-        ), f"Found unclosed resources: {[str(w.message) for w in resource_warnings]}"
+        assert len(resource_warnings) == 0, f"Found unclosed resources: {[str(w.message) for w in resource_warnings]}"
 
 
 @pytest.mark.asyncio
@@ -80,15 +73,10 @@ async def test_multiple_acompletion_calls_cleanup():
             warning
             for warning in w
             if "Unclosed" in str(warning.message)
-            and (
-                "client session" in str(warning.message)
-                or "connector" in str(warning.message)
-            )
+            and ("client session" in str(warning.message) or "connector" in str(warning.message))
         ]
 
-        assert (
-            len(resource_warnings) == 0
-        ), f"Found unclosed resources: {[str(w.message) for w in resource_warnings]}"
+        assert len(resource_warnings) == 0, f"Found unclosed resources: {[str(w.message) for w in resource_warnings]}"
 
 
 @pytest.mark.asyncio

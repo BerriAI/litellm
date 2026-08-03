@@ -60,9 +60,7 @@ def test_sha256_base64_empty():
 
 def test_build_signature_string_request_target():
     headers = {"host": "example.com", "date": "Mon, 01 Jan 2024 00:00:00 GMT"}
-    result = build_signature_string(
-        "POST", "/20231130/actions/chat", headers, ["(request-target)", "host", "date"]
-    )
+    result = build_signature_string("POST", "/20231130/actions/chat", headers, ["(request-target)", "host", "date"])
     lines = result.split("\n")
     assert lines[0] == "(request-target): post /20231130/actions/chat"
     assert lines[1] == "host: example.com"
@@ -161,10 +159,7 @@ def test_get_oci_base_url_explicit_api_base():
     ],
 )
 def test_get_oci_base_url_strips_trailing_action_path(api_base):
-    assert (
-        get_oci_base_url({}, api_base=api_base)
-        == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
-    )
+    assert get_oci_base_url({}, api_base=api_base) == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
 
 
 def test_get_oci_base_url_from_region():
@@ -247,17 +242,13 @@ def test_sign_with_oci_signer_exception_wrapped():
     bad_signer = MagicMock()
     bad_signer.do_request_sign.side_effect = RuntimeError("signing failed")
     with pytest.raises(OCIError, match="Failed to sign request"):
-        sign_with_oci_signer(
-            {}, {"oci_signer": bad_signer}, {"key": "val"}, "https://example.com"
-        )
+        sign_with_oci_signer({}, {"oci_signer": bad_signer}, {"key": "val"}, "https://example.com")
 
 
 def test_sign_with_oci_signer_success():
     signer = MagicMock()
     signer.do_request_sign.return_value = None
-    headers, body = sign_with_oci_signer(
-        {}, {"oci_signer": signer}, {"key": "val"}, "https://example.com"
-    )
+    headers, body = sign_with_oci_signer({}, {"oci_signer": signer}, {"key": "val"}, "https://example.com")
     assert isinstance(body, bytes)
     signer.do_request_sign.assert_called_once()
 
@@ -270,9 +261,7 @@ def test_sign_with_oci_signer_success():
 def test_sign_oci_request_routes_to_signer():
     signer = MagicMock()
     signer.do_request_sign.return_value = None
-    headers, body = sign_oci_request(
-        {}, {"oci_signer": signer}, {}, "https://example.com"
-    )
+    headers, body = sign_oci_request({}, {"oci_signer": signer}, {}, "https://example.com")
     signer.do_request_sign.assert_called_once()
 
 

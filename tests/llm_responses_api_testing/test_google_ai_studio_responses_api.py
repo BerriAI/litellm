@@ -39,9 +39,7 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
         choices=[
             litellm.utils.Choices(
                 index=0,
-                message=litellm.utils.Message(
-                    role="assistant", content="Test response"
-                ),
+                message=litellm.utils.Message(role="assistant", content="Test response"),
                 finish_reason="stop",
             )
         ],
@@ -81,9 +79,7 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
             call_kwargs["messages"][0]["content"]
             == "what is the latest version of supabase python package and when was it released?"
         )
-        assert (
-            call_kwargs["tools"] == []
-        )  # web search tools are converted to web_search_options, not kept as tools
+        assert call_kwargs["tools"] == []  # web search tools are converted to web_search_options, not kept as tools
 
 
 @pytest.mark.asyncio
@@ -135,12 +131,8 @@ async def test_gemini_3_responses_api_with_thought_signatures():
     # Validate response structure
     from litellm.types.llms.openai import ResponsesAPIResponse
 
-    assert isinstance(
-        response, ResponsesAPIResponse
-    ), "Response should be a ResponsesAPIResponse"
-    assert (
-        hasattr(response, "output") or "output" in response
-    ), "Response should have 'output' field"
+    assert isinstance(response, ResponsesAPIResponse), "Response should be a ResponsesAPIResponse"
+    assert hasattr(response, "output") or "output" in response, "Response should have 'output' field"
     assert isinstance(response.output, list), "Output should be a list"
 
     # Find function call in output
@@ -159,31 +151,17 @@ async def test_gemini_3_responses_api_with_thought_signatures():
             break
 
     # Verify function call exists
-    assert (
-        function_call_item is not None
-    ), "Response should contain a function_call item"
-    assert (
-        function_call_item.get("name") == "get_weather"
-    ), "Function call should be for get_weather"
+    assert function_call_item is not None, "Response should contain a function_call item"
+    assert function_call_item.get("name") == "get_weather", "Function call should be for get_weather"
 
     # Verify thought signature is present in provider_specific_fields
     provider_specific_fields = function_call_item.get("provider_specific_fields")
-    assert (
-        provider_specific_fields is not None
-    ), "Function call should have provider_specific_fields"
-    assert (
-        "thought_signature" in provider_specific_fields
-    ), "provider_specific_fields should contain thought_signature"
-    assert isinstance(
-        provider_specific_fields["thought_signature"], str
-    ), "thought_signature should be a string"
-    assert (
-        len(provider_specific_fields["thought_signature"]) > 0
-    ), "thought_signature should not be empty"
+    assert provider_specific_fields is not None, "Function call should have provider_specific_fields"
+    assert "thought_signature" in provider_specific_fields, "provider_specific_fields should contain thought_signature"
+    assert isinstance(provider_specific_fields["thought_signature"], str), "thought_signature should be a string"
+    assert len(provider_specific_fields["thought_signature"]) > 0, "thought_signature should not be empty"
 
-    print(
-        f"✅ Thought signature preserved: {provider_specific_fields['thought_signature'][:50]}..."
-    )
+    print(f"✅ Thought signature preserved: {provider_specific_fields['thought_signature'][:50]}...")
 
 
 @pytest.mark.asyncio
@@ -258,21 +236,13 @@ async def test_gemini_3_responses_api_streaming_with_thought_signatures():
                 break
 
         if function_call_item:
-            provider_specific_fields = function_call_item.get(
-                "provider_specific_fields"
-            )
+            provider_specific_fields = function_call_item.get("provider_specific_fields")
             if provider_specific_fields:
                 thought_signature = provider_specific_fields.get("thought_signature")
                 if thought_signature:
-                    assert isinstance(
-                        thought_signature, str
-                    ), "thought_signature should be a string"
-                    assert (
-                        len(thought_signature) > 0
-                    ), "thought_signature should not be empty"
-                    print(
-                        f"✅ Streaming thought signature preserved: {thought_signature[:50]}..."
-                    )
+                    assert isinstance(thought_signature, str), "thought_signature should be a string"
+                    assert len(thought_signature) > 0, "thought_signature should not be empty"
+                    print(f"✅ Streaming thought signature preserved: {thought_signature[:50]}...")
 
     print(f"✅ Collected {len(chunks)} streaming chunks")
 
@@ -285,9 +255,7 @@ class TestGoogleAIStudioResponsesAPITest(BaseResponsesAPITest):
     async def test_basic_openai_responses_delete_endpoint(self, sync_mode=False):
         pytest.skip("DELETE responses is not supported for Google AI Studio")
 
-    async def test_basic_openai_responses_streaming_delete_endpoint(
-        self, sync_mode=False
-    ):
+    async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode=False):
         pytest.skip("DELETE responses is not supported for Google AI Studio")
 
     async def test_basic_openai_responses_get_endpoint(self, sync_mode=False):

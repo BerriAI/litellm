@@ -25,9 +25,7 @@ class MockHTTPHandler:
     def get(self, url, params=None, headers=None):
         # Store params for audience verification
         self.last_params = params
-        logger.debug(
-            f"MockHTTPHandler.get called with url={url}, params={params}, headers={headers}"
-        )
+        logger.debug(f"MockHTTPHandler.get called with url={url}, params={params}, headers={headers}")
         mock_response = Mock()
         mock_response.status_code = self.status_code
         mock_response.text = self.text
@@ -70,9 +68,7 @@ def test_oidc_google_success():
 
     assert result == "mocked_token"
     assert mock_handler.last_params == {"audience": "[invalid url, do not cite]"}
-    mock_oidc_cache.set_cache.assert_called_once_with(
-        key=secret_name, value="mocked_token", ttl=3540
-    )
+    mock_oidc_cache.set_cache.assert_called_once_with(key=secret_name, value="mocked_token", ttl=3540)
 
 
 def test_oidc_google_cached():
@@ -166,9 +162,7 @@ def test_oidc_google_long_lived_token_still_capped_at_default_ttl():
             result = get_secret(secret_name)
 
     assert result == mock_handler.text
-    mock_oidc_cache.set_cache.assert_called_once_with(
-        key=secret_name, value=mock_handler.text, ttl=3540
-    )
+    mock_oidc_cache.set_cache.assert_called_once_with(key=secret_name, value=mock_handler.text, ttl=3540)
 
 
 def test_oidc_google_non_jwt_token_keeps_default_ttl():
@@ -187,9 +181,7 @@ def test_oidc_google_non_jwt_token_keeps_default_ttl():
             result = get_secret(secret_name)
 
     assert result == "mocked_token"
-    mock_oidc_cache.set_cache.assert_called_once_with(
-        key=secret_name, value="mocked_token", ttl=3540
-    )
+    mock_oidc_cache.set_cache.assert_called_once_with(key=secret_name, value="mocked_token", ttl=3540)
 
 
 def test_oidc_google_failure():
@@ -247,9 +239,7 @@ def test_oidc_github_success(mock_get_http_handler, mock_oidc_cache, mock_env):
     assert mock_handler.last_params == {"audience": "github-audience"}
     logger.debug(f"set_cache call args: {mock_oidc_cache.set_cache.call_args}")
     mock_oidc_cache.set_cache.assert_called_once()
-    mock_oidc_cache.set_cache.assert_called_with(
-        key=secret_name, value="mocked_token", ttl=295
-    )
+    mock_oidc_cache.set_cache.assert_called_with(key=secret_name, value="mocked_token", ttl=295)
 
 
 def test_oidc_github_missing_env():
@@ -290,9 +280,7 @@ def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider, monkeypat
         result = get_secret(secret_name)
 
         assert result == "azure_ad_token"
-        mock_get_azure_ad_token_provider.assert_called_once_with(
-            azure_scope="api://azure-audience"
-        )
+        mock_get_azure_ad_token_provider.assert_called_once_with(azure_scope="api://azure-audience")
         mock_token_provider.assert_called_once_with()
 
 

@@ -3,9 +3,7 @@ import os
 import sys
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../"))  # Adds the parent directory to the system path
 
 import litellm
 import pytest
@@ -87,12 +85,8 @@ def test_convert_to_model_response_object_basic():
     assert result.usage.prompt_tokens == 19
     assert result.usage.completion_tokens == 10
     assert result.usage.total_tokens == 29
-    assert result.usage.prompt_tokens_details == PromptTokensDetailsWrapper(
-        cached_tokens=0
-    )
-    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(
-        reasoning_tokens=0
-    )
+    assert result.usage.prompt_tokens_details == PromptTokensDetailsWrapper(cached_tokens=0)
+    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     # Other fields
     assert result.system_fingerprint == "fp_6b68a8204b"
@@ -151,18 +145,13 @@ def test_convert_image_input_dict_response_to_chat_completion_response():
     assert choice.index == 0
     assert isinstance(choice.message, Message)
     assert choice.message.role == "assistant"
-    assert (
-        choice.message.content
-        == "\n\nThis image shows a wooden boardwalk extending through a lush green marshland."
-    )
+    assert choice.message.content == "\n\nThis image shows a wooden boardwalk extending through a lush green marshland."
     assert choice.finish_reason == "stop"
 
     assert result.usage.prompt_tokens == 9
     assert result.usage.completion_tokens == 12
     assert result.usage.total_tokens == 21
-    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(
-        reasoning_tokens=0
-    )
+    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
 
@@ -229,13 +218,8 @@ def test_convert_to_model_response_object_tool_calls_invalid_json_arguments():
     assert len(result.choices) == 1
     assert result.choices[0].message.content is None
     assert len(result.choices[0].message.tool_calls) == 1
-    assert (
-        result.choices[0].message.tool_calls[0].function.name == "get_current_weather"
-    )
-    assert (
-        result.choices[0].message.tool_calls[0].function.arguments
-        == '{"location":"Boston, MA","unit":"fahren'
-    )
+    assert result.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+    assert result.choices[0].message.tool_calls[0].function.arguments == '{"location":"Boston, MA","unit":"fahren'
     assert result.choices[0].finish_reason == "length"
     assert result.model == "gpt-4o-2024-08-06"
     assert result.created == 1729337288
@@ -307,13 +291,8 @@ def test_convert_to_model_response_object_tool_calls_valid_json_arguments():
     assert len(result.choices) == 1
     assert result.choices[0].message.content is None
     assert len(result.choices[0].message.tool_calls) == 1
-    assert (
-        result.choices[0].message.tool_calls[0].function.name == "get_current_weather"
-    )
-    assert (
-        result.choices[0].message.tool_calls[0].function.arguments
-        == '{"location":"Boston, MA","unit":"fahrenheit"}'
-    )
+    assert result.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+    assert result.choices[0].message.tool_calls[0].function.arguments == '{"location":"Boston, MA","unit":"fahrenheit"}'
     assert result.choices[0].finish_reason == "length"
     assert result.model == "gpt-4o-2024-08-06"
     assert result.created == 1729337288
@@ -450,9 +429,7 @@ def test_convert_to_model_response_object_function_output():
     assert result.usage.prompt_tokens == 82
     assert result.usage.completion_tokens == 17
     assert result.usage.total_tokens == 99
-    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(
-        reasoning_tokens=0
-    )
+    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
 
@@ -692,9 +669,7 @@ def test_convert_to_model_response_object_with_logprobs():
     assert result.usage.prompt_tokens == 9
     assert result.usage.completion_tokens == 9
     assert result.usage.total_tokens == 18
-    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(
-        reasoning_tokens=0
-    )
+    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result.system_fingerprint is None
     assert result._hidden_params is not None
@@ -962,9 +937,7 @@ def test_convert_to_model_response_object_with_empty_error_object():
     assert isinstance(result, ModelResponse)
     assert result.model == "minimax-m2.1"
     assert len(result.choices) == 1
-    assert (
-        result.choices[0].message.content == "Hey! I'm doing well, thanks for asking!"
-    )
+    assert result.choices[0].message.content == "Hey! I'm doing well, thanks for asking!"
 
 
 def test_convert_to_model_response_object_with_real_error():
@@ -1116,18 +1089,12 @@ def test_convert_to_model_response_object_preserves_provider_specific_fields_fro
     assert result.id == "chatcmpl-proxy-123"
 
     choice = result.choices[0]
-    assert (
-        choice.message.content
-        == "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones."
-    )
+    assert choice.message.content == "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones."
     assert choice.message.provider_specific_fields is not None
     assert "citations" in choice.message.provider_specific_fields
     assert choice.message.provider_specific_fields["citations"] == citations
     assert "web_search_results" in choice.message.provider_specific_fields
-    assert (
-        choice.message.provider_specific_fields["web_search_results"]
-        == web_search_results
-    )
+    assert choice.message.provider_specific_fields["web_search_results"] == web_search_results
 
 
 def test_convert_to_model_response_object_provider_specific_fields_merges_extra_keys():
@@ -1728,9 +1695,7 @@ class TestMissingChoicesGuard:
 
         async def consume():
             chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
+            async for chunk in convert_to_streaming_response_async(response_object=response_object):
                 chunks.append(chunk)
             return chunks
 
@@ -1933,9 +1898,7 @@ class TestConvertToStreamingResponse:
 
         async def run():
             chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
+            async for chunk in convert_to_streaming_response_async(response_object=response_object):
                 chunks.append(chunk)
             return chunks
 
@@ -1988,9 +1951,7 @@ class TestConvertToStreamingResponseAsync:
 
         async def run():
             chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
+            async for chunk in convert_to_streaming_response_async(response_object=response_object):
                 chunks.append(chunk)
             return chunks
 
@@ -2095,10 +2056,7 @@ class TestShouldConvertToolCallToJsonMode:
 
         tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
         assert (
-            _should_convert_tool_call_to_json_mode(
-                tool_calls=tool_calls, convert_tool_call_to_json_mode=True
-            )
-            is True
+            _should_convert_tool_call_to_json_mode(tool_calls=tool_calls, convert_tool_call_to_json_mode=True) is True
         )
 
     def test_returns_false_when_flag_off(self):
@@ -2109,10 +2067,7 @@ class TestShouldConvertToolCallToJsonMode:
 
         tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
         assert (
-            _should_convert_tool_call_to_json_mode(
-                tool_calls=tool_calls, convert_tool_call_to_json_mode=False
-            )
-            is False
+            _should_convert_tool_call_to_json_mode(tool_calls=tool_calls, convert_tool_call_to_json_mode=False) is False
         )
 
     def test_returns_false_when_wrong_tool_name(self):
@@ -2122,10 +2077,7 @@ class TestShouldConvertToolCallToJsonMode:
 
         tool_calls = [{"function": {"name": "some_other_tool"}}]
         assert (
-            _should_convert_tool_call_to_json_mode(
-                tool_calls=tool_calls, convert_tool_call_to_json_mode=True
-            )
-            is False
+            _should_convert_tool_call_to_json_mode(tool_calls=tool_calls, convert_tool_call_to_json_mode=True) is False
         )
 
     def test_returns_false_when_multiple_tool_calls(self):
@@ -2139,10 +2091,7 @@ class TestShouldConvertToolCallToJsonMode:
             {"function": {"name": "other"}},
         ]
         assert (
-            _should_convert_tool_call_to_json_mode(
-                tool_calls=tool_calls, convert_tool_call_to_json_mode=True
-            )
-            is False
+            _should_convert_tool_call_to_json_mode(tool_calls=tool_calls, convert_tool_call_to_json_mode=True) is False
         )
 
     def test_returns_false_when_none(self):
@@ -2150,12 +2099,7 @@ class TestShouldConvertToolCallToJsonMode:
             _should_convert_tool_call_to_json_mode,
         )
 
-        assert (
-            _should_convert_tool_call_to_json_mode(
-                tool_calls=None, convert_tool_call_to_json_mode=True
-            )
-            is False
-        )
+        assert _should_convert_tool_call_to_json_mode(tool_calls=None, convert_tool_call_to_json_mode=True) is False
 
 
 class TestConvertToolCallToJsonMode:
@@ -2176,9 +2120,7 @@ class TestConvertToolCallToJsonMode:
                 ),
             )
         ]
-        message, finish_reason = convert_fn(
-            tool_calls=tool_calls, convert_tool_call_to_json_mode=True
-        )
+        message, finish_reason = convert_fn(tool_calls=tool_calls, convert_tool_call_to_json_mode=True)
         assert message is not None
         assert message.content == '{"key": "value"}'
         assert finish_reason == "stop"
@@ -2200,9 +2142,7 @@ class TestConvertToolCallToJsonMode:
                 ),
             )
         ]
-        message, finish_reason = convert_fn(
-            tool_calls=tool_calls, convert_tool_call_to_json_mode=False
-        )
+        message, finish_reason = convert_fn(tool_calls=tool_calls, convert_tool_call_to_json_mode=False)
         assert message is None
         assert finish_reason is None
 

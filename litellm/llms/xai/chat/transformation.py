@@ -111,7 +111,6 @@ class XAIChatConfig(OpenAIGPTConfig):
             "max_tokens",
             "n",
             "parallel_tool_calls",
-            "presence_penalty",
             "response_format",
             "seed",
             "stream",
@@ -132,19 +131,24 @@ class XAIChatConfig(OpenAIGPTConfig):
             base_openai_params.append("stop")
 
         #########################################################
-        # frequency penalty check
+        # reasoning check - also gates the penalties below
         #########################################################
-        if self._supports_frequency_penalty(model):
-            base_openai_params.append("frequency_penalty")
-
-        #########################################################
-        # reasoning check
-        #########################################################
+        is_reasoning_model = False
         try:
-            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
-                base_openai_params.append("reasoning_effort")
+            is_reasoning_model = litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
         except Exception as e:
             verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
+
+        if is_reasoning_model:
+            base_openai_params.append("reasoning_effort")
+
+        #########################################################
+        # penalty check - presence_penalty and frequency_penalty
+        # share the same support matrix on xAI
+        #########################################################
+        if self._supports_penalties(model, is_reasoning_model=is_reasoning_model):
+            base_openai_params.append("frequency_penalty")
+            base_openai_params.append("presence_penalty")
 
         return base_openai_params
 
@@ -153,12 +157,18 @@ class XAIChatConfig(OpenAIGPTConfig):
             return False
         return True
 
-    def _supports_frequency_penalty(self, model: str) -> bool:
+    def _supports_penalties(self, model: str, is_reasoning_model: bool = False) -> bool:
         """
-        From manual testing grok-4 does not support `frequency_penalty`
+        xAI documents `presence_penalty` and `frequency_penalty` as "Not supported
+        by grok-3 and reasoning models" - sending either returns a 400 rather than
+        being ignored.
 
-        When sent the model fails from xAI API
+        Ref: https://docs.x.ai/docs/api-reference
         """
+        if is_reasoning_model:
+            return False
+        if "grok-3" in model:
+            return False
         if "grok-4" in model:
             return False
         if "grok-code-fast" in model:

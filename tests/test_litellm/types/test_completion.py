@@ -1,7 +1,7 @@
 """
 Tests for litellm.types.completion module
 
-This test suite validates the CompletionRequest model and its compatibility with 
+This test suite validates the CompletionRequest model and its compatibility with
 OpenAI ChatCompletion API message formats.
 
 Usage:
@@ -102,9 +102,7 @@ def test_completion_request_multimodal_content():
                 {"type": "text", "text": "What's in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD..."
-                    },
+                    "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD..."},
                 },
             ],
         }

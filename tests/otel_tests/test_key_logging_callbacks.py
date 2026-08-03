@@ -35,9 +35,7 @@ async def test_key_logging_callbacks():
     }
 
     async with httpx.AsyncClient() as client:
-        generate_response = await client.post(
-            generate_url, headers=generate_headers, json=generate_payload
-        )
+        generate_response = await client.post(generate_url, headers=generate_headers, json=generate_payload)
 
     assert generate_response.status_code == 200
     generate_data = generate_response.json()
@@ -63,7 +61,4 @@ async def test_key_logging_callbacks():
     assert "logging_callbacks" in health_data
     assert health_data["logging_callbacks"]["callbacks"] == ["gcs_bucket"]
     assert health_data["logging_callbacks"]["status"] == "unhealthy"
-    assert (
-        "GCS_BUCKET_NAME is not set in the environment"
-        in health_data["logging_callbacks"]["details"]
-    )
+    assert "GCS_BUCKET_NAME is not set in the environment" in health_data["logging_callbacks"]["details"]

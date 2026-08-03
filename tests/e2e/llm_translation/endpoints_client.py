@@ -141,18 +141,14 @@ class ResponsesResult(BaseModel):
 
     @property
     def text(self) -> str:
-        return "".join(
-            content.text or "" for item in self.output for content in item.content
-        )
+        return "".join(content.text or "" for item in self.output for content in item.content)
 
     @property
     def function_calls(self) -> tuple[ResponsesOutputItem, ...]:
         return tuple(
             item
             for item in self.output
-            if item.type == "function_call"
-            and item.name is not None
-            and item.arguments is not None
+            if item.type == "function_call" and item.name is not None and item.arguments is not None
         )
 
 
@@ -260,9 +256,7 @@ class EndpointsClient:
     def delete_model(self, model_id: str) -> None:
         self.proxy.delete_model(model_id)
 
-    def _send(
-        self, path: str, key: str, body: BaseModel, *, stream: bool = False
-    ) -> StreamingResponse:
+    def _send(self, path: str, key: str, body: BaseModel, *, stream: bool = False) -> StreamingResponse:
         return self.proxy.transport.send(
             path,
             headers=self.proxy.transport.bearer(key),
@@ -270,9 +264,7 @@ class EndpointsClient:
             stream=stream,
         )
 
-    def responses(
-        self, key: str, model: str, text: str, *, stream: bool = False
-    ) -> StreamingResponse:
+    def responses(self, key: str, model: str, text: str, *, stream: bool = False) -> StreamingResponse:
         return self._send(
             "/v1/responses",
             key,
@@ -285,9 +277,7 @@ class EndpointsClient:
             stream=stream,
         )
 
-    def responses_vision(
-        self, key: str, model: str, text: str, image_url: str
-    ) -> StreamingResponse:
+    def responses_vision(self, key: str, model: str, text: str, image_url: str) -> StreamingResponse:
         return self._send(
             "/v1/responses",
             key,
@@ -319,9 +309,7 @@ class EndpointsClient:
             ),
         )
 
-    def messages(
-        self, key: str, model: str, text: str, *, max_tokens: int = 64
-    ) -> StreamingResponse:
+    def messages(self, key: str, model: str, text: str, *, max_tokens: int = 64) -> StreamingResponse:
         return self._send(
             "/v1/messages",
             key,
@@ -335,34 +323,24 @@ class EndpointsClient:
     def embeddings(self, key: str, model: str, text: str) -> StreamingResponse:
         return self._send("/embeddings", key, EmbeddingsRequest(model=model, input=text))
 
-    def rerank(
-        self, key: str, model: str, query: str, documents: list[str], top_n: int
-    ) -> StreamingResponse:
+    def rerank(self, key: str, model: str, query: str, documents: list[str], top_n: int) -> StreamingResponse:
         return self._send(
             "/v1/rerank",
             key,
             RerankRequest(model=model, query=query, documents=documents, top_n=top_n),
         )
 
-    def audio_speech(
-        self, key: str, model: str, text: str, *, voice: str = "alloy"
-    ) -> StreamingResponse:
-        return self._send(
-            "/v1/audio/speech", key, SpeechRequest(model=model, input=text, voice=voice)
-        )
+    def audio_speech(self, key: str, model: str, text: str, *, voice: str = "alloy") -> StreamingResponse:
+        return self._send("/v1/audio/speech", key, SpeechRequest(model=model, input=text, voice=voice))
 
-    def audio_speech_stream(
-        self, key: str, model: str, text: str, *, voice: str = "alloy"
-    ) -> BinaryStream:
+    def audio_speech_stream(self, key: str, model: str, text: str, *, voice: str = "alloy") -> BinaryStream:
         return self.proxy.transport.stream_binary(
             "/v1/audio/speech",
             headers=self.proxy.transport.bearer(key),
             json=SpeechRequest(model=model, input=text, voice=voice),
         )
 
-    def transcribe(
-        self, key: str, model: str, *, filename: str, content: bytes
-    ) -> Result[TranscriptionResult]:
+    def transcribe(self, key: str, model: str, *, filename: str, content: bytes) -> Result[TranscriptionResult]:
         return self.proxy.transport.upload(
             "/v1/audio/transcriptions",
             headers=self.proxy.transport.bearer(key),
@@ -382,9 +360,7 @@ class EndpointsClient:
         )
 
     def images(self, key: str, model: str, prompt: str) -> StreamingResponse:
-        return self._send(
-            "/v1/images/generations", key, ImageRequest(model=model, prompt=prompt)
-        )
+        return self._send("/v1/images/generations", key, ImageRequest(model=model, prompt=prompt))
 
     def image_edit(
         self, key: str, model: str, prompt: str, image: bytes, *, filename: str = "image.png"

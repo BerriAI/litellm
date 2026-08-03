@@ -121,9 +121,7 @@ def test_exception_without_response_headers():
 
     assert error.status_code == 502
     assert error.response is not None  # Should create a default response
-    assert (
-        error.response.headers is not None
-    )  # Should have headers object (may be empty)
+    assert error.response.headers is not None  # Should have headers object (may be empty)
 
 
 def test_exception_with_empty_headers():

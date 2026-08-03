@@ -127,6 +127,7 @@ class ManagementClient:
                 response_type=NoBody,
             )
         )
+
     def regenerate_key(self, key: str) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -244,9 +245,7 @@ class ManagementClient:
             match last:
                 case Success():
                     return
-                case UnknownApiError(body=body) if (
-                    "doesn't exist" in body and attempt + 1 < _TEAM_READY_ATTEMPTS
-                ):
+                case UnknownApiError(body=body) if "doesn't exist" in body and attempt + 1 < _TEAM_READY_ATTEMPTS:
                     time.sleep(_TEAM_READY_SLEEP_SECONDS)
                     continue
                 case _:
@@ -404,6 +403,7 @@ class ManagementClient:
 
     def org_info_status(self, organization_id: str) -> ProbeResult:
         return self.proxy.transport.probe("/organization/info", params=OrgInfoParams(organization_id=organization_id))
+
     def create_tag(self, body: TagNewBody) -> None:
         _ = unwrap(
             self.proxy.transport.post(

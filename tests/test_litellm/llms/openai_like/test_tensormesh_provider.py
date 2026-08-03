@@ -162,9 +162,4 @@ class TestTensormeshCostMap:
         )
         assert prompt_cost == pytest.approx(0.15)
         assert completion_cost == pytest.approx(0.60)
-        assert (
-            litellm.model_cost["tensormesh/openai/gpt-oss-120b"][
-                "cache_read_input_token_cost"
-            ]
-            == 0
-        )
+        assert litellm.model_cost["tensormesh/openai/gpt-oss-120b"]["cache_read_input_token_cost"] == 0

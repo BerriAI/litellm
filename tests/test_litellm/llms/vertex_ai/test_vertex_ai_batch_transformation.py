@@ -14,11 +14,7 @@ def test_output_file_id_uses_predictions_jsonl_with_output_info():
         }
     }
 
-    output_file_id = (
-        VertexAIBatchTransformation._get_output_file_id_from_vertex_ai_batch_response(
-            response
-        )
-    )
+    output_file_id = VertexAIBatchTransformation._get_output_file_id_from_vertex_ai_batch_response(response)
 
     assert (
         output_file_id
@@ -36,11 +32,7 @@ def test_output_file_id_falls_back_to_output_uri_prefix_with_predictions_jsonl()
         },
     }
 
-    output_file_id = (
-        VertexAIBatchTransformation._get_output_file_id_from_vertex_ai_batch_response(
-            response
-        )
-    )
+    output_file_id = VertexAIBatchTransformation._get_output_file_id_from_vertex_ai_batch_response(response)
 
     assert (
         output_file_id
@@ -59,14 +51,10 @@ def test_vertex_ai_cancel_batch():
         "state": "JOB_STATE_CANCELLING",
         "createTime": "2024-03-17T10:00:00.000000Z",
         "inputConfig": {"gcsSource": {"uris": ["gs://test-bucket/input.jsonl"]}},
-        "outputConfig": {
-            "gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}
-        },
+        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}},
     }
 
-    with patch(
-        "litellm.llms.vertex_ai.batches.handler._get_httpx_client"
-    ) as mock_client:
+    with patch("litellm.llms.vertex_ai.batches.handler._get_httpx_client") as mock_client:
         mock_client.return_value.post.return_value = mock_response
         mock_client.return_value.get.return_value = mock_response
 
@@ -104,14 +92,10 @@ def test_vertex_ai_cancel_batch_encodes_batch_id():
         "state": "JOB_STATE_CANCELLING",
         "createTime": "2024-03-17T10:00:00.000000Z",
         "inputConfig": {"gcsSource": {"uris": ["gs://test-bucket/input.jsonl"]}},
-        "outputConfig": {
-            "gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}
-        },
+        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}},
     }
 
-    with patch(
-        "litellm.llms.vertex_ai.batches.handler._get_httpx_client"
-    ) as mock_client:
+    with patch("litellm.llms.vertex_ai.batches.handler._get_httpx_client") as mock_client:
         mock_client.return_value.post.return_value = mock_response
         mock_client.return_value.get.return_value = mock_response
 
@@ -131,10 +115,7 @@ def test_vertex_ai_cancel_batch_encodes_batch_id():
 
             post_url = mock_client.return_value.post.call_args.kwargs["url"]
             get_url = mock_client.return_value.get.call_args.kwargs["url"]
-            assert (
-                "/..%2F..%2FbatchPredictionJobs%2Fother%3Fx%3D1%23frag:cancel"
-                in post_url
-            )
+            assert "/..%2F..%2FbatchPredictionJobs%2Fother%3Fx%3D1%23frag:cancel" in post_url
             assert "/..%2F..%2FbatchPredictionJobs%2Fother%3Fx%3D1%23frag" in get_url
 
 
@@ -157,14 +138,10 @@ def test_vertex_ai_cancel_batch_custom_proxy_retrieve_url():
         "state": "JOB_STATE_CANCELLING",
         "createTime": "2024-03-17T10:00:00.000000Z",
         "inputConfig": {"gcsSource": {"uris": ["gs://test-bucket/input.jsonl"]}},
-        "outputConfig": {
-            "gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}
-        },
+        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}},
     }
 
-    with patch(
-        "litellm.llms.vertex_ai.batches.handler._get_httpx_client"
-    ) as mock_client:
+    with patch("litellm.llms.vertex_ai.batches.handler._get_httpx_client") as mock_client:
         mock_client.return_value.post.return_value = mock_response
         mock_client.return_value.get.return_value = mock_response
 

@@ -45,9 +45,7 @@ def sample_request_payload():
             {"parts": [{"text": "Got it. Thanks for the context!"}], "role": "model"},
             {"parts": [{"text": "Hello how are you"}], "role": "user"},
             {
-                "parts": [
-                    {"text": "I'm doing well, thank you! How can I help you today?\n"}
-                ],
+                "parts": [{"text": "I'm doing well, thank you! How can I help you today?\n"}],
                 "role": "model",
             },
             {
@@ -146,22 +144,14 @@ async def test_google_gemini_httpx_request_direct():
     sample_payload = {
         "contents": [
             {
-                "parts": [
-                    {
-                        "text": "You are an interactive CLI agent specializing in software engineering tasks."
-                    }
-                ],
+                "parts": [{"text": "You are an interactive CLI agent specializing in software engineering tasks."}],
                 "role": "user",
             },
             {"parts": [{"text": "Got it. Thanks for the context!"}], "role": "model"},
             {"parts": [{"text": "Hello how are you"}], "role": "user"},
         ],
         "systemInstruction": {
-            "parts": [
-                {
-                    "text": "You are an interactive CLI agent specializing in software engineering tasks."
-                }
-            ],
+            "parts": [{"text": "You are an interactive CLI agent specializing in software engineering tasks."}],
             "role": "user",
         },
         "config": {  # Note: already transformed from generationConfig
@@ -260,25 +250,17 @@ async def test_google_gemini_httpx_request_direct():
                     config = request_data["generationConfig"]
                     assert config["temperature"] == 0, "Expected temperature to be 0"
                     assert config["topP"] == 1, "Expected topP to be 1"
-                    assert (
-                        config["responseMimeType"] == "application/json"
-                    ), "Expected responseMimeType to be application/json"
-                    assert (
-                        "responseJsonSchema" in config
-                    ), "Expected responseJsonSchema in config"
+                    assert config["responseMimeType"] == "application/json", (
+                        "Expected responseMimeType to be application/json"
+                    )
+                    assert "responseJsonSchema" in config, "Expected responseJsonSchema in config"
 
                     # Validate the responseJsonSchema structure
                     schema = config["responseJsonSchema"]
-                    assert (
-                        schema["type"] == "object"
-                    ), "Expected schema type to be object"
+                    assert schema["type"] == "object", "Expected schema type to be object"
                     assert "properties" in schema, "Expected properties in schema"
-                    assert (
-                        "reasoning" in schema["properties"]
-                    ), "Expected reasoning property in schema"
-                    assert (
-                        "next_speaker" in schema["properties"]
-                    ), "Expected next_speaker property in schema"
+                    assert "reasoning" in schema["properties"], "Expected reasoning property in schema"
+                    assert "next_speaker" in schema["properties"], "Expected next_speaker property in schema"
 
                 print("✅ Request data validation passed")
                 print(f"Request data: {json.dumps(request_data, indent=2)}")
@@ -301,17 +283,13 @@ async def test_google_gemini_httpx_request_direct():
                 # Even with an exception, we can validate the request structure
                 request_data = call_kwargs.get("json")
                 if request_data:
-                    assert (
-                        "contents" in request_data
-                    ), "Expected 'contents' in request data"
+                    assert "contents" in request_data, "Expected 'contents' in request data"
                     if "generationConfig" in request_data:
                         config = request_data["generationConfig"]
-                        assert (
-                            config["temperature"] == 0
-                        ), "Expected temperature to be 0"
-                        assert (
-                            config["responseMimeType"] == "application/json"
-                        ), "Expected responseMimeType to be application/json"
+                        assert config["temperature"] == 0, "Expected temperature to be 0"
+                        assert config["responseMimeType"] == "application/json", (
+                            "Expected responseMimeType to be application/json"
+                        )
                     print("✅ Request structure validation passed despite exception")
             else:
                 # If no HTTP call was made, re-raise the exception for debugging
@@ -342,9 +320,7 @@ async def test_generationconfig_to_config_mapping(sample_request_payload):
         )
 
     mock_generate_content_handler.assert_called_once()
-    generate_content_config_dict = mock_generate_content_handler.call_args.kwargs[
-        "generate_content_config_dict"
-    ]
+    generate_content_config_dict = mock_generate_content_handler.call_args.kwargs["generate_content_config_dict"]
     assert generate_content_config_dict["temperature"] == 0
     assert generate_content_config_dict["topP"] == 1
     assert generate_content_config_dict["responseMimeType"] == "application/json"
@@ -365,9 +341,7 @@ async def test_gemini_custom_api_base_proxy_integration():
     vertex_base = VertexBase()
 
     # Test case 1: Custom API base for Gemini
-    custom_api_base = (
-        "https://proxy.example.com/generativelanguage.googleapis.com/v1beta"
-    )
+    custom_api_base = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta"
     model = "gemini-2.5-flash-lite"
     endpoint = "generateContent"
 
@@ -387,9 +361,9 @@ async def test_gemini_custom_api_base_proxy_integration():
     assert result_url == expected_url, f"Expected {expected_url}, got {result_url}"
 
     # Verify the auth header is set to the API key as a dictionary
-    assert auth_header == {
-        "x-goog-api-key": "test-api-key"
-    }, f"Expected {{'x-goog-api-key': 'test-api-key'}}, got {auth_header}"
+    assert auth_header == {"x-goog-api-key": "test-api-key"}, (
+        f"Expected {{'x-goog-api-key': 'test-api-key'}}, got {auth_header}"
+    )
 
     print(f"✅ Custom API base URL construction test passed: {result_url}")
 
@@ -407,14 +381,14 @@ async def test_gemini_custom_api_base_proxy_integration():
 
     # Verify streaming URL has ?alt=sse parameter
     expected_streaming_url = f"{custom_api_base}/models/{model}:{endpoint}?alt=sse"
-    assert (
-        result_url_streaming == expected_streaming_url
-    ), f"Expected {expected_streaming_url}, got {result_url_streaming}"
+    assert result_url_streaming == expected_streaming_url, (
+        f"Expected {expected_streaming_url}, got {result_url_streaming}"
+    )
 
     # Verify the auth header is also set correctly for streaming
-    assert auth_header_streaming == {
-        "x-goog-api-key": "test-api-key"
-    }, f"Expected {{'x-goog-api-key': 'test-api-key'}}, got {auth_header_streaming}"
+    assert auth_header_streaming == {"x-goog-api-key": "test-api-key"}, (
+        f"Expected {{'x-goog-api-key': 'test-api-key'}}, got {auth_header_streaming}"
+    )
 
     print(f"✅ Custom API base streaming URL test passed: {result_url_streaming}")
 
@@ -478,15 +452,11 @@ async def test_gemini_proxy_config_with_custom_api_base():
         )
 
         expected_url = f"{model_config['litellm_params']['api_base']}/models/{model}:generateContent"
-        assert (
-            result_url == expected_url
-        ), f"Expected {expected_url}, got {result_url} for model {model}"
-        expected_auth_header = {
-            "x-goog-api-key": model_config["litellm_params"]["api_key"]
-        }
-        assert (
-            auth_header == expected_auth_header
-        ), f"Expected {expected_auth_header}, got {auth_header} for model {model}"
+        assert result_url == expected_url, f"Expected {expected_url}, got {result_url} for model {model}"
+        expected_auth_header = {"x-goog-api-key": model_config["litellm_params"]["api_key"]}
+        assert auth_header == expected_auth_header, (
+            f"Expected {expected_auth_header}, got {auth_header} for model {model}"
+        )
 
         print(f"✅ Model {model} configuration test passed: {result_url}")
 

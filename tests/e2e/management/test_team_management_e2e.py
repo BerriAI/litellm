@@ -169,9 +169,7 @@ def _member_delete_status(client: ManagementClient, key: str, team_id: str, user
 
 class TestTeamManagementRoutes:
     @pytest.mark.covers("mgmt.team.info.happy_path")
-    def test_info_returns_created_team_fields(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_info_returns_created_team_fields(self, client: ManagementClient, resources: ResourceManager) -> None:
         alias = f"e2e-team-info-{unique_marker()}"
         team_id = _create_team(client, resources, alias, ["gemini-2.5-flash"])
 
@@ -189,7 +187,9 @@ class TestTeamManagementRoutes:
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         team_id = _create_team(client, resources, f"e2e-team-block-{unique_marker()}", ["gemini-2.5-flash"])
-        assert not _read_team(client, team_id).team_info.blocked, "/team/info reports the team blocked before /team/block"
+        assert not _read_team(client, team_id).team_info.blocked, (
+            "/team/info reports the team blocked before /team/block"
+        )
 
         _set_blocked(client, team_id, blocked=True)
         _ = _poll(
@@ -206,9 +206,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.member_update.persists")
-    def test_member_update_persists_role_and_budget(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_member_update_persists_role_and_budget(self, client: ManagementClient, resources: ResourceManager) -> None:
         user_id = _create_user(client, resources, f"e2e-team-mu-{unique_marker()}@example.com")
         team_id = _create_team(client, resources, f"e2e-team-mu-{unique_marker()}", ["gemini-2.5-flash"])
         client.add_team_member(team_id, user_id)
@@ -217,11 +215,15 @@ class TestTeamManagementRoutes:
         )
 
         budget = 4242.0
-        _member_update(client, MemberUpdateBody(team_id=team_id, user_id=user_id, role="admin", max_budget_in_team=budget))
+        _member_update(
+            client, MemberUpdateBody(team_id=team_id, user_id=user_id, role="admin", max_budget_in_team=budget)
+        )
 
         def updated() -> bool | None:
             info = _read_team(client, team_id)
-            return True if _member_role(info, user_id) == "admin" and _member_max_budget(info, user_id) == budget else None
+            return (
+                True if _member_role(info, user_id) == "admin" and _member_max_budget(info, user_id) == budget else None
+            )
 
         _ = _poll(
             client,
@@ -230,9 +232,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.member_delete.persists")
-    def test_member_delete_persists_to_team_info(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_member_delete_persists_to_team_info(self, client: ManagementClient, resources: ResourceManager) -> None:
         user_id = _create_user(client, resources, f"e2e-team-md-{unique_marker()}@example.com")
         team_id = _create_team(client, resources, f"e2e-team-md-{unique_marker()}", ["gemini-2.5-flash"])
         client.add_team_member(team_id, user_id)
@@ -248,9 +248,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.new.admin_only")
-    def test_new_is_denied_to_non_admin_keys(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_new_is_denied_to_non_admin_keys(self, client: ManagementClient, resources: ResourceManager) -> None:
         no_role_key = _generate_key(client, resources, KeyGenerateBody(models=[]))
         internal_user_id = _create_user(client, resources, f"e2e-team-adm-{unique_marker()}@example.com")
         internal_user_key = _generate_key(client, resources, KeyGenerateBody(user_id=internal_user_id))
@@ -262,9 +260,7 @@ class TestTeamManagementRoutes:
             )
 
     @pytest.mark.covers("mgmt.team.member_add.member_forbidden")
-    def test_member_add_forbidden_to_plain_member(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_member_add_forbidden_to_plain_member(self, client: ManagementClient, resources: ResourceManager) -> None:
         _member_id, other_id, member_key, team_id = self._team_with_member_key(client, resources)
 
         outcome = _member_add_status(client, member_key, team_id, other_id)
@@ -290,9 +286,7 @@ class TestTeamManagementRoutes:
         )
 
     @staticmethod
-    def _team_with_member_key(
-        client: ManagementClient, resources: ResourceManager
-    ) -> tuple[str, str, str, str]:
+    def _team_with_member_key(client: ManagementClient, resources: ResourceManager) -> tuple[str, str, str, str]:
         """A team with a plain member (role user) whose key is scoped to that
         user + team, plus a second user id the member could try to add."""
         member_id = _create_user(client, resources, f"e2e-team-fb-{unique_marker()}@example.com")

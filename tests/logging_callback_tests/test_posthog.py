@@ -103,9 +103,7 @@ async def test_trace_id_fallback_from_standard_logging_object():
     event_payload = posthog_logger.create_posthog_event_payload(kwargs)
 
     assert event_payload["properties"]["$ai_trace_id"] == "test-trace-123"
-    assert (
-        event_payload["properties"]["$ai_span_id"] == "test_id"
-    )  # from standard_payload["id"]
+    assert event_payload["properties"]["$ai_span_id"] == "test_id"  # from standard_payload["id"]
 
 
 @pytest.mark.asyncio
@@ -219,9 +217,7 @@ async def test_custom_metadata_filters_internal_fields():
                 "custom_field": "should_appear",
                 "endpoint": "/chat/completions",  # internal field - should be filtered
                 "user_api_key_hash": "hash123",  # internal field - should be filtered
-                "headers": {
-                    "content-type": "application/json"
-                },  # internal field - should be filtered
+                "headers": {"content-type": "application/json"},  # internal field - should be filtered
                 "model_info": {"id": "123"},  # internal field - should be filtered
             }
         },
@@ -288,18 +284,14 @@ async def test_dynamic_credentials():
     assert api_url == "https://custom.posthog.com"
 
     # Test partial override - only api_key
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        posthog_api_key="another_key"
-    )
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(posthog_api_key="another_key")
     kwargs = {"standard_callback_dynamic_params": standard_callback_dynamic_params}
     api_key, api_url = posthog_logger._get_credentials_for_request(kwargs)
     assert api_key == "another_key"
     assert api_url == "https://app.posthog.com"  # falls back to env var
 
     # Test partial override - only api_url
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        posthog_api_url="https://another.posthog.com"
-    )
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(posthog_api_url="https://another.posthog.com")
     kwargs = {"standard_callback_dynamic_params": standard_callback_dynamic_params}
     api_key, api_url = posthog_logger._get_credentials_for_request(kwargs)
     assert api_key == "test_key"  # falls back to env var
@@ -320,15 +312,11 @@ def test_async_callback_atexit_handler_exists():
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
     # Verify GLOBAL_LOGGING_WORKER has _flush_on_exit method
-    assert hasattr(
-        GLOBAL_LOGGING_WORKER, "_flush_on_exit"
-    ), "GLOBAL_LOGGING_WORKER should have _flush_on_exit method"
+    assert hasattr(GLOBAL_LOGGING_WORKER, "_flush_on_exit"), "GLOBAL_LOGGING_WORKER should have _flush_on_exit method"
 
     # Verify PostHogLogger has _flush_on_exit method
     posthog_logger = PostHogLogger()
-    assert hasattr(
-        posthog_logger, "_flush_on_exit"
-    ), "PostHogLogger should have _flush_on_exit method"
+    assert hasattr(posthog_logger, "_flush_on_exit"), "PostHogLogger should have _flush_on_exit method"
 
     # Verify method can be called without crashing (with empty queue)
     # This tests the early return paths
@@ -566,6 +554,4 @@ async def test_sync_callback_not_affected_by_atexit():
             posthog_logger.log_success_event(kwargs, None, 0.0, 0.0)
 
             # Callback should be invoked immediately, not queued for atexit
-            assert (
-                callback_invoked_immediately
-            ), "Sync callback should be invoked immediately"
+            assert callback_invoked_immediately, "Sync callback should be invoked immediately"

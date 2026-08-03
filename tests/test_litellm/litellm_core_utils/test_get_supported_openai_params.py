@@ -36,9 +36,7 @@ def test_base_model_label_alone_lacks_bedrock_tools():
     """The label by itself does not advertise tools; this is what made the union
     necessary. Guards against the discrepancy disappearing (and the regression test
     above silently passing for the wrong reason)."""
-    params = get_supported_openai_params(
-        model=BEDROCK_LABEL, custom_llm_provider="bedrock"
-    )
+    params = get_supported_openai_params(model=BEDROCK_LABEL, custom_llm_provider="bedrock")
 
     assert params is not None
     assert "tools" not in params
@@ -49,14 +47,8 @@ def test_base_model_is_additive_not_replacement():
 
     Bedrock: real id supports ``tools`` but not the label's reasoning hint; the union
     must contain the real model's ``tools`` regardless of the label being a subset."""
-    real_only = set(
-        get_supported_openai_params(
-            model=BEDROCK_REAL_MODEL, custom_llm_provider="bedrock"
-        )
-    )
-    label_only = set(
-        get_supported_openai_params(model=BEDROCK_LABEL, custom_llm_provider="bedrock")
-    )
+    real_only = set(get_supported_openai_params(model=BEDROCK_REAL_MODEL, custom_llm_provider="bedrock"))
+    label_only = set(get_supported_openai_params(model=BEDROCK_LABEL, custom_llm_provider="bedrock"))
     combined = set(
         get_supported_openai_params(
             model=BEDROCK_REAL_MODEL,
@@ -76,11 +68,7 @@ def test_base_model_adds_capabilities_the_real_model_lacks():
     ``gemini-3.1-pro`` isn't in the cost map so it advertises no reasoning support,
     but the registered ``gemini-3.1-pro-preview`` base_model does. The hint must add
     ``reasoning_effort``/``thinking`` without the call erroring."""
-    real_only = set(
-        get_supported_openai_params(
-            model="gemini-3.1-pro", custom_llm_provider="gemini"
-        )
-    )
+    real_only = set(get_supported_openai_params(model="gemini-3.1-pro", custom_llm_provider="gemini"))
     assert "reasoning_effort" not in real_only
 
     combined = set(
@@ -96,21 +84,15 @@ def test_base_model_adds_capabilities_the_real_model_lacks():
 
 def test_no_base_model_is_unchanged():
     """Omitting ``base_model`` must resolve purely from ``model``."""
-    with_none = get_supported_openai_params(
-        model=BEDROCK_REAL_MODEL, custom_llm_provider="bedrock", base_model=None
-    )
-    plain = get_supported_openai_params(
-        model=BEDROCK_REAL_MODEL, custom_llm_provider="bedrock"
-    )
+    with_none = get_supported_openai_params(model=BEDROCK_REAL_MODEL, custom_llm_provider="bedrock", base_model=None)
+    plain = get_supported_openai_params(model=BEDROCK_REAL_MODEL, custom_llm_provider="bedrock")
 
     assert with_none == plain
 
 
 def test_base_model_equal_to_model_is_unchanged():
     """A ``base_model`` identical to ``model`` must not double-resolve or reorder."""
-    plain = get_supported_openai_params(
-        model=BEDROCK_REAL_MODEL, custom_llm_provider="bedrock"
-    )
+    plain = get_supported_openai_params(model=BEDROCK_REAL_MODEL, custom_llm_provider="bedrock")
     same = get_supported_openai_params(
         model=BEDROCK_REAL_MODEL,
         custom_llm_provider="bedrock",
@@ -155,14 +137,10 @@ def test_bedrock_converse_alias_resolves_like_bedrock():
     params saw no Bedrock capabilities for a Converse model invoked via the alias."""
     anthropic_model = "bedrock/converse/us.anthropic.claude-sonnet-4-6"
 
-    via_alias = get_supported_openai_params(
-        model=anthropic_model, custom_llm_provider="bedrock_converse"
-    )
+    via_alias = get_supported_openai_params(model=anthropic_model, custom_llm_provider="bedrock_converse")
 
     assert via_alias is not None
-    assert via_alias == get_supported_openai_params(
-        model=anthropic_model, custom_llm_provider="bedrock"
-    )
+    assert via_alias == get_supported_openai_params(model=anthropic_model, custom_llm_provider="bedrock")
     assert "web_search_options" not in via_alias
     assert "tools" in via_alias
 
@@ -170,9 +148,7 @@ def test_bedrock_converse_alias_resolves_like_bedrock():
 def test_bedrock_converse_alias_keeps_nova_web_search_options():
     """Nova on the ``bedrock_converse`` alias still advertises web_search_options, proving the
     alias routes through the model-aware config rather than a blanket Bedrock default."""
-    nova_params = get_supported_openai_params(
-        model="amazon.nova-pro-v1:0", custom_llm_provider="bedrock_converse"
-    )
+    nova_params = get_supported_openai_params(model="amazon.nova-pro-v1:0", custom_llm_provider="bedrock_converse")
 
     assert nova_params is not None
     assert "web_search_options" in nova_params

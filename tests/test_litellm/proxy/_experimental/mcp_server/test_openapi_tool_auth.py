@@ -125,9 +125,7 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     fake_tool = MagicMock()
     fake_tool.name = "delete_pet"
 
-    pre_call = AsyncMock(
-        side_effect=HTTPException(status_code=403, detail="not allowed")
-    )
+    pre_call = AsyncMock(side_effect=HTTPException(status_code=403, detail="not allowed"))
     handle_local = AsyncMock(return_value=[])
 
     with (
@@ -313,7 +311,6 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
     assert _request_resolved_auth_headers.get() is None
 
 
-
 LEGACY_SERVER_ID = "srv-legacy-petstore"
 LEGACY_SERVER_NAME = "legacy_petstore"
 LEGACY_TOOL = "dump_secrets"
@@ -352,12 +349,9 @@ def legacy_local_tool():
         handler=lambda **kwargs: executed.append(kwargs) or "legacy local tool ran",
     )
     global_mcp_server_manager.registry[LEGACY_SERVER_ID] = server
-    assert (
-        global_mcp_server_manager._get_mcp_server_from_tool_name(
-            f"{LEGACY_SERVER_NAME}-{LEGACY_TOOL}"
-        )
-        is None
-    ), "fixture precondition: the prefixed name must resolve to no server"
+    assert global_mcp_server_manager._get_mcp_server_from_tool_name(f"{LEGACY_SERVER_NAME}-{LEGACY_TOOL}") is None, (
+        "fixture precondition: the prefixed name must resolve to no server"
+    )
     try:
         yield server, executed
     finally:

@@ -122,9 +122,7 @@ def _accumulate(client: BudgetClient, key: str, count: int) -> None:
 
 
 @pytest.mark.covers("quota_management.budget.spend_counter.reseed_matches_db")
-def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
-    client: BudgetClient, resources: ResourceManager
-) -> None:
+def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(client: BudgetClient, resources: ResourceManager) -> None:
     try:
         rds = _redis()
         rds.ping()
@@ -154,8 +152,7 @@ def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
     with ThreadPoolExecutor(max_workers=BURST) as pool:
         burst_results = list(pool.map(one, range(BURST)))
     assert all(r.ok for r in burst_results), (
-        "some burst calls failed; cannot exercise concurrent reseed. "
-        f"statuses={[r.status_code for r in burst_results]}"
+        f"some burst calls failed; cannot exercise concurrent reseed. statuses={[r.status_code for r in burst_results]}"
     )
 
     counter: float | None = None

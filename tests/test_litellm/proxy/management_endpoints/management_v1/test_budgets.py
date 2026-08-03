@@ -343,7 +343,7 @@ def test_q_does_not_search_any_other_column(query_raw, as_proxy_admin):
 
 
 def test_is_null_selects_the_unlimited_budgets(query_raw, as_proxy_admin):
-    """"Unlimited" is max_budget IS NULL; `max_budget = 0` would be a hard zero cap."""
+    """ "Unlimited" is max_budget IS NULL; `max_budget = 0` would be a hard zero cap."""
     _serve(query_raw, [_row("b-unlimited", max_budget=None)])
 
     body = _get("filter[max_budget][is_null]=true").json()

@@ -5,9 +5,7 @@ import os
 import sys
 import traceback
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import time
 from litellm._uuid import uuid
 
@@ -36,13 +34,9 @@ async def test_httpx_timeout(model, provider, sync_mode):
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
 
     if sync_mode:
-        response = litellm.completion(
-            model=model, messages=messages, timeout=timeout_val
-        )
+        response = litellm.completion(model=model, messages=messages, timeout=timeout_val)
     else:
-        response = await litellm.acompletion(
-            model=model, messages=messages, timeout=timeout_val
-        )
+        response = await litellm.acompletion(model=model, messages=messages, timeout=timeout_val)
 
     print(f"response: {response}")
 
@@ -57,15 +51,11 @@ def test_timeout():
             messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
         )
     except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
         print(type(e))
         pass
     except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
+        pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
 
 
 # test_timeout()
@@ -82,15 +72,11 @@ def test_bedrock_timeout():
         )
         pytest.fail("Did not raise error `openai.APITimeoutError`")
     except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
         print(type(e))
         pass
     except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
+        pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
 
 
 def test_hanging_request_azure():
@@ -152,15 +138,11 @@ def test_hanging_request_azure():
         if response.choices[0].message.content is not None:
             pytest.fail("Got a response, expected a timeout")
     except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
         print(type(e))
         pass
     except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
+        pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
 
 
 # test_hanging_request_azure()
@@ -199,15 +181,11 @@ def test_hanging_request_openai():
         if response.choices[0].message.content is not None:
             pytest.fail("Got a response, expected a timeout")
     except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
         print(type(e))
         pass
     except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
+        pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
 
 
 # test_hanging_request_openai()
@@ -228,15 +206,11 @@ def test_timeout_streaming():
         for chunk in response:
             print(chunk)
     except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
         print(type(e))
         pass
     except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
+        pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
 
 
 # test_timeout_streaming()
@@ -297,8 +271,6 @@ async def test_anthropic_timeout(streaming, sync_mode):
                     pass
         pytest.fail("Did not raise error `openai.APITimeoutError`")
     except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
         print(type(e))
         pass

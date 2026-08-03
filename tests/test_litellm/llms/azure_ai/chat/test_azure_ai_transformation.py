@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
@@ -197,8 +195,7 @@ def test_azure_model_router_response_shows_actual_model():
 
     # Verify that the response contains the actual model used, not the router model
     assert result.model == "azure_ai/gpt-5-nano-2025-08-07", (
-        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
-        f"but got '{result.model}'"
+        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), but got '{result.model}'"
     )
 
 
@@ -222,14 +219,10 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
     mock_response.text = error_text
     mock_response.json.return_value = json.loads(error_text)
     mock_response.status_code = 400
-    e = httpx.HTTPStatusError(
-        message="400", request=MagicMock(), response=mock_response
-    )
+    e = httpx.HTTPStatusError(message="400", request=MagicMock(), response=mock_response)
 
     assert config._error_has_tool_level_extra_fields(error_text) is True
-    assert (
-        config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
-    )
+    assert config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
 
     request_data = {
         "model": "FW-Kimi-K2.6",

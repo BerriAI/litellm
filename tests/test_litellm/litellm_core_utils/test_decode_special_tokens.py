@@ -7,9 +7,7 @@ from litellm import decode, encode
 
 
 def _create_custom_tokenizer():
-    tokenizer = Tokenizer(
-        WordLevel({"[UNK]": 0, "Hello": 1, "World": 2}, unk_token="[UNK]")
-    )
+    tokenizer = Tokenizer(WordLevel({"[UNK]": 0, "Hello": 1, "World": 2}, unk_token="[UNK]"))
     tokenizer.pre_tokenizer = Whitespace()
     tokenizer.add_special_tokens([AddedToken("[BOS]", special=True)])
     bos_token_id = tokenizer.token_to_id("[BOS]")

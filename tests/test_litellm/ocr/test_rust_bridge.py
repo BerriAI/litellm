@@ -471,9 +471,7 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(api_key=None, timeout=None),
-        resolve_api_key=lambda name: (
-            "sk-from-vault" if name == "MISTRAL_API_KEY" else None
-        ),
+        resolve_api_key=lambda name: "sk-from-vault" if name == "MISTRAL_API_KEY" else None,
     )
 
     assert bridge.calls[0]["api_key"] == "sk-from-vault"
@@ -580,9 +578,7 @@ def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
             api_base=None,
             timeout=None,
         ),
-        resolve_api_key=lambda name: (
-            "https://azure.example.com" if name == "AZURE_AI_API_BASE" else None
-        ),
+        resolve_api_key=lambda name: "https://azure.example.com" if name == "AZURE_AI_API_BASE" else None,
     )
 
     assert bridge.calls[0]["api_base"] == "https://azure.example.com"
@@ -600,9 +596,7 @@ def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
             timeout=None,
         ),
         resolve_api_key=lambda name: (
-            "https://document-intelligence.example.com"
-            if name == "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"
-            else None
+            "https://document-intelligence.example.com" if name == "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT" else None
         ),
     )
 
@@ -815,9 +809,6 @@ def test_ocr_provider_configs_expose_api_key_env_vars():
     assert BaseOCRConfig().get_api_key_env_var() is None
     assert MistralOCRConfig().get_api_key_env_var() == "MISTRAL_API_KEY"
     assert AzureAIOCRConfig().get_api_key_env_var() == "AZURE_AI_API_KEY"
-    assert (
-        AzureDocumentIntelligenceOCRConfig().get_api_key_env_var()
-        == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
-    )
+    assert AzureDocumentIntelligenceOCRConfig().get_api_key_env_var() == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
     assert VertexAIOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
     assert VertexAIDeepSeekOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"

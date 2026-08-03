@@ -79,9 +79,7 @@ def _wait_for_health(base_url: str, proc: subprocess.Popen, deadline: float) -> 
         except httpx.HTTPError:
             pass
         time.sleep(0.5)
-    raise RuntimeError(
-        f"litellm proxy did not become ready within {STARTUP_TIMEOUT_S}s"
-    )
+    raise RuntimeError(f"litellm proxy did not become ready within {STARTUP_TIMEOUT_S}s")
 
 
 def _oci_env_from_profile() -> dict[str, str]:
@@ -190,9 +188,7 @@ def _auth_headers() -> dict:
 def _chat_payload(model: str, *, stream: bool = False) -> dict:
     return {
         "model": model,
-        "messages": [
-            {"role": "user", "content": "Reply with only the single word: pong"}
-        ],
+        "messages": [{"role": "user", "content": "Reply with only the single word: pong"}],
         "max_tokens": 64,
         "stream": stream,
     }
@@ -277,6 +273,7 @@ def test_embedding_via_proxy(proxy_url: str) -> None:
     assert isinstance(embedding, list)
     assert len(embedding) >= 64
     assert all(isinstance(x, (int, float)) for x in embedding)
+
 
 def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     """The /v1/models registry advertises every OCI alias from the config."""
@@ -401,9 +398,7 @@ def test_omitted_max_tokens_not_truncated(proxy_url: str) -> None:
     assert r.status_code == 200, f"omitted max_tokens -> {r.status_code}: {r.text}"
     body = r.json()
     choice = body["choices"][0]
-    assert (
-        choice["finish_reason"] != "length"
-    ), f"response truncated by token cap: {choice}"
+    assert choice["finish_reason"] != "length", f"response truncated by token cap: {choice}"
     assert choice["finish_reason"] == "stop"
     content = choice["message"].get("content") or ""
     assert content.strip(), f"empty content: {choice}"

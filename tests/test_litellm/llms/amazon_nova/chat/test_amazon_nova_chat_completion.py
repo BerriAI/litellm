@@ -11,10 +11,7 @@ from litellm.types.utils import ModelResponse, Usage, Choices, Message
 
 def _has_api_key() -> bool:
     """Check if Amazon Nova API key is available"""
-    return (
-        "AMAZON_NOVA_API_KEY" in os.environ
-        and os.environ["AMAZON_NOVA_API_KEY"] is not None
-    )
+    return "AMAZON_NOVA_API_KEY" in os.environ and os.environ["AMAZON_NOVA_API_KEY"] is not None
 
 
 def _create_mock_nova_response():
@@ -55,10 +52,7 @@ def test_amazon_nova_chat_completion_nova_micro():
         # Use mock response when API key is not available
         response = _create_mock_nova_response()
         # Additional mock-specific assertions for code review reference
-        assert (
-            response.choices[0].message.content
-            == "I am Amazon Nova Micro. 777 times 9 equals 6993."
-        )
+        assert response.choices[0].message.content == "I am Amazon Nova Micro. 777 times 9 equals 6993."
         assert response.model == "amazon-nova/nova-micro-v1"
         assert response.usage.prompt_tokens == 25
         assert response.usage.completion_tokens == 15

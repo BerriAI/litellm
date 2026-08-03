@@ -118,9 +118,7 @@ class TestMapFinishReasonAnthropic:
             ("content_filtered", "content_filter"),
         ],
     )
-    def test_anthropic_finish_reasons(
-        self, provider_reason: str, expected: str
-    ) -> None:
+    def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
         assert map_finish_reason(provider_reason) == expected
 
     def test_refusal(self):
@@ -185,9 +183,7 @@ class TestMapFinishReasonZhipu:
 
 
 class TestMapFinishReasonOpenAIPassthrough:
-    @pytest.mark.parametrize(
-        "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
-    )
+    @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "function_call", "content_filter"])
     def test_openai_values_pass_through(self, reason):
         assert map_finish_reason(reason) == reason
 
@@ -205,8 +201,7 @@ class TestFinishReasonMapOutputsAreValid:
         """Every value in _FINISH_REASON_MAP must be a valid OpenAI finish reason."""
         for provider_reason, openai_reason in _FINISH_REASON_MAP.items():
             assert openai_reason in VALID_OPENAI_FINISH_REASONS, (
-                f"Mapped value '{openai_reason}' (from '{provider_reason}') "
-                f"is not a valid OpenAI finish reason"
+                f"Mapped value '{openai_reason}' (from '{provider_reason}') is not a valid OpenAI finish reason"
             )
 
 
@@ -216,28 +211,18 @@ class TestRedactNestedMatchAndRegexKeys:
             "assessments": [
                 {
                     "sensitiveInformationPolicy": {
-                        "piiEntities": [
-                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
-                        ]
+                        "piiEntities": [{"type": "NAME", "match": "secret-name", "action": "BLOCKED"}]
                     },
-                    "wordPolicy": {
-                        "customWords": [{"match": "badword", "action": "BLOCKED"}]
-                    },
+                    "wordPolicy": {"customWords": [{"match": "badword", "action": "BLOCKED"}]},
                 }
             ],
             "regex": "should-redact-key-named-regex",
         }
         out = redact_nested_match_and_regex_keys(payload)
-        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-            "match"
-        ] == "[REDACTED]"
-        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
-            "[REDACTED]"
-        )
+        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "[REDACTED]"
+        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == ("[REDACTED]")
         assert out["regex"] == "[REDACTED]"
-        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
-            0
-        ]["match"] == "secret-name"
+        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "secret-name"
 
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None

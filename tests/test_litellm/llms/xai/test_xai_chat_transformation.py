@@ -1,9 +1,7 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.types.utils import (
@@ -23,11 +21,7 @@ class TestXAIReasoningTokenFolding:
         total_tokens: int,
         reasoning_tokens: int = 0,
     ) -> ModelResponse:
-        details = (
-            CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens)
-            if reasoning_tokens
-            else None
-        )
+        details = CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens) if reasoning_tokens else None
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

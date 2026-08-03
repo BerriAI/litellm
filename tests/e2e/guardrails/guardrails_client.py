@@ -68,10 +68,7 @@ class BlockCodeExecutionParamsBody(GuardrailParamsBase):
 
 
 GuardrailParamsBody = (
-    ContentFilterParamsBody
-    | BedrockGuardrailParamsBody
-    | OpenAIModerationParamsBody
-    | BlockCodeExecutionParamsBody
+    ContentFilterParamsBody | BedrockGuardrailParamsBody | OpenAIModerationParamsBody | BlockCodeExecutionParamsBody
 )
 
 
@@ -114,9 +111,7 @@ class GuardrailsClient:
                         litellm_params=ContentFilterParamsBody(
                             mode="pre_call",
                             default_on=True,
-                            blocked_words=[
-                                BlockedWordBody(keyword=blocked_keyword, action="BLOCK")
-                            ],
+                            blocked_words=[BlockedWordBody(keyword=blocked_keyword, action="BLOCK")],
                         ),
                     )
                 ),
@@ -182,9 +177,7 @@ class GuardrailsClient:
             self.proxy.transport.post(
                 "/guardrails",
                 headers=self.proxy.transport.master,
-                json=GuardrailCreateBody(
-                    guardrail=GuardrailSpecBody(guardrail_name=name, litellm_params=params)
-                ),
+                json=GuardrailCreateBody(guardrail=GuardrailSpecBody(guardrail_name=name, litellm_params=params)),
                 response_type=GuardrailCreateResponse,
             )
         ).guardrail_id
@@ -221,9 +214,7 @@ class GuardrailsClient:
         )
 
     def create_key_in_team(self, team_id: str) -> str:
-        return self.proxy.generate_key(
-            KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user")
-        )
+        return self.proxy.generate_key(KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user"))
 
     def chat(
         self,
@@ -270,9 +261,7 @@ class GuardrailsClient:
             if isinstance(last, Success):
                 return
             time.sleep(POLL_INTERVAL)
-        raise AssertionError(
-            f"team {team_id!r} was created but /team/info never returned it: {last}"
-        )
+        raise AssertionError(f"team {team_id!r} was created but /team/info never returned it: {last}")
 
 
 def build_client(proxy: ProxyClient) -> GuardrailsClient:

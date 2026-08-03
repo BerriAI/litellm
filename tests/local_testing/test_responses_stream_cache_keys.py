@@ -54,10 +54,7 @@ async def test_async_get_cache_reuses_preset_cache_key_for_responses():
 
     assert caching_handler.preset_cache_key == "responses-stream-cache-key"
     mock_cache.async_get_cache.assert_awaited_once()
-    assert (
-        mock_cache.async_get_cache.call_args.kwargs["cache_key"]
-        == "responses-stream-cache-key"
-    )
+    assert mock_cache.async_get_cache.call_args.kwargs["cache_key"] == "responses-stream-cache-key"
 
     litellm.cache = original_cache
 
@@ -104,9 +101,7 @@ async def test_async_get_cache_falls_back_to_sync_cache_for_responses():
 
     assert caching_handler.preset_cache_key == "responses-stream-cache-key"
     mock_cache.get_cache.assert_called_once()
-    assert mock_cache.get_cache.call_args.kwargs["cache_key"] == (
-        "responses-stream-cache-key"
-    )
+    assert mock_cache.get_cache.call_args.kwargs["cache_key"] == ("responses-stream-cache-key")
 
     litellm.cache = original_cache
 

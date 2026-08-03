@@ -91,9 +91,7 @@ class TestS3VectorsVectorStoreConfig:
         mock_response.status_code = 200
         mock_response.headers = {}
 
-        result = config.transform_search_vector_store_response(
-            mock_response, mock_logging_obj
-        )
+        result = config.transform_search_vector_store_response(mock_response, mock_logging_obj)
 
         # VectorStoreSearchResponse is a TypedDict, so check structure instead of isinstance
         assert result["object"] == "vector_store.search_results.page"

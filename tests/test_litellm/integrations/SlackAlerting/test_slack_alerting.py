@@ -6,9 +6,7 @@ import unittest
 from typing import List, Optional, Tuple
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 import litellm
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import CallInfo, Litellm_EntityType
@@ -20,37 +18,27 @@ class TestSlackAlerting(unittest.TestCase):
 
     def test_get_percent_of_max_budget_left(self):
         # Test case 1: When max_budget is None
-        user_info = CallInfo(
-            max_budget=None, spend=50.0, event_group=Litellm_EntityType.KEY
-        )
+        user_info = CallInfo(max_budget=None, spend=50.0, event_group=Litellm_EntityType.KEY)
         result = self.slack_alerting._get_percent_of_max_budget_left(user_info)
         self.assertEqual(result, 0.0)
 
         # Test case 2: When max_budget is 0
-        user_info = CallInfo(
-            max_budget=0.0, spend=50.0, event_group=Litellm_EntityType.KEY
-        )
+        user_info = CallInfo(max_budget=0.0, spend=50.0, event_group=Litellm_EntityType.KEY)
         result = self.slack_alerting._get_percent_of_max_budget_left(user_info)
         self.assertEqual(result, 0.0)
 
         # Test case 3: When spend is less than max_budget
-        user_info = CallInfo(
-            max_budget=100.0, spend=75.0, event_group=Litellm_EntityType.KEY
-        )
+        user_info = CallInfo(max_budget=100.0, spend=75.0, event_group=Litellm_EntityType.KEY)
         result = self.slack_alerting._get_percent_of_max_budget_left(user_info)
         self.assertEqual(result, 0.25)
 
         # Test case 4: When spend equals max_budget
-        user_info = CallInfo(
-            max_budget=100.0, spend=100.0, event_group=Litellm_EntityType.KEY
-        )
+        user_info = CallInfo(max_budget=100.0, spend=100.0, event_group=Litellm_EntityType.KEY)
         result = self.slack_alerting._get_percent_of_max_budget_left(user_info)
         self.assertEqual(result, 0.0)
 
         # Test case 5: When spend exceeds max_budget
-        user_info = CallInfo(
-            max_budget=100.0, spend=120.0, event_group=Litellm_EntityType.KEY
-        )
+        user_info = CallInfo(max_budget=100.0, spend=120.0, event_group=Litellm_EntityType.KEY)
         result = self.slack_alerting._get_percent_of_max_budget_left(user_info)
         self.assertEqual(result, -0.2)
 
@@ -189,7 +177,9 @@ class TestSlackAlerting(unittest.TestCase):
 
         # Test the specific formatting logic we're interested in
         alert_type_formatted = f"Alert type: `{alert_type.name}`\n"
-        formatted_message = f"{alert_type_formatted}\n Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+        formatted_message = (
+            f"{alert_type_formatted}\n Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+        )
 
         # Verify alert_type is in the formatted message as expected
         self.assertIn("Alert type: `llm_exceptions`", formatted_message)
@@ -214,9 +204,7 @@ class TestSlackAlerting(unittest.TestCase):
             json.dumps(outage_value)
 
         # Verify the specific error message
-        self.assertIn(
-            "Object of type set is not JSON serializable", str(context.exception)
-        )
+        self.assertIn("Object of type set is not JSON serializable", str(context.exception))
 
     def test_fixed_redis_serialization(self):
         """Test that our fix resolves the Redis serialization error."""

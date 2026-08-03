@@ -17,9 +17,7 @@ def disable_aiohttp_transport():
 
 
 @pytest.mark.asyncio
-async def test_parse_legacy_wraps_enhance_under_options(
-    disable_aiohttp_transport, respx_mock
-):
+async def test_parse_legacy_wraps_enhance_under_options(disable_aiohttp_transport, respx_mock):
     upload_route = respx_mock.post("https://platform.reducto.ai/upload").respond(
         json={"file_id": "reducto://legacy.pdf"}
     )

@@ -5,9 +5,7 @@ import sys
 import os
 from unittest.mock import patch, Mock, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -70,9 +68,7 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
             try:
                 litellm.completion(
                     model="bedrock/converse/openai.gpt-oss-20b-1:0",
-                    messages=[
-                        {"role": "user", "content": "How is the weather in Mumbai?"}
-                    ],
+                    messages=[{"role": "user", "content": "How is the weather in Mumbai?"}],
                     tools=tools,
                     aws_region_name="us-west-2",
                     client=client,
@@ -85,9 +81,7 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args.kwargs
 
-        assert call_kwargs["url"].endswith(
-            "/model/openai.gpt-oss-20b-1%3A0/converse"
-        ), call_kwargs["url"]
+        assert call_kwargs["url"].endswith("/model/openai.gpt-oss-20b-1%3A0/converse"), call_kwargs["url"]
 
         request_body = json.loads(call_kwargs["data"])
 
@@ -106,15 +100,10 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
         # Bedrock's toolSpec.inputSchema.json only accepts type/properties/required;
         # the OpenAI-style metadata must not leak through.
         for stripped_field in ("$id", "$schema", "additionalProperties", "strict"):
-            assert (
-                stripped_field not in input_schema
-            ), f"{stripped_field} should be stripped before hitting Bedrock"
+            assert stripped_field not in input_schema, f"{stripped_field} should be stripped before hitting Bedrock"
 
         assert request_body["messages"][0]["role"] == "user"
-        assert (
-            request_body["messages"][0]["content"][0]["text"]
-            == "How is the weather in Mumbai?"
-        )
+        assert request_body["messages"][0]["content"][0]["text"] == "How is the weather in Mumbai?"
 
     def test_prompt_caching(self):
         """

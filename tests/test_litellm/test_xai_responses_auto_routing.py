@@ -141,9 +141,7 @@ class TestXAIResponsesAutoRouting:
         """Test auto-routing with web_search tool"""
         model = "grok-4"
         custom_llm_provider = "xai"
-        tools = [
-            {"type": "web_search", "filters": {"allowed_domains": ["wikipedia.org"]}}
-        ]
+        tools = [{"type": "web_search", "filters": {"allowed_domains": ["wikipedia.org"]}}]
         web_search_options = None
 
         model_info, updated_model = responses_api_bridge_check(
@@ -208,9 +206,7 @@ class TestXAIResponsesAutoRouting:
         assert updated_model == model
 
     @patch("litellm.completion_extras.responses_api_bridge.completion")
-    def test_completion_with_tools_routes_to_responses_api(
-        self, mock_responses_completion
-    ):
+    def test_completion_with_tools_routes_to_responses_api(self, mock_responses_completion):
         """Test that completion() with tools routes to Responses API"""
         # Mock the responses_api_bridge.completion to avoid actual API calls
         mock_responses_completion.return_value = MagicMock()

@@ -23,33 +23,20 @@ class TestExtractBase64FromDataUrl:
     def test_extracts_base64_from_data_url(self):
         """Should extract pure base64 from data URL with prefix"""
         data_url = "data:image/png;base64,iVBORw0KGgoAAAANS"
-        result = LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(
-            data_url
-        )
+        result = LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(data_url)
         assert result == "iVBORw0KGgoAAAANS"
 
     def test_returns_base64_as_is_if_no_prefix(self):
         """Should return base64 as-is if no data: prefix"""
         pure_base64 = "iVBORw0KGgoAAAANS"
-        result = LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(
-            pure_base64
-        )
+        result = LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(pure_base64)
         assert result == pure_base64
 
     def test_handles_invalid_inputs(self):
         """Should return None for empty/None/malformed inputs"""
-        assert (
-            LiteLLMCompletionResponsesConfig._extract_base64_from_data_url("") is None
-        )
-        assert (
-            LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(None) is None
-        )
-        assert (
-            LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(
-                "data:image/png;base64"
-            )
-            is None
-        )
+        assert LiteLLMCompletionResponsesConfig._extract_base64_from_data_url("") is None
+        assert LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(None) is None
+        assert LiteLLMCompletionResponsesConfig._extract_base64_from_data_url("data:image/png;base64") is None
 
 
 class TestExtractImageGenerationOutputItems:
@@ -78,11 +65,9 @@ class TestExtractImageGenerationOutputItems:
         mock_choice.message = mock_message
         mock_choice.finish_reason = "stop"
 
-        result = (
-            LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                chat_completion_response=mock_response,
-                choice=mock_choice,
-            )
+        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+            chat_completion_response=mock_response,
+            choice=mock_choice,
         )
 
         assert len(result) == 2
@@ -103,11 +88,9 @@ class TestExtractImageGenerationOutputItems:
         mock_choice.message = mock_message
         mock_choice.finish_reason = "stop"
 
-        result = (
-            LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                chat_completion_response=mock_response,
-                choice=mock_choice,
-            )
+        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+            chat_completion_response=mock_response,
+            choice=mock_choice,
         )
 
         assert result == []
@@ -130,11 +113,9 @@ class TestExtractImageGenerationOutputItems:
         mock_choice.message = mock_message
         mock_choice.finish_reason = "length"
 
-        result = (
-            LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                chat_completion_response=mock_response,
-                choice=mock_choice,
-            )
+        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+            chat_completion_response=mock_response,
+            choice=mock_choice,
         )
 
         assert result[0].status == "incomplete"

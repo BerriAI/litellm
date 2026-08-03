@@ -10,9 +10,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest import mock
 
 import pytest
@@ -39,9 +37,7 @@ def test_get_ollama_params():
         }
         print("Converted params", converted_params)
         for key in expected_params.keys():
-            assert (
-                expected_params[key] == converted_params[key]
-            ), f"{converted_params} != {expected_params}"
+            assert expected_params[key] == converted_params[key], f"{converted_params} != {expected_params}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -98,9 +94,7 @@ def test_ollama_vision_model():
                             {"type": "text", "text": "Whats in this image?"},
                             {
                                 "type": "image_url",
-                                "image_url": {
-                                    "url": "https://dummyimage.com/100/100/fff&text=Test+image"
-                                },
+                                "image_url": {"url": "https://dummyimage.com/100/100/fff&text=Test+image"},
                             },
                         ],
                     }
@@ -130,9 +124,7 @@ mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-tex
 def test_ollama_embeddings(mock_embeddings):
     # assert that ollama_embeddings is called with the right parameters
     try:
-        embeddings = litellm.embedding(
-            model="ollama/nomic-embed-text", input=["hello world"]
-        )
+        embeddings = litellm.embedding(model="ollama/nomic-embed-text", input=["hello world"])
         print(embeddings)
         mock_embeddings.assert_called_once_with(
             api_base="http://localhost:11434",
@@ -157,9 +149,7 @@ def test_ollama_embeddings(mock_embeddings):
 def test_ollama_aembeddings(mock_aembeddings):
     # assert that ollama_aembeddings is called with the right parameters
     try:
-        embeddings = asyncio.run(
-            litellm.aembedding(model="ollama/nomic-embed-text", input=["hello world"])
-        )
+        embeddings = asyncio.run(litellm.aembedding(model="ollama/nomic-embed-text", input=["hello world"]))
         print(embeddings)
         mock_aembeddings.assert_called_once_with(
             api_base="http://localhost:11434",
@@ -202,9 +192,7 @@ def test_ollama_chat_function_calling():
         },
     ]
 
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
 
     response = litellm.completion(
         model="ollama_chat/llama3.1",
@@ -239,15 +227,12 @@ def test_ollama_ssl_verify():
     except Exception as e:
         print(e)
 
-    client: HTTPHandler = litellm.in_memory_llm_clients_cache.get_cache(
-        "httpx_clientssl_verify_False"
-    )
+    client: HTTPHandler = litellm.in_memory_llm_clients_cache.get_cache("httpx_clientssl_verify_False")
 
     test_client = httpx.Client(verify=False)
     print(client)
     assert (
-        client.client._transport._pool._ssl_context.verify_mode
-        == test_client._transport._pool._ssl_context.verify_mode
+        client.client._transport._pool._ssl_context.verify_mode == test_client._transport._pool._ssl_context.verify_mode
     )
 
 
@@ -272,9 +257,7 @@ async def test_async_ollama_ssl_verify(stream):
     except Exception as e:
         print(e)
 
-    client: AsyncHTTPHandler = litellm.in_memory_llm_clients_cache.get_cache(
-        "async_httpx_clientssl_verify_Falseollama"
-    )
+    client: AsyncHTTPHandler = litellm.in_memory_llm_clients_cache.get_cache("async_httpx_clientssl_verify_Falseollama")
 
     # check client
     print("type of transport in client=", type(client.client._transport))

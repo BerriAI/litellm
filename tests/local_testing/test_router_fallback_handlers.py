@@ -6,9 +6,7 @@ import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -138,27 +136,19 @@ class CustomTestLogger(CustomLogger):
         self.success_fallback_events = []
         self.failure_fallback_events = []
 
-    async def log_success_fallback_event(
-        self, original_model_group, kwargs, original_exception
-    ):
+    async def log_success_fallback_event(self, original_model_group, kwargs, original_exception):
         print(
             "in log_success_fallback_event for original_model_group: ",
             original_model_group,
         )
-        self.success_fallback_events.append(
-            (original_model_group, kwargs, original_exception)
-        )
+        self.success_fallback_events.append((original_model_group, kwargs, original_exception))
 
-    async def log_failure_fallback_event(
-        self, original_model_group, kwargs, original_exception
-    ):
+    async def log_failure_fallback_event(self, original_model_group, kwargs, original_exception):
         print(
             "in log_failure_fallback_event for original_model_group: ",
             original_model_group,
         )
-        self.failure_fallback_events.append(
-            (original_model_group, kwargs, original_exception)
-        )
+        self.failure_fallback_events.append((original_model_group, kwargs, original_exception))
 
 
 @pytest.mark.asyncio
@@ -239,9 +229,7 @@ async def test_failed_fallbacks_raise_most_recent_exception(function_name):
         model="gpt-3.5-turbo",
     )
 
-    request_kwargs: Dict[str, Any] = {
-        "metadata": {"previous_models": ["gpt-3.5-turbo"]}
-    }
+    request_kwargs: Dict[str, Any] = {"metadata": {"previous_models": ["gpt-3.5-turbo"]}}
 
     if function_name == "_aembedding":
         request_kwargs["input"] = "hello this is a test for run_async_fallback"
@@ -283,9 +271,7 @@ async def test_multiple_fallbacks(function_name):
     original_model_group = "gpt-3.5-turbo"
     original_exception = Exception("Simulated error")
 
-    request_kwargs: Dict[str, Any] = {
-        "metadata": {"previous_models": ["gpt-3.5-turbo"]}
-    }
+    request_kwargs: Dict[str, Any] = {"metadata": {"previous_models": ["gpt-3.5-turbo"]}}
 
     if function_name == "_aembedding":
         request_kwargs["input"] = "hello this is a test for run_async_fallback"

@@ -7,9 +7,7 @@ import asyncio
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 import litellm
 import pytest
 from dotenv import load_dotenv
@@ -51,9 +49,7 @@ class BaseAnthropicMessagesTest:
         """
         This is the model name that is expected to be in the logging payload
         """
-        raise NotImplementedError(
-            "Subclasses must implement expected_model_name_in_logging"
-        )
+        raise NotImplementedError("Subclasses must implement expected_model_name_in_logging")
 
     def _validate_response(self, response: Any):
         """Validate non-streaming response structure"""
@@ -61,9 +57,7 @@ class BaseAnthropicMessagesTest:
         if isinstance(response, AsyncIterator):
             pytest.fail("Expected non-streaming response but got AsyncIterator")
 
-        assert isinstance(
-            response, dict
-        ), f"Expected dict response, got {type(response)}"
+        assert isinstance(response, dict), f"Expected dict response, got {type(response)}"
         assert "id" in response
         assert "content" in response
         assert "model" in response
@@ -158,9 +152,7 @@ class BaseAnthropicMessagesTest:
         # Call the handler
         response = await litellm.anthropic.messages.acreate(**call_args)
 
-        print(
-            f"Response for {request_params['model']}: {json.dumps(response, indent=2, default=str)}"
-        )
+        print(f"Response for {request_params['model']}: {json.dumps(response, indent=2, default=str)}")
 
         # Verify response structure
         assert "content" in response, "Response should have 'content' field"
@@ -180,19 +172,14 @@ class BaseAnthropicMessagesTest:
             block_type = block["type"]
             print(f"✓ Successfully accessed block['type']: {block_type}")
         except TypeError as e:
-            pytest.fail(
-                f"Cannot access content block using dict syntax: {e}. "
-                f"Block type: {type(block)}"
-            )
+            pytest.fail(f"Cannot access content block using dict syntax: {e}. Block type: {type(block)}")
 
         # Verify the block has expected structure
         assert "type" in block, "Content block should have 'type' field"
         if block["type"] == "text":
             assert "text" in block, "Text content block should have 'text' field"
 
-        print(
-            f"✓ Response format consistency test passed for {request_params['model']}"
-        )
+        print(f"✓ Response format consistency test passed for {request_params['model']}")
 
     @pytest.mark.asyncio
     async def test_anthropic_messages_litellm_router_streaming_with_logging(self):
@@ -246,10 +233,7 @@ class BaseAnthropicMessagesTest:
                             )
 
                             # Extract usage information
-                            if (
-                                json_data.get("type") == "message_start"
-                                and "message" in json_data
-                            ):
+                            if json_data.get("type") == "message_start" and "message" in json_data:
                                 if "usage" in json_data["message"]:
                                     usage = json_data["message"]["usage"]
                                     all_anthropic_usage_chunks.append(usage)
@@ -284,12 +268,8 @@ class BaseAnthropicMessagesTest:
 
         # Extract token counts from usage data
         if all_anthropic_usage_chunks:
-            response_prompt_tokens = max(
-                [usage.get("input_tokens", 0) for usage in all_anthropic_usage_chunks]
-            )
-            response_completion_tokens = max(
-                [usage.get("output_tokens", 0) for usage in all_anthropic_usage_chunks]
-            )
+            response_prompt_tokens = max([usage.get("input_tokens", 0) for usage in all_anthropic_usage_chunks])
+            response_completion_tokens = max([usage.get("output_tokens", 0) for usage in all_anthropic_usage_chunks])
 
         print("input_tokens_anthropic_api", response_prompt_tokens)
         print("output_tokens_anthropic_api", response_completion_tokens)
@@ -305,27 +285,12 @@ class BaseAnthropicMessagesTest:
             ),
         )
 
-        assert (
-            test_custom_logger.logged_standard_logging_payload is not None
-        ), "Logging payload should not be None"
-        assert (
-            test_custom_logger.logged_standard_logging_payload["messages"] == messages
-        )
-        assert (
-            test_custom_logger.logged_standard_logging_payload["response"] is not None
-        )
-        assert (
-            test_custom_logger.logged_standard_logging_payload["model"]
-            == self.expected_model_name_in_logging
-        )
+        assert test_custom_logger.logged_standard_logging_payload is not None, "Logging payload should not be None"
+        assert test_custom_logger.logged_standard_logging_payload["messages"] == messages
+        assert test_custom_logger.logged_standard_logging_payload["response"] is not None
+        assert test_custom_logger.logged_standard_logging_payload["model"] == self.expected_model_name_in_logging
 
         # check logged usage + spend
         assert test_custom_logger.logged_standard_logging_payload["response_cost"] > 0
-        assert (
-            test_custom_logger.logged_standard_logging_payload["prompt_tokens"]
-            == response_prompt_tokens
-        )
-        assert (
-            test_custom_logger.logged_standard_logging_payload["completion_tokens"]
-            == response_completion_tokens
-        )
+        assert test_custom_logger.logged_standard_logging_payload["prompt_tokens"] == response_prompt_tokens
+        assert test_custom_logger.logged_standard_logging_payload["completion_tokens"] == response_completion_tokens

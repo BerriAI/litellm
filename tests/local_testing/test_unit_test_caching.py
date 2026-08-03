@@ -7,9 +7,7 @@ from litellm._uuid import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import hashlib
 import random
@@ -175,9 +173,9 @@ def test_get_cache_key_responses_api():
     ]:
         kx = {**base_kwargs, param: value_x}
         ky = {**base_kwargs, param: value_y}
-        assert cache.get_cache_key(**kx) != cache.get_cache_key(
-            **ky
-        ), f"Responses-API param `{param}` is not part of the cache key"
+        assert cache.get_cache_key(**kx) != cache.get_cache_key(**ky), (
+            f"Responses-API param `{param}` is not part of the cache key"
+        )
 
 
 def test_get_hashed_cache_key():
@@ -229,10 +227,7 @@ def test_get_model_param_value():
             "caching_groups": [("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")],
         },
     }
-    assert (
-        cache._get_model_param_value(kwargs)
-        == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
-    )
+    assert cache._get_model_param_value(kwargs) == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
 
     kwargs = {
         "model": "gpt-3.5-turbo",
@@ -241,10 +236,7 @@ def test_get_model_param_value():
             "caching_groups": [("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")],
         },
     }
-    assert (
-        cache._get_model_param_value(kwargs)
-        == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
-    )
+    assert cache._get_model_param_value(kwargs) == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
 
     kwargs = {
         "model": "gpt-3.5-turbo",

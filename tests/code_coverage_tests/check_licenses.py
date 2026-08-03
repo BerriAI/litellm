@@ -49,9 +49,7 @@ class PackageLicense:
 
 
 class LicenseChecker:
-    def __init__(
-        self, config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini")
-    ):
+    def __init__(self, config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini")):
         if not config_file.exists():
             print(f"Error: Config file {config_file} not found")
             sys.exit(1)
@@ -60,12 +58,8 @@ class LicenseChecker:
         self.config.read(config_file)
 
         # Initialize license sets
-        self.authorized_licenses = self._parse_license_list(
-            "Licenses", "authorized_licenses"
-        )
-        self.unauthorized_licenses = self._parse_license_list(
-            "Licenses", "unauthorized_licenses"
-        )
+        self.authorized_licenses = self._parse_license_list("Licenses", "authorized_licenses")
+        self.unauthorized_licenses = self._parse_license_list("Licenses", "unauthorized_licenses")
 
         # Parse authorized packages
         self.authorized_packages = self._parse_authorized_packages()
@@ -113,9 +107,7 @@ class LicenseChecker:
                     }
         return authorized
 
-    def get_package_license_from_pypi(
-        self, package_name: str, version: str
-    ) -> Optional[str]:
+    def get_package_license_from_pypi(self, package_name: str, version: str) -> Optional[str]:
         """Fetch license information for a package from PyPI.
 
         Prefers the PEP 639 SPDX expression (``info.license_expression``),
@@ -134,9 +126,7 @@ class LicenseChecker:
                 or self._license_from_classifiers(info.get("classifiers") or [])
             )
         except Exception as e:
-            print(
-                f"Warning: Failed to fetch license for {package_name} {version}: {str(e)}"
-            )
+            print(f"Warning: Failed to fetch license for {package_name} {version}: {str(e)}")
             return None
 
     @staticmethod
@@ -205,10 +195,7 @@ class LicenseChecker:
 
         # Special case for BSD licenses
         if "bsd" in normalized_license:
-            if any(
-                variation in normalized_license
-                for variation in ["3 clause", "3-clause", "new", "simplified"]
-            ):
+            if any(variation in normalized_license for variation in ["3 clause", "3-clause", "new", "simplified"]):
                 return True, "Matches authorized license: BSD 3-Clause"
 
         # Check unauthorized licenses first
@@ -245,9 +232,7 @@ class LicenseChecker:
                 return True
 
             # If no comment, proceed with license check but package is considered authorized
-            license_type = self.get_package_license_from_pypi(
-                package_name, version or ""
-            )
+            license_type = self.get_package_license_from_pypi(package_name, version or "")
             if license_type:
                 is_acceptable, reason = self.is_license_acceptable(license_type)
                 result = PackageLicense(
@@ -258,9 +243,7 @@ class LicenseChecker:
                     reason=f"Listed in authorized packages - {license_type}",
                 )
                 self.package_results.append(result)
-                print(
-                    f"✅ {package_name}: {license_type} (Listed in authorized packages)"
-                )
+                print(f"✅ {package_name}: {license_type} (Listed in authorized packages)")
                 return True
 
         # If package is not authorized or authorization check failed, proceed with normal license check
@@ -269,9 +252,7 @@ class LicenseChecker:
         if cache_key in self.license_cache:
             license_type = self.license_cache[cache_key]
         else:
-            license_type = self.get_package_license_from_pypi(
-                package_name, version or ""
-            )
+            license_type = self.get_package_license_from_pypi(package_name, version or "")
             if license_type:
                 self.license_cache[cache_key] = license_type
 
@@ -305,9 +286,7 @@ class LicenseChecker:
 
         return is_acceptable
 
-    def _load_requirements(
-        self, requirements_file: Optional[Path] = None
-    ) -> List[Requirement]:
+    def _load_requirements(self, requirements_file: Optional[Path] = None) -> List[Requirement]:
         """Load pinned requirements from a file or from the repo defaults."""
         try:
             if requirements_file is not None:
@@ -320,9 +299,7 @@ class LicenseChecker:
                     lock_data = tomllib.load(f)
 
                 requirement_lines = list(pyproject["project"].get("dependencies", []))
-                for extra_reqs in (
-                    pyproject["project"].get("optional-dependencies", {}).values()
-                ):
+                for extra_reqs in pyproject["project"].get("optional-dependencies", {}).values():
                     requirement_lines.extend(extra_reqs)
                 for group_reqs in pyproject.get("dependency-groups", {}).values():
                     requirement_lines.extend(group_reqs)
@@ -358,9 +335,7 @@ class LicenseChecker:
             ]
         except Exception as e:
             source = requirements_file or "pyproject.toml + uv.lock"
-            raise RuntimeError(
-                f"Error parsing requirements from {source}: {str(e)}"
-            ) from e
+            raise RuntimeError(f"Error parsing requirements from {source}: {str(e)}") from e
 
     def check_requirements(self, requirements_file: Optional[Path] = None) -> bool:
         """Check all packages from a requirements file or the default repo deps."""
@@ -383,16 +358,12 @@ class LicenseChecker:
             # would 404 to an "unknown" license.
             try:
                 floor_versions = [
-                    spec.version
-                    for spec in req.specifier
-                    if spec.operator in (">=", "==", "===", "~=", ">")
+                    spec.version for spec in req.specifier if spec.operator in (">=", "==", "===", "~=", ">")
                 ]
                 if floor_versions:
                     version = floor_versions[0]
                 else:
-                    version = (
-                        next(iter(req.specifier)).version if req.specifier else None
-                    )
+                    version = next(iter(req.specifier)).version if req.specifier else None
             except StopIteration:
                 version = None
 
@@ -414,9 +385,7 @@ def main():
     if not checker.check_requirements(req_file):
         # Get lists of problematic packages
         unverified = [p for p in checker.package_results if not p.license_type]
-        invalid = [
-            p for p in checker.package_results if p.license_type and not p.is_authorized
-        ]
+        invalid = [p for p in checker.package_results if p.license_type and not p.is_authorized]
 
         # Print detailed information about problematic packages
         if unverified:
@@ -435,19 +404,14 @@ def main():
         unhandled_packages = [
             p
             for p in (unverified + invalid)
-            if checker._normalize_package_name(p.name)
-            not in checker.authorized_packages
+            if checker._normalize_package_name(p.name) not in checker.authorized_packages
         ]
 
         if unhandled_packages:
             print("\n❌ Error: Found packages that need verification:")
             for pkg in unhandled_packages:
                 version_str = f" ({pkg.version})" if pkg.version else ""
-                license_str = (
-                    f" - {pkg.license_type}"
-                    if pkg.license_type
-                    else " - Unknown license"
-                )
+                license_str = f" - {pkg.license_type}" if pkg.license_type else " - Unknown license"
                 print(f"- {pkg.name}{version_str}{license_str}")
             print(
                 "\nAdd these packages to the [Authorized Packages] section in liccheck.ini with a comment about their license verification."

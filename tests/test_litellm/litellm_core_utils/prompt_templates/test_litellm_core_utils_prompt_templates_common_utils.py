@@ -5,9 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
@@ -20,9 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 
 
 def test_get_format_from_file_id():
-    unified_file_id = (
-        "litellm_proxy:application/pdf;unified_id,cbbe3534-8bf8-4386-af00-f5f6b7e370bf"
-    )
+    unified_file_id = "litellm_proxy:application/pdf;unified_id,cbbe3534-8bf8-4386-af00-f5f6b7e370bf"
 
     format = get_format_from_file_id(unified_file_id)
 
@@ -49,9 +45,7 @@ def test_update_messages_with_model_file_ids():
 
     model_file_id_mapping = {file_id: {"my_model_id": "provider_file_id"}}
 
-    updated_messages = update_messages_with_model_file_ids(
-        messages, model_id, model_file_id_mapping
-    )
+    updated_messages = update_messages_with_model_file_ids(messages, model_id, model_file_id_mapping)
 
     assert updated_messages == [
         {
@@ -157,9 +151,7 @@ def test_add_system_prompt_to_messages_merge_with_first_system():
         {"role": "system", "content": "Existing system prompt."},
         {"role": "user", "content": "Hello"},
     ]
-    result = add_system_prompt_to_messages(
-        messages, "You are helpful.", merge_with_first_system=True
-    )
+    result = add_system_prompt_to_messages(messages, "You are helpful.", merge_with_first_system=True)
     assert result == [
         {"role": "system", "content": "You are helpful.\n\nExisting system prompt."},
         {"role": "user", "content": "Hello"},
@@ -169,9 +161,7 @@ def test_add_system_prompt_to_messages_merge_with_first_system():
 def test_add_system_prompt_to_messages_merge_with_first_system_adds_new_when_no_system():
     """When merge_with_first_system=True but no system message, adds new one at start."""
     messages = [{"role": "user", "content": "Hello"}]
-    result = add_system_prompt_to_messages(
-        messages, "You are helpful.", merge_with_first_system=True
-    )
+    result = add_system_prompt_to_messages(messages, "You are helpful.", merge_with_first_system=True)
     assert result == [
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hello"},
@@ -484,14 +474,8 @@ def test_update_messages_with_model_file_ids_tolerates_non_dict_content_items():
     messages_token_ids_batch = [{"role": "user", "content": [[15496, 995], [9906, 0]]}]
 
     # Both should pass through unchanged without raising.
-    assert (
-        update_messages_with_model_file_ids(messages_token_ids, "model-A", {})
-        == messages_token_ids
-    )
-    assert (
-        update_messages_with_model_file_ids(messages_token_ids_batch, "model-A", {})
-        == messages_token_ids_batch
-    )
+    assert update_messages_with_model_file_ids(messages_token_ids, "model-A", {}) == messages_token_ids
+    assert update_messages_with_model_file_ids(messages_token_ids_batch, "model-A", {}) == messages_token_ids_batch
 
 
 class TestExtractFileDataBareStr:
@@ -637,9 +621,7 @@ class TestUnpackLegacyDefs:
         definitions = {
             f"L{i}": {
                 "type": "object",
-                "properties": {
-                    f"x{j}": {"$ref": f"#/definitions/L{i + 1}"} for j in range(fanout)
-                },
+                "properties": {f"x{j}": {"$ref": f"#/definitions/L{i + 1}"} for j in range(fanout)},
             }
             for i in range(depth)
         }
@@ -704,9 +686,7 @@ class TestUnpackLegacyDefs:
 
         schema = {
             "type": "object",
-            "properties": {
-                f"r{i}": {"$ref": f"#/components/schemas/T{i}"} for i in range(50)
-            },
+            "properties": {f"r{i}": {"$ref": f"#/components/schemas/T{i}"} for i in range(50)},
             "components": {
                 "schemas": {
                     f"T{i}": {

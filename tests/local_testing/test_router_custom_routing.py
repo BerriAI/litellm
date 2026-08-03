@@ -7,9 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Dict, List, Optional, Union
 
 import pytest
@@ -96,10 +94,7 @@ def test_reset_custom_routing_strategy():
 
     assert "get_available_deployment" not in router.__dict__
     assert "async_get_available_deployment" not in router.__dict__
-    assert (
-        router.async_get_available_deployment.__func__
-        is Router.async_get_available_deployment
-    )
+    assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
 
     # idempotent: resetting again when nothing is overridden must not raise
     router._reset_custom_routing_strategy()
@@ -115,9 +110,7 @@ async def test_custom_routing():
     # make 4 requests
     for _ in range(4):
         try:
-            response = await router.acompletion(
-                model="azure-model", messages=[{"role": "user", "content": "hello"}]
-            )
+            response = await router.acompletion(model="azure-model", messages=[{"role": "user", "content": "hello"}])
             print(response)
         except Exception as e:
             print("got exception", e)
@@ -128,9 +121,7 @@ async def test_custom_routing():
     deployments = {}
     # make 10 requests
     for _ in range(10):
-        response = await router.acompletion(
-            model="azure-model", messages=[{"role": "user", "content": "hello"}]
-        )
+        response = await router.acompletion(model="azure-model", messages=[{"role": "user", "content": "hello"}])
         print(response)
         _picked_model_id = response._hidden_params["model_id"]
         if _picked_model_id not in deployments:

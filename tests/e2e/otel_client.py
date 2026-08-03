@@ -91,9 +91,7 @@ class _TracesQuery(BaseModel):
 
 def _settled(trace: JaegerTrace, names: set[str], prefixes: set[str]) -> bool:
     present = set(trace.span_names())
-    return names.issubset(present) and all(
-        any(name.startswith(prefix) for name in present) for prefix in prefixes
-    )
+    return names.issubset(present) and all(any(name.startswith(prefix) for name in present) for prefix in prefixes)
 
 
 @dataclass(frozen=True, slots=True)

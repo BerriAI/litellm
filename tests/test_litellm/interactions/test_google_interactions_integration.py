@@ -61,9 +61,7 @@ class TestGoogleInteractionsCreate:
             input=[
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What is the capital of France?"}
-                    ],
+                    "content": [{"type": "text", "text": "What is the capital of France?"}],
                 }
             ],
             api_key=api_key,
@@ -182,9 +180,7 @@ class TestGoogleInteractionsMultiTurn:
                 },
                 {
                     "role": "model",
-                    "content": [
-                        {"type": "text", "text": "Hello Alice! Nice to meet you."}
-                    ],
+                    "content": [{"type": "text", "text": "Hello Alice! Nice to meet you."}],
                 },
                 {
                     "role": "user",
@@ -217,9 +213,7 @@ class TestGoogleInteractionsAgent:
 class TestGoogleInteractionsGetDelete:
     """Tests for get and delete operations."""
 
-    @pytest.mark.skip(
-        reason="Get/Delete require valid interaction IDs from previous calls"
-    )
+    @pytest.mark.skip(reason="Get/Delete require valid interaction IDs from previous calls")
     def test_get_interaction(self, api_key):
         """Test getting an interaction by ID."""
         # First create an interaction
@@ -238,9 +232,7 @@ class TestGoogleInteractionsGetDelete:
             assert get_response is not None
             print(f"Get response: {get_response}")
 
-    @pytest.mark.skip(
-        reason="Get/Delete require valid interaction IDs from previous calls"
-    )
+    @pytest.mark.skip(reason="Get/Delete require valid interaction IDs from previous calls")
     def test_delete_interaction(self, api_key):
         """Test deleting an interaction by ID."""
         # First create an interaction
@@ -302,9 +294,7 @@ class TestGoogleInteractionsResponseStructure:
         assert hasattr(response, "created")
         assert hasattr(response, "updated")
 
-        print(
-            f"Response structure: id={response.id}, status={response.status}, object={response.object}"
-        )
+        print(f"Response structure: id={response.id}, status={response.status}, object={response.object}")
 
 
 if __name__ == "__main__":

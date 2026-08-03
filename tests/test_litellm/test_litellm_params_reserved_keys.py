@@ -71,9 +71,7 @@ class TestLiteLLMParamsReservedKeys:
 
     def test_normal_instantiation_still_works(self):
         """Test that normal instantiation without reserved keys works."""
-        params = LiteLLM_Params(
-            model="gpt-4", api_key="test-key", custom_llm_provider="openai"
-        )
+        params = LiteLLM_Params(model="gpt-4", api_key="test-key", custom_llm_provider="openai")
         assert params.model == "gpt-4"
         assert params.api_key == "test-key"
         assert params.custom_llm_provider == "openai"

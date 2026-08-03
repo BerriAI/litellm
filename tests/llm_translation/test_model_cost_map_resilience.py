@@ -108,29 +108,17 @@ class TestValidateModelCostMap:
 
     def test_should_reject_non_dict(self):
         """Non-dict should fail at check 1."""
-        assert (
-            GetModelCostMap.validate_model_cost_map(
-                fetched_map="not a dict", backup_model_count=0
-            )
-            is False
-        )
+        assert GetModelCostMap.validate_model_cost_map(fetched_map="not a dict", backup_model_count=0) is False
 
     def test_should_reject_empty_map(self):
         """Empty dict should fail at check 1."""
-        assert (
-            GetModelCostMap.validate_model_cost_map(
-                fetched_map={}, backup_model_count=0
-            )
-            is False
-        )
+        assert GetModelCostMap.validate_model_cost_map(fetched_map={}, backup_model_count=0) is False
 
     def test_should_reject_significant_shrinkage(self):
         """Should fail at check 2 (shrinkage)."""
         fetched = {f"model-{i}": {} for i in range(40)}
         assert (
-            GetModelCostMap.validate_model_cost_map(
-                fetched_map=fetched, backup_model_count=100, min_model_count=10
-            )
+            GetModelCostMap.validate_model_cost_map(fetched_map=fetched, backup_model_count=100, min_model_count=10)
             is False
         )
 
@@ -138,9 +126,7 @@ class TestValidateModelCostMap:
         """Should pass both checks."""
         fetched = {f"model-{i}": {} for i in range(120)}
         assert (
-            GetModelCostMap.validate_model_cost_map(
-                fetched_map=fetched, backup_model_count=100, min_model_count=10
-            )
+            GetModelCostMap.validate_model_cost_map(fetched_map=fetched, backup_model_count=100, min_model_count=10)
             is True
         )
 
@@ -148,9 +134,7 @@ class TestValidateModelCostMap:
         """Equal size should pass both checks."""
         fetched = {f"model-{i}": {} for i in range(100)}
         assert (
-            GetModelCostMap.validate_model_cost_map(
-                fetched_map=fetched, backup_model_count=100, min_model_count=10
-            )
+            GetModelCostMap.validate_model_cost_map(fetched_map=fetched, backup_model_count=100, min_model_count=10)
             is True
         )
 
@@ -228,9 +212,7 @@ class TestBackupModelCostMapExists:
     def test_should_have_minimum_models_in_backup(self):
         """The backup must contain a reasonable number of models."""
         backup = GetModelCostMap.load_local_model_cost_map()
-        assert (
-            len(backup) > 100
-        ), f"Backup has only {len(backup)} models, expected > 100"
+        assert len(backup) > 100, f"Backup has only {len(backup)} models, expected > 100"
 
 
 class TestBadHostedModelCostMap:

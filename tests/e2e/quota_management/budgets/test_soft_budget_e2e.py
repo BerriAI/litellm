@@ -18,19 +18,14 @@ pytestmark = pytest.mark.e2e
 
 
 @pytest.mark.covers("quota_management.budget.soft.alerts_without_blocking")
-def test_soft_budget_does_not_block(
-    client: BudgetClient, resources: ResourceManager
-) -> None:
+def test_soft_budget_does_not_block(client: BudgetClient, resources: ResourceManager) -> None:
     # soft far below max: spend crosses soft immediately, stays under max.
     key = client.generate_key(max_budget=1000.0, soft_budget=1e-9)
     resources.defer(lambda: client.delete_key(key))
 
     for _ in range(3):
-        result = client.chat(
-            key, "claude-haiku-4-5", f"hi {unique_marker()}", max_tokens=16
-        )
+        result = client.chat(key, "claude-haiku-4-5", f"hi {unique_marker()}", max_tokens=16)
         assert not is_budget_block(result), (
-            "soft_budget blocked a request; it must alert only, not block "
-            f"(body={result.body[:200]})"
+            f"soft_budget blocked a request; it must alert only, not block (body={result.body[:200]})"
         )
         require_successful_call(result)  # any other non-2xx (e.g. provider down) is a hard fail

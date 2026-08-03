@@ -232,11 +232,7 @@ class TestStreamingIteratorTextHandling:
         event = iterator.create_content_part_added_event()
 
         # Verify that the part has text field set to empty string, not None
-        part_dict = (
-            event.part.model_dump()
-            if hasattr(event.part, "model_dump")
-            else dict(event.part)
-        )
+        part_dict = event.part.model_dump() if hasattr(event.part, "model_dump") else dict(event.part)
         assert "text" in part_dict
         assert part_dict["text"] == ""
         assert part_dict["text"] is not None
@@ -264,9 +260,7 @@ class TestStreamingIteratorTextHandling:
         )
 
         # Create a choice with None content
-        choice = StreamingChoices(
-            index=0, delta=Delta(content=None, role="assistant"), finish_reason=None
-        )
+        choice = StreamingChoices(index=0, delta=Delta(content=None, role="assistant"), finish_reason=None)
 
         result = iterator._get_delta_string_from_streaming_choices([choice])
 

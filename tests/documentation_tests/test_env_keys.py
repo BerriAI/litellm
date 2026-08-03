@@ -96,9 +96,7 @@ print(env_keys)
 # Parse the documentation to extract documented keys
 repo_base = "./"
 print(os.listdir(repo_base))
-docs_path = (
-    "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
-)
+docs_path = "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
 documented_keys = set()
 try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:
@@ -122,9 +120,7 @@ try:
                 if match:
                     documented_keys.add(match.group(1).strip())
 except Exception as e:
-    raise Exception(
-        f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}"
-    )
+    raise Exception(f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}")
 
 
 print(f"documented_keys: {documented_keys}")
@@ -137,12 +133,6 @@ for key in sorted(env_keys):
     print(key)
 
 if undocumented_keys:
-    raise Exception(
-        f"\nKeys not documented in 'environment settings - Reference': {undocumented_keys}"
-    )
+    raise Exception(f"\nKeys not documented in 'environment settings - Reference': {undocumented_keys}")
 else:
-    print(
-        "\nAll keys are documented in 'environment settings - Reference'. - {}".format(
-            env_keys
-        )
-    )
+    print("\nAll keys are documented in 'environment settings - Reference'. - {}".format(env_keys))

@@ -1,9 +1,7 @@
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 
 import json
@@ -81,11 +79,7 @@ def test_tuple_with_file_handle_rewrites_model(sample_jsonl_bytes):
     result = replace_model_in_jsonl(test_tuple, new_model)
 
     assert isinstance(result, InMemoryFile)
-    rows = [
-        json.loads(line)
-        for line in result.getvalue().decode("utf-8").splitlines()
-        if line.strip()
-    ]
+    rows = [json.loads(line) for line in result.getvalue().decode("utf-8").splitlines() if line.strip()]
     assert rows, "rewrite must produce rows"
     # every row now carries the rewritten target, not the original (restricted) model
     assert all(row["body"]["model"] == new_model for row in rows)
@@ -106,17 +100,9 @@ def test_file_like_object(sample_file_like):
 def test_router_metadata_variable_name():
     """Test that the variable name is correct"""
     assert _get_router_metadata_variable_name(function_name="completion") == "metadata"
-    assert (
-        _get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
-    )
-    assert (
-        _get_router_metadata_variable_name(function_name="acreate_file")
-        == "litellm_metadata"
-    )
-    assert (
-        _get_router_metadata_variable_name(function_name="aget_file")
-        == "litellm_metadata"
-    )
+    assert _get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
+    assert _get_router_metadata_variable_name(function_name="acreate_file") == "litellm_metadata"
+    assert _get_router_metadata_variable_name(function_name="aget_file") == "litellm_metadata"
 
 
 def test_non_json_input():
@@ -162,9 +148,7 @@ def test_parse_jsonl_with_embedded_newlines_simple():
 
 def test_parse_jsonl_with_embedded_newlines_in_strings():
     """Test parsing JSONL with newlines embedded in string values"""
-    content = (
-        '{"id": 1, "message": "Line 1\\nLine 2\\nLine 3"}\n{"id": 2, "message": "test"}'
-    )
+    content = '{"id": 1, "message": "Line 1\\nLine 2\\nLine 3"}\n{"id": 2, "message": "test"}'
     result = parse_jsonl_with_embedded_newlines(content)
 
     assert len(result) == 2
@@ -185,9 +169,7 @@ def test_parse_jsonl_with_embedded_newlines_real_world_example():
     assert result[0]["body"]["model"] == "openai-gpt-4o-mini-dp-items-translation-dag"
     assert len(result[0]["body"]["messages"]) == 2
     assert "Translate the product title" in result[0]["body"]["messages"][0]["content"]
-    assert (
-        "Cooler Master Shark X PC Case" in result[0]["body"]["messages"][1]["content"]
-    )
+    assert "Cooler Master Shark X PC Case" in result[0]["body"]["messages"][1]["content"]
     assert "UNIQUE MASTERPIECEShark X" in result[0]["body"]["messages"][1]["content"]
 
 
@@ -248,9 +230,7 @@ def test_replace_model_in_jsonl_malformed_middle_row_returns_original():
 
     result = replace_model_in_jsonl(content, "new-model")
 
-    assert (
-        result == content
-    ), "must return the original unchanged, not a partial rewrite"
+    assert result == content, "must return the original unchanged, not a partial rewrite"
 
 
 def test_replace_model_in_jsonl_malformed_row_seekable_handle_rewound():
@@ -281,11 +261,7 @@ def test_replace_model_in_jsonl_multi_row_rewrites_every_model():
     result = replace_model_in_jsonl(content, "new-model")
 
     assert isinstance(result, InMemoryFile)
-    rows = [
-        json.loads(line)
-        for line in result.getvalue().decode("utf-8").splitlines()
-        if line.strip()
-    ]
+    rows = [json.loads(line) for line in result.getvalue().decode("utf-8").splitlines() if line.strip()]
     assert [row["custom_id"] for row in rows] == ["a", "b", "c"]
     assert all(row["body"]["model"] == "new-model" for row in rows)
 
@@ -297,9 +273,7 @@ def test_replace_model_in_jsonl_with_embedded_newlines():
         "custom_id": "test123",
         "body": {
             "model": "old-model",
-            "messages": [
-                {"role": "user", "content": "This is a message\nwith multiple\nlines"}
-            ],
+            "messages": [{"role": "user", "content": "This is a message\nwith multiple\nlines"}],
         },
     }
 
@@ -317,8 +291,5 @@ def test_replace_model_in_jsonl_with_embedded_newlines():
     # Verify the model was replaced
     assert result_json["body"]["model"] == "new-model"
     # Verify the content with newlines is preserved
-    assert (
-        result_json["body"]["messages"][0]["content"]
-        == "This is a message\nwith multiple\nlines"
-    )
+    assert result_json["body"]["messages"][0]["content"] == "This is a message\nwith multiple\nlines"
     assert result_json["custom_id"] == "test123"

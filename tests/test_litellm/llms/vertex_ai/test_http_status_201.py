@@ -28,9 +28,7 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
         self.mock_logging_obj = MagicMock()
         self.mock_logging_obj.post_call = MagicMock()
 
-    @patch(
-        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.get_async_httpx_client"
-    )
+    @patch("litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.get_async_httpx_client")
     async def test_async_http_status_201(self, mock_get_client):
         """Test that async make_call handles HTTP 201 status code correctly"""
         # Create a mock response with status code 201

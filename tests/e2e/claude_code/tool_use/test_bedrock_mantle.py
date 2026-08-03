@@ -47,9 +47,7 @@ BEDROCK_MANTLE_MODELS = [
     "gpt-5-6-luna-bedrock-mantle",
 ]
 
-TOOL_USE_PROMPT = (
-    "Use the Bash tool to run the command `echo pong` and report what it printed."
-)
+TOOL_USE_PROMPT = "Use the Bash tool to run the command `echo pong` and report what it printed."
 TOOL_USE_ARGS = [
     "--allowed-tools",
     "Bash(echo pong)",
@@ -102,9 +100,7 @@ def test_tool_use_bedrock_mantle(compat_result):
             continue
 
         if not _has_tool_use_event(outcome.events):
-            error = (
-                f"[{model}] no tool_use content block observed in stream-json events"
-            )
+            error = f"[{model}] no tool_use content block observed in stream-json events"
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
             continue

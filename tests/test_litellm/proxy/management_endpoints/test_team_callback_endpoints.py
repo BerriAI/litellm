@@ -91,9 +91,7 @@ def patched_prisma():
 
 
 @pytest.mark.asyncio
-async def test_add_team_callbacks_rejects_unauthorized_caller(
-    patched_prisma, unauthorized_caller
-):
+async def test_add_team_callbacks_rejects_unauthorized_caller(patched_prisma, unauthorized_caller):
     data = AddTeamCallback(
         callback_name="langfuse",
         callback_type="success",
@@ -114,9 +112,7 @@ async def test_add_team_callbacks_rejects_unauthorized_caller(
 
 
 @pytest.mark.asyncio
-async def test_disable_team_logging_rejects_unauthorized_caller(
-    patched_prisma, unauthorized_caller
-):
+async def test_disable_team_logging_rejects_unauthorized_caller(patched_prisma, unauthorized_caller):
     with pytest.raises(HTTPException) as exc:
         await disable_team_logging(
             http_request=Mock(spec=Request),
@@ -128,9 +124,7 @@ async def test_disable_team_logging_rejects_unauthorized_caller(
 
 
 @pytest.mark.asyncio
-async def test_get_team_callbacks_rejects_unauthorized_caller(
-    patched_prisma, unauthorized_caller
-):
+async def test_get_team_callbacks_rejects_unauthorized_caller(patched_prisma, unauthorized_caller):
     with pytest.raises(HTTPException) as exc:
         await get_team_callbacks(
             http_request=Mock(spec=Request),
@@ -161,9 +155,7 @@ async def test_proxy_admin_can_add_team_callbacks(patched_prisma):
 
 @pytest.mark.asyncio
 async def test_team_admin_of_target_team_can_add_callbacks(patched_prisma):
-    patched_prisma.get_data = AsyncMock(
-        return_value=_team_row(admin_user_id="team_admin_user")
-    )
+    patched_prisma.get_data = AsyncMock(return_value=_team_row(admin_user_id="team_admin_user"))
 
     team_admin = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -450,9 +442,7 @@ async def test_add_team_callbacks_writes_encrypted_callback_vars(monkeypatch):
             litellm_changed_by=None,
         )
 
-    written = json.loads(
-        mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"]
-    )
+    written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
     cv = written["logging"][0]["callback_vars"]
     assert cv["langfuse_secret_key"] != "sk-lf-real-secret"
     assert cv["langfuse_public_key"] != "pk-lf-real-public"

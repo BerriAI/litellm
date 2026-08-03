@@ -273,9 +273,7 @@ class TestNumRetriesNoneGuard:
         router.num_retries = None  # simulate update_settings(num_retries=None)
 
         async def failing_fn(*args, **kwargs):
-            raise litellm.RateLimitError(
-                message="boom", model="mock-model", llm_provider="openai"
-            )
+            raise litellm.RateLimitError(message="boom", model="mock-model", llm_provider="openai")
 
         with patch("asyncio.sleep", return_value=None):
             with pytest.raises(litellm.RateLimitError):
@@ -298,9 +296,7 @@ class TestNumRetriesNoneGuard:
 
         async def failing_fn(*args, **kwargs):
             calls["n"] += 1
-            raise litellm.InternalServerError(
-                message="boom", model="mock-model", llm_provider="openai"
-            )
+            raise litellm.InternalServerError(message="boom", model="mock-model", llm_provider="openai")
 
         with patch("asyncio.sleep", return_value=None):
             with pytest.raises(litellm.InternalServerError):
@@ -368,9 +364,7 @@ class TestNoProviderRetryAmplification:
         counter = self._install_counting_upstream()
         with patch("asyncio.sleep", return_value=None):
             with pytest.raises(litellm.InternalServerError):
-                await router.acompletion(
-                    model="mock", messages=[{"role": "user", "content": "hi"}], **call_kwargs
-                )
+                await router.acompletion(model="mock", messages=[{"role": "user", "content": "hi"}], **call_kwargs)
         return counter["n"]
 
     @pytest.mark.asyncio
@@ -382,9 +376,7 @@ class TestNoProviderRetryAmplification:
         an unfixed build sends 9 (N=2) or 36 (N=5).
         """
         counter = self._install_counting_upstream()
-        router = self._router(
-            f"https://amp-{num_retries}.local/v1", {"num_retries": num_retries}, num_retries=1
-        )
+        router = self._router(f"https://amp-{num_retries}.local/v1", {"num_retries": num_retries}, num_retries=1)
         with patch("asyncio.sleep", return_value=None):
             with pytest.raises(litellm.InternalServerError):
                 await router.acompletion(model="mock", messages=[{"role": "user", "content": "hi"}])
@@ -407,9 +399,7 @@ class TestNoProviderRetryAmplification:
         retries for a routed call: deployment ``num_retries=5`` plus ``max_retries=3`` still
         sends exactly ``6`` upstream requests.
         """
-        router = self._router(
-            "https://nest-dep.local/v1", {"num_retries": 5, "max_retries": 3}, num_retries=1
-        )
+        router = self._router("https://nest-dep.local/v1", {"num_retries": 5, "max_retries": 3}, num_retries=1)
         assert await self._call_and_count(router) == 6
 
     @pytest.mark.asyncio
@@ -562,9 +552,7 @@ class TestRequestNumRetriesBeatsGlobal:
         )
         with patch("asyncio.sleep", return_value=None):
             with pytest.raises(litellm.InternalServerError):
-                await router.acompletion(
-                    model="mock", messages=[{"role": "user", "content": "hi"}]
-                )
+                await router.acompletion(model="mock", messages=[{"role": "user", "content": "hi"}])
         assert counter.attempts == 3
 
 
@@ -631,9 +619,7 @@ class TestRequestNumRetriesBeatsDeployment:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("request_num_retries, expected_attempts", [(3, 4), (0, 1)])
-    async def test_request_num_retries_overrides_deployment(
-        self, request_num_retries, expected_attempts
-    ):
+    async def test_request_num_retries_overrides_deployment(self, request_num_retries, expected_attempts):
         """
         global=1, deployment=2, request=3 -> 4 attempts, and request=0 -> a single attempt.
         Before the fix the deployment value won, so both cases sent 3 attempts.
@@ -651,9 +637,7 @@ class TestRequestNumRetriesBeatsDeployment:
         The deployment value keeps its place directly above litellm_settings: global=1 and
         deployment=2 with no request value -> 1 initial attempt + 2 retries.
         """
-        attempts = await self._count_attempts(
-            global_num_retries=1, deployment_num_retries=2, request_num_retries=None
-        )
+        attempts = await self._count_attempts(global_num_retries=1, deployment_num_retries=2, request_num_retries=None)
         assert attempts == 3
 
     @pytest.mark.asyncio

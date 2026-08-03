@@ -91,9 +91,7 @@ def test_instrumented_app_emits_server_span():
 
     TestClient(app).get("/ping")
 
-    server_spans = [
-        s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
-    ]
+    server_spans = [s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER]
     assert server_spans, "FastAPI instrumentor should emit a SERVER span per request"
     attrs = server_spans[0].attributes or {}
     assert any("route" in k or "method" in k for k in attrs)
@@ -108,9 +106,7 @@ def test_logger_and_instrumentor_share_provider():
 def test_passthrough_hook_renames_catch_all_span():
     """A passthrough route gets its span renamed to the real request path."""
     span = _FakeSpan()
-    _passthrough_span_name_hook(
-        span, {"path": "/openai/v1/chat/completions", "method": "POST"}
-    )
+    _passthrough_span_name_hook(span, {"path": "/openai/v1/chat/completions", "method": "POST"})
     assert span.name == "POST /openai/v1/chat/completions"
     assert span.attributes["http.route"] == "/openai/v1/chat/completions"
 
@@ -125,9 +121,7 @@ def test_passthrough_hook_leaves_non_passthrough_route_unchanged():
 
 def test_passthrough_hook_ignores_non_recording_span():
     span = _FakeSpan(recording=False)
-    _passthrough_span_name_hook(
-        span, {"path": "/openai/v1/chat/completions", "method": "POST"}
-    )
+    _passthrough_span_name_hook(span, {"path": "/openai/v1/chat/completions", "method": "POST"})
     assert span.name is None
 
 

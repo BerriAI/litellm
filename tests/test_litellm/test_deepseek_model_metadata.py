@@ -13,9 +13,7 @@ import json
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.utils import (
@@ -109,23 +107,13 @@ class TestSupportsResponseSchemaDeepSeek:
         assert supports_response_schema(model="deepseek/deepseek-chat") is True
 
     def test_explicit_provider(self):
-        assert (
-            supports_response_schema(
-                model="deepseek-chat", custom_llm_provider="deepseek"
-            )
-            is True
-        )
+        assert supports_response_schema(model="deepseek-chat", custom_llm_provider="deepseek") is True
 
     def test_reasoner_provider_slash_model(self):
         assert supports_response_schema(model="deepseek/deepseek-reasoner") is True
 
     def test_reasoner_explicit_provider(self):
-        assert (
-            supports_response_schema(
-                model="deepseek-reasoner", custom_llm_provider="deepseek"
-            )
-            is True
-        )
+        assert supports_response_schema(model="deepseek-reasoner", custom_llm_provider="deepseek") is True
 
 
 # ---------------------------------------------------------------------------

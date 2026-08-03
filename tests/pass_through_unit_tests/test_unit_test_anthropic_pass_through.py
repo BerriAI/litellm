@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
 import httpx
@@ -64,9 +62,7 @@ def mock_logging_obj():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_passthrough_handler(
-    mock_httpx_response, mock_response, mock_logging_obj
-):
+async def test_anthropic_passthrough_handler(mock_httpx_response, mock_response, mock_logging_obj):
     """
     Unit test - Assert that the anthropic passthrough handler calls the litellm logging object's async_success_handler
     """
@@ -347,11 +343,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
         "all_chunks": all_chunks,
     }
 
-    result = (
-        AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
-            **sent_args
-        )
-    )
+    result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(**sent_args)
 
     assert isinstance(result["result"], ModelResponse)
     print("result=", json.dumps(result, indent=4, default=str))

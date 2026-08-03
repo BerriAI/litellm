@@ -31,20 +31,14 @@ class JsonSchema(BaseModel):
 
 class GeminiHeaders(Headers):
     x_goog_api_key: str = Field(serialization_alias="x-goog-api-key")
-    content_type: str = Field(
-        default="application/json", serialization_alias="Content-Type"
-    )
+    content_type: str = Field(default="application/json", serialization_alias="Content-Type")
     tags: str | None = None
 
 
 class AnthropicHeaders(Headers):
     x_api_key: str = Field(serialization_alias="x-api-key")
-    anthropic_version: str = Field(
-        default="2023-06-01", serialization_alias="anthropic-version"
-    )
-    content_type: str = Field(
-        default="application/json", serialization_alias="Content-Type"
-    )
+    anthropic_version: str = Field(default="2023-06-01", serialization_alias="anthropic-version")
+    content_type: str = Field(default="application/json", serialization_alias="Content-Type")
     tags: str | None = None
 
 
@@ -53,9 +47,7 @@ class VertexHeaders(Headers):
     # from the proxy's own service account (the deployment marked use_in_pass_through),
     # so no upstream Authorization bearer is sent from the client.
     x_litellm_api_key: str = Field(serialization_alias="x-litellm-api-key")
-    content_type: str = Field(
-        default="application/json", serialization_alias="Content-Type"
-    )
+    content_type: str = Field(default="application/json", serialization_alias="Content-Type")
 
 
 class AltSseParams(BaseModel):
@@ -78,9 +70,7 @@ class GeminiFunctionDeclaration(BaseModel):
 
 
 class GeminiTool(BaseModel):
-    function_declarations: list[GeminiFunctionDeclaration] = Field(
-        serialization_alias="functionDeclarations"
-    )
+    function_declarations: list[GeminiFunctionDeclaration] = Field(serialization_alias="functionDeclarations")
 
 
 class GeminiGenerateBody(BaseModel):
@@ -141,39 +131,26 @@ class PassthroughClient:
         return self.proxy.transport.send(
             f"/gemini/v1beta/models/{model}:generateContent",
             headers=GeminiHeaders(x_goog_api_key=key, tags=_tags_header(tags)),
-            json=GeminiGenerateBody(
-                contents=[GeminiContent(parts=[GeminiPart(text=text)])], tools=tools
-            ),
+            json=GeminiGenerateBody(contents=[GeminiContent(parts=[GeminiPart(text=text)])], tools=tools),
         )
 
-    def gemini_stream(
-        self, key: str, model: str, text: str, *, tags: list[str] | None = None
-    ) -> StreamingResponse:
+    def gemini_stream(self, key: str, model: str, text: str, *, tags: list[str] | None = None) -> StreamingResponse:
         return self.proxy.transport.send(
             f"/gemini/v1beta/models/{model}:streamGenerateContent",
             headers=GeminiHeaders(x_goog_api_key=key, tags=_tags_header(tags)),
-            json=GeminiGenerateBody(
-                contents=[GeminiContent(parts=[GeminiPart(text=text)])]
-            ),
+            json=GeminiGenerateBody(contents=[GeminiContent(parts=[GeminiPart(text=text)])]),
             params=AltSseParams(),
             stream=True,
         )
 
     # ---- Vertex AI native passthrough (/vertex_ai/v1/projects/...) -------
 
-    def vertex_generate(
-        self, key: str, project: str, location: str, model: str, text: str
-    ) -> StreamingResponse:
-        path = (
-            f"/vertex_ai/v1/projects/{project}/locations/{location}"
-            f"/publishers/google/models/{model}:generateContent"
-        )
+    def vertex_generate(self, key: str, project: str, location: str, model: str, text: str) -> StreamingResponse:
+        path = f"/vertex_ai/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent"
         return self.proxy.transport.send(
             path,
             headers=VertexHeaders(x_litellm_api_key=key),
-            json=GeminiGenerateBody(
-                contents=[GeminiContent(parts=[GeminiPart(text=text)])]
-            ),
+            json=GeminiGenerateBody(contents=[GeminiContent(parts=[GeminiPart(text=text)])]),
         )
 
     # ---- Anthropic native passthrough (/anthropic/v1/messages) ----------
@@ -202,9 +179,7 @@ class PassthroughClient:
             stream=stream,
         )
 
-    def openai_chat(
-        self, key: str, model: str, text: str, *, max_completion_tokens: int = 64
-    ) -> StreamingResponse:
+    def openai_chat(self, key: str, model: str, text: str, *, max_completion_tokens: int = 64) -> StreamingResponse:
         return self.proxy.transport.send(
             "/openai/v1/chat/completions",
             headers=self.proxy.transport.bearer(key),
@@ -215,9 +190,7 @@ class PassthroughClient:
             ),
         )
 
-    def vllm_chat(
-        self, key: str, model: str, text: str, *, max_tokens: int = 64
-    ) -> StreamingResponse:
+    def vllm_chat(self, key: str, model: str, text: str, *, max_tokens: int = 64) -> StreamingResponse:
         return self.proxy.transport.send(
             "/vllm/v1/chat/completions",
             headers=self.proxy.transport.bearer(key),

@@ -154,9 +154,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     )
 
     # Create a chunk with a large arguments string that should be split
-    large_arguments = (
-        '{"param1": "value1", "param2": "value2", "param3": "value3"}'  # 67 chars
-    )
+    large_arguments = '{"param1": "value1", "param2": "value2", "param3": "value3"}'  # 67 chars
     chunk = ModelResponseStream(
         id="chunk-1",
         created=123,
@@ -211,9 +209,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
 
     # Keep draining pending events (expected: ceil(67 / 10) = 7 delta events)
     while iterator._pending_tool_events:
-        evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(
-            empty_chunk
-        )
+        evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(empty_chunk)
         if evt and evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA:
             delta_events.append(evt)
 
@@ -266,20 +262,12 @@ def test_tool_call_delta_without_id_uses_index_mapping():
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
+    delta_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     streamed_arguments = "".join(evt.delta for evt in delta_events)
 
     assert streamed_arguments == '{"location": "New York"}'
 
-    output_item_added_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    ]
+    output_item_added_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     assert len(output_item_added_events) == 1
     assert output_item_added_events[0].item.id == "call_abc123"
 
@@ -319,18 +307,10 @@ def test_parallel_tool_calls_without_ids_use_index_mapping():
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    output_item_added_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    ]
+    output_item_added_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     assert len(output_item_added_events) == 2
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
+    delta_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     arguments_by_call_id = {}
     for evt in delta_events:
         arguments_by_call_id.setdefault(evt.item_id, "")
@@ -383,11 +363,7 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
+    delta_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     arguments_by_call_id = {}
     for evt in delta_events:
         arguments_by_call_id.setdefault(evt.item_id, "")

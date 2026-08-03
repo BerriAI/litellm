@@ -187,9 +187,7 @@ class TestGroqReasoning:
         Test that Groq's 'reasoning' field in streaming chunks is properly mapped
         to LiteLLM's 'reasoning_content' field.
         """
-        handler = GroqChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = GroqChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Simulate a chunk with reasoning field as returned by Groq
         groq_chunk = {
@@ -213,10 +211,7 @@ class TestGroqReasoning:
         parsed_chunk = handler.chunk_parser(groq_chunk)
 
         # Verify that reasoning was mapped to reasoning_content
-        assert (
-            parsed_chunk.choices[0].delta.reasoning_content
-            == "This is reasoning content"
-        )
+        assert parsed_chunk.choices[0].delta.reasoning_content == "This is reasoning content"
         # Verify that the original 'reasoning' field was removed
         assert not hasattr(parsed_chunk.choices[0].delta, "reasoning")
 
@@ -224,9 +219,7 @@ class TestGroqReasoning:
         """
         Test that chunks without reasoning field still work correctly.
         """
-        handler = GroqChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = GroqChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Simulate a chunk without reasoning field
         groq_chunk = {
@@ -259,9 +252,7 @@ class TestGroqReasoning:
         """
         Test that reasoning field is properly mapped even when tool_calls are present.
         """
-        handler = GroqChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = GroqChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Simulate a chunk with both reasoning and tool_calls
         groq_chunk = {
@@ -295,14 +286,8 @@ class TestGroqReasoning:
         parsed_chunk = handler.chunk_parser(groq_chunk)
 
         # Verify that reasoning was mapped to reasoning_content
-        assert (
-            parsed_chunk.choices[0].delta.reasoning_content
-            == "Reasoning before tool call"
-        )
+        assert parsed_chunk.choices[0].delta.reasoning_content == "Reasoning before tool call"
         # Verify tool_calls are still present
         assert parsed_chunk.choices[0].delta.tool_calls is not None
         assert len(parsed_chunk.choices[0].delta.tool_calls) == 1
-        assert (
-            parsed_chunk.choices[0].delta.tool_calls[0]["function"]["name"]
-            == "test_function"
-        )
+        assert parsed_chunk.choices[0].delta.tool_calls[0]["function"]["name"] == "test_function"

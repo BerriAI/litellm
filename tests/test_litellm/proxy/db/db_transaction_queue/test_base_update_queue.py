@@ -7,9 +7,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.constants import MAX_IN_MEMORY_QUEUE_FLUSH_COUNT
 from litellm.proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
@@ -35,14 +33,12 @@ async def test_queue_flush_limit():
     flushed_updates = await queue.flush_all_updates_from_in_memory_queue()
 
     # Assert
-    assert (
-        len(flushed_updates) == MAX_IN_MEMORY_QUEUE_FLUSH_COUNT
-    ), f"Expected {MAX_IN_MEMORY_QUEUE_FLUSH_COUNT} items, but got {len(flushed_updates)}"
+    assert len(flushed_updates) == MAX_IN_MEMORY_QUEUE_FLUSH_COUNT, (
+        f"Expected {MAX_IN_MEMORY_QUEUE_FLUSH_COUNT} items, but got {len(flushed_updates)}"
+    )
 
     # Verify remaining items are still in queue
-    assert (
-        queue.update_queue.qsize() == 100
-    ), "Expected 100 items to remain in the queue"
+    assert queue.update_queue.qsize() == 100, "Expected 100 items to remain in the queue"
 
 
 def test_misconfigured_queue_thresholds_warns():

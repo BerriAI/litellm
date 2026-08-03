@@ -94,9 +94,7 @@ class TestResponsesBackgroundCostTracking:
         assert call_args[1]["user_api_key_dict"] == user_api_key_dict
 
     @pytest.mark.asyncio
-    async def test_no_storage_for_non_background_requests(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
-    ):
+    async def test_no_storage_for_non_background_requests(self, mock_managed_files_obj, mock_proxy_logging_obj):
         """Test that non-background requests are not stored"""
         # Create a mock response
         response = ResponsesAPIResponse(
@@ -128,9 +126,7 @@ class TestResponsesBackgroundCostTracking:
         mock_managed_files_obj.store_unified_object_id.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_storage_for_completed_responses(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
-    ):
+    async def test_no_storage_for_completed_responses(self, mock_managed_files_obj, mock_proxy_logging_obj):
         """Test that completed responses are not stored"""
         # Create a mock response with completed status
         response = ResponsesAPIResponse(
@@ -162,9 +158,7 @@ class TestResponsesBackgroundCostTracking:
         mock_managed_files_obj.store_unified_object_id.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_storage_without_model_id(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
-    ):
+    async def test_no_storage_without_model_id(self, mock_managed_files_obj, mock_proxy_logging_obj):
         """Test that responses without model_id in hidden params are not stored"""
         # Create a mock response without hidden params
         response = ResponsesAPIResponse(
@@ -205,14 +199,10 @@ class TestResponsesBackgroundCostTracking:
         mock_managed_files_obj.store_unified_object_id.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_error_handling_in_storage(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
-    ):
+    async def test_error_handling_in_storage(self, mock_managed_files_obj, mock_proxy_logging_obj):
         """Test that errors during storage are handled gracefully"""
         # Mock store_unified_object_id to raise an exception
-        mock_managed_files_obj.store_unified_object_id = AsyncMock(
-            side_effect=Exception("Database error")
-        )
+        mock_managed_files_obj.store_unified_object_id = AsyncMock(side_effect=Exception("Database error"))
 
         response = ResponsesAPIResponse(
             id="resp_error",
@@ -314,18 +304,14 @@ class TestCheckResponsesCost:
         assert checker.llm_router == mock_llm_router
 
     @pytest.mark.asyncio
-    async def test_check_responses_cost_no_jobs(
-        self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
-    ):
+    async def test_check_responses_cost_no_jobs(self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router):
         """Test polling when there are no jobs"""
         from litellm_enterprise.proxy.common_utils.check_responses_cost import (
             CheckResponsesCost,
         )
 
         # Mock find_many to return empty list
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[])
 
         checker = CheckResponsesCost(
             proxy_logging_obj=mock_proxy_logging_obj,
@@ -362,9 +348,7 @@ class TestCheckResponsesCost:
         mock_job.created_by = "test-user"
 
         # Mock find_many to return the job
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[mock_job]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
 
         # Mock update_many
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
@@ -397,14 +381,8 @@ class TestCheckResponsesCost:
 
             # Verify update_many was called to mark job as completed
             # (stale cleanup also calls update_many, so check the specific completion call)
-            update_many_calls = (
-                mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-            )
-            completion_calls = [
-                c
-                for c in update_many_calls
-                if c.kwargs.get("where", {}).get("id") is not None
-            ]
+            update_many_calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            completion_calls = [c for c in update_many_calls if c.kwargs.get("where", {}).get("id") is not None]
             assert len(completion_calls) == 1
             assert completion_calls[0].kwargs["where"]["id"]["in"] == ["job-123"]
             assert completion_calls[0].kwargs["data"]["status"] == "completed"
@@ -424,9 +402,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_failed"
         mock_job.created_by = "test-user"
 
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[mock_job]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
 
         # Create a failed response
@@ -452,14 +428,8 @@ class TestCheckResponsesCost:
 
             # Verify job was marked as completed even though it failed
             # (stale cleanup also calls update_many, so check the specific completion call)
-            update_many_calls = (
-                mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-            )
-            completion_calls = [
-                c
-                for c in update_many_calls
-                if c.kwargs.get("where", {}).get("id") is not None
-            ]
+            update_many_calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            completion_calls = [c for c in update_many_calls if c.kwargs.get("where", {}).get("id") is not None]
             assert len(completion_calls) == 1
 
     @pytest.mark.asyncio
@@ -477,9 +447,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_in_progress"
         mock_job.created_by = "test-user"
 
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[mock_job]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
 
         # Create an in-progress response
@@ -505,14 +473,8 @@ class TestCheckResponsesCost:
 
             # Verify no completion update_many was called (job still in progress)
             # (stale cleanup may still call update_many, so filter for completion calls)
-            update_many_calls = (
-                mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-            )
-            completion_calls = [
-                c
-                for c in update_many_calls
-                if c.kwargs.get("where", {}).get("id") is not None
-            ]
+            update_many_calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            completion_calls = [c for c in update_many_calls if c.kwargs.get("where", {}).get("id") is not None]
             assert len(completion_calls) == 0
 
     @pytest.mark.asyncio
@@ -530,9 +492,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_error"
         mock_job.created_by = "test-user"
 
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[mock_job]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
 
         checker = CheckResponsesCost(
@@ -552,12 +512,6 @@ class TestCheckResponsesCost:
 
             # Verify no completion update_many was called (error occurred)
             # (stale cleanup may still call update_many, so filter for completion calls)
-            update_many_calls = (
-                mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-            )
-            completion_calls = [
-                c
-                for c in update_many_calls
-                if c.kwargs.get("where", {}).get("id") is not None
-            ]
+            update_many_calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            completion_calls = [c for c in update_many_calls if c.kwargs.get("where", {}).get("id") is not None]
             assert len(completion_calls) == 0

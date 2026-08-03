@@ -73,25 +73,19 @@ async def test_get_daily_spend_does_not_pass_raw_quote_into_query():
 
     with patch.object(prometheus_api, "PROMETHEUS_URL", "http://prom.example"):
         with patch.object(prometheus_api, "async_http_handler", fake_client):
-            await prometheus_api.get_daily_spend_from_prometheus(
-                api_key='sk-victim"} or sum(other_metric{a="b'
-            )
+            await prometheus_api.get_daily_spend_from_prometheus(api_key='sk-victim"} or sum(other_metric{a="b')
 
     rendered_query = captured["params"]["query"]
     # The legitimate matcher framing must still be intact: one outer
     # `delta()` window, one inner `hashed_api_key="..."` matcher.
-    assert rendered_query.startswith(
-        'sum(delta(litellm_spend_metric_total{hashed_api_key="'
-    )
+    assert rendered_query.startswith('sum(delta(litellm_spend_metric_total{hashed_api_key="')
     assert rendered_query.endswith('"}[1d]))')
 
     # Every injected `"` from the attacker payload appears as `\"` so the
     # PromQL parser treats them as literal characters inside the matcher
     # value, never as the terminator that would let the rest parse as
     # PromQL syntax.
-    inner = rendered_query[
-        len('sum(delta(litellm_spend_metric_total{hashed_api_key="') : -len('"}[1d]))')
-    ]
+    inner = rendered_query[len('sum(delta(litellm_spend_metric_total{hashed_api_key="') : -len('"}[1d]))')]
     assert '"' not in inner.replace('\\"', "")
 
 
@@ -144,7 +138,4 @@ async def test_get_daily_spend_legitimate_hashed_key_unchanged():
         with patch.object(prometheus_api, "async_http_handler", fake_client):
             await prometheus_api.get_daily_spend_from_prometheus(api_key=legit_key)
 
-    assert (
-        captured["params"]["query"]
-        == f'sum(delta(litellm_spend_metric_total{{hashed_api_key="{legit_key}"}}[1d]))'
-    )
+    assert captured["params"]["query"] == f'sum(delta(litellm_spend_metric_total{{hashed_api_key="{legit_key}"}}[1d]))'

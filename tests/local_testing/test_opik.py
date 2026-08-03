@@ -57,9 +57,7 @@ async def test_opik_logging_http_request():
         await asyncio.sleep(1)
 
         # Check batching of events and that the queue contains 5 trace events and 5 span events
-        assert (
-            mock_post.called == False
-        ), "HTTP request was made but events should have been batched"
+        assert mock_post.called == False, "HTTP request was made but events should have been batched"
         assert len(test_opik_logger.log_queue) == 10
 
         # Now make calls to exceed the batch size
@@ -129,9 +127,7 @@ def test_sync_opik_logging_http_request():
         time.sleep(3)
 
         # Check that 5 spans and 5 traces were sent
-        assert (
-            mock_post.call_count == 10
-        ), f"Expected 10 HTTP requests, but got {mock_post.call_count}"
+        assert mock_post.call_count == 10, f"Expected 10 HTTP requests, but got {mock_post.call_count}"
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -161,9 +157,7 @@ async def test_opik_logging():
         # Log a streaming completion call
         stream_response = await litellm.acompletion(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": "Stream = True - What llm are you ?"}
-            ],
+            messages=[{"role": "user", "content": "Stream = True - What llm are you ?"}],
             max_tokens=10,
             temperature=0.2,
             stream=True,
@@ -241,24 +235,20 @@ def test_opik_attach_to_existing_trace():
         span_calls = [call for call in calls_made if "/spans/batch" in str(call)]
 
         # With the fix, when trace_id is provided, we should NOT create a new trace
-        assert (
-            len(trace_calls) == 0
-        ), f"Expected 0 trace calls when attaching to existing trace, but got {len(trace_calls)}"
-        assert (
-            len(span_calls) == 1
-        ), f"Expected exactly 1 span call, but got {len(span_calls)}"
+        assert len(trace_calls) == 0, (
+            f"Expected 0 trace calls when attaching to existing trace, but got {len(trace_calls)}"
+        )
+        assert len(span_calls) == 1, f"Expected exactly 1 span call, but got {len(span_calls)}"
 
         # Verify span has correct trace_id and parent_span_id
         span_payload = span_calls[0][1]["json"]["spans"][0]
-        assert (
-            span_payload["trace_id"] == existing_trace_id
-        ), f"Expected trace_id to be {existing_trace_id}, but got {span_payload['trace_id']}"
-        assert (
-            span_payload["parent_span_id"] == existing_parent_span_id
-        ), f"Expected parent_span_id to be {existing_parent_span_id}, but got {span_payload['parent_span_id']}"
-        assert (
-            "test-attach-span" in span_payload["tags"]
-        ), f"Expected 'test-attach-span' tag in {span_payload['tags']}"
+        assert span_payload["trace_id"] == existing_trace_id, (
+            f"Expected trace_id to be {existing_trace_id}, but got {span_payload['trace_id']}"
+        )
+        assert span_payload["parent_span_id"] == existing_parent_span_id, (
+            f"Expected parent_span_id to be {existing_parent_span_id}, but got {span_payload['parent_span_id']}"
+        )
+        assert "test-attach-span" in span_payload["tags"], f"Expected 'test-attach-span' tag in {span_payload['tags']}"
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -309,27 +299,17 @@ def test_opik_create_new_trace():
         span_calls = [call for call in calls_made if "/spans/batch" in str(call)]
 
         # Without trace_id provided, we should create both a new trace and a new span
-        assert (
-            len(trace_calls) == 1
-        ), f"Expected exactly 1 trace call, but got {len(trace_calls)}"
-        assert (
-            len(span_calls) == 1
-        ), f"Expected exactly 1 span call, but got {len(span_calls)}"
+        assert len(trace_calls) == 1, f"Expected exactly 1 trace call, but got {len(trace_calls)}"
+        assert len(span_calls) == 1, f"Expected exactly 1 span call, but got {len(span_calls)}"
 
         # Verify the span references the created trace
         trace_payload = trace_calls[0][1]["json"]["traces"][0]
         span_payload = span_calls[0][1]["json"]["spans"][0]
-        assert (
-            span_payload["trace_id"] == trace_payload["id"]
-        ), "Span should reference the created trace"
+        assert span_payload["trace_id"] == trace_payload["id"], "Span should reference the created trace"
 
         # Verify tags are included in both trace and span
-        assert (
-            "test-new-trace" in trace_payload["tags"]
-        ), f"Expected 'test-new-trace' tag in trace tags"
-        assert (
-            "test-new-trace" in span_payload["tags"]
-        ), f"Expected 'test-new-trace' tag in span tags"
+        assert "test-new-trace" in trace_payload["tags"], f"Expected 'test-new-trace' tag in trace tags"
+        assert "test-new-trace" in span_payload["tags"], f"Expected 'test-new-trace' tag in span tags"
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

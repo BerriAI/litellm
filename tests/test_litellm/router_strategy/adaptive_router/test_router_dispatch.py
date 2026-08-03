@@ -37,50 +37,27 @@ def _params(**overrides):
 
 def test_auto_router_check_excludes_adaptive_router_prefix():
     r = Router(model_list=[])
-    assert (
-        r._is_auto_router_deployment(
-            litellm_params=_params(model="auto_router/adaptive_router")
-        )
-        is False
-    )
+    assert r._is_auto_router_deployment(litellm_params=_params(model="auto_router/adaptive_router")) is False
 
 
 def test_auto_router_check_excludes_complexity_router_prefix():
     r = Router(model_list=[])
-    assert (
-        r._is_auto_router_deployment(
-            litellm_params=_params(model="auto_router/complexity_router")
-        )
-        is False
-    )
+    assert r._is_auto_router_deployment(litellm_params=_params(model="auto_router/complexity_router")) is False
 
 
 def test_auto_router_check_still_matches_plain_auto_router_prefix():
     r = Router(model_list=[])
-    assert (
-        r._is_auto_router_deployment(
-            litellm_params=_params(model="auto_router/my-semantic-router")
-        )
-        is True
-    )
+    assert r._is_auto_router_deployment(litellm_params=_params(model="auto_router/my-semantic-router")) is True
 
 
 def test_adaptive_router_check_recognizes_prefix():
     r = Router(model_list=[])
-    assert (
-        r._is_adaptive_router_deployment(
-            litellm_params=_params(model="auto_router/adaptive_router")
-        )
-        is True
-    )
+    assert r._is_adaptive_router_deployment(litellm_params=_params(model="auto_router/adaptive_router")) is True
 
 
 def test_adaptive_router_check_rejects_other_prefixes():
     r = Router(model_list=[])
-    assert (
-        r._is_adaptive_router_deployment(litellm_params=_params(model="openai/gpt-4o"))
-        is False
-    )
+    assert r._is_adaptive_router_deployment(litellm_params=_params(model="openai/gpt-4o")) is False
 
 
 # ---- Fix 3: cost field path --------------------------------------------
@@ -448,9 +425,7 @@ def test_finalize_prunes_stale_adaptive_router_hooks_from_callbacks():
 
     # Snapshot any pre-existing AdaptiveRouterPostCallHook entries so we can
     # restore them — other tests may have registered hooks we shouldn't drop.
-    pre_hooks = [
-        cb for cb in litellm.callbacks if isinstance(cb, AdaptiveRouterPostCallHook)
-    ]
+    pre_hooks = [cb for cb in litellm.callbacks if isinstance(cb, AdaptiveRouterPostCallHook)]
     for cb in pre_hooks:
         litellm.callbacks.remove(cb)
 
@@ -458,14 +433,9 @@ def test_finalize_prunes_stale_adaptive_router_hooks_from_callbacks():
         Router(model_list=model_list)
         Router(model_list=model_list)  # simulate hot-reload
 
-        adaptive_hooks = [
-            cb
-            for cb in litellm.callbacks
-            if isinstance(cb, AdaptiveRouterPostCallHook)
-        ]
+        adaptive_hooks = [cb for cb in litellm.callbacks if isinstance(cb, AdaptiveRouterPostCallHook)]
         assert len(adaptive_hooks) == 1, (
-            f"expected exactly one AdaptiveRouterPostCallHook after hot-reload, "
-            f"got {len(adaptive_hooks)}"
+            f"expected exactly one AdaptiveRouterPostCallHook after hot-reload, got {len(adaptive_hooks)}"
         )
     finally:
         # Best-effort cleanup: remove whatever this test added, then restore.

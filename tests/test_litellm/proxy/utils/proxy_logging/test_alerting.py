@@ -129,9 +129,7 @@ async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_global(proxy
 @pytest.mark.asyncio
 async def test_budget_alerts_slack_failure_raises(proxy_logging):
     proxy_logging.alerting = ["slack"]
-    proxy_logging.slack_alerting_instance = MagicMock(
-        budget_alerts=AsyncMock(side_effect=ConnectionError("slack"))
-    )
+    proxy_logging.slack_alerting_instance = MagicMock(budget_alerts=AsyncMock(side_effect=ConnectionError("slack")))
     proxy_logging.email_logging_instance = None
     with pytest.raises(ConnectionError):
         await proxy_logging.budget_alerts(type="user_budget", user_info=_user_info())
@@ -252,11 +250,7 @@ async def test_failure_handler_with_capture_exception_invoked(proxy_logging, mon
 async def test_failure_handler_propagates_service_logging_error_raises(proxy_logging, monkeypatch):
     proxy_logging.alert_types = [AlertType.db_exceptions]
     proxy_logging.alerting_handler = AsyncMock()
-    proxy_logging.service_logging_obj = MagicMock(
-        async_service_failure_hook=AsyncMock(side_effect=RuntimeError("svc"))
-    )
+    proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock(side_effect=RuntimeError("svc")))
     monkeypatch.setattr(litellm.utils, "capture_exception", None)
     with pytest.raises(RuntimeError):
-        await proxy_logging.failure_handler(
-            original_exception=Exception("x"), duration=0.0, call_type="db_read"
-        )
+        await proxy_logging.failure_handler(original_exception=Exception("x"), duration=0.0, call_type="db_read")

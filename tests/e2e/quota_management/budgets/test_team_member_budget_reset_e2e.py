@@ -10,7 +10,8 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
-MEMBER_BUDGET = 1.0 # default member budget is $50, we're testing with a smaller value
+MEMBER_BUDGET = 1.0  # default member budget is $50, we're testing with a smaller value
+
 
 def _as_datetime(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))

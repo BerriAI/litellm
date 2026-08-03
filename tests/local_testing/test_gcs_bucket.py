@@ -43,9 +43,7 @@ async def test_aaabasic_gcs_logger():
 
     captured_payloads = []
 
-    async def mock_log_json_data_on_gcs(
-        self, headers, bucket_name, object_name, logging_payload
-    ):
+    async def mock_log_json_data_on_gcs(self, headers, bucket_name, object_name, logging_payload):
         captured_payloads.append(
             {
                 "bucket_name": bucket_name,
@@ -126,16 +124,12 @@ async def test_aaabasic_gcs_logger():
 
         await asyncio.sleep(3)
 
-        assert (
-            len(captured_payloads) == 1
-        ), f"Expected 1 GCS upload, got {len(captured_payloads)}"
+        assert len(captured_payloads) == 1, f"Expected 1 GCS upload, got {len(captured_payloads)}"
 
         gcs_payload = captured_payloads[0]["logging_payload"]
 
         assert gcs_payload["model"] == "gpt-3.5-turbo"
-        assert gcs_payload["messages"] == [
-            {"role": "user", "content": "This is a test"}
-        ]
+        assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
 
         assert gcs_payload["response"]["choices"][0]["message"]["content"] == "Hi!"
 
@@ -147,9 +141,7 @@ async def test_aaabasic_gcs_logger():
             gcs_payload["metadata"]["user_api_key_hash"]
             == "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"
         )
-        assert (
-            gcs_payload["metadata"]["user_api_key_user_id"] == "116544810872468347480"
-        )
+        assert gcs_payload["metadata"]["user_api_key_user_id"] == "116544810872468347480"
 
         assert gcs_payload["metadata"]["requester_metadata"] == {"foo": "bar"}
 
@@ -162,9 +154,7 @@ async def test_basic_gcs_logger_failure():
 
     captured_payloads = []
 
-    async def mock_log_json_data_on_gcs(
-        self, headers, bucket_name, object_name, logging_payload
-    ):
+    async def mock_log_json_data_on_gcs(self, headers, bucket_name, object_name, logging_payload):
         captured_payloads.append(
             {
                 "bucket_name": bucket_name,
@@ -253,16 +243,12 @@ async def test_basic_gcs_logger_failure():
 
         await asyncio.sleep(3)
 
-        assert (
-            len(captured_payloads) == 1
-        ), f"Expected 1 GCS upload, got {len(captured_payloads)}"
+        assert len(captured_payloads) == 1, f"Expected 1 GCS upload, got {len(captured_payloads)}"
 
         gcs_payload = captured_payloads[0]["logging_payload"]
 
         assert gcs_payload["model"] == "gpt-3.5-turbo"
-        assert gcs_payload["messages"] == [
-            {"role": "user", "content": "This is a test"}
-        ]
+        assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
 
         assert gcs_payload["response_cost"] == 0
         assert gcs_payload["status"] == "failure"
@@ -271,6 +257,4 @@ async def test_basic_gcs_logger_failure():
             gcs_payload["metadata"]["user_api_key_hash"]
             == "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"
         )
-        assert (
-            gcs_payload["metadata"]["user_api_key_user_id"] == "116544810872468347480"
-        )
+        assert gcs_payload["metadata"]["user_api_key_user_id"] == "116544810872468347480"

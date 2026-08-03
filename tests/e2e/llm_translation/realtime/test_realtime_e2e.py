@@ -43,9 +43,7 @@ PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
 WEATHER_TOOL = FunctionTool(
     name="get_weather",
     description="Get the current temperature in Fahrenheit for a given city.",
-    parameters=JsonSchema(
-        properties={"city": JsonSchemaProperty(type="string")}, required=["city"]
-    ),
+    parameters=JsonSchema(properties={"city": JsonSchemaProperty(type="string")}, required=["city"]),
 )
 
 
@@ -72,11 +70,7 @@ def test_text_conversation(
         assert created[-1].type == "session.created"
 
         session.send(
-            SessionUpdate(
-                session=SessionConfig(
-                    instructions="You are a terse assistant. Reply in one short sentence."
-                )
-            )
+            SessionUpdate(session=SessionConfig(instructions="You are a terse assistant. Reply in one short sentence."))
         )
         session.collect_until("session.updated", timeout=20)
 
@@ -124,9 +118,7 @@ def test_tool_call_round_trip(
         session.send(ResponseCreate())
         first = session.collect_until("response.done", timeout=60)
 
-        args_event = parse_last(
-            first, "response.function_call_arguments.done", FunctionCallArgumentsDone
-        )
+        args_event = parse_last(first, "response.function_call_arguments.done", FunctionCallArgumentsDone)
         assert args_event is not None, "model did not emit a function call"
         args = WeatherArgs.model_validate_json(args_event.arguments)
 
@@ -138,9 +130,7 @@ def test_tool_call_round_trip(
         tool_result = WeatherResult(city=args.city, temperature_f=72)
         session.send(
             ConversationItemCreate(
-                item=FunctionCallOutputItem(
-                    call_id=args_event.call_id, output=tool_result.model_dump_json()
-                )
+                item=FunctionCallOutputItem(call_id=args_event.call_id, output=tool_result.model_dump_json())
             )
         )
         session.send(ResponseCreate())

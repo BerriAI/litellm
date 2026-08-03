@@ -14,9 +14,7 @@ from fastapi import HTTPException
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -184,11 +182,7 @@ async def test_strict_output_filtering_01():
     with pytest.raises(HTTPException) as exc_info:
         await azure_content_safety.async_post_call_success_hook(
             user_api_key_dict=UserAPIKeyAuth(),
-            data={
-                "messages": [
-                    {"role": "system", "content": "You are an helpfull assistant"}
-                ]
-            },
+            data={"messages": [{"role": "system", "content": "You are an helpfull assistant"}]},
             response=response,
         )
 
@@ -229,9 +223,7 @@ async def test_strict_output_filtering_02():
 
     await azure_content_safety.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
-        data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
-        },
+        data={"messages": [{"role": "system", "content": "You are an helpfull assistant"}]},
         response=response,
     )
 
@@ -268,9 +260,7 @@ async def test_loose_output_filtering_01():
 
     await azure_content_safety.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
-        data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
-        },
+        data={"messages": [{"role": "system", "content": "You are an helpfull assistant"}]},
         response=response,
     )
 
@@ -307,8 +297,6 @@ async def test_loose_output_filtering_02():
 
     await azure_content_safety.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
-        data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
-        },
+        data={"messages": [{"role": "system", "content": "You are an helpfull assistant"}]},
         response=response,
     )

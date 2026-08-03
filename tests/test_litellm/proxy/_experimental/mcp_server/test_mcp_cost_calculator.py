@@ -8,9 +8,7 @@ import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._experimental.mcp_server.cost_calculator import MCPCostCalculator
 

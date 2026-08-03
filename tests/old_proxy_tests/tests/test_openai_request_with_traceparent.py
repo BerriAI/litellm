@@ -32,9 +32,7 @@ with tracer.start_as_current_span("ishaan-local-dev-app") as span:
     # # request sent to model set on litellm proxy, `litellm --model`
     response = client.chat.completions.create(
         model="llama3",
-        messages=[
-            {"role": "user", "content": "this is a test request, write a short poem"}
-        ],
+        messages=[{"role": "user", "content": "this is a test request, write a short poem"}],
         extra_headers=extra_headers,
     )
 

@@ -15,9 +15,7 @@ def test_bedrock_sonnet_4_6_region_prefixes():
     """All documented Bedrock cross-region inference prefixes for
     claude-sonnet-4-6 must be present in model_prices_and_context_window.json.
     """
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path) as f:
         model_data = json.load(f)
 
@@ -34,9 +32,9 @@ def test_bedrock_sonnet_4_6_region_prefixes():
         assert model in model_data, f"Model {model} not found in config"
         model_info = model_data[model]
 
-        assert (
-            model_info["litellm_provider"] == "bedrock_converse"
-        ), f"{model} should use bedrock_converse, got {model_info['litellm_provider']}"
+        assert model_info["litellm_provider"] == "bedrock_converse", (
+            f"{model} should use bedrock_converse, got {model_info['litellm_provider']}"
+        )
         assert model_info["mode"] == "chat"
         assert model_info["max_input_tokens"] == 1000000
         assert model_info["max_output_tokens"] == 64000
@@ -57,9 +55,7 @@ def test_bedrock_sonnet_4_6_jp_matches_other_regional_pricing():
     regional profiles (us./eu./au.), which carry a 10% premium over the
     base/global entries.
     """
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path) as f:
         model_data = json.load(f)
 
@@ -74,6 +70,5 @@ def test_bedrock_sonnet_4_6_jp_matches_other_regional_pricing():
     ]
     for field in pricing_fields:
         assert jp_info[field] == au_info[field], (
-            f"{field} mismatch between jp. and au. variants: "
-            f"jp={jp_info[field]}, au={au_info[field]}"
+            f"{field} mismatch between jp. and au. variants: jp={jp_info[field]}, au={au_info[field]}"
         )

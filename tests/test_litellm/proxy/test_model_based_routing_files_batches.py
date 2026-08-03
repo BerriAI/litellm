@@ -31,25 +31,17 @@ class TestEncodeFileIdWithModel:
 
     def test_vertex_numeric_batch_id_gets_batch_prefix_with_id_type(self):
         """Vertex AI numeric batch IDs should produce batch_ prefix when id_type='batch'."""
-        result = encode_file_id_with_model(
-            "3814889423749775360", "gemini-2.5-pro", id_type="batch"
-        )
-        assert result.startswith(
-            "batch_"
-        ), f"Expected batch_ prefix for Vertex numeric batch ID, got: {result[:10]}"
+        result = encode_file_id_with_model("3814889423749775360", "gemini-2.5-pro", id_type="batch")
+        assert result.startswith("batch_"), f"Expected batch_ prefix for Vertex numeric batch ID, got: {result[:10]}"
 
     def test_vertex_numeric_id_defaults_to_file_prefix(self):
         """Vertex AI numeric IDs should default to file- prefix when id_type is not specified."""
         result = encode_file_id_with_model("3814889423749775360", "gemini-2.5-pro")
-        assert result.startswith(
-            "file-"
-        ), "Default id_type should produce file- prefix for backward compatibility"
+        assert result.startswith("file-"), "Default id_type should produce file- prefix for backward compatibility"
 
     def test_gcs_uri_gets_file_prefix(self):
         """GCS URIs (output_file_id) should produce file- prefix."""
-        result = encode_file_id_with_model(
-            "gs://bucket/path/to/file.jsonl", "gemini-2.5-pro"
-        )
+        result = encode_file_id_with_model("gs://bucket/path/to/file.jsonl", "gemini-2.5-pro")
         assert result.startswith("file-")
 
 
@@ -69,13 +61,8 @@ class TestPrepareDataWithCredentials:
 
         assert data["s3_bucket_name"] == "safe-bucket"
         assert "custom_llm_provider" not in data
-        assert isinstance(
-            data["_litellm_internal_model_credentials"], type(MappingProxyType({}))
-        )
-        assert (
-            data["_litellm_internal_model_credentials"]["s3_bucket_name"]
-            == "safe-bucket"
-        )
+        assert isinstance(data["_litellm_internal_model_credentials"], type(MappingProxyType({})))
+        assert data["_litellm_internal_model_credentials"]["s3_bucket_name"] == "safe-bucket"
 
     def test_does_not_add_internal_credentials_by_default(self):
         data = {"file_id": "file-abc"}

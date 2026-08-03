@@ -8,9 +8,7 @@ DashScope is an OpenAI-compatible provider with minor customizations.
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.types.llms.openai import AllMessageValues
 import pytest
@@ -55,9 +53,7 @@ class TestDashScopeConfig:
         This test mocks the actual HTTP request to test the integration properly.
         """
 
-        litellm.disable_aiohttp_transport = (
-            True  # since this uses respx, we need to set use_aiohttp_transport to False
-        )
+        litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
 
         # Set up environment variables for the test
         api_key = "fake-dashscope-key"
@@ -94,9 +90,7 @@ class TestDashScopeConfig:
         # Make the actual API call through LiteLLM
         response = completion(
             model=model,
-            messages=[
-                {"role": "user", "content": "write code for saying hey from LiteLLM"}
-            ],
+            messages=[{"role": "user", "content": "write code for saying hey from LiteLLM"}],
             api_key=api_key,
             api_base=api_base,
         )
@@ -133,9 +127,7 @@ class TestDashScopeConfig:
         ]
 
         # Call the _transform_messages method directly
-        transformed_messages = config._transform_messages(
-            messages=messages, model="qwen-turbo", is_async=False
-        )
+        transformed_messages = config._transform_messages(messages=messages, model="qwen-turbo", is_async=False)
 
         # Verify that the content is still in list format and has not been transformed to a string
         assert isinstance(transformed_messages[0]["content"], list)
@@ -161,10 +153,8 @@ class TestDashScopeConfig:
             },
         ]
 
-        transformed_messages, _ = (
-            config.remove_cache_control_flag_from_messages_and_tools(
-                model="dashscope/qwen-turbo", messages=messages
-            )
+        transformed_messages, _ = config.remove_cache_control_flag_from_messages_and_tools(
+            model="dashscope/qwen-turbo", messages=messages
         )
 
         assert transformed_messages[0].get("cache_control") == {"type": "ephemeral"}

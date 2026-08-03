@@ -12,9 +12,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
@@ -27,18 +25,14 @@ class TestVertexAIAnthropicImageURLHandling:
     """Test that Vertex AI Anthropic converts image URLs to base64."""
 
     @patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
-    def test_vertex_ai_anthropic_converts_https_url_to_base64(
-        self, mock_convert_url: MagicMock
-    ):
+    def test_vertex_ai_anthropic_converts_https_url_to_base64(self, mock_convert_url: MagicMock):
         """
         Test that HTTPS image URLs are converted to base64 for Vertex AI Anthropic.
 
         For regular Anthropic, HTTPS URLs are passed through as URL type.
         For Vertex AI Anthropic, HTTPS URLs should be converted to base64.
         """
-        mock_convert_url.return_value = (
-            "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ=="
-        )
+        mock_convert_url.return_value = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ=="
 
         messages = [
             {
@@ -71,9 +65,7 @@ class TestVertexAIAnthropicImageURLHandling:
         assert image_content["source"]["type"] == "base64"
 
     @patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
-    def test_regular_anthropic_uses_url_type_for_https(
-        self, mock_convert_url: MagicMock
-    ):
+    def test_regular_anthropic_uses_url_type_for_https(self, mock_convert_url: MagicMock):
         """
         Test that regular Anthropic API uses URL type for HTTPS images.
 
@@ -189,9 +181,7 @@ class TestToolMessageImageURLHandling:
     """
 
     @patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
-    def test_convert_to_anthropic_tool_result_with_force_base64(
-        self, mock_convert_url: MagicMock
-    ):
+    def test_convert_to_anthropic_tool_result_with_force_base64(self, mock_convert_url: MagicMock):
         """
         Test that convert_to_anthropic_tool_result converts image URLs to base64
         when force_base64=True.
@@ -211,9 +201,7 @@ class TestToolMessageImageURLHandling:
 
         result = convert_to_anthropic_tool_result(tool_message, force_base64=True)
 
-        mock_convert_url.assert_called_once_with(
-            url="https://example.com/tool_result.jpg"
-        )
+        mock_convert_url.assert_called_once_with(url="https://example.com/tool_result.jpg")
         assert result["type"] == "tool_result"
         assert result["tool_use_id"] == "call_123"
 
@@ -224,9 +212,7 @@ class TestToolMessageImageURLHandling:
         assert content[0]["source"]["type"] == "base64"
 
     @patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
-    def test_convert_to_anthropic_tool_result_without_force_base64(
-        self, mock_convert_url: MagicMock
-    ):
+    def test_convert_to_anthropic_tool_result_without_force_base64(self, mock_convert_url: MagicMock):
         """
         Test that convert_to_anthropic_tool_result uses URL type when force_base64=False.
         """
@@ -253,9 +239,7 @@ class TestToolMessageImageURLHandling:
         assert content[0]["source"]["type"] == "url"
 
     @patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
-    def test_vertex_ai_tool_message_converts_image_to_base64(
-        self, mock_convert_url: MagicMock
-    ):
+    def test_vertex_ai_tool_message_converts_image_to_base64(self, mock_convert_url: MagicMock):
         """
         Test full conversation with tool result containing image for Vertex AI.
         The image URL should be converted to base64.
@@ -306,10 +290,7 @@ class TestToolMessageImageURLHandling:
         for msg in result:
             if msg.get("role") == "user":
                 for content_item in msg.get("content", []):
-                    if (
-                        isinstance(content_item, dict)
-                        and content_item.get("type") == "tool_result"
-                    ):
+                    if isinstance(content_item, dict) and content_item.get("type") == "tool_result":
                         tool_content = content_item.get("content", [])
                         for item in tool_content:
                             if isinstance(item, dict) and item.get("type") == "image":
@@ -366,10 +347,7 @@ class TestToolMessageImageURLHandling:
         for msg in result:
             if msg.get("role") == "user":
                 for content_item in msg.get("content", []):
-                    if (
-                        isinstance(content_item, dict)
-                        and content_item.get("type") == "tool_result"
-                    ):
+                    if isinstance(content_item, dict) and content_item.get("type") == "tool_result":
                         tool_content = content_item.get("content", [])
                         for item in tool_content:
                             if isinstance(item, dict) and item.get("type") == "image":

@@ -16,9 +16,7 @@ def mock_gcs_dependencies():
     mock_async_client = AsyncMock()
 
     with (
-        patch(
-            "litellm.caching.gcs_cache._get_httpx_client", return_value=mock_sync_client
-        ),
+        patch("litellm.caching.gcs_cache._get_httpx_client", return_value=mock_sync_client),
         patch(
             "litellm.caching.gcs_cache.get_async_httpx_client",
             return_value=mock_async_client,

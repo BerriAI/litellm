@@ -11,9 +11,7 @@ import os
 
 from test_streaming import streaming_format_tests
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -75,9 +73,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
         response = await litellm.acompletion(
             api_key="mock_api_key",
             model="anthropic/claude-sonnet-4-5-20250929",
-            messages=[
-                {"role": "user", "content": "What's the weather like in Boston today?"}
-            ],
+            messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
             tools=[
                 {
                     "type": "function",
@@ -158,9 +154,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
             "model": "claude-sonnet-4-5-20250929",
         }
 
-        mock_post.assert_called_once_with(
-            expected_url, json=expected_json, headers=expected_headers, timeout=600.0
-        )
+        mock_post.assert_called_once_with(expected_url, json=expected_json, headers=expected_headers, timeout=600.0)
 
 
 @pytest.fixture
@@ -250,8 +244,7 @@ async def test_anthropic_api_prompt_caching_basic():
                 "content": [
                     {
                         "type": "text",
-                        "text": "Here is the full text of a complex legal agreement"
-                        * 100,
+                        "text": "Here is the full text of a complex legal agreement" * 100,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -296,9 +289,7 @@ async def test_anthropic_api_prompt_caching_basic():
     assert "cache_creation_input_tokens" in response.usage
 
     # Assert either a cache entry was created or cache was read - changes depending on the anthropic api ttl
-    assert (response.usage.cache_read_input_tokens > 0) or (
-        response.usage.cache_creation_input_tokens > 0
-    )
+    assert (response.usage.cache_read_input_tokens > 0) or (response.usage.cache_creation_input_tokens > 0)
 
 
 @pytest.mark.flaky(retries=3, delay=2)
@@ -318,10 +309,7 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
                 "content": [
                     {
                         "type": "text",
-                        "text": "Here is the full text of a complex legal agreement {}".format(
-                            random_id
-                        )
-                        * 100,
+                        "text": "Here is the full text of a complex legal agreement {}".format(random_id) * 100,
                         "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
                 ],
@@ -366,9 +354,7 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
     assert "cache_creation_input_tokens" in response.usage
 
     # Assert either a cache entry was created or cache was read - changes depending on the anthropic api ttl
-    assert (response.usage.cache_read_input_tokens > 0) or (
-        response.usage.cache_creation_input_tokens > 0
-    )
+    assert (response.usage.cache_read_input_tokens > 0) or (response.usage.cache_creation_input_tokens > 0)
 
 
 @pytest.mark.asyncio()
@@ -380,9 +366,7 @@ async def test_anthropic_api_prompt_caching_with_content_str():
             "cache_control": {"type": "ephemeral"},
         },
     ]
-    translated_system_message = litellm.AnthropicConfig().translate_system_message(
-        messages=system_message
-    )
+    translated_system_message = litellm.AnthropicConfig().translate_system_message(messages=system_message)
 
     assert translated_system_message == [
         # System Message
@@ -452,9 +436,9 @@ async def test_anthropic_api_prompt_caching_with_content_str():
 
     assert len(translated_messages) == len(expected_messages)
     for idx, i in enumerate(translated_messages):
-        assert (
-            i == expected_messages[idx]
-        ), "Error on idx={}. Got={}, Expected={}".format(idx, i, expected_messages[idx])
+        assert i == expected_messages[idx], "Error on idx={}. Got={}, Expected={}".format(
+            idx, i, expected_messages[idx]
+        )
 
 
 @pytest.mark.flaky(retries=3, delay=2)
@@ -470,8 +454,7 @@ async def test_anthropic_api_prompt_caching_no_headers():
                 "content": [
                     {
                         "type": "text",
-                        "text": "Here is the full text of a complex legal agreement"
-                        * 100,
+                        "text": "Here is the full text of a complex legal agreement" * 100,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -513,9 +496,7 @@ async def test_anthropic_api_prompt_caching_no_headers():
     assert "cache_creation_input_tokens" in response.usage
 
     # Assert either a cache entry was created or cache was read - changes depending on the anthropic api ttl
-    assert (response.usage.cache_read_input_tokens > 0) or (
-        response.usage.cache_creation_input_tokens > 0
-    )
+    assert (response.usage.cache_read_input_tokens > 0) or (response.usage.cache_creation_input_tokens > 0)
 
 
 @pytest.mark.flaky(retries=3, delay=2)
@@ -530,8 +511,7 @@ async def test_anthropic_api_prompt_caching_streaming():
                 "content": [
                     {
                         "type": "text",
-                        "text": "Here is the full text of a complex legal agreement"
-                        * 100,
+                        "text": "Here is the full text of a complex legal agreement" * 100,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -579,18 +559,14 @@ async def test_anthropic_api_prompt_caching_streaming():
             print("Received final usage - {}".format(chunk.usage))
         if hasattr(chunk, "usage") and hasattr(chunk.usage, "cache_read_input_tokens"):
             is_cache_read_input_tokens_in_usage = True
-        if hasattr(chunk, "usage") and hasattr(
-            chunk.usage, "cache_creation_input_tokens"
-        ):
+        if hasattr(chunk, "usage") and hasattr(chunk.usage, "cache_creation_input_tokens"):
             is_cache_creation_input_tokens_in_usage = True
 
         idx += 1
 
     print("response=", response)
 
-    assert (
-        is_cache_read_input_tokens_in_usage and is_cache_creation_input_tokens_in_usage
-    )
+    assert is_cache_read_input_tokens_in_usage and is_cache_creation_input_tokens_in_usage
 
 
 @pytest.mark.asyncio
@@ -686,9 +662,7 @@ async def test_litellm_anthropic_prompt_caching_system():
             "model": "claude-sonnet-4-5-20250929",
         }
 
-        mock_post.assert_called_once_with(
-            expected_url, json=expected_json, headers=expected_headers, timeout=600.0
-        )
+        mock_post.assert_called_once_with(expected_url, json=expected_json, headers=expected_headers, timeout=600.0)
 
 
 def test_is_prompt_caching_enabled(anthropic_messages):
@@ -708,9 +682,7 @@ def test_is_prompt_caching_enabled(anthropic_messages):
 @pytest.mark.skip(
     reason="BETA FEATURE - skipping since this led to a latency impact, beta feature that is not used as yet"
 )
-async def test_router_prompt_caching_model_stored(
-    messages, expected_model_id, anthropic_messages
-):
+async def test_router_prompt_caching_model_stored(messages, expected_model_id, anthropic_messages):
     """
     If a model is called with prompt caching supported, then the model id should be stored in the router cache.
     """
@@ -805,15 +777,11 @@ async def test_router_with_prompt_caching(anthropic_messages):
     cached_model_id = cache.get_model_id(messages=anthropic_messages, tools=None)
 
     assert cached_model_id is not None
-    prompt_caching_cache_key = PromptCachingCache.get_prompt_caching_cache_key(
-        messages=anthropic_messages, tools=None
-    )
+    prompt_caching_cache_key = PromptCachingCache.get_prompt_caching_cache_key(messages=anthropic_messages, tools=None)
     print(f"prompt_caching_cache_key: {prompt_caching_cache_key}")
     assert cached_model_id["model_id"] == initial_model_id
 
-    new_messages = anthropic_messages + [
-        {"role": "user", "content": "What is the weather in SF?"}
-    ]
+    new_messages = anthropic_messages + [{"role": "user", "content": "What is the weather in SF?"}]
 
     for _ in range(20):
         response = await router.acompletion(

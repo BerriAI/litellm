@@ -74,9 +74,7 @@ class TestRAGBedrock(BaseRAGTest):
         response = bedrock_agent_runtime.retrieve(
             knowledgeBaseId=vector_store_id,
             retrievalQuery={"text": query},
-            retrievalConfiguration={
-                "vectorSearchConfiguration": {"numberOfResults": 5}
-            },
+            retrievalConfiguration={"vectorSearchConfiguration": {"numberOfResults": 5}},
         )
 
         if response.get("retrievalResults") and len(response["retrievalResults"]) > 0:

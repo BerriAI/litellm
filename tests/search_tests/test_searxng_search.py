@@ -64,9 +64,9 @@ class TestSearXNGSearchRequestTransformation:
                 optional_params={"country": country},
             )
             params = result["_searxng_params"]
-            assert (
-                params["language"] == expected_language
-            ), f"country={country} should map to language={expected_language}"
+            assert params["language"] == expected_language, (
+                f"country={country} should map to language={expected_language}"
+            )
 
     def test_max_results_ignored(self):
         """Test that max_results is accepted but doesn't add extra params."""
@@ -227,9 +227,7 @@ class TestSearXNGSearchResponseTransformation:
             }
         )
 
-        response = self.config.transform_search_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        response = self.config.transform_search_response(raw_response=raw, logging_obj=self.logging_obj)
 
         assert response.object == "search"
         assert len(response.results) == 2
@@ -249,9 +247,7 @@ class TestSearXNGSearchResponseTransformation:
         """Test transforming a response with no results."""
         raw = self._make_mock_response({"results": []})
 
-        response = self.config.transform_search_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        response = self.config.transform_search_response(raw_response=raw, logging_obj=self.logging_obj)
 
         assert response.object == "search"
         assert response.results == []
@@ -260,9 +256,7 @@ class TestSearXNGSearchResponseTransformation:
         """Test transforming a response that has no 'results' key."""
         raw = self._make_mock_response({"query": "test"})
 
-        response = self.config.transform_search_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        response = self.config.transform_search_response(raw_response=raw, logging_obj=self.logging_obj)
 
         assert response.object == "search"
         assert response.results == []
@@ -280,9 +274,7 @@ class TestSearXNGSearchResponseTransformation:
             }
         )
 
-        response = self.config.transform_search_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        response = self.config.transform_search_response(raw_response=raw, logging_obj=self.logging_obj)
 
         result = response.results[0]
         assert result.title == "Minimal Result"

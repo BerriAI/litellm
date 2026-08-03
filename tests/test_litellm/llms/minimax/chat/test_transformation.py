@@ -8,9 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../"))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import completion
@@ -103,9 +101,7 @@ def test_minimax_provider_config_manager():
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
-    config = ProviderConfigManager.get_provider_chat_config(
-        model="MiniMax-M2.1", provider=LlmProviders.MINIMAX
-    )
+    config = ProviderConfigManager.get_provider_chat_config(model="MiniMax-M2.1", provider=LlmProviders.MINIMAX)
 
     assert config is not None
     assert isinstance(config, MinimaxChatConfig)

@@ -4,7 +4,7 @@ Test for preset_cache_key multiple values bug fix.
 This test verifies that get_cache_key doesn't raise TypeError when kwargs
 already contains preset_cache_key.
 
-Issue: When get_cache_key(**kwargs) is called with kwargs containing 
+Issue: When get_cache_key(**kwargs) is called with kwargs containing
 preset_cache_key, the call to _set_preset_cache_key_in_kwargs() would fail with:
     TypeError: got multiple values for keyword argument 'preset_cache_key'
 """

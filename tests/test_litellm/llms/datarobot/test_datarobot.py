@@ -12,9 +12,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 @patch.dict(os.environ, {}, clear=True)
 def test_completion_datarobot():
     """Ensure that the completion function works with DataRobot API."""
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
     try:
         client = HTTPHandler()
         with patch.object(client, "post") as mock_post:
@@ -30,10 +28,7 @@ def test_completion_datarobot():
             # Add any assertions here to check the response
             mock_post.assert_called_once()
             mocks_kwargs = mock_post.call_args.kwargs
-            assert (
-                mocks_kwargs["url"]
-                == "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"
-            )
+            assert mocks_kwargs["url"] == "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"
             assert mocks_kwargs["headers"]["Authorization"] == "Bearer fake-api-key"
             json_data = json.loads(mock_post.call_args.kwargs["data"])
             assert json_data["clientId"] == "custom-model"
@@ -43,16 +38,12 @@ def test_completion_datarobot():
 
 @patch.dict(
     os.environ,
-    {
-        "DATAROBOT_ENDPOINT": "https://app.datarobot.com/api/v2/deployments/deployment_id/"
-    },
+    {"DATAROBOT_ENDPOINT": "https://app.datarobot.com/api/v2/deployments/deployment_id/"},
     clear=True,
 )
 def test_completion_datarobot_with_deployment():
     """Ensure that deployment URL is used correctly."""
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
     try:
         client = HTTPHandler()
         with patch.object(client, "post") as mock_post:
@@ -68,10 +59,7 @@ def test_completion_datarobot_with_deployment():
             # Add any assertions here to check the response
             mock_post.assert_called_once()
             mocks_kwargs = mock_post.call_args.kwargs
-            assert (
-                mocks_kwargs["url"]
-                == "https://app.datarobot.com/api/v2/deployments/deployment_id/"
-            )
+            assert mocks_kwargs["url"] == "https://app.datarobot.com/api/v2/deployments/deployment_id/"
             assert mocks_kwargs["headers"]["Authorization"] == "Bearer fake-api-key"
             json_data = json.loads(mock_post.call_args.kwargs["data"])
             assert json_data["clientId"] == "custom-model"
@@ -85,9 +73,7 @@ def test_completion_datarobot_with_environment_variables():
     if os.environ.get("DATAROBOT_API_TOKEN") is None:
         return
 
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
     try:
         response = completion(
             model="datarobot/vertex_ai/gemini-1.5-flash-002",

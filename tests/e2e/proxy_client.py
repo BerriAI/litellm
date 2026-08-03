@@ -142,9 +142,7 @@ class ProxyClient:
             response_type=FileListResponse,
         )
 
-    def list_fine_tuning_jobs(
-        self, key: str, params: FineTuningJobsParams
-    ) -> Result[FineTuningJobsResponse]:
+    def list_fine_tuning_jobs(self, key: str, params: FineTuningJobsParams) -> Result[FineTuningJobsResponse]:
         return self.transport.get(
             "/v1/fine_tuning/jobs",
             headers=self.transport.bearer(key),
@@ -196,9 +194,7 @@ class ProxyClient:
                 params=NoBody(),
                 response_type=ModelsListResponse,
             )
-            if isinstance(last_result, Success) and any(
-                entry.id == model_name for entry in last_result.data.data
-            ):
+            if isinstance(last_result, Success) and any(entry.id == model_name for entry in last_result.data.data):
                 return
             time.sleep(self.poll_interval)
         last_error = (

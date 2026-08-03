@@ -70,9 +70,7 @@ class TestTextCompletionTokenIds:
         assert response.usage.prompt_tokens == 2
 
     @respx.mock
-    def test_completion_prompt_token_ids_batch(
-        self, text_completion_response, monkeypatch
-    ):
+    def test_completion_prompt_token_ids_batch(self, text_completion_response, monkeypatch):
         """
         Test text_completion with multiple prompts as token IDs.
         """
@@ -99,9 +97,7 @@ class TestTextCompletionTokenIds:
             "usage": {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10},
         }
 
-        respx.post("https://api.openai.com/v1/completions").mock(
-            return_value=Response(200, json=batch_response)
-        )
+        respx.post("https://api.openai.com/v1/completions").mock(return_value=Response(200, json=batch_response))
 
         response = text_completion(
             model="gpt-3.5-turbo-instruct",

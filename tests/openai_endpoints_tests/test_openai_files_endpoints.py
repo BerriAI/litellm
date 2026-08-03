@@ -49,9 +49,7 @@ async def upload_file(session, purpose="fine-tune"):
     headers = {"Authorization": f"Bearer {API_KEY}"}
     data = aiohttp.FormData()
     data.add_field("purpose", purpose)
-    data.add_field(
-        "file", b'{"prompt": "Hello", "completion": "Hi"}', filename="mydata.jsonl"
-    )
+    data.add_field("file", b'{"prompt": "Hello", "completion": "Hi"}', filename="mydata.jsonl")
 
     async with session.post(url, headers=headers, data=data) as response:
         assert response.status == 200

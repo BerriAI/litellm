@@ -182,6 +182,4 @@ def test_eu_patterns_have_category():
     eu_category_patterns = PATTERN_CATEGORIES.get("EU PII Patterns", [])
 
     for pattern_name in eu_patterns:
-        assert (
-            pattern_name in eu_category_patterns
-        ), f"Pattern {pattern_name} not in EU PII Patterns category"
+        assert pattern_name in eu_category_patterns, f"Pattern {pattern_name} not in EU PII Patterns category"

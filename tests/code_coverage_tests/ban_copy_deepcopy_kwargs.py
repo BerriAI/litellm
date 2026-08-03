@@ -18,11 +18,7 @@ class CopyDeepcopyKwargsDetector(ast.NodeVisitor):
                         {
                             "line": node.lineno,
                             "arg_name": arg_name,
-                            "full_call": (
-                                ast.unparse(node)
-                                if hasattr(ast, "unparse")
-                                else str(node)
-                            ),
+                            "full_call": (ast.unparse(node) if hasattr(ast, "unparse") else str(node)),
                         }
                     )
 
@@ -32,11 +28,7 @@ class CopyDeepcopyKwargsDetector(ast.NodeVisitor):
         """Check if this is a copy.deepcopy() call"""
         if isinstance(node.func, ast.Attribute):
             # Case: copy.deepcopy()
-            if (
-                isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "copy"
-                and node.func.attr == "deepcopy"
-            ):
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "copy" and node.func.attr == "deepcopy":
                 return True
         elif isinstance(node.func, ast.Name):
             # Case: deepcopy() (if imported as 'from copy import deepcopy')
@@ -114,12 +106,10 @@ if __name__ == "__main__":
             print(f"\n📁 File: {file_path}")
             for violation in file_violations:
                 total_violations += 1
-                print(
-                    f"  ❌ Line {violation['line']}: copy.deepcopy({violation['arg_name']})"
-                )
+                print(f"  ❌ Line {violation['line']}: copy.deepcopy({violation['arg_name']})")
                 print(f"     Full call: {violation['full_call']}")
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"🚨 TOTAL VIOLATIONS: {total_violations}")
         print("🚨 USE safe_deep_copy() INSTEAD OF copy.deepcopy() FOR KWARGS!")
         print("🚨 Available imports:")

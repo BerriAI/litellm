@@ -8,9 +8,7 @@ import sys, os, time
 import traceback, asyncio
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
@@ -47,9 +45,7 @@ def test_add_pattern():
     assert list(router.patterns.keys())[0] == "openai/(.*)"
 
     # try getting the pattern
-    assert router.route(request="openai/gpt-15") == [
-        deployment.to_json(exclude_none=True)
-    ]
+    assert router.route(request="openai/gpt-15") == [deployment.to_json(exclude_none=True)]
 
 
 def test_add_pattern_vertex_ai():
@@ -69,9 +65,7 @@ def test_add_pattern_vertex_ai():
     assert list(router.patterns.keys())[0] == "vertex_ai/(.*)"
 
     # try getting the pattern
-    assert router.route(request="vertex_ai/gemini-1.5-flash-latest") == [
-        deployment.to_json(exclude_none=True)
-    ]
+    assert router.route(request="vertex_ai/gemini-1.5-flash-latest") == [deployment.to_json(exclude_none=True)]
 
 
 def test_add_multiple_deployments():
@@ -102,10 +96,7 @@ def test_pattern_to_regex():
     """
     router = PatternMatchRouter()
     assert router._pattern_to_regex("openai/*") == "openai/(.*)"
-    assert (
-        router._pattern_to_regex("openai/fo::*::static::*")
-        == "openai/fo::(.*)::static::(.*)"
-    )
+    assert router._pattern_to_regex("openai/fo::*::static::*") == "openai/fo::(.*)::static::(.*)"
 
 
 def test_route_with_none():
@@ -133,9 +124,7 @@ def test_route_with_multiple_matching_patterns():
     )
     router.add_pattern("openai/*", deployment1.to_json(exclude_none=True))
     router.add_pattern("openai/gpt-*", deployment2.to_json(exclude_none=True))
-    assert router.route("openai/gpt-3.5-turbo") == [
-        deployment2.to_json(exclude_none=True)
-    ]
+    assert router.route("openai/gpt-3.5-turbo") == [deployment2.to_json(exclude_none=True)]
 
 
 # Add this test to check for exception handling
@@ -151,9 +140,7 @@ def test_route_with_exception():
     )
     router.add_pattern("openai/*", deployment.to_json(exclude_none=True))
 
-    router.patterns = (
-        []
-    )  # this will cause router.route to raise an exception, since router.patterns should be a dict
+    router.patterns = []  # this will cause router.route to raise an exception, since router.patterns should be a dict
 
     result = router.route("openai/gpt-3.5-turbo")
     assert result is None
@@ -225,7 +212,6 @@ def test_router_pattern_match_e2e():
     )
 
     with patch.object(client, "post", new=MagicMock()) as mock_post:
-
         router.completion(
             model="llmengine/my-custom-model",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -342,9 +328,7 @@ def test_wildcard_priority_over_deployment_names():
                     "api_base": "http://localhost:8080/openai",
                     "api_key": "test-key-1",
                 },
-                "model_info": {
-                    "id": "zapier-multi-provider-text-embedding-3-small-openai"
-                },
+                "model_info": {"id": "zapier-multi-provider-text-embedding-3-small-openai"},
             },
             {
                 "model_name": "*",
@@ -372,26 +356,24 @@ def test_wildcard_priority_over_deployment_names():
     assert len(deployments) == 1, f"Expected 1 deployment, got {len(deployments)}"
 
     # Should match the "openai/*" wildcard deployment (api_base ending in 8082)
-    assert (
-        deployments[0]["litellm_params"]["api_base"] == "http://localhost:8082/openai"
-    ), f"Expected wildcard deployment (8082), got {deployments[0]['litellm_params']['api_base']}"
+    assert deployments[0]["litellm_params"]["api_base"] == "http://localhost:8082/openai", (
+        f"Expected wildcard deployment (8082), got {deployments[0]['litellm_params']['api_base']}"
+    )
 
     # Test 2: Request exact model_name should still work
-    deployments = router.get_model_list(
-        model_name="zapier-multi-provider-text-embedding-3-small"
-    )
+    deployments = router.get_model_list(model_name="zapier-multi-provider-text-embedding-3-small")
 
     assert deployments is not None, "No deployments found"
     assert len(deployments) == 1, f"Expected 1 deployment, got {len(deployments)}"
-    assert (
-        deployments[0]["litellm_params"]["api_base"] == "http://localhost:8080/openai"
-    ), f"Expected exact match deployment (8080), got {deployments[0]['litellm_params']['api_base']}"
+    assert deployments[0]["litellm_params"]["api_base"] == "http://localhost:8080/openai", (
+        f"Expected exact match deployment (8080), got {deployments[0]['litellm_params']['api_base']}"
+    )
 
     # Test 3: Request with "*" wildcard should match the "*" deployment
     deployments = router.get_model_list(model_name="some-random-model")
 
     assert deployments is not None, "No deployments found"
     assert len(deployments) == 1, f"Expected 1 deployment, got {len(deployments)}"
-    assert (
-        deployments[0]["litellm_params"]["api_base"] == "http://localhost:8081/openai"
-    ), f"Expected '*' wildcard deployment (8081), got {deployments[0]['litellm_params']['api_base']}"
+    assert deployments[0]["litellm_params"]["api_base"] == "http://localhost:8081/openai", (
+        f"Expected '*' wildcard deployment (8081), got {deployments[0]['litellm_params']['api_base']}"
+    )

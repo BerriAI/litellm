@@ -73,9 +73,7 @@ def test_transform_request_body_inpainting():
 def test_transform_response_dict_to_openai_response():
     response_dict = {"images": ["b64img1", "b64img2"]}
     model_response = ImageResponse()
-    result = AmazonNovaCanvasConfig.transform_response_dict_to_openai_response(
-        model_response, response_dict
-    )
+    result = AmazonNovaCanvasConfig.transform_response_dict_to_openai_response(model_response, response_dict)
     assert hasattr(result, "data")
     assert len(result.data) == 2
     assert result.data[0].b64_json == "b64img1"

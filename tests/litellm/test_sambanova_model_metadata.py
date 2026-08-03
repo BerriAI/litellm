@@ -11,9 +11,7 @@ def test_sambanova_minimax_m27_model_info():
         model_cost = json.load(f)
 
     info = model_cost.get(model)
-    assert (
-        info is not None
-    ), f"{model} not found in model_prices_and_context_window.json"
+    assert info is not None, f"{model} not found in model_prices_and_context_window.json"
     assert info["litellm_provider"] == "sambanova"
     assert info["mode"] == "chat"
     assert info["input_cost_per_token"] > 0

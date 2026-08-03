@@ -1,9 +1,7 @@
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../"))  # Adds the parent directory to the system path
 
 import httpx
 import pytest
@@ -66,9 +64,7 @@ def test_process_azure_headers_with_partial_headers():
 
 
 def test_process_azure_headers_with_no_matching_headers():
-    input_headers = Headers(
-        {"unrelated-header-1": "value1", "unrelated-header-2": "value2"}
-    )
+    input_headers = Headers({"unrelated-header-1": "value1", "unrelated-header-2": "value2"})
 
     expected_output = {
         "llm_provider-unrelated-header-1": "value1",
@@ -219,9 +215,7 @@ class TestAzureEmbedding(BaseLLMEmbeddingTest):
 
 @patch("azure.identity.UsernamePasswordCredential")
 @patch("azure.identity.get_bearer_token_provider")
-def test_get_azure_ad_token_from_username_password(
-    mock_get_bearer_token_provider, mock_credential
-):
+def test_get_azure_ad_token_from_username_password(mock_get_bearer_token_provider, mock_credential):
     from litellm.llms.azure.common_utils import (
         get_azure_ad_token_from_username_password,
     )
@@ -241,9 +235,7 @@ def test_get_azure_ad_token_from_username_password(
     )
 
     # Verify UsernamePasswordCredential was called with correct arguments
-    mock_credential.assert_called_once_with(
-        client_id=client_id, username=username, password=password
-    )
+    mock_credential.assert_called_once_with(client_id=client_id, username=username, password=password)
 
     # Verify get_bearer_token_provider was called
     mock_get_bearer_token_provider.assert_called_once_with(
@@ -267,7 +259,6 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
     )
 
     class ResponseFormat(BaseModel):
-
         number: str = Field(description="total number of days in a week")
         days: list[str] = Field(description="name of days in a week")
 
@@ -468,12 +459,8 @@ def test_map_openai_params():
 
 @pytest.mark.parametrize("max_retries", [0, 4])
 @pytest.mark.parametrize("stream", [True, False])
-@patch(
-    "litellm.main.azure_chat_completions.make_sync_azure_openai_chat_completion_request"
-)
-def test_azure_max_retries_0(
-    mock_make_sync_azure_openai_chat_completion_request, max_retries, stream
-):
+@patch("litellm.main.azure_chat_completions.make_sync_azure_openai_chat_completion_request")
+def test_azure_max_retries_0(mock_make_sync_azure_openai_chat_completion_request, max_retries, stream):
     import litellm
     from litellm import completion
 
@@ -492,10 +479,7 @@ def test_azure_max_retries_0(
 
     mock_make_sync_azure_openai_chat_completion_request.assert_called_once()
     assert (
-        mock_make_sync_azure_openai_chat_completion_request.call_args.kwargs[
-            "azure_client"
-        ].max_retries
-        == max_retries
+        mock_make_sync_azure_openai_chat_completion_request.call_args.kwargs["azure_client"].max_retries == max_retries
     )
 
 
@@ -503,9 +487,7 @@ def test_azure_max_retries_0(
 @pytest.mark.parametrize("stream", [True, False])
 @patch("litellm.main.azure_chat_completions.make_azure_openai_chat_completion_request")
 @pytest.mark.asyncio
-async def test_async_azure_max_retries_0(
-    make_azure_openai_chat_completion_request, max_retries, stream
-):
+async def test_async_azure_max_retries_0(make_azure_openai_chat_completion_request, max_retries, stream):
     import litellm
     from litellm import acompletion
 
@@ -523,12 +505,7 @@ async def test_async_azure_max_retries_0(
         print(e)
 
     make_azure_openai_chat_completion_request.assert_called_once()
-    assert (
-        make_azure_openai_chat_completion_request.call_args.kwargs[
-            "azure_client"
-        ].max_retries
-        == max_retries
-    )
+    assert make_azure_openai_chat_completion_request.call_args.kwargs["azure_client"].max_retries == max_retries
 
 
 @pytest.mark.parametrize("max_retries", [0, 4])
@@ -536,9 +513,7 @@ async def test_async_azure_max_retries_0(
 @pytest.mark.parametrize("sync_mode", [True, False])
 @patch("litellm.llms.azure.common_utils.select_azure_base_url_or_endpoint")
 @pytest.mark.asyncio
-async def test_azure_instruct(
-    mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode
-):
+async def test_azure_instruct(mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode):
     import litellm
     from litellm import completion, acompletion
 
@@ -547,9 +522,7 @@ async def test_azure_instruct(
 
     args = {
         "model": "azure_text/instruct-model",
-        "messages": [
-            {"role": "user", "content": "What is the weather like in Boston?"}
-        ],
+        "messages": [{"role": "user", "content": "What is the weather like in Boston?"}],
         "max_tokens": 10,
         "max_retries": max_retries,
     }
@@ -563,21 +536,14 @@ async def test_azure_instruct(
         pass
 
     mock_select_azure_base_url_or_endpoint.assert_called_once()
-    assert (
-        mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"][
-            "max_retries"
-        ]
-        == max_retries
-    )
+    assert mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"]["max_retries"] == max_retries
 
 
 @pytest.mark.parametrize("max_retries", [0, 4])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @patch("litellm.llms.azure.common_utils.select_azure_base_url_or_endpoint")
 @pytest.mark.asyncio
-async def test_azure_embedding_max_retries_0(
-    mock_select_azure_base_url_or_endpoint, max_retries, sync_mode
-):
+async def test_azure_embedding_max_retries_0(mock_select_azure_base_url_or_endpoint, max_retries, sync_mode):
     import litellm
     from litellm import aembedding, embedding
 
@@ -603,12 +569,7 @@ async def test_azure_embedding_max_retries_0(
         "mock_select_azure_base_url_or_endpoint.call_args.kwargs",
         mock_select_azure_base_url_or_endpoint.call_args.kwargs,
     )
-    assert (
-        mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"][
-            "max_retries"
-        ]
-        == max_retries
-    )
+    assert mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"]["max_retries"] == max_retries
 
 
 def test_azure_safety_result():
@@ -648,10 +609,7 @@ def test_azure_openai_responses_bridge():
             print(e)
 
         mock_responses.assert_called_once()
-        assert (
-            mock_responses.call_args.kwargs["model"]
-            == "test-azure-computer-use-preview"
-        )
+        assert mock_responses.call_args.kwargs["model"] == "test-azure-computer-use-preview"
         assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
 
 
@@ -715,22 +673,9 @@ def test_azure_with_content_safety_error():
     assert e.provider_specific_fields is not None
     print("got provider_specific_fields=", e.provider_specific_fields)
     assert e.provider_specific_fields.get("innererror") is not None
-    assert (
-        e.provider_specific_fields["innererror"]["code"]
-        == "ResponsibleAIPolicyViolation"
-    )
-    assert (
-        e.provider_specific_fields["innererror"]["content_filter_result"]["violence"][
-            "filtered"
-        ]
-        is True
-    )
-    assert (
-        e.provider_specific_fields["innererror"]["content_filter_result"]["violence"][
-            "severity"
-        ]
-        == "high"
-    )
+    assert e.provider_specific_fields["innererror"]["code"] == "ResponsibleAIPolicyViolation"
+    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["filtered"] is True
+    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["severity"] == "high"
 
 
 def test_azure_openai_with_prompt_cache_key():

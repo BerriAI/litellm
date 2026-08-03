@@ -35,9 +35,7 @@ def test_no_fields_set_sends_full_body():
     }
 
     # No guardrail settings means full body
-    result = PassthroughGuardrailHandler.prepare_input(
-        request_data=request_data, guardrail_settings=None
-    )
+    result = PassthroughGuardrailHandler.prepare_input(request_data=request_data, guardrail_settings=None)
 
     # Result should be JSON string of full request
     assert isinstance(result, str)
@@ -68,9 +66,7 @@ def test_request_fields_query_only():
     # Set request_fields to only extract query
     guardrail_settings = PassThroughGuardrailSettings(request_fields=["query"])
 
-    result = PassthroughGuardrailHandler.prepare_input(
-        request_data=request_data, guardrail_settings=guardrail_settings
-    )
+    result = PassthroughGuardrailHandler.prepare_input(request_data=request_data, guardrail_settings=guardrail_settings)
 
     # Result should only contain query
     assert isinstance(result, str)
@@ -98,9 +94,7 @@ def test_request_fields_documents_wildcard():
     # Set request_fields to extract documents array
     guardrail_settings = PassThroughGuardrailSettings(request_fields=["documents[*]"])
 
-    result = PassthroughGuardrailHandler.prepare_input(
-        request_data=request_data, guardrail_settings=guardrail_settings
-    )
+    result = PassthroughGuardrailHandler.prepare_input(request_data=request_data, guardrail_settings=guardrail_settings)
 
     # Result should contain documents
     assert isinstance(result, str)

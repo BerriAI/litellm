@@ -31,9 +31,7 @@ def patched_embedding(monkeypatch):
     router.model_names = ["text-embedding-ada-002"]
     router.get_deployment_by_model_group_name = MagicMock(return_value=None)
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     async def _fake_process(self, *args, **kwargs):
         return dict(HAPPY_RESPONSE)
@@ -51,9 +49,7 @@ def embedding_pipeline_raises(monkeypatch):
     router = MagicMock()
     router.model_names = []
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     from litellm.proxy._types import ProxyException
 
@@ -61,9 +57,7 @@ def embedding_pipeline_raises(monkeypatch):
         raise ValueError("boom")
 
     async def _handler(self, *, e, user_api_key_dict, proxy_logging_obj, version=None):
-        return ProxyException(
-            message="boom", type="bad_request_error", param="model", code=400
-        )
+        return ProxyException(message="boom", type="bad_request_error", param="model", code=400)
 
     monkeypatch.setattr(
         common_request_processing.ProxyBaseLLMRequestProcessing,

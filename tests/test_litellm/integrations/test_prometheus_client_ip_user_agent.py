@@ -16,16 +16,12 @@ async def test_async_post_call_failure_hook_includes_client_ip_user_agent():
     """
     # Mocking
     # Mocking
-    with patch(
-        "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
-    ):
+    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
         logger = PrometheusLogger()
         # Initialize attributes manually as __init__ is mocked
         logger.litellm_proxy_failed_requests_metric = MagicMock()
         logger.litellm_proxy_total_requests_metric = MagicMock()
-        logger.get_labels_for_metric = MagicMock(
-            return_value=["client_ip", "user_agent"]
-        )
+        logger.get_labels_for_metric = MagicMock(return_value=["client_ip", "user_agent"])
 
     request_data = {
         "model": "gpt-4",
@@ -38,9 +34,7 @@ async def test_async_post_call_failure_hook_includes_client_ip_user_agent():
     original_exception = Exception("Test exception")
 
     # Mock prometheus_label_factory to inspect arguments
-    with patch(
-        "litellm.integrations.prometheus.prometheus_label_factory"
-    ) as mock_label_factory:
+    with patch("litellm.integrations.prometheus.prometheus_label_factory") as mock_label_factory:
         mock_label_factory.return_value = {}
 
         await logger.async_post_call_failure_hook(
@@ -59,16 +53,11 @@ async def test_async_post_call_failure_hook_includes_client_ip_user_agent():
             kwargs = call.kwargs
             enum_values = kwargs.get("enum_values")
             if isinstance(enum_values, UserAPIKeyLabelValues):
-                if (
-                    enum_values.client_ip == "127.0.0.1"
-                    and enum_values.user_agent == "test-agent"
-                ):
+                if enum_values.client_ip == "127.0.0.1" and enum_values.user_agent == "test-agent":
                     found = True
                     break
 
-        assert (
-            found
-        ), "UserAPIKeyLabelValues should contain client_ip='127.0.0.1' and user_agent='test-agent'"
+        assert found, "UserAPIKeyLabelValues should contain client_ip='127.0.0.1' and user_agent='test-agent'"
 
 
 @pytest.mark.asyncio
@@ -80,14 +69,10 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
     to async_log_success_event to prevent double-counting.
     """
     # Mocking
-    with patch(
-        "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
-    ):
+    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
         logger = PrometheusLogger()
         logger.litellm_proxy_total_requests_metric = MagicMock()
-        logger.get_labels_for_metric = MagicMock(
-            return_value=["client_ip", "user_agent"]
-        )
+        logger.get_labels_for_metric = MagicMock(return_value=["client_ip", "user_agent"])
         logger._should_skip_metrics_for_invalid_key = MagicMock(return_value=False)
         logger._increment_top_level_request_and_spend_metrics = MagicMock()
         logger._increment_token_metrics = MagicMock()
@@ -127,9 +112,7 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
     }
 
     # Mock prometheus_label_factory to inspect arguments
-    with patch(
-        "litellm.integrations.prometheus.prometheus_label_factory"
-    ) as mock_label_factory:
+    with patch("litellm.integrations.prometheus.prometheus_label_factory") as mock_label_factory:
         mock_label_factory.return_value = {}
 
         await logger.async_log_success_event(
@@ -149,16 +132,11 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
             kwargs_args = call.kwargs
             enum_values = kwargs_args.get("enum_values")
             if isinstance(enum_values, UserAPIKeyLabelValues):
-                if (
-                    enum_values.client_ip == "192.168.1.1"
-                    and enum_values.user_agent == "success-agent"
-                ):
+                if enum_values.client_ip == "192.168.1.1" and enum_values.user_agent == "success-agent":
                     found = True
                     break
 
-        assert (
-            found
-        ), "UserAPIKeyLabelValues should contain client_ip='192.168.1.1' and user_agent='success-agent'"
+        assert found, "UserAPIKeyLabelValues should contain client_ip='192.168.1.1' and user_agent='success-agent'"
 
 
 def test_set_llm_deployment_failure_metrics_includes_client_ip_user_agent():
@@ -167,15 +145,11 @@ def test_set_llm_deployment_failure_metrics_includes_client_ip_user_agent():
     """
     # Mocking
     # Mocking
-    with patch(
-        "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
-    ):
+    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
         logger = PrometheusLogger()
         logger.litellm_deployment_failure_responses = MagicMock()
         logger.litellm_deployment_total_requests = MagicMock()
-        logger.get_labels_for_metric = MagicMock(
-            return_value=["client_ip", "user_agent"]
-        )
+        logger.get_labels_for_metric = MagicMock(return_value=["client_ip", "user_agent"])
         logger.set_deployment_partial_outage = MagicMock()
 
     request_kwargs = {
@@ -197,9 +171,7 @@ def test_set_llm_deployment_failure_metrics_includes_client_ip_user_agent():
     }
 
     # Mock prometheus_label_factory to inspect arguments
-    with patch(
-        "litellm.integrations.prometheus.prometheus_label_factory"
-    ) as mock_label_factory:
+    with patch("litellm.integrations.prometheus.prometheus_label_factory") as mock_label_factory:
         mock_label_factory.return_value = {}
 
         logger.set_llm_deployment_failure_metrics(request_kwargs=request_kwargs)
@@ -214,16 +186,11 @@ def test_set_llm_deployment_failure_metrics_includes_client_ip_user_agent():
             kwargs = call.kwargs
             enum_values = kwargs.get("enum_values")
             if isinstance(enum_values, UserAPIKeyLabelValues):
-                if (
-                    enum_values.client_ip == "10.0.0.1"
-                    and enum_values.user_agent == "failure-deployment"
-                ):
+                if enum_values.client_ip == "10.0.0.1" and enum_values.user_agent == "failure-deployment":
                     found = True
                     break
 
-        assert (
-            found
-        ), "UserAPIKeyLabelValues should contain client_ip='10.0.0.1' and user_agent='failure-deployment'"
+        assert found, "UserAPIKeyLabelValues should contain client_ip='10.0.0.1' and user_agent='failure-deployment'"
 
 
 if __name__ == "__main__":

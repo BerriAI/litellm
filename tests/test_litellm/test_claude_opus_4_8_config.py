@@ -201,7 +201,5 @@ def test_opus_4_8_all_variants_carry_adaptive_thinking_flag(cost_map):
     against a future variant being added without it."""
     variants = [k for k in cost_map if "claude-opus-4-8" in k]
     assert variants, "no claude-opus-4-8 entries found in cost map"
-    missing = [
-        k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True
-    ]
+    missing = [k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True]
     assert not missing, f"missing supports_adaptive_thinking: {missing}"

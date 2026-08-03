@@ -67,9 +67,7 @@ class TestWeeklySessionAnomaly:
         model_name = f"weekly-anomaly-{route.route_id}-{unique_marker()}"
         model_id = client.proxy.create_model(model_name, route.params)
         resources.defer(lambda: client.proxy.delete_model(model_id))
-        key = client.proxy.generate_key(
-            KeyGenerateBody(models=[model_name], key_alias=model_name)
-        )
+        key = client.proxy.generate_key(KeyGenerateBody(models=[model_name], key_alias=model_name))
         resources.defer(lambda: client.proxy.delete_key(key))
 
         turns = run_concurrent_sessions(

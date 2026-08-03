@@ -7,9 +7,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.recraft.image_generation.transformation import (
     RecraftImageGenerationConfig,
@@ -105,9 +103,7 @@ class TestRecraftImageGenerationTransformation:
             litellm_params={},
         )
 
-        expected_url = (
-            f"https://secret.api.recraft.ai/{self.config.IMAGE_GENERATION_ENDPOINT}"
-        )
+        expected_url = f"https://secret.api.recraft.ai/{self.config.IMAGE_GENERATION_ENDPOINT}"
         assert result == expected_url
         mock_get_secret.assert_called_once_with("RECRAFT_API_BASE")
 
@@ -124,9 +120,7 @@ class TestRecraftImageGenerationTransformation:
             litellm_params={},
         )
 
-        expected_url = (
-            f"{self.config.DEFAULT_BASE_URL}/{self.config.IMAGE_GENERATION_ENDPOINT}"
-        )
+        expected_url = f"{self.config.DEFAULT_BASE_URL}/{self.config.IMAGE_GENERATION_ENDPOINT}"
         assert result == expected_url
 
     @patch("litellm.llms.recraft.image_generation.transformation.get_secret_str")

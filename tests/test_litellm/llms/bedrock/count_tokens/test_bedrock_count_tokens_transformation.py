@@ -3,9 +3,7 @@ import json
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from litellm.llms.bedrock.count_tokens.transformation import (
     DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
     BedrockCountTokensConfig,
@@ -232,9 +230,7 @@ def test_tool_name_sanitization():
 
     result = config.transform_anthropic_to_bedrock_count_tokens(request)
 
-    tool_name = result["input"]["converse"]["toolConfig"]["tools"][0]["toolSpec"][
-        "name"
-    ]
+    tool_name = result["input"]["converse"]["toolConfig"]["tools"][0]["toolSpec"]["name"]
     # Should be sanitized: only [a-zA-Z0-9_]
     assert tool_name == "my_tool_"
 

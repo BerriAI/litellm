@@ -20,9 +20,7 @@ import fakeredis
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import logging
 
@@ -99,9 +97,7 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
 request_data = {
     "model": "azure-gpt-3.5",
-    "messages": [
-        {"role": "user", "content": "this is my new test. respond in 50 lines"}
-    ],
+    "messages": [{"role": "user", "content": "this is my new test. respond in 50 lines"}],
 }
 
 
@@ -116,14 +112,10 @@ def prisma_client():
     os.environ["DATABASE_URL"] = modified_url
 
     # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
+    litellm.proxy.proxy_server.litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
@@ -221,9 +213,7 @@ async def test_pod_lock_acquisition_after_expiry():
         cronjob_id=cronjob_id,
     )
 
-    assert (
-        result == True
-    ), "Second pod should acquire lock after first pod's lock expires"
+    assert result == True, "Second pod should acquire lock after first pod's lock expires"
 
     # Verify in redis
     lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
@@ -438,9 +428,9 @@ async def test_e2e_size_of_redis_buffer():
 
     # get the size of each queue
     for queue in initialized_queues:
-        assert (
-            queue.update_queue.qsize() == 1
-        ), f"Queue {queue.__class__.__name__} was not initialized with mock data. Expected size 1, got {queue.update_queue.qsize()}"
+        assert queue.update_queue.qsize() == 1, (
+            f"Queue {queue.__class__.__name__} was not initialized with mock data. Expected size 1, got {queue.update_queue.qsize()}"
+        )
 
     # flush from in-memory -> redis -> to DB
     with patch(

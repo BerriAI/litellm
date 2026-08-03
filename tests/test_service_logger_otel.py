@@ -25,9 +25,7 @@ class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_tracing")
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_metrics")
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_logs")
-    async def test_langfuse_otel_ignores_service_logs(
-        self, mock_logs, mock_metrics, mock_tracing
-    ):
+    async def test_langfuse_otel_ignores_service_logs(self, mock_logs, mock_metrics, mock_tracing):
         """
         Test that LangfuseOtelLogger overrides the service logging hooks with 'pass'.
         """
@@ -46,9 +44,7 @@ class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_tracing")
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_metrics")
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_logs")
-    async def test_langfuse_otel_does_not_create_proxy_request_span(
-        self, mock_logs, mock_metrics, mock_tracing
-    ):
+    async def test_langfuse_otel_does_not_create_proxy_request_span(self, mock_logs, mock_metrics, mock_tracing):
         """
         Test that LangfuseOtelLogger returns None for create_litellm_proxy_request_started_span.
 
@@ -73,9 +69,7 @@ class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_tracing")
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_metrics")
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_logs")
-    async def test_service_logging_shadowing_fix(
-        self, mock_logs, mock_metrics, mock_tracing
-    ):
+    async def test_service_logging_shadowing_fix(self, mock_logs, mock_metrics, mock_tracing):
         """
         Test the architectural fix: multiple OTEL loggers should receive logs independently.
         """
@@ -89,9 +83,7 @@ class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
         service_logging = ServiceLogging()
 
         # 3. Mock the base OpenTelemetry hook
-        with patch.object(
-            OpenTelemetry, "async_service_success_hook", new_callable=AsyncMock
-        ) as mock_base_hook:
+        with patch.object(OpenTelemetry, "async_service_success_hook", new_callable=AsyncMock) as mock_base_hook:
             # Trigger a service event
             await service_logging.async_service_success_hook(
                 service=ServiceTypes.DB,
@@ -112,9 +104,7 @@ class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_tracing")
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_metrics")
     @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_logs")
-    async def test_langfuse_otel_env_config_includes_v4_ingestion_header(
-        self, mock_logs, mock_metrics, mock_tracing
-    ):
+    async def test_langfuse_otel_env_config_includes_v4_ingestion_header(self, mock_logs, mock_metrics, mock_tracing):
         logger = LangfuseOtelLogger()
 
         headers = OpenTelemetry._get_headers_dictionary(logger.config.headers)

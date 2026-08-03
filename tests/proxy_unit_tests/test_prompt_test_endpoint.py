@@ -27,9 +27,7 @@ User: Hello {{name}}, how are you?"""
 
         # Parse the dotprompt
         prompt_manager = PromptManager()
-        frontmatter, template_content = prompt_manager._parse_frontmatter(
-            content=dotprompt_content
-        )
+        frontmatter, template_content = prompt_manager._parse_frontmatter(content=dotprompt_content)
 
         assert frontmatter["model"] == "gpt-4o"
         assert frontmatter["temperature"] == 0.7
@@ -159,9 +157,7 @@ User: Hello"""
             "temperature": 0.7,
         }
 
-        template = PromptTemplate(
-            content="User: Hello", metadata=malicious_frontmatter, template_id="test"
-        )
+        template = PromptTemplate(content="User: Hello", metadata=malicious_frontmatter, template_id="test")
 
         # api_base must flow into optional_params — that's the attack surface
         assert "api_base" in template.optional_params

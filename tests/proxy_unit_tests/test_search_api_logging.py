@@ -2,7 +2,7 @@
 Test search API logging and cost tracking in proxy.
 
 Tests that search API requests are properly logged to LiteLLM_SpendLogs
-with correct fields populated (call_type, model, custom_llm_provider, 
+with correct fields populated (call_type, model, custom_llm_provider,
 model_group, spend, etc.)
 """
 
@@ -43,9 +43,7 @@ def prisma_client():
     user_api_key_cache = DualCache()
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     proxy_server.litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     proxy_server.user_custom_key_generate = None
@@ -102,9 +100,7 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
     )
 
     key_request = GenerateKeyRequest(models=[], duration=None)
-    key_response = await generate_key_fn(
-        data=key_request, user_api_key_dict=user_api_key_dict
-    )
+    key_response = await generate_key_fn(data=key_request, user_api_key_dict=user_api_key_dict)
     generated_key = key_response.key
     user_id = key_response.user_id
 
@@ -193,10 +189,7 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
         # API key should be hashed (either the generated key or the one from metadata)
         assert spend_log.api_key != ""  # Should be populated
         # Note: user field may be empty if not set in the request, but user_id should be in metadata
-        assert (
-            spend_log.metadata.get("user_api_key_user_id") == user_id
-            or spend_log.user == user_id
-        )
+        assert spend_log.metadata.get("user_api_key_user_id") == user_id or spend_log.user == user_id
 
         print(f"✅ Search API logging test passed!")
         print(f"   - call_type: {spend_log.call_type}")

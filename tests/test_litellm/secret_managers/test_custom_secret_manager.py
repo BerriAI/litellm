@@ -9,9 +9,7 @@ from typing import Optional, Union
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager

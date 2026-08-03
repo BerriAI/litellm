@@ -104,24 +104,12 @@ def _actor_profile() -> Dict[Actor, Dict[str, Any]]:
 
 
 async def _wipe_world(prisma: PrismaClient) -> None:
-    await prisma.db.litellm_verificationtoken.delete_many(
-        where={"user_id": {"startswith": PREFIX}}
-    )
-    await prisma.db.litellm_organizationmembership.delete_many(
-        where={"user_id": {"startswith": PREFIX}}
-    )
-    await prisma.db.litellm_teammembership.delete_many(
-        where={"user_id": {"startswith": PREFIX}}
-    )
-    await prisma.db.litellm_usertable.delete_many(
-        where={"user_id": {"startswith": PREFIX}}
-    )
-    await prisma.db.litellm_teamtable.delete_many(
-        where={"team_id": {"startswith": PREFIX}}
-    )
-    await prisma.db.litellm_organizationtable.delete_many(
-        where={"organization_id": {"startswith": PREFIX}}
-    )
+    await prisma.db.litellm_verificationtoken.delete_many(where={"user_id": {"startswith": PREFIX}})
+    await prisma.db.litellm_organizationmembership.delete_many(where={"user_id": {"startswith": PREFIX}})
+    await prisma.db.litellm_teammembership.delete_many(where={"user_id": {"startswith": PREFIX}})
+    await prisma.db.litellm_usertable.delete_many(where={"user_id": {"startswith": PREFIX}})
+    await prisma.db.litellm_teamtable.delete_many(where={"team_id": {"startswith": PREFIX}})
+    await prisma.db.litellm_organizationtable.delete_many(where={"organization_id": {"startswith": PREFIX}})
     await prisma.db.litellm_budgettable.delete_many(where={"budget_id": BUDGET_ID})
 
 
@@ -242,9 +230,7 @@ async def seed_world(prisma: PrismaClient) -> World:
         (Actor.SERVICE_ACCOUNT, TEAM_ALPHA),
         (Actor.CROSS_ORG_USER, TEAM_BETA),
     ]:
-        await prisma.db.litellm_teammembership.create(
-            data={"user_id": user_ids[actor], "team_id": team_id}
-        )
+        await prisma.db.litellm_teammembership.create(data={"user_id": user_ids[actor], "team_id": team_id})
 
     keys: Dict[Actor, SeededKey] = {}
     for actor, profile in profiles.items():
@@ -265,9 +251,7 @@ async def seed_world(prisma: PrismaClient) -> World:
         if actor == Actor.SERVICE_ACCOUNT:
             token_data["metadata"] = Json({"service_account_id": user_ids[actor]})
         await prisma.db.litellm_verificationtoken.create(data=token_data)
-        keys[actor] = SeededKey(
-            user_id=user_ids[actor], cleartext=cleartext, hashed=hashed
-        )
+        keys[actor] = SeededKey(user_id=user_ids[actor], cleartext=cleartext, hashed=hashed)
 
     return World(
         org_a_id=ORG_A,

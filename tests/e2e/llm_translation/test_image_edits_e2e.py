@@ -31,9 +31,7 @@ _TEST_PNG = base64.b64decode(
 
 class TestImageEdit:
     @pytest.mark.covers("llm.images_edits.openai.basic.nonstream.works")
-    def test_image_edit_returns_image(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_image_edit_returns_image(self, endpoints_client: EndpointsClient, resources: ResourceManager) -> None:
         model = f"e2e-image-edit-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
@@ -42,13 +40,7 @@ class TestImageEdit:
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
 
-        edited = unwrap(
-            endpoints_client.image_edit(
-                key, model, "Add a small red circle in the center", _TEST_PNG
-            )
-        )
+        edited = unwrap(endpoints_client.image_edit(key, model, "Add a small red circle in the center", _TEST_PNG))
         assert edited.data, f"/images/edits returned no data: {edited}"
         first = edited.data[0]
-        assert first.b64_json or first.url, (
-            f"edited image has neither b64_json nor url: {first}"
-        )
+        assert first.b64_json or first.url, f"edited image has neither b64_json nor url: {first}"

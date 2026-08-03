@@ -53,9 +53,7 @@ class TestFallbackCreateRequest:
 
     def test_duplicate_fallback_models(self):
         """Test that duplicate fallback models raise validation error"""
-        with pytest.raises(
-            ValueError, match="fallback_models must not contain duplicates"
-        ):
+        with pytest.raises(ValueError, match="fallback_models must not contain duplicates"):
             FallbackCreateRequest(
                 model="gpt-3.5-turbo",
                 fallback_models=["gpt-4", "gpt-4"],
@@ -171,10 +169,7 @@ class TestCreateFallback:
             assert response.model == "gpt-3.5-turbo"
             assert response.fallback_models == ["gpt-4", "claude-3-haiku"]
             assert response.fallback_type == "general"
-            assert (
-                "created" in response.message.lower()
-                or "updated" in response.message.lower()
-            )
+            assert "created" in response.message.lower() or "updated" in response.message.lower()
 
             # Verify database was updated
             mock_prisma_client.db.litellm_config.upsert.assert_called_once()
@@ -287,9 +282,7 @@ class TestCreateFallback:
         assert exc_info.value.status_code == 400
         assert "cannot be its own fallback" in str(exc_info.value.detail)
 
-    async def test_create_fallback_db_not_enabled(
-        self, mock_router, mock_user_api_key_dict
-    ):
+    async def test_create_fallback_db_not_enabled(self, mock_router, mock_user_api_key_dict):
         """Test error when database storage is not enabled"""
         request = FallbackCreateRequest(
             model="gpt-3.5-turbo",
@@ -365,25 +358,19 @@ class TestGetFallback:
         """Create a mock user API key dict"""
         return MagicMock()
 
-    async def test_get_fallback_success(
-        self, mock_router_with_fallbacks, mock_user_api_key_dict
-    ):
+    async def test_get_fallback_success(self, mock_router_with_fallbacks, mock_user_api_key_dict):
         """Test successful fallback retrieval"""
         with patch(
             "litellm.proxy.proxy_server.llm_router",
             mock_router_with_fallbacks,
         ):
-            response = await get_fallback(
-                "gpt-3.5-turbo", "general", mock_user_api_key_dict
-            )
+            response = await get_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict)
 
             assert response.model == "gpt-3.5-turbo"
             assert response.fallback_models == ["gpt-4", "claude-3-haiku"]
             assert response.fallback_type == "general"
 
-    async def test_get_fallback_not_found(
-        self, mock_router_with_fallbacks, mock_user_api_key_dict
-    ):
+    async def test_get_fallback_not_found(self, mock_router_with_fallbacks, mock_user_api_key_dict):
         """Test error when fallback is not found"""
         with (
             patch(
@@ -438,11 +425,7 @@ class TestDeleteFallback:
         """Create a mock proxy config"""
         config = MagicMock()
         config.get_config = AsyncMock(
-            return_value={
-                "router_settings": {
-                    "fallbacks": [{"gpt-3.5-turbo": ["gpt-4", "claude-3-haiku"]}]
-                }
-            }
+            return_value={"router_settings": {"fallbacks": [{"gpt-3.5-turbo": ["gpt-4", "claude-3-haiku"]}]}}
         )
         return config
 
@@ -477,9 +460,7 @@ class TestDeleteFallback:
                 True,
             ),
         ):
-            response = await delete_fallback(
-                "gpt-3.5-turbo", "general", mock_user_api_key_dict
-            )
+            response = await delete_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict)
 
             assert response.model == "gpt-3.5-turbo"
             assert response.fallback_type == "general"
@@ -534,9 +515,7 @@ class TestDeleteFallback:
         assert exc_info.value.status_code == 500
         assert "Router not initialized" in str(exc_info.value.detail)
 
-    async def test_delete_fallback_db_not_enabled(
-        self, mock_router_with_fallbacks, mock_user_api_key_dict
-    ):
+    async def test_delete_fallback_db_not_enabled(self, mock_router_with_fallbacks, mock_user_api_key_dict):
         """Test error when database storage is not enabled"""
         with (
             patch(

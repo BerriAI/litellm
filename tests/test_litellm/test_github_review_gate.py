@@ -22,9 +22,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[2] / ".github" / "scripts" / "triage_with_llm.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / ".github" / "scripts" / "triage_with_llm.py"
 
 NOW = dt.datetime(2026, 5, 24, 12, 0, 0, tzinfo=dt.timezone.utc)
 JUST_NOW = "2026-05-24T11:00:00Z"  # 1h old -> within 24h grace
@@ -92,10 +90,7 @@ def _pass(prompt):
 
 
 def _fail(prompt):
-    return (
-        '{"verdict": "fail", "missing": ["QA proof", "expected vs. actual"],'
-        ' "explanation": "thin description"}'
-    )
+    return '{"verdict": "fail", "missing": ["QA proof", "expected vs. actual"], "explanation": "thin description"}'
 
 
 def _gate(triage_module, **kwargs):
@@ -115,9 +110,7 @@ def _gate(triage_module, **kwargs):
 
 
 class TestReviewGatePass:
-    def test_pass_untagged_adds_label_and_ready_comment(
-        self, triage_module, monkeypatch
-    ):
+    def test_pass_untagged_adds_label_and_ready_comment(self, triage_module, monkeypatch):
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: _make_pr())
         rec = _Recorder(triage_module, monkeypatch)
 
@@ -141,9 +134,7 @@ class TestReviewGatePass:
         assert result["action"] == "noop-passing"
         assert rec.added == [] and rec.removed == [] and rec.comments == []
 
-    def test_pass_after_prior_regression_uses_all_clear_wording(
-        self, triage_module, monkeypatch
-    ):
+    def test_pass_after_prior_regression_uses_all_clear_wording(self, triage_module, monkeypatch):
         # A regression marker in history -> this is a recovery, not a first pass.
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: _make_pr())
         rec = _Recorder(triage_module, monkeypatch)
@@ -159,9 +150,7 @@ class TestReviewGatePass:
         assert result["action"] == "labeled-ready"
         assert "all clear" in rec.comments[0].lower()
 
-    def test_linked_issue_passes_without_calling_judge(
-        self, triage_module, monkeypatch
-    ):
+    def test_linked_issue_passes_without_calling_judge(self, triage_module, monkeypatch):
         pr = _make_pr(body="Fixes #4321\n\nbody")
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
         rec = _Recorder(triage_module, monkeypatch)
@@ -176,9 +165,7 @@ class TestReviewGatePass:
 
 
 class TestReviewGateRegression:
-    def test_regression_removes_label_and_keeps_pr_open(
-        self, triage_module, monkeypatch
-    ):
+    def test_regression_removes_label_and_keeps_pr_open(self, triage_module, monkeypatch):
         pr = _make_pr(labels=[{"name": "ready for review"}])
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
         rec = _Recorder(triage_module, monkeypatch)
@@ -197,15 +184,11 @@ class TestReviewGateRegression:
         assert "auto-closed" in rec.comments[0]
 
     def test_regression_comment_discloses_grace_deadline(self, triage_module):
-        one_day = triage_module.format_regression_comment(
-            ["QA proof"], "needs work", grace_days=1
-        )
+        one_day = triage_module.format_regression_comment(["QA proof"], "needs work", grace_days=1)
         assert "24 hours" in one_day
         assert "auto-closed" in one_day
 
-        three_days = triage_module.format_regression_comment(
-            ["QA proof"], "needs work", grace_days=3
-        )
+        three_days = triage_module.format_regression_comment(["QA proof"], "needs work", grace_days=3)
         assert "3 days" in three_days
         assert "auto-closed" in three_days
 
@@ -221,9 +204,7 @@ class TestReviewGateRegression:
         assert rec.removed == [triage_module.READY_FOR_REVIEW_LABEL]
         assert "2/5" in rec.comments[0]
 
-    def test_greptile_score_read_from_comments_when_not_injected(
-        self, triage_module, monkeypatch
-    ):
+    def test_greptile_score_read_from_comments_when_not_injected(self, triage_module, monkeypatch):
         pr = _make_pr(labels=[{"name": "ready for review"}])
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
         rec = _Recorder(triage_module, monkeypatch)
@@ -247,9 +228,7 @@ class TestReviewGateRegression:
 
 class TestReviewGateGraceAndClose:
     def test_within_grace_posts_one_time_notice(self, triage_module, monkeypatch):
-        monkeypatch.setattr(
-            triage_module, "fetch_pr", lambda repo, n: _make_pr(created_at=JUST_NOW)
-        )
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: _make_pr(created_at=JUST_NOW))
         rec = _Recorder(triage_module, monkeypatch)
 
         result = _gate(triage_module, judge=_fail, greptile_score=None)
@@ -260,9 +239,7 @@ class TestReviewGateGraceAndClose:
         assert "QA proof" in rec.comments[0]
 
     def test_within_grace_does_not_double_notify(self, triage_module, monkeypatch):
-        monkeypatch.setattr(
-            triage_module, "fetch_pr", lambda repo, n: _make_pr(created_at=JUST_NOW)
-        )
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: _make_pr(created_at=JUST_NOW))
         rec = _Recorder(triage_module, monkeypatch)
         prior = [
             {
@@ -342,9 +319,7 @@ class TestReviewGateGraceAndClose:
         assert rec.closed == [7]
         assert len(rec.comments) == 1
 
-    def test_linked_issue_with_greptile_fail_uses_greptile_explanation(
-        self, triage_module, monkeypatch
-    ):
+    def test_linked_issue_with_greptile_fail_uses_greptile_explanation(self, triage_module, monkeypatch):
         """When the rubric short-circuits to pass (linked-issue regex) but
         Greptile dragged the PR under the bar, the close comment's
         explanation must describe the Greptile shortfall, not the
@@ -447,9 +422,7 @@ class TestReviewGateGuards:
         monkeypatch.setattr(
             triage_module,
             "post_comment",
-            lambda repo, n, body: state["comments"].append(
-                {"user": {"login": "github-actions[bot]"}, "body": body}
-            ),
+            lambda repo, n, body: state["comments"].append({"user": {"login": "github-actions[bot]"}, "body": body}),
         )
         monkeypatch.setattr(
             triage_module,
@@ -461,28 +434,20 @@ class TestReviewGateGuards:
             "remove_label",
             lambda repo, n, label: state["labels"].clear(),
         )
-        monkeypatch.setattr(
-            triage_module, "close_pr", lambda repo, n: pytest.fail("must not close")
-        )
+        monkeypatch.setattr(triage_module, "close_pr", lambda repo, n: pytest.fail("must not close"))
 
         # 1) passes -> tagged
-        r1 = _gate(
-            triage_module, judge=_pass, greptile_score=5, comments=state["comments"]
-        )
+        r1 = _gate(triage_module, judge=_pass, greptile_score=5, comments=state["comments"])
         assert r1["action"] == "labeled-ready"
         assert any(lbl["name"] == "ready for review" for lbl in state["labels"])
 
         # 2) regresses -> tag removed, comment posted, PR still open
-        r2 = _gate(
-            triage_module, judge=_fail, greptile_score=2, comments=state["comments"]
-        )
+        r2 = _gate(triage_module, judge=_fail, greptile_score=2, comments=state["comments"])
         assert r2["action"] == "label-removed-regressed"
         assert state["labels"] == []
 
         # 3) fixed again -> "all clear" + tag back
-        r3 = _gate(
-            triage_module, judge=_pass, greptile_score=5, comments=state["comments"]
-        )
+        r3 = _gate(triage_module, judge=_pass, greptile_score=5, comments=state["comments"])
         assert r3["action"] == "labeled-ready"
         assert any(lbl["name"] == "ready for review" for lbl in state["labels"])
         assert "all clear" in state["comments"][-1]["body"].lower()
@@ -497,15 +462,11 @@ class TestReviewGateAllowlist:
         pr = _make_pr(user={"login": "random-oss-dev"})
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
         rec = _Recorder(triage_module, monkeypatch)
-        result = _gate(
-            triage_module, judge=lambda p: pytest.fail("no LLM for non-allowlisted")
-        )
+        result = _gate(triage_module, judge=lambda p: pytest.fail("no LLM for non-allowlisted"))
         assert result["action"] == "skip-not-allowlisted"
         assert rec.added == [] and rec.comments == [] and rec.closed == []
 
-    def test_should_act_on_allowlisted_internal_author(
-        self, triage_module, monkeypatch
-    ):
+    def test_should_act_on_allowlisted_internal_author(self, triage_module, monkeypatch):
         pr = _make_pr(author_association="MEMBER", user={"login": "mateo-berri"})
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
         rec = _Recorder(triage_module, monkeypatch)

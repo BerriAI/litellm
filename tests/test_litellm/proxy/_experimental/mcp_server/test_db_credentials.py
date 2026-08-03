@@ -353,9 +353,7 @@ def test_client_private_key_encrypted_at_rest():
     credentials blob, never persisted in plaintext, and must round-trip back. The
     pre-fix code left client_private_key out of encrypt_credentials, so it was stored
     verbatim."""
-    private_key = (
-        "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
-    )
+    private_key = "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
     credentials = {"client_secret": "shh", "client_private_key": private_key}
 
     encrypted = encrypt_credentials(dict(credentials), encryption_key=None)

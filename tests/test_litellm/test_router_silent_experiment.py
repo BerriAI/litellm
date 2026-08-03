@@ -185,11 +185,7 @@ async def test_router_silent_experiment_acompletion():
 
         # Find the silent call
         silent_call = next(
-            (
-                c
-                for c in call_args_list
-                if c[1].get("metadata", {}).get("is_silent_experiment") is True
-            ),
+            (c for c in call_args_list if c[1].get("metadata", {}).get("is_silent_experiment") is True),
             None,
         )
         assert silent_call is not None
@@ -197,11 +193,7 @@ async def test_router_silent_experiment_acompletion():
 
         # Find the primary call
         primary_call = next(
-            (
-                c
-                for c in call_args_list
-                if not c[1].get("metadata", {}).get("is_silent_experiment")
-            ),
+            (c for c in call_args_list if not c[1].get("metadata", {}).get("is_silent_experiment")),
             None,
         )
         assert primary_call is not None
@@ -270,11 +262,7 @@ def test_router_silent_experiment_completion():
 
         # Find the silent call
         silent_call = next(
-            (
-                c
-                for c in call_args_list
-                if c[1].get("metadata", {}).get("is_silent_experiment") is True
-            ),
+            (c for c in call_args_list if c[1].get("metadata", {}).get("is_silent_experiment") is True),
             None,
         )
         assert silent_call is not None

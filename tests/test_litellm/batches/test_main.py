@@ -68,9 +68,7 @@ def seams():
         stack.enter_context(patch.object(bm, "openai_batches_instance", openai_i))
         stack.enter_context(patch.object(bm, "azure_batches_instance", azure_i))
         stack.enter_context(patch.object(bm, "vertex_ai_batches_instance", vertex_i))
-        stack.enter_context(
-            patch.object(bm, "anthropic_batches_instance", anthropic_i)
-        )
+        stack.enter_context(patch.object(bm, "anthropic_batches_instance", anthropic_i))
         stack.enter_context(patch.object(bm, "base_llm_http_handler", base_http))
         stack.enter_context(patch.object(bm, "BedrockBatchesHandler", bedrock_arn))
         yield Seams(
@@ -168,9 +166,7 @@ def test_create__provider_config_routes_to_base_http_handler(seams):
         "get_provider_batches_config",
         return_value=MagicMock(name="provider_config"),
     ):
-        result = bm.create_batch(
-            **CREATE_KW, custom_llm_provider="bedrock", model="bedrock/my-batch-model"
-        )
+        result = bm.create_batch(**CREATE_KW, custom_llm_provider="bedrock", model="bedrock/my-batch-model")
 
     assert result is seams.base_http.create_batch.return_value
     _assert_only(seams.base_http.create_batch, seams, "create_batch")
@@ -275,9 +271,7 @@ def test_retrieve__bedrock_model_invocation_job_arn(seams):
     result = bm.retrieve_batch(batch_id=arn, custom_llm_provider="bedrock")
 
     seams.bedrock_arn._handle_model_invocation_job_status.assert_called_once()
-    assert (
-        result is seams.bedrock_arn._handle_model_invocation_job_status.return_value
-    )
+    assert result is seams.bedrock_arn._handle_model_invocation_job_status.return_value
     seams.bedrock_arn._handle_async_invoke_status.assert_not_called()
 
 
@@ -379,9 +373,7 @@ def test_cancel__unsupported_provider_raises_badrequest(seams):
 
 
 def test_cancel__async_flag_propagates_is_async(seams):
-    bm.cancel_batch(
-        batch_id="batch-1", custom_llm_provider="openai", acancel_batch=True
-    )
+    bm.cancel_batch(batch_id="batch-1", custom_llm_provider="openai", acancel_batch=True)
 
     assert seams.openai.cancel_batch.call_args.kwargs["_is_async"] is True
 
@@ -409,9 +401,7 @@ async def test_acreate_batch_delegates_to_create_batch():
 @pytest.mark.asyncio
 async def test_aretrieve_batch_delegates_to_retrieve_batch():
     with patch.object(bm, "retrieve_batch", MagicMock(return_value="SENTINEL")) as m:
-        result = await bm.aretrieve_batch(
-            batch_id="batch-1", custom_llm_provider="azure"
-        )
+        result = await bm.aretrieve_batch(batch_id="batch-1", custom_llm_provider="azure")
 
     assert result == "SENTINEL"
     assert m.call_count == 1
@@ -423,9 +413,7 @@ async def test_aretrieve_batch_delegates_to_retrieve_batch():
 @pytest.mark.asyncio
 async def test_alist_batches_delegates_to_list_batches():
     with patch.object(bm, "list_batches", MagicMock(return_value="SENTINEL")) as m:
-        result = await bm.alist_batches(
-            after="cur", limit=3, custom_llm_provider="vertex_ai"
-        )
+        result = await bm.alist_batches(after="cur", limit=3, custom_llm_provider="vertex_ai")
 
     assert result == "SENTINEL"
     assert m.call_count == 1
@@ -438,9 +426,7 @@ async def test_alist_batches_delegates_to_list_batches():
 @pytest.mark.asyncio
 async def test_acancel_batch_delegates_to_cancel_batch():
     with patch.object(bm, "cancel_batch", MagicMock(return_value="SENTINEL")) as m:
-        result = await bm.acancel_batch(
-            batch_id="batch-1", custom_llm_provider="openai"
-        )
+        result = await bm.acancel_batch(batch_id="batch-1", custom_llm_provider="openai")
 
     assert result == "SENTINEL"
     assert m.call_count == 1
@@ -493,9 +479,7 @@ def _sent(mock_method, *keys):
 def test_create__openai_credentials_passthrough(seams):
     bm.create_batch(**CREATE_KW, custom_llm_provider="openai", **OPENAI_CREDS)
 
-    assert _sent(
-        seams.openai.create_batch, "api_key", "api_base", "organization", "max_retries"
-    ) == {
+    assert _sent(seams.openai.create_batch, "api_key", "api_base", "organization", "max_retries") == {
         "api_key": "sk-user-openai",
         "api_base": "https://openai.user.test",
         "organization": "org-user-123",
@@ -506,9 +490,7 @@ def test_create__openai_credentials_passthrough(seams):
 def test_create__azure_credentials_passthrough(seams):
     bm.create_batch(**CREATE_KW, custom_llm_provider="azure", **AZURE_CREDS)
 
-    assert _sent(
-        seams.azure.create_batch, "api_key", "api_base", "api_version"
-    ) == {
+    assert _sent(seams.azure.create_batch, "api_key", "api_base", "api_version") == {
         "api_key": "sk-user-azure",
         "api_base": "https://azure.user.test",
         "api_version": "2024-12-99",
@@ -558,9 +540,7 @@ def test_create__provider_config_credentials_passthrough(seams):
 def test_retrieve__openai_credentials_passthrough(seams):
     bm.retrieve_batch(batch_id="b1", custom_llm_provider="openai", **OPENAI_CREDS)
 
-    assert _sent(
-        seams.openai.retrieve_batch, "api_key", "api_base", "organization"
-    ) == {
+    assert _sent(seams.openai.retrieve_batch, "api_key", "api_base", "organization") == {
         "api_key": "sk-user-openai",
         "api_base": "https://openai.user.test",
         "organization": "org-user-123",
@@ -570,9 +550,7 @@ def test_retrieve__openai_credentials_passthrough(seams):
 def test_retrieve__azure_credentials_passthrough(seams):
     bm.retrieve_batch(batch_id="b1", custom_llm_provider="azure", **AZURE_CREDS)
 
-    assert _sent(
-        seams.azure.retrieve_batch, "api_key", "api_base", "api_version"
-    ) == {
+    assert _sent(seams.azure.retrieve_batch, "api_key", "api_base", "api_version") == {
         "api_key": "sk-user-azure",
         "api_base": "https://azure.user.test",
         "api_version": "2024-12-99",
@@ -634,9 +612,7 @@ def test_retrieve__provider_config_credentials_passthrough(seams):
 def test_list__openai_credentials_passthrough(seams):
     bm.list_batches(custom_llm_provider="openai", **OPENAI_CREDS)
 
-    assert _sent(
-        seams.openai.list_batches, "api_key", "api_base", "organization"
-    ) == {
+    assert _sent(seams.openai.list_batches, "api_key", "api_base", "organization") == {
         "api_key": "sk-user-openai",
         "api_base": "https://openai.user.test",
         "organization": "org-user-123",
@@ -646,9 +622,7 @@ def test_list__openai_credentials_passthrough(seams):
 def test_list__azure_credentials_passthrough(seams):
     bm.list_batches(custom_llm_provider="azure", **AZURE_CREDS)
 
-    assert _sent(
-        seams.azure.list_batches, "api_key", "api_base", "api_version"
-    ) == {
+    assert _sent(seams.azure.list_batches, "api_key", "api_base", "api_version") == {
         "api_key": "sk-user-azure",
         "api_base": "https://azure.user.test",
         "api_version": "2024-12-99",
@@ -676,9 +650,7 @@ def test_list__vertex_credentials_passthrough(seams):
 def test_cancel__openai_credentials_passthrough(seams):
     bm.cancel_batch(batch_id="b1", custom_llm_provider="openai", **OPENAI_CREDS)
 
-    assert _sent(
-        seams.openai.cancel_batch, "api_key", "api_base", "organization"
-    ) == {
+    assert _sent(seams.openai.cancel_batch, "api_key", "api_base", "organization") == {
         "api_key": "sk-user-openai",
         "api_base": "https://openai.user.test",
         "organization": "org-user-123",
@@ -688,9 +660,7 @@ def test_cancel__openai_credentials_passthrough(seams):
 def test_cancel__azure_credentials_passthrough(seams):
     bm.cancel_batch(batch_id="b1", custom_llm_provider="azure", **AZURE_CREDS)
 
-    assert _sent(
-        seams.azure.cancel_batch, "api_key", "api_base", "api_version"
-    ) == {
+    assert _sent(seams.azure.cancel_batch, "api_key", "api_base", "api_version") == {
         "api_key": "sk-user-azure",
         "api_base": "https://azure.user.test",
         "api_version": "2024-12-99",

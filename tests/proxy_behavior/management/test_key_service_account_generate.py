@@ -66,13 +66,9 @@ async def test_key_service_account_generate_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json=body,
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {team_target}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {team_target}: {resp.status_code} {resp.text}"
 
-    rows = await prisma.db.litellm_verificationtoken.find_many(
-        where={"key_alias": scratch.prefix}
-    )
+    rows = await prisma.db.litellm_verificationtoken.find_many(where={"key_alias": scratch.prefix})
     if expected_status == 200:
         assert len(rows) == 1
         # A service-account key belongs to the team, not a user.
@@ -82,9 +78,7 @@ async def test_key_service_account_generate_authz_matrix(
         assert rows == [], f"{actor.value}: denied but key row leaked"
 
 
-async def test_key_service_account_generate_unknown_team_is_400(
-    proxy_client, prisma, scratch, world
-):
+async def test_key_service_account_generate_unknown_team_is_400(proxy_client, prisma, scratch, world):
     """A team_id absent from the database is rejected 400."""
     resp = await proxy_client.post(
         "/key/service-account/generate",
@@ -92,7 +86,5 @@ async def test_key_service_account_generate_unknown_team_is_400(
         json={"key_alias": scratch.prefix, "team_id": scratch.tag("no-such-team")},
     )
     assert resp.status_code == 400, resp.text
-    rows = await prisma.db.litellm_verificationtoken.find_many(
-        where={"key_alias": scratch.prefix}
-    )
+    rows = await prisma.db.litellm_verificationtoken.find_many(where={"key_alias": scratch.prefix})
     assert rows == []

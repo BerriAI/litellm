@@ -44,10 +44,7 @@ async def test_batch_cache_size_is_1000_minimum(cache_setup):
     dual_cache, _, _ = cache_setup
 
     # Critical: batch cache size must be at least DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
-    assert (
-        dual_cache.last_redis_batch_access_time.max_size
-        >= DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
-    )
+    assert dual_cache.last_redis_batch_access_time.max_size >= DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 
 @pytest.mark.asyncio
@@ -60,9 +57,7 @@ async def test_throttling_prevents_duplicate_redis_calls(cache_setup):
     # Set short expiry for testing
     dual_cache.redis_batch_cache_expiry = 0.1  # 100ms
 
-    with patch.object(
-        redis_cache, "async_batch_get_cache", new_callable=AsyncMock
-    ) as mock_redis:
+    with patch.object(redis_cache, "async_batch_get_cache", new_callable=AsyncMock) as mock_redis:
         mock_redis.return_value = {key: None for key in test_keys}
 
         # First call hits Redis (no throttle data exists)

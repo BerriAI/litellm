@@ -37,12 +37,7 @@ def _skill(skill_id: str, created_by: str | None) -> LiteLLM_SkillsTable:
 def test_should_extract_skill_auth_from_supported_metadata_fields():
     auth = UserAPIKeyAuth(user_id="user-1")
 
-    assert (
-        skills_main._get_user_api_key_auth_from_kwargs(
-            {"metadata": {"user_api_key_auth": auth}}
-        )
-        is auth
-    )
+    assert skills_main._get_user_api_key_auth_from_kwargs({"metadata": {"user_api_key_auth": auth}}) is auth
     assert (
         skills_main._get_user_api_key_auth_from_kwargs(
             {"metadata": {}, "litellm_metadata": {"user_api_key_auth": auth}}
@@ -122,9 +117,7 @@ def test_should_forward_skill_auth_through_sdk_entrypoints(monkeypatch):
         == "deleted"
     )
 
-    assert handler.create_skill_handler.call_args.kwargs["metadata"] == {
-        "source": "request"
-    }
+    assert handler.create_skill_handler.call_args.kwargs["metadata"] == {"source": "request"}
     assert handler.create_skill_handler.call_args.kwargs["user_api_key_dict"] is auth
     assert handler.list_skills_handler.call_args.kwargs["user_api_key_dict"] is auth
     assert handler.get_skill_handler.call_args.kwargs["user_api_key_dict"] is auth
@@ -149,9 +142,7 @@ def test_should_build_resource_owner_scopes_for_auth_context():
     ]
     assert resource_ownership.get_primary_resource_owner_scope(auth) == "user-1"
     assert resource_ownership.user_can_access_resource_owner("team:team-1", auth)
-    assert resource_ownership.get_resource_owner_scopes(
-        UserAPIKeyAuth(token="token-hash")
-    ) == ["key:token-hash"]
+    assert resource_ownership.get_resource_owner_scopes(UserAPIKeyAuth(token="token-hash")) == ["key:token-hash"]
     # Identity-less callers get an empty scope set — sharing a sentinel
     # would collapse every identity-less caller into the same logical
     # owner, which is a cross-tenant data-access primitive.
@@ -165,9 +156,7 @@ def test_should_allow_admin_and_anonymous_resource_owner_paths():
     assert resource_ownership.is_proxy_admin(admin)
     assert resource_ownership.user_can_access_resource_owner(None, admin)
     assert resource_ownership.user_can_access_resource_owner(None, None)
-    assert not resource_ownership.user_can_access_resource_owner(
-        None, UserAPIKeyAuth(user_id="user-1")
-    )
+    assert not resource_ownership.user_can_access_resource_owner(None, UserAPIKeyAuth(user_id="user-1"))
 
 
 @pytest.mark.asyncio
@@ -218,9 +207,7 @@ async def test_should_forward_skill_auth_through_transformation_handler(monkeypa
 async def test_should_store_team_owner_for_keys_without_user_id(monkeypatch):
     table = AsyncMock()
     table.create.side_effect = lambda data: _skill(data["skill_id"], data["created_by"])
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -242,9 +229,7 @@ async def test_should_store_team_owner_for_keys_without_user_id(monkeypatch):
 async def test_should_store_token_owner_for_keys_without_user_team_or_org(monkeypatch):
     table = AsyncMock()
     table.create.side_effect = lambda data: _skill(data["skill_id"], data["created_by"])
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -268,9 +253,7 @@ async def test_should_reject_skill_create_for_identityless_proxy_auth(monkeypatc
     sentinel as ``created_by`` would let any two such callers see each
     other's skills via the resulting shared owner scope."""
     table = AsyncMock()
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -291,9 +274,7 @@ async def test_should_reject_skill_create_for_identityless_proxy_auth(monkeypatc
 async def test_should_filter_list_skills_to_authenticated_owner_scopes(monkeypatch):
     table = AsyncMock()
     table.find_many.return_value = [_skill("litellm_skill_owner", "user-1")]
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -318,9 +299,7 @@ async def test_should_filter_list_skills_to_authenticated_owner_scopes(monkeypat
 async def test_should_hide_skill_from_different_owner(monkeypatch):
     table = AsyncMock()
     table.find_unique.return_value = _skill("litellm_skill_other", "user-2")
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -340,9 +319,7 @@ async def test_should_hide_skill_from_different_owner(monkeypatch):
 async def test_should_hide_unowned_skill_by_default(monkeypatch):
     table = AsyncMock()
     table.find_unique.return_value = _skill("litellm_skill_unowned", None)
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -365,9 +342,7 @@ async def test_unowned_skill_is_admin_only(monkeypatch):
     opt-out env var that re-opens the cross-tenant access primitive."""
     table = AsyncMock()
     table.find_unique.return_value = _skill("litellm_skill_unowned", None)
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -389,9 +364,7 @@ async def test_list_skills_excludes_unowned_for_non_admin(monkeypatch):
     with ``created_by IS NULL`` are excluded — admin-only."""
     table = AsyncMock()
     table.find_many.return_value = []
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -447,9 +420,7 @@ async def test_load_skill_uses_cache_after_first_db_hit(monkeypatch):
     fake_skill = Mock(created_by="user-1", skill_id="litellm_skill_a")
     table = AsyncMock()
     table.find_unique = AsyncMock(return_value=fake_skill)
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         skills_handler.LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -457,10 +428,7 @@ async def test_load_skill_uses_cache_after_first_db_hit(monkeypatch):
     )
 
     for _ in range(3):
-        assert (
-            await skills_handler.LiteLLMSkillsHandler._load_skill("litellm_skill_a")
-            is fake_skill
-        )
+        assert await skills_handler.LiteLLMSkillsHandler._load_skill("litellm_skill_a") is fake_skill
     assert table.find_unique.await_count == 1
 
 
@@ -470,9 +438,7 @@ async def test_load_skill_caches_negative_lookups(monkeypatch):
     the DB and the caller still sees ``None``."""
     table = AsyncMock()
     table.find_unique = AsyncMock(return_value=None)
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         skills_handler.LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -491,9 +457,7 @@ async def test_delete_skill_invalidates_cache(monkeypatch):
     table = AsyncMock()
     table.find_unique = AsyncMock(return_value=fake_skill)
     table.delete = AsyncMock()
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
+    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
     monkeypatch.setattr(
         skills_handler.LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -505,12 +469,7 @@ async def test_delete_skill_invalidates_cache(monkeypatch):
     assert skills_handler._SKILL_CACHE.get_cache("litellm_skill_a") is fake_skill
 
     auth = UserAPIKeyAuth(user_id="user-1")
-    await skills_handler.LiteLLMSkillsHandler.delete_skill(
-        "litellm_skill_a", user_api_key_dict=auth
-    )
+    await skills_handler.LiteLLMSkillsHandler.delete_skill("litellm_skill_a", user_api_key_dict=auth)
 
     # Post-delete, the cache holds the negative sentinel — not the stale row.
-    assert (
-        skills_handler._SKILL_CACHE.get_cache("litellm_skill_a")
-        == skills_handler._NEGATIVE_SKILL_SENTINEL
-    )
+    assert skills_handler._SKILL_CACHE.get_cache("litellm_skill_a") == skills_handler._NEGATIVE_SKILL_SENTINEL

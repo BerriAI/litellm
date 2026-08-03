@@ -61,16 +61,12 @@ class LoadResult:
 
 
 def median_seconds(entries: list[LocustStatEntry]) -> float:
-    samples = sorted(
-        (milliseconds, count) for entry in entries for milliseconds, count in entry.response_times.items()
-    )
+    samples = sorted((milliseconds, count) for entry in entries for milliseconds, count in entry.response_times.items())
     total = sum(count for _, count in samples)
     if total == 0:
         return 0.0
     running = accumulate(count for _, count in samples)
-    return next(
-        milliseconds for (milliseconds, _), seen in zip(samples, running) if seen >= total / 2
-    ) / 1000.0
+    return next(milliseconds for (milliseconds, _), seen in zip(samples, running) if seen >= total / 2) / 1000.0
 
 
 def aggregate_stats(

@@ -97,11 +97,7 @@ def test_classify_whitespace_only():
 
 
 def test_classify_truncates_very_long_input():
-    text = (
-        "Who is the current president of France? "
-        + "x " * 5000
-        + " Write a Python function"
-    )
+    text = "Who is the current president of France? " + "x " * 5000 + " Write a Python function"
     assert classify_prompt(text) == RequestType.FACTUAL_LOOKUP
 
 

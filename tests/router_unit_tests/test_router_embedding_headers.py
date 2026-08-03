@@ -49,9 +49,7 @@ class TestRouterEmbeddingHeaders:
             wraps=router._update_kwargs_before_fallbacks,
         ) as mock_update:
             with patch("litellm.embedding") as mock_litellm_embedding:
-                mock_litellm_embedding.return_value = MagicMock(
-                    data=[{"embedding": [0.1, 0.2, 0.3]}]
-                )
+                mock_litellm_embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2, 0.3]}])
 
                 router.embedding(model="text-embedding-3-small", input=["test input"])
 
@@ -86,16 +84,10 @@ class TestRouterEmbeddingHeaders:
             "_update_kwargs_before_fallbacks",
             wraps=router._update_kwargs_before_fallbacks,
         ) as mock_update:
-            with patch(
-                "litellm.aembedding", new_callable=AsyncMock
-            ) as mock_litellm_aembedding:
-                mock_litellm_aembedding.return_value = MagicMock(
-                    data=[{"embedding": [0.1, 0.2, 0.3]}]
-                )
+            with patch("litellm.aembedding", new_callable=AsyncMock) as mock_litellm_aembedding:
+                mock_litellm_aembedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2, 0.3]}])
 
-                await router.aembedding(
-                    model="text-embedding-3-small", input=["test input"]
-                )
+                await router.aembedding(model="text-embedding-3-small", input=["test input"])
 
                 # Verify _update_kwargs_before_fallbacks was called
                 mock_update.assert_called_once()
@@ -132,9 +124,7 @@ class TestRouterEmbeddingHeaders:
         )
 
         with patch("litellm.embedding") as mock_litellm_embedding:
-            mock_litellm_embedding.return_value = MagicMock(
-                data=[{"embedding": [0.1, 0.2, 0.3]}]
-            )
+            mock_litellm_embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2, 0.3]}])
 
             router.embedding(model="text-embedding-3-small", input=["test input"])
 
@@ -177,16 +167,10 @@ class TestRouterEmbeddingHeaders:
             },
         )
 
-        with patch(
-            "litellm.aembedding", new_callable=AsyncMock
-        ) as mock_litellm_aembedding:
-            mock_litellm_aembedding.return_value = MagicMock(
-                data=[{"embedding": [0.1, 0.2, 0.3]}]
-            )
+        with patch("litellm.aembedding", new_callable=AsyncMock) as mock_litellm_aembedding:
+            mock_litellm_aembedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2, 0.3]}])
 
-            await router.aembedding(
-                model="text-embedding-3-small", input=["test input"]
-            )
+            await router.aembedding(model="text-embedding-3-small", input=["test input"])
 
             # Verify that litellm.aembedding was called with the headers
             mock_litellm_aembedding.assert_called_once()
@@ -220,9 +204,7 @@ class TestRouterEmbeddingHeaders:
         router = Router(model_list=model_list)
 
         with patch("litellm.embedding") as mock_litellm_embedding:
-            mock_litellm_embedding.return_value = MagicMock(
-                data=[{"embedding": [0.1, 0.2, 0.3]}]
-            )
+            mock_litellm_embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2, 0.3]}])
 
             router.embedding(model="test-embedding-model", input=["test input"])
 
@@ -253,9 +235,7 @@ class TestRouterEmbeddingHeaders:
         router = Router(model_list=model_list, num_retries=3)
 
         with patch("litellm.embedding") as mock_litellm_embedding:
-            mock_litellm_embedding.return_value = MagicMock(
-                data=[{"embedding": [0.1, 0.2, 0.3]}]
-            )
+            mock_litellm_embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2, 0.3]}])
 
             router.embedding(model="text-embedding-3-small", input=["test input"])
 
@@ -283,9 +263,7 @@ class TestRouterEmbeddingHeaders:
         router = Router(model_list=model_list)
 
         with patch("litellm.embedding") as mock_litellm_embedding:
-            mock_litellm_embedding.return_value = MagicMock(
-                data=[{"embedding": [0.1, 0.2, 0.3]}]
-            )
+            mock_litellm_embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2, 0.3]}])
 
             router.embedding(model="text-embedding-3-small", input=["test input"])
 
@@ -321,25 +299,19 @@ class TestRouterEmbeddingHeaders:
             },
         ]
 
-        router = Router(
-            model_list=model_list, default_litellm_params={"headers": custom_headers}
-        )
+        router = Router(model_list=model_list, default_litellm_params={"headers": custom_headers})
 
         # Test completion
         with patch("litellm.completion") as mock_completion:
             mock_completion.return_value = MagicMock()
 
-            router.completion(
-                model="gpt-5-mini", messages=[{"role": "user", "content": "test"}]
-            )
+            router.completion(model="gpt-5-mini", messages=[{"role": "user", "content": "test"}])
 
             completion_kwargs = mock_completion.call_args[1]
 
         # Test embedding
         with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.return_value = MagicMock(
-                data=[{"embedding": [0.1, 0.2, 0.3]}]
-            )
+            mock_embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2, 0.3]}])
 
             router.embedding(model="text-embedding-3-small", input=["test input"])
 

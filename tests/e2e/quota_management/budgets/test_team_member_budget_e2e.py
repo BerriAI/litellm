@@ -83,9 +83,7 @@ class TestTeamMemberBudget:
         sent = frozenset(rid for rid in (_send(client, member.key) for _ in range(BURST)) if rid)
         assert sent, "no member call went through; cannot check attribution"
 
-        rows = client.proxy.poll_logs_for_key(
-            member.key, predicate=lambda rs: bool(sent & {r.request_id for r in rs})
-        )
+        rows = client.proxy.poll_logs_for_key(member.key, predicate=lambda rs: bool(sent & {r.request_id for r in rs}))
         logged = [row for row in rows if row.request_id in sent]
         assert logged, f"none of the member's {len(sent)} calls reached the spend logs"
 

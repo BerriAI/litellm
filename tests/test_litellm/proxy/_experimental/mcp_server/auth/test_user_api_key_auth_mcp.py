@@ -6387,9 +6387,7 @@ class TestAggregateGatewayDcrChallenge:
                 assert _gateway_dcr_challenge_target("/mcp/srv", None, None) == expected, resolved
         assert _gateway_dcr_challenge_target("/mcp/a,b", None, None) is None
         assert _gateway_dcr_challenge_target("/mcp", None, None) is None
-        with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-        ) as mock_mgr:
+        with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr:
             mock_mgr.get_mcp_server_by_name.return_value = _server(MCPAuth.oauth2)
             assert _gateway_dcr_challenge_target("/mcp/srv", ["other"], None) is None
 

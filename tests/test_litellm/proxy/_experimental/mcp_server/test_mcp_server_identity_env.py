@@ -45,9 +45,7 @@ def _env_and_reload(**env):
 
 
 def test_defaults_used_when_env_unset():
-    with _env_and_reload(
-        LITELLM_MCP_SERVER_NAME=None, LITELLM_MCP_SERVER_DESCRIPTION=None
-    ) as (utils, _mgmt):
+    with _env_and_reload(LITELLM_MCP_SERVER_NAME=None, LITELLM_MCP_SERVER_DESCRIPTION=None) as (utils, _mgmt):
         assert utils.LITELLM_MCP_SERVER_NAME == "litellm-mcp-server"
         assert utils.LITELLM_MCP_SERVER_DESCRIPTION == "MCP Server for LiteLLM"
 

@@ -11,9 +11,7 @@ import pytest
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import httpx
 import litellm
@@ -345,10 +343,7 @@ class TestNova2ResponseParsing:
                 {"reasoningText": {"text": "Then, I'll consider the solution."}},
             ]
         )
-        assert (
-            result
-            == "First, I need to analyze the problem. Then, I'll consider the solution."
-        )
+        assert result == "First, I need to analyze the problem. Then, I'll consider the solution."
 
     def test_should_return_empty_string_for_empty_blocks(self):
         config = AmazonConverseConfig()
@@ -443,10 +438,7 @@ class TestNova2StreamingResponseParsing:
         ]
         results = [handler.converse_chunk_parser(c) for c in chunks]
         assert results[0].choices[0].delta.reasoning_content == "I need to call a tool."
-        assert (
-            results[1].choices[0].delta.tool_calls[0]["function"]["name"]
-            == "get_weather"
-        )
+        assert results[1].choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
         assert results[3].choices[0].delta.content == "The weather is sunny."
 
 
@@ -519,9 +511,7 @@ class TestNova2EndToEndRequest:
         )
 
     @pytest.mark.parametrize("model", [NOVA_2_LITE, NOVA_2_PRO])
-    def test_should_place_reasoning_config_in_additional_model_request_fields(
-        self, model
-    ):
+    def test_should_place_reasoning_config_in_additional_model_request_fields(self, model):
         body = self._build_request(model, "high")
         additional = body.get("additionalModelRequestFields", {})
         assert additional["reasoningConfig"] == {
@@ -534,9 +524,7 @@ class TestNova2EndToEndRequest:
     @pytest.mark.parametrize("model", [NOVA_2_LITE, NOVA_2_PRO])
     def test_should_coexist_with_inference_params(self, model):
         body = self._build_request(model, "high", temperature=0.5, max_tokens=512)
-        assert (
-            body["additionalModelRequestFields"]["reasoningConfig"]["type"] == "enabled"
-        )
+        assert body["additionalModelRequestFields"]["reasoningConfig"]["type"] == "enabled"
         inf = body.get("inferenceConfig", {})
         assert inf.get("temperature") == 0.5
         assert inf.get("maxTokens") == 512
@@ -558,9 +546,7 @@ class TestNova2EndToEndResponse:
             "stopReason": "end_turn",
             "metrics": {"latencyMs": 100},
         }
-        resp = httpx.Response(
-            200, json=body, request=httpx.Request("POST", "https://bedrock")
-        )
+        resp = httpx.Response(200, json=body, request=httpx.Request("POST", "https://bedrock"))
         return config.transform_response(
             model=model,
             raw_response=resp,
@@ -680,10 +666,6 @@ class TestNova2MultiTurnMessageTranslation:
         )
         assistant = next(m for m in bedrock_msgs if m["role"] == "assistant")
         rc_blocks = [b for b in assistant["content"] if "reasoningContent" in b]
-        text_blocks = [
-            b
-            for b in assistant["content"]
-            if "text" in b and "reasoningContent" not in b
-        ]
+        text_blocks = [b for b in assistant["content"] if "text" in b and "reasoningContent" not in b]
         assert len(rc_blocks) >= 1
         assert any("Hello!" in b["text"] for b in text_blocks)

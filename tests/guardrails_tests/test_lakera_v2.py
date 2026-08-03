@@ -49,9 +49,7 @@ async def test_lakera_pre_call_hook_for_pii_masking():
         ],
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         # Create a sample request with PII data
@@ -157,9 +155,7 @@ async def test_lakera_blocks_non_pii_violations():
         ],
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         # Create a sample request that would trigger violations
@@ -203,9 +199,7 @@ async def test_lakera_only_pii_violations_are_masked():
 
     # Mock response with only PII violations
     mock_response = {
-        "payload": [
-            {"detector_type": "pii/email", "start": 10, "end": 25, "message_id": 0}
-        ],
+        "payload": [{"detector_type": "pii/email", "start": 10, "end": 25, "message_id": 0}],
         "flagged": True,
         "breakdown": [
             {
@@ -229,9 +223,7 @@ async def test_lakera_only_pii_violations_are_masked():
         ],
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         data = {
@@ -410,9 +402,7 @@ async def test_lakera_blocks_flagged_content_with_user_scenario():
         ],
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         # Create a sample request that would trigger violations
@@ -448,13 +438,8 @@ async def test_lakera_blocks_flagged_content_with_user_scenario():
         # Verify the full response is included in the exception
         lakera_response = exc_info.value.detail["lakera_guardrail_response"]
         assert lakera_response["flagged"] is True
-        assert (
-            lakera_response["metadata"]["request_uuid"]
-            == "b7cd4c8a-28aa-4285-a245-2befee514dbf"
-        )
-        assert (
-            len(lakera_response["breakdown"]) == 16
-        )  # All the breakdown items from the user's scenario
+        assert lakera_response["metadata"]["request_uuid"] == "b7cd4c8a-28aa-4285-a245-2befee514dbf"
+        assert len(lakera_response["breakdown"]) == 16  # All the breakdown items from the user's scenario
 
 
 @pytest.mark.asyncio
@@ -480,9 +465,7 @@ async def test_lakera_monitor_mode_allows_flagged_content():
         ],
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         data = {
@@ -528,9 +511,7 @@ async def test_lakera_block_mode_raises_exception():
         ],
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         data = {
@@ -571,9 +552,7 @@ async def test_lakera_monitor_mode_during_call():
         ],
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         data = {
@@ -612,13 +591,9 @@ async def test_lakera_post_call_blocks_flagged_content():
 
     # Mock LLM response object
     llm_response = MagicMock()
-    llm_response.model_dump.return_value = {
-        "choices": [{"message": {"role": "assistant", "content": "some response"}}]
-    }
+    llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "some response"}}]}
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         data = {
@@ -656,9 +631,7 @@ async def test_lakera_post_call_allows_clean_content():
         "choices": [{"message": {"role": "assistant", "content": "clean response"}}]
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         data = {
@@ -685,9 +658,7 @@ async def test_lakera_post_call_masks_pii_and_allows():
     lakera_guardrail = LakeraAIGuardrail(api_key="test_key")
 
     mock_response = {
-        "payload": [
-            {"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 1}
-        ],
+        "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 1}],
         "flagged": True,
         "breakdown": [
             {"detector_type": "pii/email", "detected": True, "message_id": 1},
@@ -706,9 +677,7 @@ async def test_lakera_post_call_masks_pii_and_allows():
         ]
     }
 
-    with patch.object(
-        lakera_guardrail, "call_v2_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
 
         data = {
@@ -725,12 +694,7 @@ async def test_lakera_post_call_masks_pii_and_allows():
             response=llm_response,
         )
 
-        assert isinstance(
-            result, ModelResponse
-        ), "PII masking path must return ModelResponse"
+        assert isinstance(result, ModelResponse), "PII masking path must return ModelResponse"
         result_dict = result.model_dump()
-        assert (
-            result_dict["choices"][0]["message"]["content"]
-            != "Your email is test@example.com"
-        )
+        assert result_dict["choices"][0]["message"]["content"] != "Your email is test@example.com"
         assert "[MASKED" in result_dict["choices"][0]["message"]["content"]

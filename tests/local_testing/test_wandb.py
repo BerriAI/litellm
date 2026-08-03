@@ -37,9 +37,7 @@ def test_wandb_logging_async():
             # openai.ChatCompletion.create replacement
             response = await router.acompletion(
                 model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "user", "content": "this is a test with litellm router ?"}
-                ],
+                messages=[{"role": "user", "content": "this is a test with litellm router ?"}],
             )
             print(response)
 

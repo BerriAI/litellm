@@ -1,9 +1,15 @@
+import re
+from types import MappingProxyType
+
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 ZAI_API_BASE = "https://api.z.ai/api/paas/v4"
+GLM_VERSION_PATTERN = re.compile(r"glm-(\d+)(?:\.(\d+))?")
+THINKING_ON = MappingProxyType({"type": "enabled"})
+THINKING_OFF = MappingProxyType({"type": "disabled"})
 
 
 class ZAIChatConfig(OpenAIGPTConfig):
@@ -34,6 +40,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         base_params = [
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "stream_options",
             "temperature",
@@ -41,14 +48,67 @@ class ZAIChatConfig(OpenAIGPTConfig):
             "stop",
             "tools",
             "tool_choice",
+            "response_format",
         ]
 
-        import litellm
-
-        try:
-            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
-                base_params.append("thinking")
-        except Exception:
-            pass
+        if self._is_reasoning_model(model):
+            base_params.extend(("thinking", "reasoning_effort"))
 
         return base_params
+
+    @staticmethod
+    def _glm_version(model: str) -> tuple[int, int] | None:
+        """Parse the ``glm-<major>[.<minor>]`` version out of a Z.AI model id.
+
+        Returns ``None`` for ids that don't follow that shape.
+        """
+        match = GLM_VERSION_PATTERN.match(model.split("/")[-1].lower())
+        return (int(match[1]), int(match[2] or 0)) if match else None
+
+    @classmethod
+    def _is_reasoning_model(cls, model: str) -> bool:
+        """GLM-4.5 and newer expose ``thinking``.
+
+        Read from the id rather than the model map: the map marks GLM-4.6 and up
+        but not GLM-4.5, and it lags every new release.
+        """
+        version = cls._glm_version(model)
+        return version is not None and version >= (4, 5)
+
+    @classmethod
+    def _supports_reasoning_effort_param(cls, model: str) -> bool:
+        """``reasoning_effort`` is native to GLM-5.2 and newer.
+
+        Earlier reasoning models (GLM-4.5 through GLM-5.1) only expose the
+        ``thinking`` object, so ``reasoning_effort`` is translated to that instead
+        of being forwarded.
+        """
+        version = cls._glm_version(model)
+        return version is not None and version >= (5, 2)
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,  # mutable-ok: signature fixed by BaseConfig.map_openai_params
+        optional_params: dict,  # mutable-ok: signature fixed by BaseConfig.map_openai_params
+        model: str,
+        drop_params: bool,
+    ) -> dict:  # mutable-ok: signature fixed by BaseConfig.map_openai_params
+        """GLM takes ``max_tokens`` (not ``max_completion_tokens``), and only
+        GLM-5.2+ takes ``reasoning_effort`` natively."""
+        optional_params = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+
+        max_completion_tokens = optional_params.pop("max_completion_tokens", None)
+        if max_completion_tokens is not None:
+            optional_params.setdefault("max_tokens", max_completion_tokens)
+
+        if not self._supports_reasoning_effort_param(model):
+            reasoning_effort = optional_params.pop("reasoning_effort", None)
+            if isinstance(reasoning_effort, str):
+                optional_params.setdefault("thinking", THINKING_OFF if reasoning_effort == "none" else THINKING_ON)
+
+        return optional_params

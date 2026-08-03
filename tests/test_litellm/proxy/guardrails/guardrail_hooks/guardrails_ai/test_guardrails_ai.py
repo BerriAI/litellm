@@ -34,7 +34,6 @@ async def test_guardrails_ai_process_input():
             rawLlmOutput="processed text",
         ),
     ) as mock_api_request:
-
         data = {
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant"},
@@ -45,9 +44,7 @@ async def test_guardrails_ai_process_input():
         result = await guardrails_ai_guardrail.process_input(data, "completion")
 
         # Verify the API was called with the user message
-        mock_api_request.assert_called_once_with(
-            llm_output="Hello, how are you?", request_data=data
-        )
+        mock_api_request.assert_called_once_with(llm_output="Hello, how are you?", request_data=data)
 
         # Verify the message was updated
         assert result["messages"][1]["content"] == "processed text"
@@ -62,14 +59,11 @@ async def test_guardrails_ai_process_input():
             rawLlmOutput="async processed text",
         ),
     ) as mock_api_request:
-
         data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
 
         result = await guardrails_ai_guardrail.process_input(data, "acompletion")
 
-        mock_api_request.assert_called_once_with(
-            llm_output="What is the weather?", request_data=data
-        )
+        mock_api_request.assert_called_once_with(llm_output="What is the weather?", request_data=data)
 
         assert result["messages"][0]["content"] == "async processed text"
 
@@ -86,9 +80,7 @@ async def test_guardrails_ai_process_input():
         "litellm.litellm_core_utils.prompt_templates.common_utils.get_last_user_message",
         return_value=None,
     ):
-        data = {
-            "messages": [{"role": "system", "content": "You are a helpful assistant"}]
-        }
+        data = {"messages": [{"role": "system", "content": "You are a helpful assistant"}]}
 
         result = await guardrails_ai_guardrail.process_input(data, "completion")
 
@@ -111,7 +103,6 @@ async def test_guardrails_ai_process_input():
             rawLlmOutput="sanitized message",
         ),
     ) as mock_api_request:
-
         data = {
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant"},
@@ -124,9 +115,7 @@ async def test_guardrails_ai_process_input():
         result = await guardrails_ai_guardrail.process_input(data, "completion")
 
         # Should process the last user message
-        mock_api_request.assert_called_once_with(
-            llm_output="Second question", request_data=data
-        )
+        mock_api_request.assert_called_once_with(llm_output="Second question", request_data=data)
 
         # Only the last user message should be updated
         assert result["messages"][0]["content"] == "You are a helpful assistant"
@@ -145,7 +134,6 @@ async def test_guardrails_ai_process_input():
             callId="test-123",
         ),
     ) as mock_api_request:
-
         data = {
             "messages": [
                 {
@@ -162,10 +150,7 @@ async def test_guardrails_ai_process_input():
         )
 
         # Should use validatedOutput when available
-        assert (
-            result["messages"][0]["content"]
-            == "Sometimes I have spelling errors in my writing"
-        )
+        assert result["messages"][0]["content"] == "Sometimes I have spelling errors in my writing"
 
     # Test case 8: Test fallback to rawLlmOutput when validatedOutput is not present
     with patch.object(
@@ -178,7 +163,6 @@ async def test_guardrails_ai_process_input():
             callId="test-456",
         ),
     ) as mock_api_request:
-
         data = {"messages": [{"role": "user", "content": "Test message"}]}
 
         result = await guardrails_ai_guardrail.process_input(data, "completion")
@@ -191,7 +175,6 @@ async def test_guardrails_ai_process_input():
         "make_guardrails_ai_api_request",
         return_value={},  # Empty response
     ) as mock_api_request:
-
         data = {"messages": [{"role": "user", "content": "Original message"}]}
 
         result = await guardrails_ai_guardrail.process_input(data, "completion")

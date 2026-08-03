@@ -36,9 +36,7 @@ ANTHROPIC_MODELS = [
 # Built-in tool-use prompt: ask Claude to use the `Bash` tool. The CLI
 # allow-lists the tool via `--allowed-tools` so the run completes without
 # an interactive permission prompt.
-TOOL_USE_PROMPT = (
-    "Use the Bash tool to run the command `echo pong` and report what it printed."
-)
+TOOL_USE_PROMPT = "Use the Bash tool to run the command `echo pong` and report what it printed."
 # Restrict the Bash tool to the exact command `echo pong` and put the
 # CLI in `dontAsk` mode so anything else the model returns is auto-
 # denied instead of executed. `dontAsk` mode in headless `--print` mode
@@ -101,9 +99,7 @@ def test_tool_use_anthropic(compat_result):
             continue
 
         if not _has_tool_use_event(outcome.events):
-            error = (
-                f"[{model}] no tool_use content block observed in stream-json events"
-            )
+            error = f"[{model}] no tool_use content block observed in stream-json events"
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
             continue

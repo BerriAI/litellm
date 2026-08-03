@@ -19,9 +19,7 @@ from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
 
-WEATHER_WAV = (
-    Path(__file__).resolve().parent / "realtime" / "fixtures" / "weather_question_24k.wav"
-)
+WEATHER_WAV = Path(__file__).resolve().parent / "realtime" / "fixtures" / "weather_question_24k.wav"
 
 
 class TestAudioTranscriptions:
@@ -32,20 +30,14 @@ class TestAudioTranscriptions:
         model = f"e2e-transcribe-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model="openai/gpt-4o-mini-transcribe", api_key="os.environ/OPENAI_API_KEY"
-            ),
+            LiteLLMParamsBody(model="openai/gpt-4o-mini-transcribe", api_key="os.environ/OPENAI_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
 
         result = unwrap(
-            endpoints_client.transcribe(
-                key, model, filename=WEATHER_WAV.name, content=WEATHER_WAV.read_bytes()
-            )
+            endpoints_client.transcribe(key, model, filename=WEATHER_WAV.name, content=WEATHER_WAV.read_bytes())
         )
         text = result.text.strip()
         assert text, "/audio/transcriptions returned an empty transcript"
-        assert "weather" in text.lower(), (
-            f"transcript of a spoken weather question does not mention weather: {text!r}"
-        )
+        assert "weather" in text.lower(), f"transcript of a spoken weather question does not mention weather: {text!r}"

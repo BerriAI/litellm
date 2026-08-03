@@ -45,9 +45,7 @@ def _make_team(team_id="team-1", organization_id="org-1") -> LiteLLM_TeamTable:
     )
 
 
-def _make_user_key(
-    user_id="org-admin-user", role=LitellmUserRoles.INTERNAL_USER.value
-) -> UserAPIKeyAuth:
+def _make_user_key(user_id="org-admin-user", role=LitellmUserRoles.INTERNAL_USER.value) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(user_id=user_id, user_role=role)
 
 
@@ -61,9 +59,7 @@ def _make_membership(user_id, org_id, role="org_admin"):
     )
 
 
-def _make_caller_user(
-    user_id="org-admin-user", org_id="org-1", org_role="org_admin"
-) -> LiteLLM_UserTable:
+def _make_caller_user(user_id="org-admin-user", org_id="org-1", org_role="org_admin") -> LiteLLM_UserTable:
     return LiteLLM_UserTable(
         user_id=user_id,
         organization_memberships=[_make_membership(user_id, org_id, org_role)],
@@ -80,9 +76,7 @@ def _patch_org_admin_deps(get_user_return):
         ),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock(), create=True),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(), create=True),
-        patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", MagicMock(), create=True
-        ),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock(), create=True),
     )
 
 
@@ -106,9 +100,7 @@ class TestIsUserOrgAdminForTeam:
 
         p1, p2, p3, p4 = _patch_org_admin_deps(caller)
         with p1, p2, p3, p4:
-            result = await _is_user_org_admin_for_team(
-                user_api_key_dict=key, team_obj=team
-            )
+            result = await _is_user_org_admin_for_team(user_api_key_dict=key, team_obj=team)
             assert result is True
 
     @pytest.mark.asyncio
@@ -123,9 +115,7 @@ class TestIsUserOrgAdminForTeam:
 
         p1, p2, p3, p4 = _patch_org_admin_deps(caller)
         with p1, p2, p3, p4:
-            result = await _is_user_org_admin_for_team(
-                user_api_key_dict=key, team_obj=team
-            )
+            result = await _is_user_org_admin_for_team(user_api_key_dict=key, team_obj=team)
             assert result is False
 
     @pytest.mark.asyncio
@@ -151,9 +141,7 @@ class TestIsUserOrgAdminForTeam:
 
         p1, p2, p3, p4 = _patch_org_admin_deps(caller)
         with p1, p2, p3, p4:
-            result = await _is_user_org_admin_for_team(
-                user_api_key_dict=key, team_obj=team
-            )
+            result = await _is_user_org_admin_for_team(user_api_key_dict=key, team_obj=team)
             assert result is False
 
     @pytest.mark.asyncio
@@ -219,9 +207,7 @@ class TestValidateMembership:
 
         team = _make_team(organization_id="org-1")
         key = _make_user_key(user_id="random-user")
-        caller = _make_caller_user(
-            user_id="random-user", org_id="org-2", org_role="user"
-        )
+        caller = _make_caller_user(user_id="random-user", org_id="org-2", org_role="user")
 
         p1, p2, p3, p4 = _patch_org_admin_deps(caller)
         with p1, p2, p3, p4:
@@ -236,9 +222,7 @@ class TestValidateMembership:
         )
 
         team = _make_team(team_id="team-1")
-        key = UserAPIKeyAuth(
-            team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER.value
-        )
+        key = UserAPIKeyAuth(team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER.value)
         await validate_membership(user_api_key_dict=key, team_table=team)
 
 
@@ -270,9 +254,7 @@ class TestUserIsOrgAdminRouteCheck:
             user_id="org-admin-user",
             organization_memberships=[_make_membership("org-admin-user", "org-1")],
         )
-        result = _user_is_org_admin(
-            request_data={"organization_id": "org-1"}, user_object=user
-        )
+        result = _user_is_org_admin(request_data={"organization_id": "org-1"}, user_object=user)
         assert result is True
 
     def test_non_matching_org_id_returns_false(self):
@@ -282,9 +264,7 @@ class TestUserIsOrgAdminRouteCheck:
             user_id="org-admin-user",
             organization_memberships=[_make_membership("org-admin-user", "org-1")],
         )
-        result = _user_is_org_admin(
-            request_data={"organization_id": "org-99"}, user_object=user
-        )
+        result = _user_is_org_admin(request_data={"organization_id": "org-99"}, user_object=user)
         assert result is False
 
     def test_organizations_list_field(self):
@@ -294,9 +274,7 @@ class TestUserIsOrgAdminRouteCheck:
             user_id="org-admin-user",
             organization_memberships=[_make_membership("org-admin-user", "org-1")],
         )
-        result = _user_is_org_admin(
-            request_data={"organizations": ["org-1"]}, user_object=user
-        )
+        result = _user_is_org_admin(request_data={"organizations": ["org-1"]}, user_object=user)
         assert result is True
 
     def test_none_user_object_returns_false(self):

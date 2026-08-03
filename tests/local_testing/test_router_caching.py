@@ -9,9 +9,7 @@ from unittest.mock import patch
 from typing import Union
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from litellm.caching import RedisCache, RedisClusterCache
@@ -96,9 +94,7 @@ async def test_acompletion_caching_on_router():
             },
         ]
 
-        messages = [
-            {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
-        ]
+        messages = [{"role": "user", "content": f"write a one sentence poem {time.time()}?"}]
         start_time = time.time()
         router = Router(
             model_list=model_list,
@@ -109,21 +105,15 @@ async def test_acompletion_caching_on_router():
             timeout=30,
             routing_strategy="simple-shuffle",
         )
-        response1 = await router.acompletion(
-            model="gpt-4.1-nano", messages=messages, temperature=1
-        )
+        response1 = await router.acompletion(model="gpt-4.1-nano", messages=messages, temperature=1)
         print(f"response1: {response1}")
         await asyncio.sleep(5)  # add cache is async, async sleep for cache to get set
 
-        response2 = await router.acompletion(
-            model="gpt-4.1-nano", messages=messages, temperature=1
-        )
+        response2 = await router.acompletion(model="gpt-4.1-nano", messages=messages, temperature=1)
         print(f"response2: {response2}")
         assert response1.id == response2.id
         assert len(response1.choices[0].message.content) > 0
-        assert (
-            response1.choices[0].message.content == response2.choices[0].message.content
-        )
+        assert response1.choices[0].message.content == response2.choices[0].message.content
         router.reset()
     except litellm.Timeout as e:
         end_time = time.time()
@@ -152,9 +142,7 @@ async def test_completion_caching_on_router():
             },
         ]
 
-        messages = [
-            {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
-        ]
+        messages = [{"role": "user", "content": f"write a one sentence poem {time.time()}?"}]
         router = Router(
             model_list=model_list,
             redis_host=os.environ["REDIS_HOST"],
@@ -165,14 +153,10 @@ async def test_completion_caching_on_router():
             routing_strategy_args={"ttl": 10},
             routing_strategy="usage-based-routing",
         )
-        response1 = await router.acompletion(
-            model="gpt-3.5-turbo", messages=messages, temperature=1
-        )
+        response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1)
         print(f"response1: {response1}")
         await asyncio.sleep(10)
-        response2 = await router.acompletion(
-            model="gpt-3.5-turbo", messages=messages, temperature=1
-        )
+        response2 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1)
         print(f"response2: {response2}")
         assert len(response1.choices[0].message.content) > 0
         assert len(response2.choices[0].message.content) > 0
@@ -211,9 +195,7 @@ async def test_acompletion_caching_with_ttl_on_router():
             },
         ]
 
-        messages = [
-            {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
-        ]
+        messages = [{"role": "user", "content": f"write a one sentence poem {time.time()}?"}]
         start_time = time.time()
         router = Router(
             model_list=model_list,
@@ -224,20 +206,14 @@ async def test_acompletion_caching_with_ttl_on_router():
             timeout=30,
             routing_strategy="simple-shuffle",
         )
-        response1 = await router.acompletion(
-            model="gpt-3.5-turbo", messages=messages, temperature=1, ttl=0
-        )
+        response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1, ttl=0)
         print(f"response1: {response1}")
         await asyncio.sleep(1)  # add cache is async, async sleep for cache to get set
-        response2 = await router.acompletion(
-            model="gpt-3.5-turbo", messages=messages, temperature=1, ttl=0
-        )
+        response2 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1, ttl=0)
         print(f"response2: {response2}")
         assert response1.id != response2.id
         assert len(response1.choices[0].message.content) > 0
-        assert (
-            response1.choices[0].message.content != response2.choices[0].message.content
-        )
+        assert response1.choices[0].message.content != response2.choices[0].message.content
         router.reset()
     except litellm.Timeout as e:
         end_time = time.time()
@@ -277,9 +253,7 @@ async def test_acompletion_caching_on_router_caching_groups():
             },
         ]
 
-        messages = [
-            {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
-        ]
+        messages = [{"role": "user", "content": f"write a one sentence poem {time.time()}?"}]
         start_time = time.time()
         router = Router(
             model_list=model_list,
@@ -291,20 +265,14 @@ async def test_acompletion_caching_on_router_caching_groups():
             routing_strategy="simple-shuffle",
             caching_groups=[("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")],
         )
-        response1 = await router.acompletion(
-            model="openai-gpt-3.5-turbo", messages=messages, temperature=1
-        )
+        response1 = await router.acompletion(model="openai-gpt-3.5-turbo", messages=messages, temperature=1)
         print(f"response1: {response1}")
         await asyncio.sleep(1)  # add cache is async, async sleep for cache to get set
-        response2 = await router.acompletion(
-            model="azure-gpt-3.5-turbo", messages=messages, temperature=1
-        )
+        response2 = await router.acompletion(model="azure-gpt-3.5-turbo", messages=messages, temperature=1)
         print(f"response2: {response2}")
         assert response1.id == response2.id
         assert len(response1.choices[0].message.content) > 0
-        assert (
-            response1.choices[0].message.content == response2.choices[0].message.content
-        )
+        assert response1.choices[0].message.content == response2.choices[0].message.content
         router.reset()
     except litellm.Timeout as e:
         end_time = time.time()

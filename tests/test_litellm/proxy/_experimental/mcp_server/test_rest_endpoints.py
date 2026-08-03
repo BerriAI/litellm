@@ -776,9 +776,7 @@ class TestListToolsRestAPI:
         they do for a gateway session, never to the bare session key."""
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 
-        session_auth = UserAPIKeyAuth(
-            team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user"
-        )
+        session_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user")
         admitted_auth = UserAPIKeyAuth(user_id="grant-user", org_id="admitted-org")
 
         async def fake_reload(user_id):
@@ -858,9 +856,7 @@ class TestListToolsRestAPI:
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
-        session_auth = UserAPIKeyAuth(
-            team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user"
-        )
+        session_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user")
         scoped_auth = UserAPIKeyAuth(
             object_permission=LiteLLM_ObjectPermissionTable(
                 object_permission_id="toolset-scope",
@@ -3011,9 +3007,7 @@ class TestRestListToolsetFiltering:
 
         mock_manager = MagicMock()
         mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
-        mock_manager.resolve_toolset_tool_permissions = AsyncMock(
-            return_value={"server-a": ["lookup_status"]}
-        )
+        mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value={"server-a": ["lookup_status"]})
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,

@@ -8,9 +8,7 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import json
 import os
@@ -43,12 +41,8 @@ obj = ModelResponse(
                         bytes=[],
                         logprob=-0.00018153927521780133,
                         top_logprobs=[
-                            TopLogprob(
-                                token="", bytes=[], logprob=-0.00018153927521780133
-                            ),
-                            TopLogprob(
-                                token="\n\n", bytes=[10, 10], logprob=-9.062681198120117
-                            ),
+                            TopLogprob(token="", bytes=[], logprob=-0.00018153927521780133),
+                            TopLogprob(token="\n\n", bytes=[10, 10], logprob=-9.062681198120117),
                         ],
                     )
                 ]

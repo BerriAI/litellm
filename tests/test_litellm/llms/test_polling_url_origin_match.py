@@ -38,9 +38,7 @@ def test_azure_di_sync_rejects_cross_origin_polling():
         "Operation-Location": "https://attacker.example.com/results/xyz",
     }
     raw_response.request = MagicMock()
-    raw_response.request.url = (
-        "https://eastus.cognitiveservices.azure.com/documentintelligence/.../analyze"
-    )
+    raw_response.request.url = "https://eastus.cognitiveservices.azure.com/documentintelligence/.../analyze"
     raw_response.request.headers = {"Ocp-Apim-Subscription-Key": "leak-me"}
 
     with pytest.raises(ValueError, match="rejected polling URL"):
@@ -68,9 +66,7 @@ def test_bfl_image_generation_sync_rejects_cross_origin_polling():
 
     initial_response = MagicMock()
     initial_response.status_code = 200
-    initial_response.json = MagicMock(
-        return_value={"polling_url": "https://attacker.example.com/get_result"}
-    )
+    initial_response.json = MagicMock(return_value={"polling_url": "https://attacker.example.com/get_result"})
     initial_response.request = MagicMock()
     initial_response.request.url = "https://api.bfl.ai/v1/flux-pro"
 
@@ -97,9 +93,7 @@ async def test_bfl_image_generation_async_rejects_cross_origin_polling():
 
     initial_response = MagicMock()
     initial_response.status_code = 200
-    initial_response.json = MagicMock(
-        return_value={"polling_url": "https://attacker.example.com/get_result"}
-    )
+    initial_response.json = MagicMock(return_value={"polling_url": "https://attacker.example.com/get_result"})
     initial_response.request = MagicMock()
     initial_response.request.url = "https://api.bfl.ai/v1/flux-pro"
 
@@ -125,9 +119,7 @@ def test_bfl_image_edit_sync_rejects_cross_origin_polling():
 
     initial_response = MagicMock()
     initial_response.status_code = 200
-    initial_response.json = MagicMock(
-        return_value={"polling_url": "https://attacker.example.com/get_result"}
-    )
+    initial_response.json = MagicMock(return_value={"polling_url": "https://attacker.example.com/get_result"})
     initial_response.request = MagicMock()
     initial_response.request.url = "https://api.bfl.ai/v1/flux-pro/edit"
 
@@ -155,9 +147,7 @@ def test_bfl_image_generation_same_origin_polling_passes():
 
     initial_response = MagicMock()
     initial_response.status_code = 200
-    initial_response.json = MagicMock(
-        return_value={"polling_url": "https://api.bfl.ai/v1/get_result?id=abc"}
-    )
+    initial_response.json = MagicMock(return_value={"polling_url": "https://api.bfl.ai/v1/get_result?id=abc"})
     initial_response.request = MagicMock()
     initial_response.request.url = "https://api.bfl.ai/v1/flux-pro"
 

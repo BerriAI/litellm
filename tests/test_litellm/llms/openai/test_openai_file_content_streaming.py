@@ -73,14 +73,10 @@ async def test_afile_content_streaming_builds_standard_logging_object_on_complet
             headers={"content-length": "5"},
         )
 
-    async def _mock_async_success_handler(
-        self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
-    ):
+    async def _mock_async_success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
         nonlocal captured_standard_logging_object
         captured_standard_logging_object = kwargs.get("standard_logging_object")
-        self.model_call_details["standard_logging_object"] = (
-            captured_standard_logging_object
-        )
+        self.model_call_details["standard_logging_object"] = captured_standard_logging_object
 
     monkeypatch.setattr(
         files_main.openai_files_instance,
@@ -118,10 +114,7 @@ async def test_afile_content_streaming_builds_standard_logging_object_on_complet
     assert captured_standard_logging_object["call_type"] == "afile_content"
     assert captured_standard_logging_object["custom_llm_provider"] == "openai"
     assert captured_standard_logging_object["response"]["id"] == "file-abc123"
-    assert (
-        captured_standard_logging_object["hidden_params"]["api_base"]
-        == "https://api.openai.com/v1"
-    )
+    assert captured_standard_logging_object["hidden_params"]["api_base"] == "https://api.openai.com/v1"
 
 
 @pytest.mark.asyncio

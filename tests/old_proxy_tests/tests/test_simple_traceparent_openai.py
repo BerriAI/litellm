@@ -13,9 +13,7 @@ print("Trace ID: ", _trace_id)
 
 response = client.chat.completions.create(
     model="llama3",
-    messages=[
-        {"role": "user", "content": "this is a test request, write a short poem"}
-    ],
+    messages=[{"role": "user", "content": "this is a test request, write a short poem"}],
     extra_headers=extra_headers,
 )
 

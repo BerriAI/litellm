@@ -1567,8 +1567,6 @@ async def test_apply_guardrail_litellm_timeout_fail_open_forwards_uncompressed()
     assert result["structured_messages"] == ORIGINAL_MESSAGES
 
 
-
-
 # ---------------------------------------------------------------------------
 # Content-parts flattening (LIT-4795)
 #
@@ -2010,7 +2008,9 @@ async def _plan_for(guardrail: HeadroomGuardrail, response, messages: list):
         return_value=_make_retrieve_response("ORIGINAL CONTENT"),
     ):
         return await guardrail.async_build_agentic_loop_plan(
-            tools={"tool_calls": [{"id": "call_1", "name": HEADROOM_RETRIEVE_TOOL_NAME, "arguments": {"hash": "h" * 24}}]},
+            tools={
+                "tool_calls": [{"id": "call_1", "name": HEADROOM_RETRIEVE_TOOL_NAME, "arguments": {"hash": "h" * 24}}]
+            },
             model="claude-sonnet-4-5-20250929",
             messages=messages,
             response=response,

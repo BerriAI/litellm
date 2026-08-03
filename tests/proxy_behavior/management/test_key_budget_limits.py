@@ -115,15 +115,11 @@ async def test_check_team_key_limits_aggregate(
         headers={"Authorization": f"Bearer {seeder}"},
         json=body,
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{body!r} → {resp.status_code}: {resp.text}"
+    assert resp.status_code == expected_status, f"{body!r} → {resp.status_code}: {resp.text}"
     if detail_substring is not None:
         assert detail_substring in resp.text, resp.text
 
-    rows = await prisma.db.litellm_verificationtoken.find_many(
-        where={"key_alias": scratch.prefix}
-    )
+    rows = await prisma.db.litellm_verificationtoken.find_many(where={"key_alias": scratch.prefix})
     if expected_status == 200:
         assert len(rows) == 1
     else:
@@ -199,14 +195,10 @@ async def test_check_team_key_limits_model_specific(
         headers={"Authorization": f"Bearer {seeder}"},
         json=body,
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{body!r} → {resp.status_code}: {resp.text}"
+    assert resp.status_code == expected_status, f"{body!r} → {resp.status_code}: {resp.text}"
     if detail_substring is not None:
         assert detail_substring in resp.text, resp.text
-    rows = await prisma.db.litellm_verificationtoken.find_many(
-        where={"key_alias": scratch.prefix}
-    )
+    rows = await prisma.db.litellm_verificationtoken.find_many(where={"key_alias": scratch.prefix})
     assert len(rows) == (1 if expected_status == 200 else 0)
 
 
@@ -290,14 +282,10 @@ async def test_check_org_key_limits_aggregate(
         headers={"Authorization": f"Bearer {seeder}"},
         json=body,
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{body!r} → {resp.status_code}: {resp.text}"
+    assert resp.status_code == expected_status, f"{body!r} → {resp.status_code}: {resp.text}"
     if detail_substring is not None:
         assert detail_substring in resp.text, resp.text
-    rows = await prisma.db.litellm_verificationtoken.find_many(
-        where={"key_alias": scratch.prefix}
-    )
+    rows = await prisma.db.litellm_verificationtoken.find_many(where={"key_alias": scratch.prefix})
     assert len(rows) == (1 if expected_status == 200 else 0)
 
 
@@ -364,14 +352,10 @@ async def test_check_org_key_limits_model_specific(
         headers={"Authorization": f"Bearer {seeder}"},
         json=body,
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{body!r} → {resp.status_code}: {resp.text}"
+    assert resp.status_code == expected_status, f"{body!r} → {resp.status_code}: {resp.text}"
     if detail_substring is not None:
         assert detail_substring in resp.text, resp.text
-    rows = await prisma.db.litellm_verificationtoken.find_many(
-        where={"key_alias": scratch.prefix}
-    )
+    rows = await prisma.db.litellm_verificationtoken.find_many(where={"key_alias": scratch.prefix})
     assert len(rows) == (1 if expected_status == 200 else 0)
 
 

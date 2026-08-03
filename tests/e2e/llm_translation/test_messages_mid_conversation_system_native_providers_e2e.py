@@ -96,9 +96,7 @@ def _post_messages(client: EndpointsClient, key: str, body: RichMessagesRequest)
     )
 
 
-def _register_deployment(
-    client: EndpointsClient, resources: ResourceManager, params: LiteLLMParamsBody
-) -> str:
+def _register_deployment(client: EndpointsClient, resources: ResourceManager, params: LiteLLMParamsBody) -> str:
     model = f"e2e-midsys-{unique_marker()}"
     model_id = client.create_model(model, params)
     resources.defer(lambda: client.delete_model(model_id))
@@ -123,9 +121,7 @@ class PrimedCache(BaseModel):
         return self.prefix_read_tokens + self.first_turn_creation_tokens
 
 
-def _prime_prompt_cache(
-    client: EndpointsClient, key: str, model: str, system_block: TextBlock
-) -> PrimedCache:
+def _prime_prompt_cache(client: EndpointsClient, key: str, model: str, system_block: TextBlock) -> PrimedCache:
     """Send first-turn calls (fresh cache-marked user turn each attempt,
     identical system prefix) until one both reads the system prefix back from
     cache and writes its own user-turn chunk, proving the cache is live in both
@@ -253,9 +249,7 @@ class TestAzureFoundryMidConversationSystem:
     def test_unflagged_model_hoists_system_reminder_and_succeeds(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        _assert_unflagged_model_hoists_and_succeeds(
-            endpoints_client, resources, _azure_params(self.UNFLAGGED_MODEL)
-        )
+        _assert_unflagged_model_hoists_and_succeeds(endpoints_client, resources, _azure_params(self.UNFLAGGED_MODEL))
 
 
 class TestVertexMidConversationSystem:
@@ -279,6 +273,4 @@ class TestVertexMidConversationSystem:
     def test_unflagged_model_hoists_system_reminder_and_succeeds(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        _assert_unflagged_model_hoists_and_succeeds(
-            endpoints_client, resources, _vertex_params(self.UNFLAGGED_MODEL)
-        )
+        _assert_unflagged_model_hoists_and_succeeds(endpoints_client, resources, _vertex_params(self.UNFLAGGED_MODEL))

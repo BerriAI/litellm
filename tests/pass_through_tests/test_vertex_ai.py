@@ -94,9 +94,7 @@ def _vertex_access_token() -> str:
     import google.auth
     import google.auth.transport.requests
 
-    credentials, _ = google.auth.default(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
+    credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     credentials.refresh(google.auth.transport.requests.Request())
     return credentials.token
 
@@ -145,9 +143,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
         )
         if _is_vertex_quota_error(response):
             pytest.skip("Vertex AI quota exhausted")
-        assert (
-            response.status_code == 200
-        ), f"vertex pass-through call failed: {response.status_code} {response.text}"
+        assert response.status_code == 200, f"vertex pass-through call failed: {response.status_code} {response.text}"
 
         call_id = response.headers.get("x-litellm-call-id")
         assert call_id, "proxy response missing x-litellm-call-id header"
@@ -157,16 +153,12 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
             row = _spend_log_for_request(call_id)
             if row is not None and float(row.get("spend") or 0) > 0:
                 assert "gemini" in row["model"], f"unexpected model in spend log: {row}"
-                assert (
-                    row["custom_llm_provider"] == "vertex_ai"
-                ), f"unexpected provider in spend log: {row}"
+                assert row["custom_llm_provider"] == "vertex_ai", f"unexpected provider in spend log: {row}"
                 return
 
         print(f"attempt {attempt}: spend log for call {call_id} not found yet, re-billing")
 
-    pytest.fail(
-        f"Vertex pass-through spend never recorded after {max_attempts} billed calls"
-    )
+    pytest.fail(f"Vertex pass-through spend never recorded after {max_attempts} billed calls")
 
 
 @pytest.mark.asyncio()
@@ -195,18 +187,14 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
     await asyncio.sleep(20)
     spend_after = get_tracked_spend()
     print("spend_after", spend_after)
-    assert (
-        spend_after > spend_before
-    ), "Spend should be greater than before. spend_before: {}, spend_after: {}".format(
+    assert spend_after > spend_before, "Spend should be greater than before. spend_before: {}, spend_after: {}".format(
         spend_before, spend_after
     )
 
     pass
 
 
-@pytest.mark.skip(
-    reason="skip flaky test - google context caching is flaky and not reliable."
-)
+@pytest.mark.skip(reason="skip flaky test - google context caching is flaky and not reliable.")
 @pytest.mark.asyncio
 async def test_vertex_ai_pass_through_endpoint_context_caching():
     import vertexai

@@ -8,14 +8,10 @@ def test_databricks_pricing_integrity():
     Verifies that for all Databricks models in model_prices_and_context_window.json:
     USD Price == DBU Price * 0.07
     """
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../../../model_prices_and_context_window.json")
 
     # Verify file exists
-    assert os.path.exists(
-        json_path
-    ), f"Could not find model_prices_and_context_window.json at {json_path}"
+    assert os.path.exists(json_path), f"Could not find model_prices_and_context_window.json at {json_path}"
 
     with open(json_path, "r") as f:
         data = json.load(f)
@@ -33,9 +29,7 @@ def test_databricks_pricing_integrity():
                 expected = input_dbu * conversion_rate
                 # Allow small floating point difference
                 if abs(input_usd - expected) > 1e-9:
-                    errors.append(
-                        f"{model} input mismatch: USD={input_usd}, DBU={input_dbu}, Expected={expected}"
-                    )
+                    errors.append(f"{model} input mismatch: USD={input_usd}, DBU={input_dbu}, Expected={expected}")
 
             # Check Output Cost
             output_usd = info.get("output_cost_per_token")
@@ -44,8 +38,6 @@ def test_databricks_pricing_integrity():
             if output_usd is not None and output_dbu is not None:
                 expected = output_dbu * conversion_rate
                 if abs(output_usd - expected) > 1e-9:
-                    errors.append(
-                        f"{model} output mismatch: USD={output_usd}, DBU={output_dbu}, Expected={expected}"
-                    )
+                    errors.append(f"{model} output mismatch: USD={output_usd}, DBU={output_dbu}, Expected={expected}")
 
     assert not errors, "\n" + "\n".join(errors)

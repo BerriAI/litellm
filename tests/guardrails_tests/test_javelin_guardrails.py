@@ -44,9 +44,7 @@ async def test_javelin_guardrail_reject_prompt():
         ]
     }
 
-    with patch.object(
-        guardrail, "call_javelin_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(guardrail, "call_javelin_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = mock_response
 
         user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
@@ -79,10 +77,7 @@ async def test_javelin_guardrail_reject_prompt():
         detail_dict = dict(detail_dict)
         assert "javelin_guardrail_response" in detail_dict
         assert "reject_prompt" in detail_dict
-        assert (
-            detail_dict["reject_prompt"]
-            == "Unable to complete request, prompt injection/jailbreak detected"
-        )
+        assert detail_dict["reject_prompt"] == "Unable to complete request, prompt injection/jailbreak detected"
 
 
 # test trustsafety guardrail
@@ -129,9 +124,7 @@ async def test_javelin_guardrail_trustsafety():
         ]
     }
 
-    with patch.object(
-        guardrail, "call_javelin_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(guardrail, "call_javelin_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = mock_response
 
         user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
@@ -164,10 +157,7 @@ async def test_javelin_guardrail_trustsafety():
         detail_dict = dict(detail_dict)  # Ensure type checker knows it's a dict
         assert "javelin_guardrail_response" in detail_dict
         assert "reject_prompt" in detail_dict
-        assert (
-            detail_dict["reject_prompt"]
-            == "Unable to complete request, trust & safety violation detected"
-        )
+        assert detail_dict["reject_prompt"] == "Unable to complete request, trust & safety violation detected"
 
 
 # test language detection guardrail
@@ -200,9 +190,7 @@ async def test_javelin_guardrail_language_detection():
         ]
     }
 
-    with patch.object(
-        guardrail, "call_javelin_guard", new_callable=AsyncMock
-    ) as mock_call:
+    with patch.object(guardrail, "call_javelin_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = mock_response
 
         user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
@@ -235,10 +223,7 @@ async def test_javelin_guardrail_language_detection():
         detail_dict = dict(detail_dict)  # Ensure type checker knows it's a dict
         assert "javelin_guardrail_response" in detail_dict
         assert "reject_prompt" in detail_dict
-        assert (
-            detail_dict["reject_prompt"]
-            == "Unable to complete request, language violation detected"
-        )
+        assert detail_dict["reject_prompt"] == "Unable to complete request, language violation detected"
 
 
 @pytest.mark.asyncio

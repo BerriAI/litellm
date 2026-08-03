@@ -64,9 +64,7 @@ class TestVertexAIVideoConfig:
             "vertex_location": "us-central1",
         }
 
-        url = self.config.get_complete_url(
-            model="vertex_ai/veo-002", api_base=None, litellm_params=litellm_params
-        )
+        url = self.config.get_complete_url(model="vertex_ai/veo-002", api_base=None, litellm_params=litellm_params)
 
         expected = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/veo-002"
         assert url == expected
@@ -100,9 +98,7 @@ class TestVertexAIVideoConfig:
         # Note: The method might not raise if vertex_project can be fetched from env
         # This test verifies the behavior when completely missing
         try:
-            url = self.config.get_complete_url(
-                model="veo-002", api_base=None, litellm_params=litellm_params
-            )
+            url = self.config.get_complete_url(model="veo-002", api_base=None, litellm_params=litellm_params)
             # If no error is raised, vertex_project was obtained from environment
             # In that case, just verify a URL was returned
             assert url is not None
@@ -114,9 +110,7 @@ class TestVertexAIVideoConfig:
         """Test URL construction with default location."""
         litellm_params = {"vertex_project": "test-project"}
 
-        url = self.config.get_complete_url(
-            model="veo-002", api_base=None, litellm_params=litellm_params
-        )
+        url = self.config.get_complete_url(model="veo-002", api_base=None, litellm_params=litellm_params)
 
         # Should default to us-central1
         assert "us-central1" in url
@@ -348,9 +342,7 @@ class TestVertexAIVideoConfig:
                 "raiMediaFilteredCount": 0,
                 "videos": [
                     {
-                        "bytesBase64Encoded": base64.b64encode(
-                            b"fake_video_data"
-                        ).decode(),
+                        "bytesBase64Encoded": base64.b64encode(b"fake_video_data").decode(),
                         "mimeType": "video/mp4",
                     }
                 ],
@@ -416,9 +408,7 @@ class TestVertexAIVideoConfig:
             "done": True,
             "response": {
                 "@type": "type.googleapis.com/cloud.ai.large_models.vision.GenerateVideoResponse",
-                "videos": [
-                    {"bytesBase64Encoded": encoded_video, "mimeType": "video/mp4"}
-                ],
+                "videos": [{"bytesBase64Encoded": encoded_video, "mimeType": "video/mp4"}],
             },
         }
 
@@ -438,9 +428,7 @@ class TestVertexAIVideoConfig:
         }
 
         with pytest.raises(ValueError, match="Video generation is not complete yet"):
-            self.config.transform_video_content_response(
-                raw_response=mock_response, logging_obj=self.mock_logging_obj
-            )
+            self.config.transform_video_content_response(raw_response=mock_response, logging_obj=self.mock_logging_obj)
 
     def test_transform_video_content_response_missing_video_data(self):
         """Test that missing video data raises error."""
@@ -452,9 +440,7 @@ class TestVertexAIVideoConfig:
         }
 
         with pytest.raises(ValueError, match="No video data found"):
-            self.config.transform_video_content_response(
-                raw_response=mock_response, logging_obj=self.mock_logging_obj
-            )
+            self.config.transform_video_content_response(raw_response=mock_response, logging_obj=self.mock_logging_obj)
 
     def test_get_video_edit_prefetch_params(self):
         """Test that prefetch params returns the fetchPredictOperation URL and body."""
@@ -480,9 +466,7 @@ class TestVertexAIVideoConfig:
 
         prefetched = {
             "done": True,
-            "response": {
-                "videos": [{"bytesBase64Encoded": fake_bytes, "mimeType": "video/mp4"}]
-            },
+            "response": {"videos": [{"bytesBase64Encoded": fake_bytes, "mimeType": "video/mp4"}]},
         }
 
         url, data = self.config.transform_video_edit_request(
@@ -508,9 +492,7 @@ class TestVertexAIVideoConfig:
 
         prefetched = {
             "done": True,
-            "response": {
-                "videos": [{"gcsUri": "gs://bucket/video.mp4", "mimeType": "video/mp4"}]
-            },
+            "response": {"videos": [{"gcsUri": "gs://bucket/video.mp4", "mimeType": "video/mp4"}]},
         }
 
         _, data = self.config.transform_video_edit_request(
@@ -609,9 +591,7 @@ class TestVertexAIVideoConfig:
 
     def test_get_error_class(self):
         """Test error class generation."""
-        error = self.config.get_error_class(
-            error_message="Test error", status_code=500, headers={}
-        )
+        error = self.config.get_error_class(error_message="Test error", status_code=500, headers={})
 
         # Should return VertexAIError
         from litellm.llms.vertex_ai.common_utils import VertexAIError
@@ -823,10 +803,7 @@ class TestImageAndParametersPassthrough:
         # instances contains prompt + image
         assert len(data["instances"]) == 1
         instance = data["instances"][0]
-        assert (
-            instance["prompt"]
-            == "Cinematic drone shot moving forward along the beach boardwalk"
-        )
+        assert instance["prompt"] == "Cinematic drone shot moving forward along the beach boardwalk"
         assert instance["image"] == image
 
         # parameters block is correct and not double-nested

@@ -47,9 +47,7 @@ async def test_budget_per_session_under_budget_passes():
 
     mock_agent = _make_mock_agent(max_budget_per_session=5.0)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = mock_agent
 
         result = await handler.async_pre_call_hook(
@@ -82,9 +80,7 @@ async def test_budget_per_session_exceeds_budget():
 
     mock_agent = _make_mock_agent(max_budget_per_session=1.0)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = mock_agent
 
         with pytest.raises(HTTPException) as exc_info:
@@ -118,9 +114,7 @@ async def test_budget_per_session_independent_sessions():
 
     mock_agent = _make_mock_agent(max_budget_per_session=2.0)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = mock_agent
 
         # Session A should be blocked

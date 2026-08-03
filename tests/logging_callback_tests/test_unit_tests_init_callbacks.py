@@ -4,9 +4,7 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 from typing import Literal
 
@@ -88,9 +86,7 @@ def reset_env_vars():
 all_callback_required_env_vars = []
 
 
-async def use_callback_in_llm_call(
-    callback: str, used_in: Literal["callbacks", "success_callback"]
-):
+async def use_callback_in_llm_call(callback: str, used_in: Literal["callbacks", "success_callback"]):
     if callback == "dynamic_rate_limiter":
         # internal CustomLogger class that expects internal_usage_cache passed to it, it always fails when tested in this way
         return
@@ -126,9 +122,7 @@ async def use_callback_in_llm_call(
         mock_response.json.return_value = {"values": []}
         mock_response.text = ""
 
-        patch.object(
-            litellm.module_level_client, "get", return_value=mock_response
-        ).start()
+        patch.object(litellm.module_level_client, "get", return_value=mock_response).start()
     elif callback == "prometheus":
         # pytest teardown - clear existing prometheus collectors
         collectors = list(REGISTRY._collector_to_names.keys())
@@ -139,23 +133,15 @@ async def use_callback_in_llm_call(
     if callback == "argilla":
         import httpx
 
-        mock_response = httpx.Response(
-            status_code=200, json={"items": [{"id": "mocked_dataset_id"}]}
-        )
-        patch.object(
-            litellm.module_level_client, "get", return_value=mock_response
-        ).start()
+        mock_response = httpx.Response(status_code=200, json={"items": [{"id": "mocked_dataset_id"}]})
+        patch.object(litellm.module_level_client, "get", return_value=mock_response).start()
 
     # Mock the httpx call for Argilla dataset retrieval
     if callback == "argilla":
         import httpx
 
-        mock_response = httpx.Response(
-            status_code=200, json={"items": [{"id": "mocked_dataset_id"}]}
-        )
-        patch.object(
-            litellm.module_level_client, "get", return_value=mock_response
-        ).start()
+        mock_response = httpx.Response(status_code=200, json={"items": [{"id": "mocked_dataset_id"}]})
+        patch.object(litellm.module_level_client, "get", return_value=mock_response).start()
 
     if used_in == "callbacks":
         litellm.callbacks = [callback]
@@ -180,9 +166,7 @@ async def use_callback_in_llm_call(
             assert isinstance(litellm.success_callback[0], expected_class)
             assert isinstance(litellm.failure_callback[0], expected_class)
 
-            assert (
-                len(litellm._async_success_callback) == 1
-            ), f"Got={litellm._async_success_callback}"
+            assert len(litellm._async_success_callback) == 1, f"Got={litellm._async_success_callback}"
             assert len(litellm._async_failure_callback) == 1
             assert len(litellm.success_callback) == 1
             assert len(litellm.failure_callback) == 1

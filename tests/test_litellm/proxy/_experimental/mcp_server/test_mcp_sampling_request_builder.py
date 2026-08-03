@@ -123,9 +123,7 @@ class TestBuildSamplingRequest:
             "te",
             "trailer",
         ]:
-            assert (
-                hop_header not in headers
-            ), f"Hop-by-hop header '{hop_header}' should be filtered"
+            assert hop_header not in headers, f"Hop-by-hop header '{hop_header}' should be filtered"
         assert headers.get("x-custom") == "keep-me"
 
     def test_should_forward_traceparent_header(self):
@@ -135,9 +133,7 @@ class TestBuildSamplingRequest:
         }
         req = _build_sampling_request(raw_headers=raw)
         headers = dict(req.headers)
-        assert headers.get("traceparent") == (
-            "00-abcdef1234567890abcdef1234567890-1234567890abcdef-01"
-        )
+        assert headers.get("traceparent") == ("00-abcdef1234567890abcdef1234567890-1234567890abcdef-01")
 
     def test_should_forward_x_litellm_api_key(self):
         """x-litellm-api-key header must be forwarded for auth."""

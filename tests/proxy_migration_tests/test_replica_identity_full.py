@@ -44,9 +44,7 @@ def scratch_schema(monkeypatch):
     schema = f"replica_identity_{uuid.uuid4().hex[:8]}"
     with psycopg.connect(_base_url(), autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema}"')
-        conn.execute(
-            f'CREATE TABLE "{schema}"."LiteLLM_ScratchTable" (id TEXT PRIMARY KEY, note TEXT)'
-        )
+        conn.execute(f'CREATE TABLE "{schema}"."LiteLLM_ScratchTable" (id TEXT PRIMARY KEY, note TEXT)')
         conn.execute(f'CREATE TABLE "{schema}"."LiteLLM_ScratchSibling" (id TEXT PRIMARY KEY)')
         conn.execute(f'CREATE TABLE "{schema}"."ScratchForeignTable" (id TEXT PRIMARY KEY)')
 
@@ -131,9 +129,7 @@ def test_reports_an_unrunnable_prisma_cli_without_raising(tmp_path):
 
 def test_setup_database_applies_after_a_successful_migration_run(monkeypatch):
     applied = []
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: True)
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: True))
     monkeypatch.setattr(
         ProxyExtrasDBManager,
         "apply_replica_identity_full_if_requested",
@@ -146,9 +142,7 @@ def test_setup_database_applies_after_a_successful_migration_run(monkeypatch):
 
 def test_setup_database_skips_replica_identity_when_migrations_fail(monkeypatch):
     applied = []
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: False)
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: False))
     monkeypatch.setattr(
         ProxyExtrasDBManager,
         "apply_replica_identity_full_if_requested",

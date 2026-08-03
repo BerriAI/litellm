@@ -66,9 +66,7 @@ def load_all_deployments(
     return tuple(
         CompatDeployment(
             model_name=entry["model_name"],
-            litellm_params=LiteLLMParamsBody(
-                **_normalize_params(entry["litellm_params"])
-            ),
+            litellm_params=LiteLLMParamsBody(**_normalize_params(entry["litellm_params"])),
         )
         for entry in model_list
     )
@@ -81,6 +79,4 @@ def all_expected_model_names(
 ) -> frozenset[str]:
     """Every virtual name the compat matrix declares - the ground truth
     the cells are supposed to probe. Used by the drift-check test."""
-    return frozenset(
-        d.model_name for d in load_all_deployments(config_path, reader)
-    )
+    return frozenset(d.model_name for d in load_all_deployments(config_path, reader))

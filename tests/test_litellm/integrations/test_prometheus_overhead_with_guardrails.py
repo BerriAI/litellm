@@ -43,12 +43,7 @@ def test_get_guardrail_overhead_seconds_sums_pre_post_excludes_during():
 
 def test_get_guardrail_overhead_seconds_no_guardrails_is_zero():
     """No guardrail_information at all -> 0.0."""
-    assert (
-        PrometheusLogger._get_guardrail_overhead_seconds(
-            StandardLoggingPayload(model="gpt-4o")
-        )
-        == 0.0
-    )
+    assert PrometheusLogger._get_guardrail_overhead_seconds(StandardLoggingPayload(model="gpt-4o")) == 0.0
 
 
 def test_get_guardrail_overhead_seconds_accepts_plain_string_mode():
@@ -176,13 +171,9 @@ def test_overhead_with_guardrails_recorded_when_only_guardrails_no_sdk_overhead(
 
     payload = StandardLoggingPayload(
         hidden_params={},  # no litellm_overhead_time_ms
-        guardrail_information=[
-            {"guardrail_mode": GuardrailEventHooks.post_call, "duration": 0.2}
-        ],
+        guardrail_information=[{"guardrail_mode": GuardrailEventHooks.post_call, "duration": 0.2}],
     )
-    logger._set_overhead_with_guardrails_metric(
-        payload, enum_values=MagicMock(), label_context=MagicMock()
-    )
+    logger._set_overhead_with_guardrails_metric(payload, enum_values=MagicMock(), label_context=MagicMock())
 
     mock_metric.labels.return_value.observe.assert_called_once()
     observed = mock_metric.labels.return_value.observe.call_args[0][0]
@@ -198,13 +189,9 @@ def test_overhead_with_guardrails_recorded_when_sdk_overhead_is_zero(monkeypatch
 
     payload = StandardLoggingPayload(
         hidden_params={"litellm_overhead_time_ms": 0.0},
-        guardrail_information=[
-            {"guardrail_mode": GuardrailEventHooks.pre_call, "duration": 0.1}
-        ],
+        guardrail_information=[{"guardrail_mode": GuardrailEventHooks.pre_call, "duration": 0.1}],
     )
-    logger._set_overhead_with_guardrails_metric(
-        payload, enum_values=MagicMock(), label_context=MagicMock()
-    )
+    logger._set_overhead_with_guardrails_metric(payload, enum_values=MagicMock(), label_context=MagicMock())
 
     observed = mock_metric.labels.return_value.observe.call_args[0][0]
     assert abs(observed - 0.1) < 1e-6
@@ -218,9 +205,7 @@ def test_overhead_with_guardrails_skipped_when_no_overhead_and_no_guardrails(mon
     logger.litellm_overhead_with_guardrails_latency_metric = mock_metric
 
     payload = StandardLoggingPayload(hidden_params={})
-    logger._set_overhead_with_guardrails_metric(
-        payload, enum_values=MagicMock(), label_context=MagicMock()
-    )
+    logger._set_overhead_with_guardrails_metric(payload, enum_values=MagicMock(), label_context=MagicMock())
 
     mock_metric.labels.assert_not_called()
 

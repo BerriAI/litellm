@@ -56,9 +56,7 @@ def test_token_counter_happy_path(client, auth_as, patched_token_counter):
     }
 
 
-def test_token_counter_missing_input_returns_400(
-    client, auth_as, patched_token_counter
-):
+def test_token_counter_missing_input_returns_400(client, auth_as, patched_token_counter):
     """Pins ``POST /utils/token_counter`` (error: missing input)."""
     with auth_as():
         response = client.post("/utils/token_counter", json={"model": "gpt-4"})
@@ -89,9 +87,7 @@ def patched_supported_params(monkeypatch):
 def test_supported_openai_params_happy_path(client, auth_as, patched_supported_params):
     """Pins ``GET /utils/supported_openai_params``."""
     with auth_as():
-        response = client.get(
-            "/utils/supported_openai_params", params={"model": "gpt-4"}
-        )
+        response = client.get("/utils/supported_openai_params", params={"model": "gpt-4"})
     assert response.status_code == 200
     assert normalize(response.json()) == {
         "supported_openai_params": ["max_tokens", "temperature", "top_p"],

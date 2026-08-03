@@ -60,9 +60,7 @@ def test_acompletion_accepts_shared_session():
     """Verify acompletion() has a shared_session parameter"""
     sig = inspect.signature(litellm.acompletion)
 
-    assert (
-        "shared_session" in sig.parameters
-    ), "acompletion() missing shared_session parameter"
+    assert "shared_session" in sig.parameters, "acompletion() missing shared_session parameter"
 
     # Should be optional (defaults to None)
     assert sig.parameters["shared_session"].default is None
@@ -72,9 +70,7 @@ def test_completion_accepts_shared_session():
     """Verify completion() has a shared_session parameter"""
     sig = inspect.signature(litellm.completion)
 
-    assert (
-        "shared_session" in sig.parameters
-    ), "completion() missing shared_session parameter"
+    assert "shared_session" in sig.parameters, "completion() missing shared_session parameter"
 
     assert sig.parameters["shared_session"].default is None
 
@@ -92,13 +88,11 @@ def test_acompletion_passes_session_to_completion():
     source = inspect.getsource(litellm.acompletion)
 
     # Check for both possible quote styles
-    found = is_parameter_active_in_source(
-        source, '"shared_session": shared_session'
-    ) or is_parameter_active_in_source(source, "'shared_session': shared_session")
+    found = is_parameter_active_in_source(source, '"shared_session": shared_session') or is_parameter_active_in_source(
+        source, "'shared_session': shared_session"
+    )
 
-    assert (
-        found
-    ), "acompletion() doesn't include shared_session in completion_kwargs (or it's commented out)"
+    assert found, "acompletion() doesn't include shared_session in completion_kwargs (or it's commented out)"
 
 
 # ============================================================================
@@ -112,9 +106,7 @@ def test_handler_completion_accepts_shared_session():
 
     sig = inspect.signature(BaseLLMHTTPHandler.completion)
 
-    assert (
-        "shared_session" in sig.parameters
-    ), "Handler.completion() missing shared_session parameter"
+    assert "shared_session" in sig.parameters, "Handler.completion() missing shared_session parameter"
 
 
 def test_handler_async_completion_accepts_shared_session():
@@ -123,9 +115,7 @@ def test_handler_async_completion_accepts_shared_session():
 
     sig = inspect.signature(BaseLLMHTTPHandler.async_completion)
 
-    assert (
-        "shared_session" in sig.parameters
-    ), "Handler.async_completion() missing shared_session parameter"
+    assert "shared_session" in sig.parameters, "Handler.async_completion() missing shared_session parameter"
 
 
 # ============================================================================

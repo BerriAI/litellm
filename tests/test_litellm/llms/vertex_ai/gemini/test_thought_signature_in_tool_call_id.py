@@ -94,10 +94,7 @@ def test_tool_call_id_includes_signature_in_response(enable_preview_features):
     tool_call_id = tools[0]["id"]
 
     # Verify signature is always in provider_specific_fields
-    assert (
-        tools[0].get("provider_specific_fields", {}).get("thought_signature")
-        == test_signature
-    )
+    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == test_signature
 
     # When preview features enabled, signature should be embedded in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
@@ -234,9 +231,7 @@ def test_openai_client_e2e_flow(enable_preview_features):
         ],
     }
     # Step 4: LiteLLM converts back to Gemini format, extracting signature
-    gemini_parts_converted = convert_to_gemini_tool_call_invoke(
-        openai_assistant_message
-    )
+    gemini_parts_converted = convert_to_gemini_tool_call_invoke(openai_assistant_message)
 
     # Verify signature is preserved through the round trip
     assert len(gemini_parts_converted) == 1
@@ -271,10 +266,7 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert len(tools) == 2
 
     # First tool call should have signature in provider_specific_fields
-    assert (
-        tools[0].get("provider_specific_fields", {}).get("thought_signature")
-        == signature1
-    )
+    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == signature1
 
     # When preview features enabled, first tool call has signature in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tools[0]["id"]

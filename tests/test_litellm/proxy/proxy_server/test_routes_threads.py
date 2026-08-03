@@ -73,9 +73,7 @@ def patched_threads(monkeypatch):
     monkeypatch.setattr(
         proxy_server,
         "proxy_logging_obj",
-        MagicMock(
-            post_call_failure_hook=AsyncMock(), update_request_status=AsyncMock()
-        ),
+        MagicMock(post_call_failure_hook=AsyncMock(), update_request_status=AsyncMock()),
     )
 
     async def _add_data(data, **kwargs):
@@ -91,9 +89,7 @@ def no_router(monkeypatch):
     monkeypatch.setattr(
         proxy_server,
         "proxy_logging_obj",
-        MagicMock(
-            post_call_failure_hook=AsyncMock(), update_request_status=AsyncMock()
-        ),
+        MagicMock(post_call_failure_hook=AsyncMock(), update_request_status=AsyncMock()),
     )
 
     async def _add_data(data, **kwargs):

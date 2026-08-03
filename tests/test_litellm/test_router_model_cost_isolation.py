@@ -14,9 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import Router
@@ -47,12 +45,8 @@ def test_should_not_pollute_shared_key_with_zero_cost_pricing():
     builtin_output_cost = builtin_info["output_cost_per_token"]
 
     # Sanity: built-in pricing should be non-zero for this model
-    assert (
-        builtin_input_cost > 0
-    ), "Test requires a model with non-zero built-in pricing"
-    assert (
-        builtin_output_cost > 0
-    ), "Test requires a model with non-zero built-in pricing"
+    assert builtin_input_cost > 0, "Test requires a model with non-zero built-in pricing"
+    assert builtin_output_cost > 0, "Test requires a model with non-zero built-in pricing"
 
     router = Router(
         model_list=[
@@ -99,12 +93,10 @@ def test_should_not_pollute_shared_key_with_zero_cost_pricing():
     )
     assert info_b is not None
     assert info_b["input_cost_per_token"] == builtin_input_cost, (
-        f"Deployment B should use built-in input cost {builtin_input_cost}, "
-        f"got {info_b['input_cost_per_token']}"
+        f"Deployment B should use built-in input cost {builtin_input_cost}, got {info_b['input_cost_per_token']}"
     )
     assert info_b["output_cost_per_token"] == builtin_output_cost, (
-        f"Deployment B should use built-in output cost {builtin_output_cost}, "
-        f"got {info_b['output_cost_per_token']}"
+        f"Deployment B should use built-in output cost {builtin_output_cost}, got {info_b['output_cost_per_token']}"
     )
 
 
@@ -236,9 +228,7 @@ def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
         ],
     )
 
-    info_std_1 = router1.get_deployment_model_info(
-        model_id="order1-standard", model_name=backend_model
-    )
+    info_std_1 = router1.get_deployment_model_info(model_id="order1-standard", model_name=backend_model)
     assert info_std_1["input_cost_per_token"] == builtin_input_cost
     assert info_std_1["output_cost_per_token"] == builtin_output_cost
 
@@ -268,16 +258,12 @@ def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
         ],
     )
 
-    info_std_2 = router2.get_deployment_model_info(
-        model_id="order2-standard", model_name=backend_model
-    )
+    info_std_2 = router2.get_deployment_model_info(model_id="order2-standard", model_name=backend_model)
     assert info_std_2["input_cost_per_token"] == builtin_input_cost, (
-        f"Order should not matter. Expected {builtin_input_cost}, "
-        f"got {info_std_2['input_cost_per_token']}"
+        f"Order should not matter. Expected {builtin_input_cost}, got {info_std_2['input_cost_per_token']}"
     )
     assert info_std_2["output_cost_per_token"] == builtin_output_cost, (
-        f"Order should not matter. Expected {builtin_output_cost}, "
-        f"got {info_std_2['output_cost_per_token']}"
+        f"Order should not matter. Expected {builtin_output_cost}, got {info_std_2['output_cost_per_token']}"
     )
 
 
@@ -305,12 +291,7 @@ def test_responses_prefix_stripped_alias_registered_for_model_list():
     )
     assert "azure/responses/gpt-strip-test-a1b2c3d4" in litellm.model_cost
     assert "azure/gpt-strip-test-a1b2c3d4" in litellm.model_cost
-    assert (
-        litellm.model_cost["azure/gpt-strip-test-a1b2c3d4"].get(
-            "supports_native_streaming"
-        )
-        is True
-    )
+    assert litellm.model_cost["azure/gpt-strip-test-a1b2c3d4"].get("supports_native_streaming") is True
 
 
 def test_responses_prefix_stripped_alias_registered_for_add_deployment():
@@ -329,12 +310,7 @@ def test_responses_prefix_stripped_alias_registered_for_add_deployment():
     router.add_deployment(deployment=deployment)
     assert "azure/responses/gpt-add-strip-e5f6a7b8" in litellm.model_cost
     assert "azure/gpt-add-strip-e5f6a7b8" in litellm.model_cost
-    assert (
-        litellm.model_cost["azure/gpt-add-strip-e5f6a7b8"].get(
-            "supports_native_streaming"
-        )
-        is True
-    )
+    assert litellm.model_cost["azure/gpt-add-strip-e5f6a7b8"].get("supports_native_streaming") is True
 
 
 def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
@@ -347,12 +323,8 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
     backend_model = "chatgpt/gpt-5.4"
     model_keys = {
         backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
-        "chatgpt-shared-mode-base": copy.deepcopy(
-            litellm.model_cost.get("chatgpt-shared-mode-base")
-        ),
-        "chatgpt-shared-mode-alias": copy.deepcopy(
-            litellm.model_cost.get("chatgpt-shared-mode-alias")
-        ),
+        "chatgpt-shared-mode-base": copy.deepcopy(litellm.model_cost.get("chatgpt-shared-mode-base")),
+        "chatgpt-shared-mode-alias": copy.deepcopy(litellm.model_cost.get("chatgpt-shared-mode-alias")),
     }
 
     try:
@@ -363,9 +335,7 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         _invalidate_model_cost_lowercase_map()
 
         router = Router(model_list=[])
-        with patch.object(
-            Router, "_add_deployment", lambda self, deployment: deployment
-        ):
+        with patch.object(Router, "_add_deployment", lambda self, deployment: deployment):
             router._create_deployment(
                 deployment_info={},
                 _model_name="chatgpt/gpt-5.4",
@@ -553,9 +523,7 @@ def test_custom_pricing_field_denylist_covers_all_builtin_pricing_fields():
 
     pricing_markers = ("cost", "price", "uplift", "vector_size", "tiered_pricing")
     builtin_pricing_fields = {
-        name
-        for name in typing.get_type_hints(ModelInfoBase)
-        if any(marker in name for marker in pricing_markers)
+        name for name in typing.get_type_hints(ModelInfoBase) if any(marker in name for marker in pricing_markers)
     }
     denylisted_fields = set(CustomPricingLiteLLMParams.model_fields.keys())
 
@@ -612,8 +580,7 @@ def test_tiered_pricing_override_isolated_from_sibling_via_model_info_lookup():
 
         shared = litellm.get_model_info(model=backend_model)
         assert shared.get("input_cost_per_token_above_272k_tokens") != override, (
-            "Tiered override leaked into the shared backend key; siblings read "
-            "the wrong rate via /model/info"
+            "Tiered override leaked into the shared backend key; siblings read the wrong rate via /model/info"
         )
         assert shared.get("cache_read_input_token_cost_above_272k_tokens") != override
 
@@ -670,9 +637,7 @@ def test_custom_pricing_isolated_from_sibling_via_proxy_model_info_path():
         )
 
         resolved = {
-            m["model_name"]: _get_proxy_model_info(model=copy.deepcopy(m))[
-                "model_info"
-            ]["input_cost_per_token"]
+            m["model_name"]: _get_proxy_model_info(model=copy.deepcopy(m))["model_info"]["input_cost_per_token"]
             for m in router.model_list
         }
 
@@ -730,10 +695,7 @@ def test_custom_model_info_metadata_not_leaked_to_shared_backend_key():
         for shared_key in shared_keys:
             shared_entry = litellm.model_cost.get(shared_key) or {}
             leaked = [field for field in leak_fields if field in shared_entry]
-            assert not leaked, (
-                f"per-deployment metadata {leaked} leaked onto shared key "
-                f"{shared_key}: {shared_entry}"
-            )
+            assert not leaked, f"per-deployment metadata {leaked} leaked onto shared key {shared_key}: {shared_entry}"
 
         entry_a = litellm.model_cost["lit4544-deploy-a"]
         assert entry_a["additionalProp1"] == {"restricted": False, "model_location": "EU"}
@@ -753,10 +715,7 @@ def test_add_deployment_does_not_leak_custom_metadata_to_shared_backend_key():
     shared_keys = ("gpt-4o-mini", backend_model)
     deploy_id = "lit4544-add-deployment"
 
-    model_keys = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (*shared_keys, deploy_id)
-    }
+    model_keys = {key: copy.deepcopy(litellm.model_cost.get(key)) for key in (*shared_keys, deploy_id)}
     try:
         router = Router(model_list=[])
         router.add_deployment(
@@ -777,14 +736,9 @@ def test_add_deployment_does_not_leak_custom_metadata_to_shared_backend_key():
         for shared_key in shared_keys:
             shared_entry = litellm.model_cost.get(shared_key) or {}
             leaked = [
-                field
-                for field in ("id", "additionalProp1", "access_via_team_ids", "db_model")
-                if field in shared_entry
+                field for field in ("id", "additionalProp1", "access_via_team_ids", "db_model") if field in shared_entry
             ]
-            assert not leaked, (
-                f"per-deployment metadata {leaked} leaked onto shared key "
-                f"{shared_key}: {shared_entry}"
-            )
+            assert not leaked, f"per-deployment metadata {leaked} leaked onto shared key {shared_key}: {shared_entry}"
 
         assert litellm.model_cost[deploy_id]["access_via_team_ids"] == ["team-dynamic"]
     finally:
@@ -841,10 +795,7 @@ def test_capability_flags_propagate_from_deployment_model_info_to_shared_key():
     backend_model = f"bedrock_mantle/{bare_model}"
     deploy_id = "lit4544-mantle-deploy"
 
-    model_keys = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (bare_model, backend_model, deploy_id)
-    }
+    model_keys = {key: copy.deepcopy(litellm.model_cost.get(key)) for key in (bare_model, backend_model, deploy_id)}
     try:
         Router(
             model_list=[
@@ -883,16 +834,12 @@ def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
     shared_key = "openai/text-embedding-3-small"
     model_keys = {
         shared_key: copy.deepcopy(litellm.model_cost.get(shared_key)),
-        "text-embedding-3-small": copy.deepcopy(
-            litellm.model_cost.get("text-embedding-3-small")
-        ),
+        "text-embedding-3-small": copy.deepcopy(litellm.model_cost.get("text-embedding-3-small")),
         "openai/*": copy.deepcopy(litellm.model_cost.get("openai/*")),
         "lit3991-named": litellm.model_cost.get("lit3991-named"),
         "lit3991-wildcard": litellm.model_cost.get("lit3991-wildcard"),
     }
-    builtin_input_cost = litellm.get_model_info(model=shared_key)[
-        "input_cost_per_token"
-    ]
+    builtin_input_cost = litellm.get_model_info(model=shared_key)["input_cost_per_token"]
     assert builtin_input_cost > 0
 
     try:
@@ -925,12 +872,8 @@ def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
             mock_response=[0.1, 0.2],
         )
 
-        assert (
-            litellm.get_model_info(model=shared_key)["input_cost_per_token"]
-            == builtin_input_cost
-        ), (
-            "one call through the zero-cost wildcard poisoned the shared "
-            f"{shared_key} pricing for the named deployment"
+        assert litellm.get_model_info(model=shared_key)["input_cost_per_token"] == builtin_input_cost, (
+            f"one call through the zero-cost wildcard poisoned the shared {shared_key} pricing for the named deployment"
         )
 
         named_response = router.embedding(
@@ -938,9 +881,7 @@ def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
             input=["hello"],
             mock_response=[0.1, 0.2],
         )
-        named_cost = litellm.completion_cost(
-            completion_response=named_response, call_type="embedding"
-        )
+        named_cost = litellm.completion_cost(completion_response=named_response, call_type="embedding")
         assert named_cost == pytest.approx(10 * builtin_input_cost)
     finally:
         _restore_model_cost_entries(model_keys)

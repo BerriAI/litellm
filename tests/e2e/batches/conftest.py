@@ -44,9 +44,7 @@ def batch_deployments(client: BatchClient) -> Iterator[None]:
     registered: list[str] = []
     try:
         for provider in PROVIDERS:
-            registered.append(
-                client.create_model(provider.model, provider.litellm_params())
-            )
+            registered.append(client.create_model(provider.model, provider.litellm_params()))
         yield
     finally:
         for model_id in registered:

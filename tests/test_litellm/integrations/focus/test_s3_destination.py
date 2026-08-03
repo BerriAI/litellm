@@ -26,17 +26,13 @@ def test_should_require_bucket_name():
 
 def test_should_build_hourly_object_key():
     dest = FocusS3Destination(prefix="exports/", config={"bucket_name": "bucket"})
-    key = dest._build_object_key(
-        time_window=_window(freq="hourly", hour=3), filename="data.snappy"
-    )
+    key = dest._build_object_key(time_window=_window(freq="hourly", hour=3), filename="data.snappy")
     assert key == "exports/date=2024-01-02/hour=03/data.snappy"
 
 
 def test_should_build_daily_key_without_hour_segment():
     dest = FocusS3Destination(prefix="", config={"bucket_name": "bucket"})
-    key = dest._build_object_key(
-        time_window=_window(freq="daily", hour=0), filename="daily.parquet"
-    )
+    key = dest._build_object_key(time_window=_window(freq="daily", hour=0), filename="daily.parquet")
     assert key == "date=2024-01-02/daily.parquet"
 
 

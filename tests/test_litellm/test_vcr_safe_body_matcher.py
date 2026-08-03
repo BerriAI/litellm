@@ -29,9 +29,7 @@ from tests._vcr_conftest_common import (  # noqa: E402
 
 
 def _req(body, uri="https://api.openai.com/v1/chat/completions"):
-    return SimpleNamespace(
-        body=body, uri=uri, headers={"Content-Type": "application/json"}
-    )
+    return SimpleNamespace(body=body, uri=uri, headers={"Content-Type": "application/json"})
 
 
 def _req_with_headers(headers, body=b""):
@@ -53,10 +51,7 @@ def test_safe_body_matcher_accepts_str_bytes_equivalent():
 
 
 def test_safe_body_matcher_handles_jsonl_without_crashing():
-    jsonl = (
-        b'{"recordId": "request-1", "modelInput": {}}\n'
-        b'{"recordId": "request-2", "modelInput": {}}\n'
-    )
+    jsonl = b'{"recordId": "request-1", "modelInput": {}}\n{"recordId": "request-2", "modelInput": {}}\n'
     _safe_body_matcher(_req(jsonl), _req(jsonl))
 
 
@@ -122,24 +117,16 @@ def test_before_record_request_no_auth_yields_stable_no_key_bucket():
 
 
 def test_key_fingerprint_matcher_distinguishes_good_and_bad_keys():
-    good = _before_record_request(
-        _req_with_headers({"Authorization": "Bearer sk-real-good-key"})
-    )
-    bad = _before_record_request(
-        _req_with_headers({"Authorization": "Bearer my-bad-key"})
-    )
+    good = _before_record_request(_req_with_headers({"Authorization": "Bearer sk-real-good-key"}))
+    bad = _before_record_request(_req_with_headers({"Authorization": "Bearer my-bad-key"}))
     assert good.headers[KEY_FINGERPRINT_HEADER] != bad.headers[KEY_FINGERPRINT_HEADER]
     with pytest.raises(AssertionError):
         _key_fingerprint_matcher(good, bad)
 
 
 def test_key_fingerprint_matcher_matches_repeated_good_key_calls():
-    a = _before_record_request(
-        _req_with_headers({"Authorization": "Bearer sk-same-key"})
-    )
-    b = _before_record_request(
-        _req_with_headers({"Authorization": "Bearer sk-same-key"})
-    )
+    a = _before_record_request(_req_with_headers({"Authorization": "Bearer sk-same-key"}))
+    b = _before_record_request(_req_with_headers({"Authorization": "Bearer sk-same-key"}))
     _key_fingerprint_matcher(a, b)
 
 
@@ -154,36 +141,24 @@ def test_before_record_request_is_deterministic_across_distinct_requests():
     payload = {"Authorization": "Bearer sk-deterministic"}
     first = _before_record_request(_req_with_headers(payload))
     second = _before_record_request(_req_with_headers(payload))
-    assert (
-        first.headers[KEY_FINGERPRINT_HEADER] == second.headers[KEY_FINGERPRINT_HEADER]
-    )
+    assert first.headers[KEY_FINGERPRINT_HEADER] == second.headers[KEY_FINGERPRINT_HEADER]
 
 
 def test_google_oauth_bearer_tokens_collapse_to_one_fingerprint():
     """Rotating ``ya29.*`` access tokens must share one fingerprint so
     Vertex/Gemini cassettes match across runs (cf. AWS SigV4 access-key
     stabilization)."""
-    run1 = _before_record_request(
-        _req_with_headers({"Authorization": "Bearer ya29.FIRST-token-aaaaaaaa"})
-    )
-    run2 = _before_record_request(
-        _req_with_headers({"Authorization": "Bearer ya29.SECOND-token-bbbbbbbb"})
-    )
+    run1 = _before_record_request(_req_with_headers({"Authorization": "Bearer ya29.FIRST-token-aaaaaaaa"}))
+    run2 = _before_record_request(_req_with_headers({"Authorization": "Bearer ya29.SECOND-token-bbbbbbbb"}))
     assert run1.headers[KEY_FINGERPRINT_HEADER] == run2.headers[KEY_FINGERPRINT_HEADER]
     _key_fingerprint_matcher(run1, run2)
 
 
 def test_non_google_bearer_tokens_still_distinguished():
     """The ya29 collapse must not make every Bearer token identical."""
-    google = _before_record_request(
-        _req_with_headers({"Authorization": "Bearer ya29.something"})
-    )
-    real = _before_record_request(
-        _req_with_headers({"Authorization": "Bearer sk-real-openai-key"})
-    )
-    assert (
-        google.headers[KEY_FINGERPRINT_HEADER] != real.headers[KEY_FINGERPRINT_HEADER]
-    )
+    google = _before_record_request(_req_with_headers({"Authorization": "Bearer ya29.something"}))
+    real = _before_record_request(_req_with_headers({"Authorization": "Bearer sk-real-openai-key"}))
+    assert google.headers[KEY_FINGERPRINT_HEADER] != real.headers[KEY_FINGERPRINT_HEADER]
 
 
 def test_normalize_volatile_tokens_collapses_uuid_and_timestamps():
@@ -233,19 +208,11 @@ def test_safe_body_matcher_still_rejects_genuinely_different_bodies():
 
 
 def test_credential_exchange_request_skips_body_comparison():
-    assert _is_credential_exchange_request(
-        _req(b"assertion=AAA", uri="https://oauth2.googleapis.com/token")
-    )
-    assert not _is_credential_exchange_request(
-        _req(b"x", uri="https://api.openai.com/v1/chat/completions")
-    )
+    assert _is_credential_exchange_request(_req(b"assertion=AAA", uri="https://oauth2.googleapis.com/token"))
+    assert not _is_credential_exchange_request(_req(b"x", uri="https://api.openai.com/v1/chat/completions"))
     # Freshly-signed JWT assertions differ every run but must still match.
-    a = _req(
-        b"grant_type=x&assertion=eyJ0AAAA", uri="https://oauth2.googleapis.com/token"
-    )
-    b = _req(
-        b"grant_type=x&assertion=eyJ0BBBB", uri="https://oauth2.googleapis.com/token"
-    )
+    a = _req(b"grant_type=x&assertion=eyJ0AAAA", uri="https://oauth2.googleapis.com/token")
+    b = _req(b"grant_type=x&assertion=eyJ0BBBB", uri="https://oauth2.googleapis.com/token")
     _safe_body_matcher(a, b)  # must not raise
 
 
@@ -333,13 +300,9 @@ def test_tolerant_path_still_rejects_different_regular_paths():
 
 
 def test_telemetry_request_detection():
-    assert _is_telemetry_request(
-        _req(b"x", uri="https://us.cloud.langfuse.com/api/public/ingestion")
-    )
+    assert _is_telemetry_request(_req(b"x", uri="https://us.cloud.langfuse.com/api/public/ingestion"))
     assert _is_telemetry_request(_req(b"x", uri="https://otlp.arize.com/v1/traces"))
-    assert not _is_telemetry_request(
-        _req(b"x", uri="https://api.openai.com/v1/chat/completions")
-    )
+    assert not _is_telemetry_request(_req(b"x", uri="https://api.openai.com/v1/chat/completions"))
 
 
 def test_safe_body_matcher_skips_telemetry_body():
@@ -361,12 +324,8 @@ def test_tolerant_query_skips_telemetry_but_enforces_others():
         return Request(method="GET", uri=uri, body=b"", headers={})
 
     # Telemetry GET with a fresh trace_id in the query must still match.
-    a = _greq(
-        "https://us.cloud.langfuse.com/api/public/observations?traceId=litellm-test-AAA"
-    )
-    b = _greq(
-        "https://us.cloud.langfuse.com/api/public/observations?traceId=litellm-test-BBB"
-    )
+    a = _greq("https://us.cloud.langfuse.com/api/public/observations?traceId=litellm-test-AAA")
+    b = _greq("https://us.cloud.langfuse.com/api/public/observations?traceId=litellm-test-BBB")
     _tolerant_query_matcher(a, b)  # must not raise
 
     # Non-telemetry hosts keep vcrpy's strict query comparison.

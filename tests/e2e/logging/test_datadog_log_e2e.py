@@ -89,18 +89,14 @@ def _assert_exactly_one_event(
     # indexed event status from the parsed payload's status attribute
     # ("success") and normalizes it to its OK severity - so "ok" is what a
     # successfully ingested success event looks like on the search API.
-    assert event.status == "ok", (
-        f"success events must index at DataDog's ok severity, got {event.status!r}"
-    )
+    assert event.status == "ok", f"success events must index at DataDog's ok severity, got {event.status!r}"
 
     payload = _DdMessagePayload.model_validate(event.attributes)
     assert payload.status == "success", f"payload status must be success, got {payload.status!r}"
     assert payload.model_group == model_group, (
         f"payload model_group must be {model_group!r}, got {payload.model_group!r}"
     )
-    assert payload.call_type == call_type, (
-        f"payload call_type must be {call_type!r}, got {payload.call_type!r}"
-    )
+    assert payload.call_type == call_type, f"payload call_type must be {call_type!r}, got {payload.call_type!r}"
     assert payload.total_tokens > 0, f"payload must count real tokens, got {payload.total_tokens}"
     # Relative tolerance, not bit-equality: the cost round-trips through
     # DataDog's attribute indexing, whose float serialization may drift in the
@@ -109,9 +105,7 @@ def _assert_exactly_one_event(
         f"payload response_cost {payload.response_cost} must equal the anchor cost {cost_anchor}"
     )
     if expect_stream:
-        assert payload.stream is True, (
-            f"a streamed call's payload must record stream=true, got {payload.stream!r}"
-        )
+        assert payload.stream is True, f"a streamed call's payload must record stream=true, got {payload.stream!r}"
     return payload
 
 
@@ -211,7 +205,9 @@ class TestDataDogLogDelivery:
         marker = unique_marker()
         outcome = first_ok(
             client,
-            lambda: client.chat_raw(key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", stream=True, max_tokens=16),
+            lambda: client.chat_raw(
+                key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", stream=True, max_tokens=16
+            ),
         )
         assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
         assert outcome.chunks > 0, "the stream must deliver at least one event"
@@ -231,9 +227,7 @@ class TestDataDogLogDelivery:
             cost_anchor=spend_row.spend,
             expect_stream=True,
         )
-        assert spend_row.total_tokens is not None, (
-            "the spend row must record total_tokens for the token cross-check"
-        )
+        assert spend_row.total_tokens is not None, "the spend row must record total_tokens for the token cross-check"
         assert spend_row.total_tokens == payload.total_tokens, (
             f"the spend row and the DataDog event must agree on tokens: "
             f"{spend_row.total_tokens} vs {payload.total_tokens}"
@@ -255,7 +249,9 @@ class TestDataDogLogDelivery:
         marker = unique_marker()
         outcome = first_ok(
             client,
-            lambda: client.messages_raw(key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=16, stream=True),
+            lambda: client.messages_raw(
+                key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=16, stream=True
+            ),
         )
         assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
         assert outcome.chunks > 0, "the stream must deliver at least one event"
@@ -275,9 +271,7 @@ class TestDataDogLogDelivery:
             cost_anchor=spend_row.spend,
             expect_stream=True,
         )
-        assert spend_row.total_tokens is not None, (
-            "the spend row must record total_tokens for the token cross-check"
-        )
+        assert spend_row.total_tokens is not None, "the spend row must record total_tokens for the token cross-check"
         assert spend_row.total_tokens == payload.total_tokens, (
             f"the spend row and the DataDog event must agree on tokens: "
             f"{spend_row.total_tokens} vs {payload.total_tokens}"
@@ -319,9 +313,7 @@ class TestDataDogLogDelivery:
             cost_anchor=spend_row.spend,
             expect_stream=True,
         )
-        assert spend_row.total_tokens is not None, (
-            "the spend row must record total_tokens for the token cross-check"
-        )
+        assert spend_row.total_tokens is not None, "the spend row must record total_tokens for the token cross-check"
         assert spend_row.total_tokens == payload.total_tokens, (
             f"the spend row and the DataDog event must agree on tokens: "
             f"{spend_row.total_tokens} vs {payload.total_tokens}"

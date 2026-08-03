@@ -46,9 +46,7 @@ class TestAnthropicStructuredOutput:
             "json_schema": json_schema["json_schema"],
         }
 
-        output_format = config.map_response_format_to_anthropic_output_format(
-            response_format
-        )
+        output_format = config.map_response_format_to_anthropic_output_format(response_format)
 
         # Verify that maxItems is filtered out for Anthropic
         assert output_format is not None
@@ -82,9 +80,7 @@ class TestAnthropicStructuredOutput:
             "json_schema": json_schema["json_schema"],
         }
 
-        output_format = config.map_response_format_to_anthropic_output_format(
-            response_format
-        )
+        output_format = config.map_response_format_to_anthropic_output_format(response_format)
 
         assert output_format is not None
         transformed_schema = output_format["schema"]
@@ -112,9 +108,7 @@ class TestAnthropicStructuredOutput:
             "json_schema": json_schema["json_schema"],
         }
 
-        output_format = config.map_response_format_to_anthropic_output_format(
-            response_format
-        )
+        output_format = config.map_response_format_to_anthropic_output_format(response_format)
 
         assert output_format is not None
         transformed_schema = output_format["schema"]
@@ -125,10 +119,7 @@ class TestAnthropicStructuredOutput:
         # Nested maxItems should also be removed
         if "$defs" in transformed_schema:
             nested_item_schema = transformed_schema["$defs"].get("NestedItem", {})
-            if (
-                "properties" in nested_item_schema
-                and "tags" in nested_item_schema["properties"]
-            ):
+            if "properties" in nested_item_schema and "tags" in nested_item_schema["properties"]:
                 assert "maxItems" not in nested_item_schema["properties"]["tags"]
 
     def test_other_constraints_preserved(self):
@@ -153,9 +144,7 @@ class TestAnthropicStructuredOutput:
             "json_schema": json_schema["json_schema"],
         }
 
-        output_format = config.map_response_format_to_anthropic_output_format(
-            response_format
-        )
+        output_format = config.map_response_format_to_anthropic_output_format(response_format)
 
         assert output_format is not None
         transformed_schema = output_format["schema"]

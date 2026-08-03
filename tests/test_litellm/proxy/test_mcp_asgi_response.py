@@ -12,9 +12,7 @@ async def test_stream_mcp_asgi_response_propagates_pre_header_http_exception():
         raise HTTPException(
             status_code=401,
             detail="Unauthorized",
-            headers={
-                "WWW-Authenticate": "Bearer authorization_uri=https://example.test/auth"
-            },
+            headers={"WWW-Authenticate": "Bearer authorization_uri=https://example.test/auth"},
         )
 
     async def receive():
@@ -31,6 +29,4 @@ async def test_stream_mcp_asgi_response_propagates_pre_header_http_exception():
         )
 
     assert exc_info.value.status_code == 401
-    assert exc_info.value.headers == {
-        "WWW-Authenticate": "Bearer authorization_uri=https://example.test/auth"
-    }
+    assert exc_info.value.headers == {"WWW-Authenticate": "Bearer authorization_uri=https://example.test/auth"}

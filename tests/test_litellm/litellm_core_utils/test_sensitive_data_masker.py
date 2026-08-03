@@ -155,9 +155,7 @@ def test_mask_short_values_false_keeps_short_values_readable():
     chars of an exception and only masks longer tails), while longer values are still
     partially masked.
     """
-    masker = SensitiveDataMasker(
-        visible_prefix=50, visible_suffix=0, mask_short_values=False
-    )
+    masker = SensitiveDataMasker(visible_prefix=50, visible_suffix=0, mask_short_values=False)
 
     short = "Test exception for structure validation"
     assert masker._mask_value(short) == short
@@ -205,9 +203,7 @@ def test_mask_sensitive_structure_passes_through_plain_topology_names():
     from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 
     assert mask_sensitive_structure(["gpt-4", "claude-3-haiku"]) == ["gpt-4", "claude-3-haiku"]
-    assert mask_sensitive_structure([{"gpt-3.5-turbo": ["claude-3-haiku"]}]) == [
-        {"gpt-3.5-turbo": ["claude-3-haiku"]}
-    ]
+    assert mask_sensitive_structure([{"gpt-3.5-turbo": ["claude-3-haiku"]}]) == [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
     assert mask_sensitive_structure(None) is None
 
 
@@ -236,9 +232,7 @@ def test_mask_sensitive_structure_masks_credentials_nested_in_config_shape():
     from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 
     secret = "sk-NESTEDINLINESECRET0987654321"
-    masked = mask_sensitive_structure(
-        [{"primary-group": [{"model": "gpt-4o", "api_key": secret}]}]
-    )
+    masked = mask_sensitive_structure([{"primary-group": [{"model": "gpt-4o", "api_key": secret}]}])
     assert secret not in str(masked)
 
 
@@ -285,10 +279,7 @@ def test_mask_credentials_in_payload_masks_inside_pydantic_models():
     auth_dict = result["user_api_key_auth"]
     assert isinstance(auth_dict, dict)
     assert auth_dict["team_alias"] == "acme"
-    assert (
-        auth_dict["token"]
-        != "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
-    )
+    assert auth_dict["token"] != "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
     assert "*" in auth_dict["token"]
 
 

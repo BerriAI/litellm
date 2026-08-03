@@ -10,9 +10,7 @@ import os
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import logging
 
 import pytest
@@ -68,9 +66,7 @@ def client():
         yield client
 
 
-@pytest.mark.skip(
-    reason="Init multiple Langfuse clients causing OOM issues. Reduce init clients on ci/cd. "
-)
+@pytest.mark.skip(reason="Init multiple Langfuse clients causing OOM issues. Reduce init clients on ci/cd. ")
 def test_chat_completion(client):
     try:
         # Your test data

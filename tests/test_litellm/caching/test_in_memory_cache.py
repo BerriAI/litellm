@@ -12,9 +12,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock
 
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -195,13 +193,9 @@ def test_in_memory_cache_eviction_order():
 
     # Add items with different TTLs
     now = time.time()
-    in_memory_cache.set_cache(
-        key="early_expire", value="value_1", ttl=100
-    )  # expires in 100 seconds
+    in_memory_cache.set_cache(key="early_expire", value="value_1", ttl=100)  # expires in 100 seconds
     time.sleep(0.01)
-    in_memory_cache.set_cache(
-        key="late_expire", value="value_2", ttl=200
-    )  # expires in 200 seconds
+    in_memory_cache.set_cache(key="late_expire", value="value_2", ttl=200)  # expires in 200 seconds
 
     # Verify TTL order
     early_ttl = in_memory_cache.ttl_dict["early_expire"]

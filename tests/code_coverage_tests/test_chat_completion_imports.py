@@ -8,9 +8,7 @@ from pathlib import Path
 def test_chat_completion_no_imports():
     """Test that chat_completion endpoint has no imports in function bodies."""
     # Path to the proxy server file
-    proxy_server_path = (
-        Path(__file__).parent.parent.parent / "litellm" / "proxy" / "proxy_server.py"
-    )
+    proxy_server_path = Path(__file__).parent.parent.parent / "litellm" / "proxy" / "proxy_server.py"
 
     with open(proxy_server_path, "r") as f:
         content = f.read()
@@ -38,12 +36,8 @@ def test_chat_completion_no_imports():
 
     # Assert no import violations found
     if import_violations:
-        print(
-            f"Found {len(import_violations)} import violations in chat_completion endpoint:"
-        )
+        print(f"Found {len(import_violations)} import violations in chat_completion endpoint:")
         for line_num in import_violations:
             print(f"  - Line {line_num}: Import statement found")
-        print(
-            "\nchat_completion endpoint should not contain imports for optimal performance."
-        )
+        print("\nchat_completion endpoint should not contain imports for optimal performance.")
         raise Exception("Import violations found in chat_completion endpoint")

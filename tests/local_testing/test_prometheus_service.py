@@ -48,12 +48,8 @@ async def test_completion_with_caching():
     litellm.cache.cache.service_logger_obj = sl
 
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    response1 = await acompletion(
-        model="gpt-3.5-turbo", messages=messages, caching=True
-    )
-    response1 = await acompletion(
-        model="gpt-3.5-turbo", messages=messages, caching=True
-    )
+    response1 = await acompletion(model="gpt-3.5-turbo", messages=messages, caching=True)
+    response1 = await acompletion(model="gpt-3.5-turbo", messages=messages, caching=True)
 
     assert sl.mock_testing_async_success_hook > 0
     assert sl.prometheusServicesLogger.mock_testing_success_calls > 0
@@ -215,9 +211,7 @@ def test_get_metric_existing():
     """Test _get_metric when metric exists. _get_metric should return the metric object"""
     pl = PrometheusServicesLogger()
     # Create a metric first
-    hist = pl.create_histogram(
-        service="test_service", type_of_request="test_type_of_request"
-    )
+    hist = pl.create_histogram(service="test_service", type_of_request="test_type_of_request")
 
     # Test retrieving existing metric
     retrieved_metric = pl._get_metric("litellm_test_service_test_type_of_request")
@@ -239,9 +233,7 @@ def test_create_histogram_new():
     pl = PrometheusServicesLogger()
 
     # Create new histogram
-    hist = pl.create_histogram(
-        service="test_service", type_of_request="test_type_of_request"
-    )
+    hist = pl.create_histogram(service="test_service", type_of_request="test_type_of_request")
 
     assert hist is not None
     assert pl._get_metric("litellm_test_service_test_type_of_request") is hist
@@ -252,14 +244,10 @@ def test_create_histogram_existing():
     pl = PrometheusServicesLogger()
 
     # Create initial histogram
-    hist1 = pl.create_histogram(
-        service="test_service", type_of_request="test_type_of_request"
-    )
+    hist1 = pl.create_histogram(service="test_service", type_of_request="test_type_of_request")
 
     # Create same histogram again
-    hist2 = pl.create_histogram(
-        service="test_service", type_of_request="test_type_of_request"
-    )
+    hist2 = pl.create_histogram(service="test_service", type_of_request="test_type_of_request")
 
     assert hist2 is hist1  # same object
     assert pl._get_metric("litellm_test_service_test_type_of_request") is hist1
@@ -270,9 +258,7 @@ def test_create_counter_new():
     pl = PrometheusServicesLogger()
 
     # Create new counter
-    counter = pl.create_counter(
-        service="test_service", type_of_request="test_type_of_request"
-    )
+    counter = pl.create_counter(service="test_service", type_of_request="test_type_of_request")
 
     assert counter is not None
     assert pl._get_metric("litellm_test_service_test_type_of_request") is counter
@@ -283,14 +269,10 @@ def test_create_counter_existing():
     pl = PrometheusServicesLogger()
 
     # Create initial counter
-    counter1 = pl.create_counter(
-        service="test_service", type_of_request="test_type_of_request"
-    )
+    counter1 = pl.create_counter(service="test_service", type_of_request="test_type_of_request")
 
     # Create same counter again
-    counter2 = pl.create_counter(
-        service="test_service", type_of_request="test_type_of_request"
-    )
+    counter2 = pl.create_counter(service="test_service", type_of_request="test_type_of_request")
 
     assert counter2 is counter1
     assert pl._get_metric("litellm_test_service_test_type_of_request") is counter1

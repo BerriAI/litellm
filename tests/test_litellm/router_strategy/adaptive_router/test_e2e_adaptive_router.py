@@ -35,9 +35,7 @@ def _make_router(
     if prefs is None:
         prefs = {
             "gpt-4o-mini": AdaptiveRouterPreferences(quality_tier=2, strengths=[]),
-            "gpt-4o": AdaptiveRouterPreferences(
-                quality_tier=3, strengths=[RequestType.CODE_GENERATION]
-            ),
+            "gpt-4o": AdaptiveRouterPreferences(quality_tier=3, strengths=[RequestType.CODE_GENERATION]),
         }
     if costs is None:
         costs = {"gpt-4o-mini": 0.15, "gpt-4o": 5.0}
@@ -70,9 +68,7 @@ async def test_pick_record_flush_full_cycle():
     # Prime 2 prior turns (distinct content so no other signals fire) so the
     # MIN_TURNS_FOR_CLEAN_CREDIT satisfaction gate is satisfied on turn 3.
     priming = [
-        Turn(
-            user_content="alpha bravo charlie", assistant_content="delta echo foxtrot"
-        ),
+        Turn(user_content="alpha bravo charlie", assistant_content="delta echo foxtrot"),
         Turn(
             user_content="golf hotel india juliet",
             assistant_content="kilo lima mike november",
@@ -236,12 +232,8 @@ async def test_flush_isolates_writes_per_router_session_model():
                 RequestType.GENERAL,
                 Turn(user_content="hi", assistant_content="hello"),
             )
-    await router.record_turn(
-        "s1", "gpt-4o", RequestType.GENERAL, Turn(user_content="thanks!")
-    )
-    await router.record_turn(
-        "s2", "gpt-4o-mini", RequestType.GENERAL, Turn(user_content="thanks!")
-    )
+    await router.record_turn("s1", "gpt-4o", RequestType.GENERAL, Turn(user_content="thanks!"))
+    await router.record_turn("s2", "gpt-4o-mini", RequestType.GENERAL, Turn(user_content="thanks!"))
 
     prisma = _make_mock_prisma()
     n = await router.queue.flush_session_to_db(prisma)
@@ -266,9 +258,7 @@ async def test_repeated_flush_drains_queue_and_subsequent_flush_is_noop():
             RequestType.GENERAL,
             Turn(user_content="hi", assistant_content="hello"),
         )
-    await router.record_turn(
-        "drain-1", chosen, RequestType.GENERAL, Turn(user_content="thanks!")
-    )
+    await router.record_turn("drain-1", chosen, RequestType.GENERAL, Turn(user_content="thanks!"))
 
     prisma = _make_mock_prisma()
     assert await router.queue.flush_state_to_db(prisma) == 1

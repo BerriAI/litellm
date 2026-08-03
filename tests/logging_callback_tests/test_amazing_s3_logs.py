@@ -74,9 +74,7 @@ def fake_s3_client(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "sync_mode,streaming", [(True, True), (True, False), (False, True), (False, False)]
-)
+@pytest.mark.parametrize("sync_mode,streaming", [(True, True), (True, False), (False, True), (False, False)])
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_basic_s3_logging(sync_mode, streaming):
     verbose_logger.setLevel(level=logging.DEBUG)
@@ -171,9 +169,9 @@ async def test_basic_s3_v2_logging(streaming):
     await asyncio.sleep(5)
 
     assert len(uploaded_keys) > 0, "S3 upload was never called"
-    assert any(
-        response_id in key for key in uploaded_keys
-    ), f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
+    assert any(response_id in key for key in uploaded_keys), (
+        f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
+    )
 
 
 @pytest.mark.asyncio
@@ -345,9 +343,7 @@ def test_s3_logging():
         response = s3.list_objects(Bucket=bucket_name)
 
         # Sort the objects based on the LastModified timestamp
-        objects = sorted(
-            response["Contents"], key=lambda x: x["LastModified"], reverse=True
-        )
+        objects = sorted(response["Contents"], key=lambda x: x["LastModified"], reverse=True)
         # Get the keys of the most recent objects
         most_recent_keys = [obj["Key"] for obj in objects]
         print(most_recent_keys)
@@ -470,6 +466,4 @@ class TestS3Logger(S3Logger):
         self.recorded_requests[response_obj["id"]] = start_time
         print("recorded request", self.recorded_requests)
         self.logged_standard_logging_payload = kwargs["standard_logging_object"]
-        return await super().async_log_success_event(
-            kwargs, response_obj, start_time, end_time
-        )
+        return await super().async_log_success_event(kwargs, response_obj, start_time, end_time)

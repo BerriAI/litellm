@@ -9,9 +9,7 @@ import os, io
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
