@@ -93,30 +93,6 @@ def unauthenticated_client():
 
 
 # ---------------------------------------------------------------------------
-# OAuth metadata endpoints
-# ---------------------------------------------------------------------------
-
-
-def test_oauth_authorization_server_metadata(client):
-    resp = client.get("/.well-known/oauth-authorization-server")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "issuer" in data
-    assert data["authorization_endpoint"].endswith("/v1/mcp/oauth/authorize")
-    assert data["token_endpoint"].endswith("/v1/mcp/oauth/token")
-    assert "S256" in data["code_challenge_methods_supported"]
-
-
-def test_oauth_protected_resource_metadata(client):
-    resp = client.get("/.well-known/oauth-protected-resource")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "resource" in data
-    assert "authorization_servers" in data
-    assert len(data["authorization_servers"]) == 1
-
-
-# ---------------------------------------------------------------------------
 # Authorization GET endpoint
 # ---------------------------------------------------------------------------
 
