@@ -13,6 +13,7 @@ from typing import (
     Literal,
     NamedTuple,
     Optional,
+    Union,
 )
 
 import httpx
