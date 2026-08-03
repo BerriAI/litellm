@@ -7,6 +7,7 @@ litellm_content_retrieve tool calls server-side via the typed agentic loop plan.
 
 import time
 import uuid
+from collections.abc import Mapping
 from typing import Any, cast
 
 from litellm._logging import verbose_logger
@@ -100,8 +101,8 @@ class CompressionInterceptionLogger(CustomLogger):
 
     @staticmethod
     def initialize_from_proxy_config(
-        litellm_settings: dict[str, Any],
-        callback_specific_params: dict[str, Any],
+        litellm_settings: Mapping[str, Any],
+        callback_specific_params: Mapping[str, Any],
     ) -> "CompressionInterceptionLogger":
         compression_params: CompressionInterceptionConfig = {}
         if "compression_interception_params" in litellm_settings:

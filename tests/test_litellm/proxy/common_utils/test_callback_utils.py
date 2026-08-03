@@ -10,13 +10,18 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
+    CONFIG_PARAMETERIZED_CALLBACKS,
     add_policy_to_applied_policies_header,
+    config_parameterized_logger_class,
     decrypt_callback_vars,
+    uninstall_deconfigured_parameterized_callbacks,
     encrypt_callback_vars,
     get_logging_caching_headers,
     initialize_callbacks_on_proxy,
+    install_config_parameterized_callback,
     get_remaining_tokens_and_requests_from_request_data,
     normalize_callback_names,
+    resolve_config_parameterized_callback,
     sanitize_openai_provider_metadata,
     strip_callback_config,
 )
@@ -218,6 +223,138 @@ def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
         assert "compression_interception" not in litellm.callbacks
     finally:
         litellm.callbacks = original_callbacks
+
+
+@pytest.mark.parametrize(
+    "callback_name, params_key, params, expected_attrs",
+    [
+        (
+            "websearch_interception",
+            "websearch_interception_params",
+            {"enabled_providers": ["bedrock", "openai"], "search_tool_name": "tavily-search"},
+            {"enabled_providers": ["bedrock", "openai"], "search_tool_name": "tavily-search"},
+        ),
+        (
+            "compression_interception",
+            "compression_interception_params",
+            {"enabled": False, "compression_trigger": 4242},
+            {"enabled": False, "compression_trigger": 4242},
+        ),
+        (
+            "code_interpreter_interception",
+            "code_interpreter_interception_params",
+            {"enabled": True, "sandbox_tool_name": "my-sandbox"},
+            {"enabled": True, "sandbox_tool_name": "my-sandbox"},
+        ),
+    ],
+)
+def test_resolve_config_parameterized_callback_forwards_litellm_settings_params(
+    callback_name, params_key, params, expected_attrs
+):
+    resolved = resolve_config_parameterized_callback(
+        callback=callback_name,
+        litellm_settings={params_key: params},
+        callback_specific_params={},
+    )
+
+    assert resolved is not None
+    assert {attr: getattr(resolved, attr) for attr in expected_attrs} == expected_attrs
+
+
+def test_resolve_config_parameterized_callback_falls_back_to_callback_specific_params():
+    resolved = resolve_config_parameterized_callback(
+        callback="websearch_interception",
+        litellm_settings={},
+        callback_specific_params={"websearch_interception": {"search_tool_name": "exa-search"}},
+    )
+
+    assert resolved is not None
+    assert resolved.search_tool_name == "exa-search"
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse", "prometheus", "my_custom_module.my_logger"])
+def test_resolve_config_parameterized_callback_returns_none_for_other_callbacks(callback_name):
+    assert (
+        resolve_config_parameterized_callback(
+            callback=callback_name,
+            litellm_settings={},
+            callback_specific_params={},
+        )
+        is None
+    )
+
+
+def test_initialize_callbacks_on_proxy_instantiates_websearch_interception_with_params(
+    monkeypatch,
+):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(prisma_client=None),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+
+    initialize_callbacks_on_proxy(
+        value=["websearch_interception"],
+        premium_user=False,
+        config_file_path=".",
+        litellm_settings={
+            "websearch_interception_params": {
+                "enabled_providers": ["bedrock"],
+                "search_tool_name": "tavily-search",
+            }
+        },
+        callback_specific_params={},
+    )
+
+    installed = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    assert len(installed) == 1
+    assert installed[0].search_tool_name == "tavily-search"
+    assert installed[0].enabled_providers == ["bedrock"]
+    assert "websearch_interception" not in litellm.callbacks
+
+
+def test_every_config_parameterized_callback_name_resolves_to_a_logger_class():
+    resolved = {name: config_parameterized_logger_class(name) for name in CONFIG_PARAMETERIZED_CALLBACKS}
+
+    assert all(cls is not None for cls in resolved.values()), resolved
+    assert len({id(cls) for cls in resolved.values()}) == len(CONFIG_PARAMETERIZED_CALLBACKS)
+
+
+def test_uninstall_deconfigured_parameterized_callbacks_keeps_still_configured_logger(
+    monkeypatch,
+):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+    install_config_parameterized_callback(
+        callback="websearch_interception",
+        litellm_settings={"websearch_interception_params": {"search_tool_name": "tavily-search"}},
+    )
+
+    uninstall_deconfigured_parameterized_callbacks(["websearch_interception", "langfuse"])
+
+    installed = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    assert len(installed) == 1
+
+
+def test_install_config_parameterized_callback_ignores_unrelated_callbacks(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+
+    handled = install_config_parameterized_callback(
+        callback="langfuse",
+        litellm_settings={},
+        callback_specific_params={},
+    )
+
+    assert handled is False
+    assert litellm.callbacks == []
 
 
 # ---------------------------------------------------------------------------

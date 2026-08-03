@@ -295,7 +295,11 @@ from litellm.proxy.common_request_processing import (
     _should_return_raw_model_name,
     create_response,
 )
-from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.callback_utils import (
+    initialize_callbacks_on_proxy,
+    install_config_parameterized_callback,
+    uninstall_deconfigured_parameterized_callbacks,
+)
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -5449,9 +5453,11 @@ class ProxyConfig:
 
         # Load config separately so a timeout here doesn't block model loading
         config_data: dict = {}
+        config_loaded = False
         search_tools = None
         try:
             config_data = await proxy_config.get_config()
+            config_loaded = True
             search_tools = self.parse_search_tools(config_data)
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -5505,7 +5511,8 @@ class ProxyConfig:
             llm_model_list = llm_router.get_model_list()
 
         # check if user set any callbacks in Config Table
-        self._add_callbacks_from_db_config(config_data)
+        if config_loaded:
+            self._add_callbacks_from_db_config(config_data)
 
         # router settings
         await self._add_router_settings_from_db_config(
@@ -5551,6 +5558,7 @@ class ProxyConfig:
         Adds callbacks from DB config to litellm
         """
         litellm_settings = config_data.get("litellm_settings", {}) or {}
+        callback_specific_params = config_data.get("callback_settings")
         success_callbacks = litellm_settings.get("success_callback", None)
         failure_callbacks = litellm_settings.get("failure_callback", None)
         callbacks = litellm_settings.get("callbacks", None)
@@ -5571,13 +5579,21 @@ class ProxyConfig:
                     existing_callbacks=litellm.failure_callback,
                 )
 
-        if callbacks is not None and isinstance(callbacks, list):
-            for callback in callbacks:
+        if callbacks is None or isinstance(callbacks, list):
+            configured_callbacks = callbacks or ()
+            for callback in configured_callbacks:
+                if isinstance(callback, str) and install_config_parameterized_callback(
+                    callback=callback,
+                    litellm_settings=litellm_settings,
+                    callback_specific_params=callback_specific_params,
+                ):
+                    continue
                 self._add_callback_from_db_to_in_memory_litellm_callbacks(
                     callback=callback,
                     event_types=["success", "failure"],
                     existing_callbacks=litellm.callbacks,
                 )
+            uninstall_deconfigured_parameterized_callbacks(configured_callbacks)
 
     def _encrypt_env_variables(self, environment_variables: dict, new_encryption_key: str | None = None) -> dict:
         """

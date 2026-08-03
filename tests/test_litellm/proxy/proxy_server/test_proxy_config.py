@@ -1852,6 +1852,254 @@ def test_ProxyConfig__add_callbacks_from_db_config_processes_lists(monkeypatch):
     }
 
 
+def _websearch_db_config(search_tool_name: str, enabled_providers: list[str]) -> Dict[str, Any]:
+    return {
+        "litellm_settings": {
+            "callbacks": ["websearch_interception"],
+            "websearch_interception_params": {
+                "enabled_providers": enabled_providers,
+                "search_tool_name": search_tool_name,
+            },
+        }
+    }
+
+
+def _reset_callback_lists(monkeypatch) -> None:
+    for list_name in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, list_name, [], raising=False)
+
+
+def test_ProxyConfig__add_callbacks_from_db_config_installs_websearch_interception_logger(
+    monkeypatch,
+):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock", "vertex_ai"]))
+
+    installed = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    snapshot = {
+        "raw_string_registered": "websearch_interception" in litellm.callbacks,
+        "instance_count": len(installed),
+        "search_tool_name": installed[0].search_tool_name if installed else None,
+        "enabled_providers": installed[0].enabled_providers if installed else None,
+    }
+    assert snapshot == {
+        "raw_string_registered": False,
+        "instance_count": 1,
+        "search_tool_name": "tavily-search",
+        "enabled_providers": ["bedrock", "vertex_ai"],
+    }
+
+
+def test_ProxyConfig__add_callbacks_from_db_config_installs_compression_interception_logger(
+    monkeypatch,
+):
+    from litellm.integrations.compression_interception.handler import (
+        CompressionInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+
+    pc._add_callbacks_from_db_config(
+        {
+            "litellm_settings": {
+                "callbacks": ["compression_interception"],
+                "compression_interception_params": {
+                    "enabled": True,
+                    "compression_trigger": 123456,
+                },
+            }
+        }
+    )
+
+    installed = [cb for cb in litellm.callbacks if isinstance(cb, CompressionInterceptionLogger)]
+    snapshot = {
+        "instance_count": len(installed),
+        "compression_trigger": installed[0].compression_trigger if installed else None,
+    }
+    assert snapshot == {"instance_count": 1, "compression_trigger": 123456}
+
+
+def test_ProxyConfig__add_callbacks_from_db_config_reuses_logger_across_polls(monkeypatch):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+    config = _websearch_db_config("tavily-search", ["bedrock"])
+
+    pc._add_callbacks_from_db_config(config)
+    first = next(cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger))
+    for _ in range(3):
+        pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+
+    installed = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    snapshot = {"instance_count": len(installed), "same_instance": installed[:1] == [first]}
+    assert snapshot == {"instance_count": 1, "same_instance": True}
+
+
+@pytest.mark.parametrize(
+    "changed_config, expected",
+    [
+        (
+            ("perplexity-search", ["bedrock"]),
+            {"search_tool_name": "perplexity-search", "enabled_providers": ["bedrock"]},
+        ),
+        (
+            ("tavily-search", ["bedrock", "openai"]),
+            {"search_tool_name": "tavily-search", "enabled_providers": ["bedrock", "openai"]},
+        ),
+    ],
+)
+def test_ProxyConfig__add_callbacks_from_db_config_replaces_logger_when_params_change(
+    monkeypatch, changed_config, expected
+):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    pc._add_callbacks_from_db_config(_websearch_db_config(*changed_config))
+
+    installed = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    snapshot = {
+        "instance_count": len(installed),
+        "search_tool_name": installed[0].search_tool_name if installed else None,
+        "enabled_providers": installed[0].enabled_providers if installed else None,
+    }
+    assert snapshot == {"instance_count": 1, **expected}
+
+
+def test_ProxyConfig__add_callbacks_from_db_config_uninstalls_logger_when_callback_removed(
+    monkeypatch,
+):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    installed_before = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"callbacks": ["some_other_callback"]}})
+
+    remaining_anywhere = [
+        cb
+        for callback_list in (
+            litellm.callbacks,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        )
+        for cb in callback_list
+        if isinstance(cb, WebSearchInterceptionLogger)
+    ]
+    snapshot = {
+        "installed_before": len(installed_before),
+        "remaining_anywhere": len(remaining_anywhere),
+    }
+    assert snapshot == {"installed_before": 1, "remaining_anywhere": 0}
+
+
+@pytest.mark.parametrize(
+    "config_without_callbacks",
+    [
+        {},
+        {"litellm_settings": {}},
+        {"litellm_settings": {"callbacks": []}},
+        {"litellm_settings": {"success_callback": ["langfuse"]}},
+    ],
+)
+def test_ProxyConfig__add_callbacks_from_db_config_uninstalls_logger_when_config_omits_callbacks(
+    monkeypatch, config_without_callbacks
+):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    installed_before = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+
+    pc._add_callbacks_from_db_config(config_without_callbacks)
+
+    remaining = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    snapshot = {"installed_before": len(installed_before), "remaining": len(remaining)}
+    assert snapshot == {"installed_before": 1, "remaining": 0}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_llm_router_keeps_logger_when_config_load_fails(monkeypatch):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    installed_before = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+
+    class _FailingProxyConfig:
+        async def get_config(self) -> dict:
+            raise TimeoutError("transient DB timeout")
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", _FailingProxyConfig())
+
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+
+    remaining = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    snapshot = {"installed_before": len(installed_before), "remaining": len(remaining)}
+    assert snapshot == {"installed_before": 1, "remaining": 1}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_llm_router_reconciles_when_search_tool_parsing_fails(monkeypatch):
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    _reset_callback_lists(monkeypatch)
+    pc = ProxyConfig()
+    pc._add_callbacks_from_db_config(_websearch_db_config("tavily-search", ["bedrock"]))
+    installed_before = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+
+    class _MalformedSearchToolsProxyConfig:
+        async def get_config(self) -> dict:
+            return {"litellm_settings": {}, "search_tools": "not-a-list"}
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", _MalformedSearchToolsProxyConfig())
+
+    with pytest.raises(AttributeError):
+        pc.parse_search_tools({"search_tools": "not-a-list"})
+
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+
+    remaining = [cb for cb in litellm.callbacks if isinstance(cb, WebSearchInterceptionLogger)]
+    snapshot = {"installed_before": len(installed_before), "remaining": len(remaining)}
+    assert snapshot == {"installed_before": 1, "remaining": 0}
+
+
 def test_ProxyConfig__add_callbacks_from_db_config_bad_config_raises():
     pc = ProxyConfig()
     with pytest.raises(AttributeError):
