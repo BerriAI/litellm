@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
-import { screen } from "@testing-library/react";
+import { screen, fireEvent } from "@testing-library/react";
 import { TeamGuardrailsTab } from "./TeamGuardrailsTab";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
@@ -38,6 +38,8 @@ const pendingSubmission = {
     guardrail: "generic_guardrail_api",
     mode: "pre_call",
     api_base: "https://example.com/guard",
+    headers: { "X-API-Key": "secret" },
+    extra_headers: ["x-request-id"],
   },
   guardrail_info: {},
   submitted_at: "2026-05-09T00:00:00Z",
@@ -102,5 +104,39 @@ describe("TeamGuardrailsTab — approve/reject role gate", () => {
 
     expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /reject/i })).not.toBeInTheDocument();
+  });
+
+  it("disables all admin-only write controls for a non-admin, including the detail panel", async () => {
+    mockUseAuthorized.mockReturnValue({ ...baseAuth, userRole: "Internal User" });
+    renderWithProviders(<TeamGuardrailsTab accessToken="test-token" />);
+
+    await screen.findByText("test-pending-guardrail");
+    expect(screen.getByRole("switch")).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await screen.findByText("Forward LiteLLM API Key");
+
+    expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reject/i })).not.toBeInTheDocument();
+    screen.getAllByRole("switch").forEach((toggle) => expect(toggle).toBeDisabled());
+    expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Remove/)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("e.g. x-request-id")).not.toBeInTheDocument();
+  });
+
+  it("keeps all write controls enabled for an admin in the detail panel", async () => {
+    mockUseAuthorized.mockReturnValue({ ...baseAuth, userRole: "Admin" });
+    renderWithProviders(<TeamGuardrailsTab accessToken="test-token" />);
+
+    await screen.findByText("test-pending-guardrail");
+
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    await screen.findByText("Forward LiteLLM API Key");
+
+    expect(screen.getAllByRole("button", { name: /approve/i }).length).toBeGreaterThanOrEqual(2);
+    screen.getAllByRole("switch").forEach((toggle) => expect(toggle).toBeEnabled());
+    expect(screen.getAllByRole("button", { name: "Add" })).toHaveLength(2);
+    expect(screen.getByLabelText("Remove X-API-Key")).toBeInTheDocument();
+    expect(screen.getByLabelText("Remove x-request-id")).toBeInTheDocument();
   });
 });
