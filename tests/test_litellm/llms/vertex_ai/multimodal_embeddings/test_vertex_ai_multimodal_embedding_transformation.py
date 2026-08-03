@@ -179,3 +179,49 @@ class TestVertexMultimodalEmbedding:
             headers={},
         )
         assert "parameters" not in request
+
+    def test_response_keeps_both_text_and_image_embeddings(self):
+        predictions = {
+            "predictions": [
+                {
+                    "textEmbedding": [0.4, 0.5, 0.6],
+                    "imageEmbedding": [0.1, 0.2, 0.3],
+                }
+            ]
+        }
+        result = self.config.transform_embedding_response_to_openai(predictions)
+        assert [e["embedding"] for e in result] == [[0.4, 0.5, 0.6], [0.1, 0.2, 0.3]]
+        assert [e["index"] for e in result] == [0, 0]
+
+    def test_response_keeps_text_and_video_embeddings(self):
+        predictions = {
+            "predictions": [
+                {
+                    "textEmbedding": [0.4, 0.5, 0.6],
+                    "videoEmbeddings": [
+                        {
+                            "startOffsetSec": 0,
+                            "endOffsetSec": 5,
+                            "embedding": [0.7, 0.8, 0.9],
+                        }
+                    ],
+                }
+            ]
+        }
+        result = self.config.transform_embedding_response_to_openai(predictions)
+        assert [e["embedding"] for e in result] == [[0.4, 0.5, 0.6], [0.7, 0.8, 0.9]]
+
+    @pytest.mark.parametrize(
+        "prediction, expected",
+        [
+            ({"textEmbedding": [0.1, 0.2]}, [[0.1, 0.2]]),
+            ({"imageEmbedding": [0.3, 0.4]}, [[0.3, 0.4]]),
+            (
+                {"videoEmbeddings": [{"startOffsetSec": 0, "endOffsetSec": 5, "embedding": [0.5]}]},
+                [[0.5]],
+            ),
+        ],
+    )
+    def test_response_single_modality_unchanged(self, prediction, expected):
+        result = self.config.transform_embedding_response_to_openai({"predictions": [prediction]})
+        assert [e["embedding"] for e in result] == expected
