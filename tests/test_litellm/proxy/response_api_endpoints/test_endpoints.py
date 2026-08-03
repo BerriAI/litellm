@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from litellm.proxy.proxy_server import app
@@ -116,6 +117,77 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
             assert "choices" in response_data or "id" in response_data
             # Should not have Responses API structure
             assert "output" not in response_data or "status" not in response_data
+
+    @pytest.mark.asyncio
+    async def test_cursor_data_generator_accepts_request_kwarg(self):
+        """
+        Regression for #35632: base_process_llm_request always passes request=
+        into select_data_generator. cursor_data_generator must accept it (and
+        forward it) so streaming /cursor/chat/completions does not 500 with
+        TypeError: unexpected keyword argument 'request'.
+        """
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            cursor_chat_completions,
+        )
+
+        captured: dict = {}
+
+        async def _capture_and_invoke_generator(self, **kwargs):
+            select_data_generator = kwargs["select_data_generator"]
+            mock_fastapi_request = MagicMock(spec=Request)
+            # Mirror the call shape in common_request_processing (streaming path).
+            # Before the fix this raised TypeError for unexpected kwarg 'request'.
+            result = select_data_generator(
+                response=MagicMock(),
+                user_api_key_dict=kwargs["user_api_key_dict"],
+                request_data=self.data,
+                request=mock_fastapi_request,
+            )
+            captured["accepted_request"] = True
+            captured["result"] = result
+            return {"id": "cursor_stream_ok"}
+
+        mock_http_request = MagicMock(spec=Request)
+        mock_http_request.headers = {}
+        mock_fastapi_response = MagicMock()
+        mock_user_api_key = MagicMock()
+        mock_user_api_key.token = "test_token"
+        mock_user_api_key.user_id = "test_user"
+        mock_user_api_key.team_id = None
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server._read_request_body",
+                new=AsyncMock(
+                    return_value={
+                        "model": "gpt-4o",
+                        "input": [{"role": "user", "content": "Hello"}],
+                        "stream": True,
+                    }
+                ),
+            ),
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=_capture_and_invoke_generator,
+            ),
+            patch("litellm.proxy.proxy_server.async_data_generator") as mock_adg,
+        ):
+            mock_adg.return_value = MagicMock(name="async_gen")
+            response = await cursor_chat_completions(
+                request=mock_http_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key,
+            )
+
+        assert response == {"id": "cursor_stream_ok"}
+        assert captured.get("accepted_request") is True
+        mock_adg.assert_called_once()
+        assert "request" in mock_adg.call_args.kwargs
+        assert mock_adg.call_args.kwargs["request"] is not None
 
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")

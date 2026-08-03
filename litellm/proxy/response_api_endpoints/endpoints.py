@@ -342,7 +342,9 @@ async def cursor_chat_completions(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
-    def cursor_data_generator(response, user_api_key_dict, request_data):
+    def cursor_data_generator(
+        response, user_api_key_dict, request_data, request=None
+    ):
         """
         Custom generator that transforms Responses API streaming chunks to chat completion chunks.
 
@@ -353,6 +355,9 @@ async def cursor_chat_completions(
             response: The streaming response (BaseResponsesAPIStreamingIterator or other)
             user_api_key_dict: User API key authentication dict
             request_data: Request data containing model, logging_obj, etc.
+            request: Optional FastAPI Request — accepted for parity with
+                ``select_data_generator`` / ``base_process_llm_request``, which
+                always pass ``request=`` on the streaming path (#35632).
 
         Returns:
             Async generator that yields SSE-formatted chat completion chunks
@@ -379,12 +384,14 @@ async def cursor_chat_completions(
                 response=streamwrapper,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
+                request=request,
             )
         # Otherwise, use the default generator
         return async_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
+            request=request,
         )
 
     try:
