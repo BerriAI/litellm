@@ -236,9 +236,9 @@ function LoginPageContent() {
                   <AlertTitle>Default Credentials</AlertTitle>
                   <AlertDescription>
                     <p className="text-sm">
-                      By default, Username is <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">admin</code> and
-                      Password is your set LiteLLM Proxy
-                      <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">MASTER_KEY</code>.
+                      By default, the username is <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">admin</code> and
+                      the password is the LiteLLM Proxy <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">MASTER_KEY</code> you
+                      set.
                     </p>
                     <p className="mt-2 text-sm">
                       Need to set UI credentials or SSO?{" "}
