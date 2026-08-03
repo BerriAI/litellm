@@ -5,6 +5,7 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
@@ -722,18 +723,32 @@ def clean_headers(
     return clean_headers
 
 
+@lru_cache(maxsize=1)
+def _secret_mcp_auth_header_names() -> frozenset[str]:
+    """Resolve the MCP client-side auth header name once per process.
+
+    get_secret_str issues a blocking secret-manager SDK call when one is configured,
+    and the caller runs on every proxied request, so the deployment-static value is
+    cached rather than looked up per request.
+    """
+    secret_name = get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME")
+    return frozenset({secret_name.lower()}) if secret_name else frozenset()
+
+
 def configured_credential_header_names(general_settings: Mapping[str, Any] | None) -> frozenset[str]:
     """Credential header names that are only knowable from this deployment's config.
 
     The MCP client-side auth header can be renamed through either source, so both
     candidate names are collected instead of resolving their precedence; redacting a
     name this deployment no longer uses is free, missing the one it does use is not.
+
+    Only general_settings is read per call; see _secret_mcp_auth_header_names for why
+    the other source is cached.
     """
-    candidates = (
-        get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME"),
-        general_settings.get("mcp_client_side_auth_header_name") if general_settings else None,
-    )
-    return frozenset(name.lower() for name in candidates if isinstance(name, str) and name)
+    settings_name = general_settings.get("mcp_client_side_auth_header_name") if general_settings else None
+    if isinstance(settings_name, str) and settings_name:
+        return _secret_mcp_auth_header_names() | frozenset({settings_name.lower()})
+    return _secret_mcp_auth_header_names()
 
 
 def _is_credential_header(header: str, configured_names: frozenset[str]) -> bool:

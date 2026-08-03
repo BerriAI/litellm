@@ -5697,27 +5697,42 @@ def test_redact_credential_headers_masks_the_configured_mcp_auth_header():
 
 
 def test_configured_credential_header_names_reads_env_and_general_settings(monkeypatch):
-    from litellm.proxy.litellm_pre_call_utils import configured_credential_header_names
-
-    monkeypatch.delenv("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME", raising=False)
-    assert configured_credential_header_names(None) == frozenset()
-
-    monkeypatch.setenv("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME", "X-Env-Auth")
-    assert configured_credential_header_names({"mcp_client_side_auth_header_name": "X-Settings-Auth"}) == frozenset(
-        {"x-env-auth", "x-settings-auth"}
-    )
-
-
-def test_configured_credential_header_names_resolves_through_the_secret_manager():
-    """The header name can live in a secret manager, so env-only lookup would miss it."""
     import litellm.proxy.litellm_pre_call_utils as pre_call_utils
 
+    pre_call_utils._secret_mcp_auth_header_names.cache_clear()
+    monkeypatch.delenv("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME", raising=False)
+    assert pre_call_utils.configured_credential_header_names(None) == frozenset()
+
+    pre_call_utils._secret_mcp_auth_header_names.cache_clear()
+    monkeypatch.setenv("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME", "X-Env-Auth")
+    assert pre_call_utils.configured_credential_header_names(
+        {"mcp_client_side_auth_header_name": "X-Settings-Auth"}
+    ) == frozenset({"x-env-auth", "x-settings-auth"})
+
+
+def test_configured_credential_header_names_resolves_through_the_secret_manager(monkeypatch):
+    """The header name can live in a secret manager, so an env-only lookup would miss it."""
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    pre_call_utils._secret_mcp_auth_header_names.cache_clear()
     with patch.object(
         pre_call_utils,
         "get_secret_str",
         side_effect=lambda key: "x-vault-mcp-auth" if "MCP" in key else None,
     ):
         assert pre_call_utils.configured_credential_header_names(None) == frozenset({"x-vault-mcp-auth"})
+
+
+def test_configured_credential_header_names_resolves_the_secret_once(monkeypatch):
+    """get_secret_str is a blocking SDK call under a cloud secret manager, and this runs per request."""
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    pre_call_utils._secret_mcp_auth_header_names.cache_clear()
+    with patch.object(pre_call_utils, "get_secret_str", return_value="x-vault-mcp-auth") as mock_secret:
+        for _ in range(5):
+            assert "x-vault-mcp-auth" in pre_call_utils.configured_credential_header_names(None)
+
+    assert mock_secret.call_count == 1
 
 
 @pytest.mark.asyncio
