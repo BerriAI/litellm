@@ -688,7 +688,6 @@ async def test_async_log_failure_event(prometheus_logger):
     prometheus_logger.set_deployment_partial_outage.assert_called_once_with(
         litellm_model_name="gpt-5-mini",
         model_id="model-123",
-        api_base="https://api.openai.com",
         api_provider="openai",
     )
 
@@ -1005,7 +1004,6 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
     prometheus_logger.set_deployment_healthy.assert_called_once_with(
         litellm_model_name="gpt-5-mini",
         model_id="model-123",
-        api_base="https://api.openai.com",
         api_provider="openai",
     )
 

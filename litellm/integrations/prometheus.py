@@ -3176,7 +3176,7 @@ class PrometheusLogger(CustomLogger):
         litellm_model_name: str | None,
         model_id: str | None,
         api_provider: str | None,
-    ) -> dict:
+    ) -> Mapping[str, str]:
         """
         Returns the complete label set for the litellm_deployment_state gauge.
 
