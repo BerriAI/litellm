@@ -300,6 +300,8 @@ def _is_within_off_peak_window(off_peak_hours_utc: str | list[str], current_time
     """
     if current_time is None:
         current_time = datetime.now(timezone.utc)
+    elif current_time.tzinfo is not None:
+        current_time = current_time.astimezone(timezone.utc)
     now = current_time.time()
     windows = [off_peak_hours_utc] if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
     for window in windows:
