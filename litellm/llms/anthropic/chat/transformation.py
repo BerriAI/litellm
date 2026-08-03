@@ -1875,7 +1875,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except Exception as e:
             raise AnthropicError(
                 status_code=400,
-                message=f"{e!s}\nReceived Messages={messages}",
+                message=f"{e}\nReceived Messages={messages}",
             )  # don't use verbose_logger.exception, if exception is raised
 
         ## Auto-strip advisor blocks from history if advisor tool is absent.
@@ -2454,7 +2454,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise AnthropicError(
-                message=f"Unable to get json response - {e!s}, Original Response: {raw_response.text}",
+                message=f"Unable to get json response - {e}, Original Response: {raw_response.text}",
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )

@@ -104,7 +104,7 @@ async def discover_agent_card(
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         verbose_proxy_logger.exception("Unexpected error during A2A discovery: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Discovery failed: {exc!s}")
+        raise HTTPException(status_code=500, detail=f"Discovery failed: {exc}")
 
     return JSONResponse(
         content={"url": request.url, "agent_card": card},

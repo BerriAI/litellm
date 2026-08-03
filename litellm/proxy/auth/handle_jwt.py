@@ -777,8 +777,8 @@ class JWTHandler:
             return userinfo
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error fetching OIDC UserInfo: {e!s}")
-            raise Exception(f"Failed to fetch OIDC UserInfo: {e!s}")
+            verbose_proxy_logger.error(f"Error fetching OIDC UserInfo: {e}")
+            raise Exception(f"Failed to fetch OIDC UserInfo: {e}")
 
     _unscoped_jwt_warning_emitted = False
 
@@ -987,7 +987,7 @@ class JWTHandler:
                 code=status.HTTP_401_UNAUTHORIZED,
             )
         except Exception as e:
-            raise Exception(f"Validation fails: {e!s}")
+            raise Exception(f"Validation fails: {e}")
 
         return self._apply_issuer_claim_mappings(
             token=payload,
@@ -1032,7 +1032,7 @@ class JWTHandler:
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
             except Exception as e:
-                raise Exception(f"Validation fails: {e!s}")
+                raise Exception(f"Validation fails: {e}")
 
         raise Exception("Invalid JWT Submitted")
 

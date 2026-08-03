@@ -857,14 +857,14 @@ async def handle_bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error(f"BedrockError in handle_bedrock_count_tokens: {e!s}")
+        verbose_proxy_logger.error(f"BedrockError in handle_bedrock_count_tokens: {e}")
         raise HTTPException(status_code=e.status_code, detail={"error": e.message})
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error in handle_bedrock_count_tokens: {e!s}")
-        raise HTTPException(status_code=500, detail={"error": f"CountTokens processing error: {e!s}"})
+        verbose_proxy_logger.error(f"Error in handle_bedrock_count_tokens: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"CountTokens processing error: {e}"})
 
 
 async def bedrock_llm_proxy_route(

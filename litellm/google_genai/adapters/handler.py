@@ -98,7 +98,7 @@ class GenerateContentToCompletionHandler:
                 return generate_content_response
 
         except Exception as e:
-            raise ValueError(f"Error calling litellm.acompletion for generate_content: {e!s}")
+            raise ValueError(f"Error calling litellm.acompletion for generate_content: {e}")
 
     @staticmethod
     def generate_content_handler(
@@ -159,4 +159,4 @@ class GenerateContentToCompletionHandler:
                 return generate_content_response
 
         except Exception as e:
-            raise ValueError(f"Error calling litellm.completion for generate_content: {e!s}")
+            raise ValueError(f"Error calling litellm.completion for generate_content: {e}")

@@ -106,7 +106,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
         except Exception as e:
             raise OpenAIError(
                 status_code=raw_response.status_code,
-                message=f"Failed to parse Clarifai response: {e!s}",
+                message=f"Failed to parse Clarifai response: {e}",
                 headers=raw_response.headers,
             ) from e
 

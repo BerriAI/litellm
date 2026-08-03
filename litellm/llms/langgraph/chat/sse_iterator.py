@@ -196,7 +196,7 @@ class LangGraphSSEStreamIterator:
         except httpx.StreamClosed:
             raise StopIteration
         except Exception as e:
-            verbose_logger.error(f"Error in LangGraph SSE stream: {e!s}")
+            verbose_logger.error(f"Error in LangGraph SSE stream: {e}")
             raise StopIteration
 
     async def __anext__(self) -> ModelResponseStream:
@@ -224,5 +224,5 @@ class LangGraphSSEStreamIterator:
         except httpx.StreamClosed:
             raise StopAsyncIteration
         except Exception as e:
-            verbose_logger.error(f"Error in LangGraph SSE stream: {e!s}")
+            verbose_logger.error(f"Error in LangGraph SSE stream: {e}")
             raise StopAsyncIteration

@@ -515,7 +515,7 @@ class MCPClient:
             _log(
                 f"MCP client list_tools failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {e!s}, "
+                f"Error: {e}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
@@ -536,7 +536,7 @@ class MCPClient:
     def error_tool_result(exc: Exception) -> MCPCallToolResult:
         """The error result ``call_tool`` returns when it swallows a failure (no re-execution)."""
         return MCPCallToolResult(
-            content=[TextContent(type="text", text=f"{type(exc).__name__}: {exc!s}")],
+            content=[TextContent(type="text", text=f"{type(exc).__name__}: {exc}")],
             isError=True,
         )
 
@@ -601,7 +601,7 @@ class MCPClient:
             _log(
                 f"MCP client call_tool failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {e!s}, "
+                f"Error: {e}, "
                 f"Tool: {call_tool_request_params.name}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
@@ -640,7 +640,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client list_prompts failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {e!s}, "
+                f"Error: {e}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
@@ -681,7 +681,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client get_prompt failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {e!s}, "
+                f"Error: {e}, "
                 f"Prompt: {get_prompt_request_params.name}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
@@ -717,7 +717,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client list_resources failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {e!s}, "
+                f"Error: {e}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
@@ -753,7 +753,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client list_resource_templates failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {e!s}, "
+                f"Error: {e}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"
             )
@@ -791,7 +791,7 @@ class MCPClient:
             verbose_logger.error(
                 f"MCP client read_resource failed - "
                 f"Error Type: {error_type}, "
-                f"Error: {e!s}, "
+                f"Error: {e}, "
                 f"Url: {url}, "
                 f"Server: {self.server_url or 'stdio'}, "
                 f"Transport: {self.transport_type}"

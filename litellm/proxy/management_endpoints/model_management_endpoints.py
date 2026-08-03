@@ -355,13 +355,13 @@ async def patch_model(
         return updated_model
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error in patch_model: {e!s}")
+        verbose_proxy_logger.exception(f"Error in patch_model: {e}")
 
         if isinstance(e, (HTTPException, ProxyException)):
             raise e
 
         raise ProxyException(
-            message=f"Error updating model: {e!s}",
+            message=f"Error updating model: {e}",
             type=ProxyErrorTypes.internal_server_error,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
@@ -462,13 +462,13 @@ async def _set_model_blocked_status(
         return updated_model
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error in model {action}: {e!s}")
+        verbose_proxy_logger.exception(f"Error in model {action}: {e}")
 
         if isinstance(e, (HTTPException, ProxyException)):
             raise e
 
         raise ProxyException(
-            message=f"Error updating model blocked status: {e!s}",
+            message=f"Error updating model blocked status: {e}",
             type=ProxyErrorTypes.internal_server_error,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
@@ -1223,10 +1223,10 @@ async def delete_model(
             )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to delete model. Due to error - {e!s}")
+        verbose_proxy_logger.exception(f"Failed to delete model. Due to error - {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -1429,10 +1429,10 @@ async def add_new_model(
         return model_response
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.add_new_model(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.add_new_model(): Exception occured - {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -1582,10 +1582,10 @@ async def update_model(
 
             return model_response
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.update_model(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.update_model(): Exception occured - {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -1675,13 +1675,13 @@ async def update_public_model_groups(
         }
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating public model groups: {e!s}")
+        verbose_proxy_logger.exception(f"Error updating public model groups: {e}")
 
         if isinstance(e, HTTPException):
             raise e
 
         raise ProxyException(
-            message=f"Error updating public model groups: {e!s}",
+            message=f"Error updating public model groups: {e}",
             type=ProxyErrorTypes.internal_server_error,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
@@ -1743,13 +1743,13 @@ async def update_useful_links(
         }
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating public model groups: {e!s}")
+        verbose_proxy_logger.exception(f"Error updating public model groups: {e}")
 
         if isinstance(e, HTTPException):
             raise e
 
         raise ProxyException(
-            message=f"Error updating public model groups: {e!s}",
+            message=f"Error updating public model groups: {e}",
             type=ProxyErrorTypes.internal_server_error,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
@@ -1970,5 +1970,5 @@ async def clear_cache() -> frozenset[str] | None:
         )
         return still_desired_ids
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to clear cache and reload models. Due to error - {e!s}")
+        verbose_proxy_logger.exception(f"Failed to clear cache and reload models. Due to error - {e}")
         return None

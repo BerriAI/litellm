@@ -122,7 +122,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return response
 
         except Exception as e:
-            raise ValueError(f"Error transforming Deepgram response: {e!s}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming Deepgram response: {e}\nResponse: {raw_response.text}")
 
     def _reconstruct_diarized_transcript(self, words: list) -> str:
         """

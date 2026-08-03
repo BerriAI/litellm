@@ -490,7 +490,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     parallel_request_limiter=self,
                 )
             except Exception as e:
-                verbose_proxy_logger.debug(f"Could not load batch rate limiter: {e!s}")
+                verbose_proxy_logger.debug(f"Could not load batch rate limiter: {e}")
         return self._batch_rate_limiter
 
     def _get_current_time(self) -> datetime:
@@ -808,7 +808,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
-                verbose_proxy_logger.warning(f"Redis Lua script failed for hash tag {hash_tag}: {e!s}")
+                verbose_proxy_logger.warning(f"Redis Lua script failed for hash tag {hash_tag}: {e}")
                 # Fallback to in-memory cache for this group
                 group_cache_values = await self.in_memory_cache_sliding_window(
                     keys=group_keys,
@@ -1055,7 +1055,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                     counts = [max(0, int(value)) for value in raw_counts]
                 except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror, never a 500
-                    verbose_proxy_logger.warning(f"parallel_count_script failed, using local mirror: {e!s}")
+                    verbose_proxy_logger.warning(f"parallel_count_script failed, using local mirror: {e}")
                     counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
             else:
                 counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
@@ -1085,7 +1085,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ],
                 )
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to in-memory enforcement, never a 500
-                verbose_proxy_logger.warning(f"parallel_acquire_script failed, falling back to in-memory gauge: {e!s}")
+                verbose_proxy_logger.warning(f"parallel_acquire_script failed, falling back to in-memory gauge: {e}")
                 async with self._check_and_increment_lock:
                     return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
             if int(raw[0]) == 1:
@@ -1212,9 +1212,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
-                verbose_proxy_logger.warning(
-                    f"parallel_release_script failed, falling back to in-memory release: {e!s}"
-                )
+                verbose_proxy_logger.warning(f"parallel_release_script failed, falling back to in-memory release: {e}")
 
         async with self._check_and_increment_lock:
             for counter_key in counter_keys:
@@ -2240,7 +2238,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return False
 
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error checking model failure status: {e!s}, defaulting to enforce limits")
+            verbose_proxy_logger.debug(f"Error checking model failure status: {e}, defaulting to enforce limits")
             # Fail safe: enforce limits if we can't check
             return True
 
@@ -2746,7 +2744,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         except Exception as e:
-            verbose_proxy_logger.warning(f"TTL preservation failed, falling back to regular pipeline: {e!s}")
+            verbose_proxy_logger.warning(f"TTL preservation failed, falling back to regular pipeline: {e}")
             # Fallback to regular pipeline on error
             await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                 increment_list=pipeline_operations,
@@ -3003,7 +3001,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in rate limit success event: {e!s}")
+            verbose_proxy_logger.exception(f"Error in rate limit success event: {e}")
 
     async def async_logging_hook(
         self,
@@ -3120,7 +3118,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if stash is not None and reserved_tokens > 0:
                 stash.reservation_released = True
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in rate limit failure event: {e!s}")
+            verbose_proxy_logger.exception(f"Error in rate limit failure event: {e}")
 
     async def async_release_max_parallel_requests_on_disconnect(
         self,
@@ -3185,7 +3183,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in rate limit post-call hook: {e!s}")
+            verbose_proxy_logger.exception(f"Error in rate limit post-call hook: {e}")
 
     async def async_post_call_failure_hook(
         self,

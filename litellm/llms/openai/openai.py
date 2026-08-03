@@ -551,7 +551,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             except Exception as e:
                 verbose_logger.exception(
-                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: {e!s}"
+                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: {e}"
                 )
 
         return None
@@ -774,7 +774,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     # e.message
                 except Exception as e:
                     if print_verbose is not None:
-                        print_verbose(f"openai.py: Received openai error - {e!s}")
+                        print_verbose(f"openai.py: Received openai error - {e}")
                     if (
                         "Conversation roles must alternate user/assistant" in str(e)
                         or "user and assistant roles should be alternating" in str(e)
@@ -1089,7 +1089,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 if response is not None and hasattr(response, "text"):
                     raise OpenAIError(
                         status_code=status_code,
-                        message=f"{e!s}\n\nOriginal Response: {response.text}",  # type: ignore
+                        message=f"{e}\n\nOriginal Response: {response.text}",  # type: ignore
                         headers=error_headers,
                         body=exception_body,
                     )
@@ -1111,7 +1111,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     else:
                         raise OpenAIError(
                             status_code=500,
-                            message=f"{e!s}",
+                            message=f"{e}",
                             headers=error_headers,
                             body=exception_body,
                         )

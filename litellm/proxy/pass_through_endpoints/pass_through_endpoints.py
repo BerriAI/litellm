@@ -294,8 +294,8 @@ async def chat_completion_pass_through_endpoint(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.completion(): Exception occured - {e!s}")
-        error_msg = f"{e!s}"
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.completion(): Exception occured - {e}")
+        error_msg = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
@@ -1502,7 +1502,7 @@ async def pass_through_request(
             )
         else:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.pass_through_endpoint(): Exception occured - {e!s}"
+                f"litellm.proxy.proxy_server.pass_through_endpoint(): Exception occured - {e}"
             )
 
         #########################################################
@@ -1544,7 +1544,7 @@ async def pass_through_request(
                 headers=custom_headers,
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),

@@ -1292,5 +1292,5 @@ async def handle_sampling_create_message(
         verbose_logger.exception("MCP sampling handler failed: %s", e)
         return ErrorData(
             code=-1,
-            message=f"Sampling failed: {e!s}",
+            message=f"Sampling failed: {e}",
         )

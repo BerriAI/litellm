@@ -178,7 +178,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             raw_response_json = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Failed to parse response: {e!s}",
+                error_message=f"Failed to parse response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )

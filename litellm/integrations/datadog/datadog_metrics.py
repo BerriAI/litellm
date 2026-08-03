@@ -180,7 +180,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
                 await self.flush_queue()
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Metrics: Error in async_log_success_event: {e!s}")
+            verbose_logger.exception(f"Datadog Metrics: Error in async_log_success_event: {e}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -202,7 +202,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
                 await self.flush_queue()
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Metrics: Error in async_log_failure_event: {e!s}")
+            verbose_logger.exception(f"Datadog Metrics: Error in async_log_failure_event: {e}")
 
     async def async_send_batch(self):
         if not self.log_queue:
@@ -214,7 +214,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         try:
             await self._upload_to_datadog(payload_data)
         except Exception as e:
-            verbose_logger.exception(f"Datadog Metrics: Error in async_send_batch: {e!s}")
+            verbose_logger.exception(f"Datadog Metrics: Error in async_send_batch: {e}")
             raise
 
     async def _upload_to_datadog(self, payload: DatadogMetricsPayload):

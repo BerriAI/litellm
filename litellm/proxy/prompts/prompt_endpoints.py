@@ -1304,7 +1304,7 @@ async def convert_prompt_file_to_json(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error converting prompt file: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error converting prompt file: {e}")
 
     finally:
         # Clean up temp file

@@ -82,7 +82,7 @@ class PrometheusServicesLogger:
             self.mock_testing_failure_calls = 0
 
         except Exception as e:
-            print_verbose(f"Got exception on init prometheus client {e!s}")
+            print_verbose(f"Got exception on init prometheus client {e}")
             raise e
 
     def _get_service_metrics_initialize(self, service: ServiceTypes) -> list[ServiceMetrics]:

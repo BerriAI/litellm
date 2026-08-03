@@ -96,7 +96,7 @@ def _fetch_inference_provider_mapping(model: str) -> dict:
             status_code = 500
             headers = {}
         raise HuggingFaceError(
-            message=f"Failed to fetch provider mapping: {e!s}",
+            message=f"Failed to fetch provider mapping: {e}",
             status_code=status_code,
             headers=headers,
         )

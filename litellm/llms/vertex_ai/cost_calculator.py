@@ -114,7 +114,7 @@ def cost_per_character(
                 prompt_cost = prompt_characters * model_info["input_cost_per_character"]
         except Exception as e:
             verbose_logger.debug(
-                f"litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {e!s}\nDefaulting to None"
+                f"litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {e}\nDefaulting to None"
             )
             prompt_cost, _ = cost_per_token(
                 model=model,
@@ -152,7 +152,7 @@ def cost_per_character(
                 completion_cost = completion_characters * model_info["output_cost_per_character"]
         except Exception as e:
             verbose_logger.debug(
-                f"litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {e!s}\nDefaulting to None"
+                f"litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {e}\nDefaulting to None"
             )
             _, completion_cost = cost_per_token(
                 model=model,

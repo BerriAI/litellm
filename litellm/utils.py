@@ -947,7 +947,7 @@ def function_setup(
 
                 except Exception as e:
                     # Log the error but don't fail the request
-                    verbose_logger.warning(f"Error removing thought signatures from tool call IDs: {e!s}")
+                    verbose_logger.warning(f"Error removing thought signatures from tool call IDs: {e}")
         elif call_type == CallTypes.embedding.value or call_type == CallTypes.aembedding.value:
             messages = args[1] if len(args) > 1 else kwargs.get("input", None)
         elif call_type == CallTypes.image_generation.value or call_type == CallTypes.aimage_generation.value:
@@ -1004,7 +1004,7 @@ def function_setup(
                 else:
                     messages = "default-message-value"
             except Exception as e:
-                verbose_logger.debug(f"Error extracting messages from Google contents: {e!s}")
+                verbose_logger.debug(f"Error extracting messages from Google contents: {e}")
                 messages = "default-message-value"
         else:
             messages = "default-message-value"
@@ -1410,7 +1410,7 @@ def client(original_function):
                     )
                     kwargs["max_tokens"] = modified_max_tokens
                 except Exception as e:
-                    print_verbose(f"Error while checking max token limit: {e!s}")
+                    print_verbose(f"Error while checking max token limit: {e}")
             # MODEL CALL
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
@@ -1675,7 +1675,7 @@ def client(original_function):
                     )
                     kwargs["max_tokens"] = modified_max_tokens
                 except Exception as e:
-                    print_verbose(f"Error while checking max token limit: {e!s}")
+                    print_verbose(f"Error while checking max token limit: {e}")
 
             # MODEL CALL
             result = await original_function(*args, **kwargs)
@@ -2224,7 +2224,7 @@ def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bo
         return supports_native_streaming
     except Exception as e:
         verbose_logger.debug(
-            f"Model not found or error in checking supports_native_streaming support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e!s}"
+            f"Model not found or error in checking supports_native_streaming support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e}"
         )
         return False
 
@@ -2248,7 +2248,7 @@ def supports_response_schema(model: str, custom_llm_provider: str | None = None)
         model, custom_llm_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
     except Exception as e:
         verbose_logger.debug(
-            f"Model not found or error in checking response schema support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e!s}"
+            f"Model not found or error in checking response schema support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e}"
         )
         return False
 
@@ -2362,7 +2362,7 @@ def _supports_factory(model: str, custom_llm_provider: str | None, key: str) -> 
         return False
     except Exception as e:
         verbose_logger.debug(
-            f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e!s}"
+            f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e}"
         )
 
         supported_by_provider = _supports_provider_info_factory(model, custom_llm_provider, key)
@@ -2404,7 +2404,7 @@ def _is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None,
         verbose_logger.debug(
             f"Model not found or error in checking {key} disabled state. "
             f"You passed model={model}, custom_llm_provider={custom_llm_provider}. "
-            f"Error: {e!s}"
+            f"Error: {e}"
         )
         return False
 
@@ -2537,7 +2537,7 @@ def get_supported_regions(model: str, custom_llm_provider: str | None = None) ->
             return None
     except Exception as e:
         verbose_logger.debug(
-            f"Model not found or error in checking supported_regions support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e!s}"
+            f"Model not found or error in checking supported_regions support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e}"
         )
         return None
 
@@ -6542,7 +6542,7 @@ class TextCompletionStreamWrapper:
 
             return response
         except Exception as e:
-            raise Exception(f"Error occurred converting to text completion object - chunk: {chunk}; Error: {e!s}")
+            raise Exception(f"Error occurred converting to text completion object - chunk: {chunk}; Error: {e}")
 
     def __next__(self):
         # model_response = ModelResponse(stream=True, model=self.model)
@@ -6868,7 +6868,7 @@ def trim_messages(
             return final_messages, response_tokens
         return final_messages
     except Exception as e:  # [NON-Blocking, if error occurs just return final_messages
-        verbose_logger.exception(f"Got exception while token trimming - {e!s}")
+        verbose_logger.exception(f"Got exception while token trimming - {e}")
         return original_messages
 
 

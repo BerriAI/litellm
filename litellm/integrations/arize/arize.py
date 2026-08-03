@@ -169,7 +169,7 @@ class ArizeLogger(OpenTelemetry):
         except Exception as e:
             return {
                 "status": "unhealthy",
-                "error_message": f"Arize health check failed: {e!s}",
+                "error_message": f"Arize health check failed: {e}",
             }
 
     def construct_dynamic_otel_headers(

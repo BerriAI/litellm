@@ -201,7 +201,7 @@ def handle_cohere_response(
         cohere_response = CohereChatResult(**json_response)
     except (TypeError, ValidationError) as e:
         raise OCIError(
-            message=f"Response cannot be casted to CohereChatResult: {e!s}",
+            message=f"Response cannot be casted to CohereChatResult: {e}",
             status_code=raw_response.status_code,
         )
 
@@ -283,7 +283,7 @@ def handle_cohere_stream_chunk(
     except (TypeError, ValidationError) as e:
         raise OCIError(
             status_code=500,
-            message=f"Chunk cannot be parsed as CohereStreamChunk: {e!s}",
+            message=f"Chunk cannot be parsed as CohereStreamChunk: {e}",
         )
 
     if typed_chunk.index is None:

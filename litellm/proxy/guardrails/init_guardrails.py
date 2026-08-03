@@ -141,5 +141,5 @@ def initialize_guardrails(
 
         return litellm.guardrail_name_config_map
     except Exception as e:
-        verbose_proxy_logger.exception(f"error initializing guardrails {e!s}")
+        verbose_proxy_logger.exception(f"error initializing guardrails {e}")
         raise e

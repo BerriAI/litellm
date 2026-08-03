@@ -256,7 +256,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Failed to parse Gemini response: {e!s}",
+                error_message=f"Failed to parse Gemini response: {e}",
                 status_code=response.status_code,
                 headers=response.headers,
             )
@@ -327,7 +327,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Failed to parse Gemini create response: {e!s}",
+                error_message=f"Failed to parse Gemini create response: {e}",
                 status_code=response.status_code,
                 headers=response.headers,
             )

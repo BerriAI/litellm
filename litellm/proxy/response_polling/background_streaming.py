@@ -328,7 +328,7 @@ async def background_streaming_task(
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error in background streaming task for {polling_id}: {e!s}")
+        verbose_proxy_logger.error(f"Error in background streaming task for {polling_id}: {e}")
         import traceback
 
         verbose_proxy_logger.error(traceback.format_exc())

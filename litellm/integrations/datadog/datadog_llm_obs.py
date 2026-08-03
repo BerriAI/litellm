@@ -89,7 +89,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             kwargs.update(dict_datadog_llm_obs_params)
             CustomBatchLogger.__init__(self, **kwargs, flush_lock=self.flush_lock)
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error initializing - {e!s}")
+            verbose_logger.exception(f"DataDogLLMObs: Error initializing - {e}")
             raise e
 
     def _configure_dd_agent(self, dd_agent_host: str):
@@ -145,7 +145,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 await self.async_send_batch()
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error logging success event - {e!s}")
+            verbose_logger.exception(f"DataDogLLMObs: Error logging success event - {e}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -157,7 +157,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 await self.async_send_batch()
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error logging failure event - {e!s}")
+            verbose_logger.exception(f"DataDogLLMObs: Error logging failure event - {e}")
 
     async def async_send_batch(self):
         try:
@@ -214,7 +214,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         except httpx.HTTPStatusError as e:
             verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {e.response.text}")
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {e!s}")
+            verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {e}")
 
     def create_llm_obs_payload(self, kwargs: dict, start_time: datetime, end_time: datetime) -> LLMObsPayload:
         standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
@@ -707,7 +707,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
                             kv_pairs[f"tool_calls.{idx}.function.arguments"] = json.dumps(function_arguments)
             except (KeyError, TypeError, ValueError) as e:
-                verbose_logger.debug(f"DataDogLLMObs: Error processing tool call {idx}: {e!s}")
+                verbose_logger.debug(f"DataDogLLMObs: Error processing tool call {idx}: {e}")
                 continue
 
         return kv_pairs
@@ -747,6 +747,6 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                                     tool_call_metadata[f"output_{key}"] = value
 
         except Exception as e:
-            verbose_logger.debug(f"DataDogLLMObs: Error extracting tool call metadata: {e!s}")
+            verbose_logger.debug(f"DataDogLLMObs: Error extracting tool call metadata: {e}")
 
         return tool_call_metadata

@@ -60,7 +60,7 @@ def _normalize_langfuse_base_url(base_target_url: str) -> str:
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": f"Invalid Langfuse host: {e!s}"},
+            detail={"error": f"Invalid Langfuse host: {e}"},
         )
 
     if base_url.scheme not in ("http", "https") or not base_url.host:
@@ -137,7 +137,7 @@ def _build_langfuse_proxy_target(
         except SSRFError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": f"Invalid Langfuse host: {e!s}"},
+                detail={"error": f"Invalid Langfuse host: {e}"},
             )
         custom_headers["Host"] = host_header
         return target_url, custom_headers

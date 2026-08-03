@@ -2411,7 +2411,7 @@ async def _process_team_members(
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail={"error": f"Unable to add user - {data.member}, to team - {data.team_id}, for reason - {e!s}"},
+                detail={"error": f"Unable to add user - {data.member}, to team - {data.team_id}, for reason - {e}"},
             )
         updated_users.append(updated_user)
         if updated_tm is not None:
@@ -2433,7 +2433,7 @@ async def _process_team_members(
             except Exception as e:
                 raise HTTPException(
                     status_code=500,
-                    detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e!s}"},
+                    detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e}"},
                 )
             updated_users.append(updated_user)
             if updated_tm is not None:
@@ -3936,7 +3936,7 @@ async def team_info(
         )
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -4808,7 +4808,7 @@ async def list_team(
             )
         except Exception as e:
             team_exception = f"""Invalid team object for team_id: {team.team_id}. team_object={team.model_dump()}.
-            Error: {e!s}
+            Error: {e}
             """
             verbose_proxy_logger.exception(team_exception)
             continue
@@ -4925,7 +4925,7 @@ async def ui_view_teams(
         return teams
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error searching teams: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error searching teams: {e}")
 
 
 def add_new_models_to_team(team_obj: LiteLLM_TeamTable, new_models: list[str]) -> list[str]:

@@ -245,7 +245,7 @@ class DatabricksBase:
         except requests.RequestException as e:
             raise DatabricksException(
                 status_code=500,
-                message=f"OAuth M2M token request failed: {e!s}",
+                message=f"OAuth M2M token request failed: {e}",
             )
 
         if response.status_code != 200:

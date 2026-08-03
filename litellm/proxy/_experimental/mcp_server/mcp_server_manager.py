@@ -1951,7 +1951,7 @@ class MCPServerManager:
             verbose_logger.info(f"Successfully registered {registered_count} OpenAPI tools for server {server.name}")
 
         except Exception as e:
-            verbose_logger.error(f"Failed to register OpenAPI tools for server {server.name}: {e!s}")
+            verbose_logger.error(f"Failed to register OpenAPI tools for server {server.name}: {e}")
             raise e
 
     def _cleanup_server_tool_routing_artifacts(self, server: MCPServer) -> None:
@@ -2326,7 +2326,7 @@ class MCPServerManager:
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
 
         except Exception as e:
-            verbose_logger.debug(f"Failed to add MCP server: {e!s}")
+            verbose_logger.debug(f"Failed to add MCP server: {e}")
             raise e
 
     async def update_server(self, mcp_server: LiteLLM_MCPServerTable):
@@ -2360,7 +2360,7 @@ class MCPServerManager:
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
 
         except Exception as e:
-            verbose_logger.debug(f"Failed to udpate MCP server: {e!s}")
+            verbose_logger.debug(f"Failed to udpate MCP server: {e}")
             raise e
 
     def get_all_mcp_server_ids(self) -> set[str]:
@@ -2386,7 +2386,7 @@ class MCPServerManager:
 
             await user_api_key_cache.async_delete_cache(key=self.get_byom_submitted_servers_cache_key(user_id))
         except Exception as e:  # noqa: BLE001
-            verbose_logger.warning(f"Failed to invalidate BYOM submitted MCP server cache: {e!s}")
+            verbose_logger.warning(f"Failed to invalidate BYOM submitted MCP server cache: {e}")
 
     async def _get_active_submitted_mcp_server_ids_for_user(
         self, user_api_key_auth: UserAPIKeyAuth | None
@@ -2401,7 +2401,7 @@ class MCPServerManager:
             )
             from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
         except Exception as e:  # noqa: BLE001
-            verbose_logger.warning(f"Failed to load BYOM submitted MCP server cache dependencies: {e!s}")
+            verbose_logger.warning(f"Failed to load BYOM submitted MCP server cache dependencies: {e}")
             return []
 
         byom_cache_key = self.get_byom_submitted_servers_cache_key(submitter_user_id)
@@ -2411,7 +2411,7 @@ class MCPServerManager:
             if cached_submitted_server_ids is not None:
                 submitted_server_ids = cast(list[str], cached_submitted_server_ids)
         except Exception as e:  # noqa: BLE001
-            verbose_logger.warning(f"Failed to read BYOM submitted MCP server cache: {e!s}")
+            verbose_logger.warning(f"Failed to read BYOM submitted MCP server cache: {e}")
 
         if submitted_server_ids is None:
             if prisma_client is None:
@@ -2422,7 +2422,7 @@ class MCPServerManager:
                         prisma_client, submitter_user_id
                     )
                 except Exception as e:  # noqa: BLE001
-                    verbose_logger.warning(f"Failed to read BYOM submitted MCP servers from database: {e!s}")
+                    verbose_logger.warning(f"Failed to read BYOM submitted MCP servers from database: {e}")
                     submitted_server_ids = []
             try:
                 await user_api_key_cache.async_set_cache(
@@ -2431,7 +2431,7 @@ class MCPServerManager:
                     ttl=60,
                 )
             except Exception as e:  # noqa: BLE001
-                verbose_logger.warning(f"Failed to write BYOM submitted MCP server cache: {e!s}")
+                verbose_logger.warning(f"Failed to write BYOM submitted MCP server cache: {e}")
 
         return [server_id for server_id in submitted_server_ids if self.get_mcp_server_by_id(server_id) is not None]
 
@@ -2647,7 +2647,7 @@ class MCPServerManager:
             )
             return tool_permissions
         except Exception as e:
-            verbose_logger.warning(f"Failed to resolve toolset permissions: {e!s}")
+            verbose_logger.warning(f"Failed to resolve toolset permissions: {e}")
             return {}
 
     def invalidate_toolset_cache(self, toolset_id: str | None = None) -> None:
@@ -2764,7 +2764,7 @@ class MCPServerManager:
                 return []
             return await self._get_tools_from_server(server)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get tools from server {server_id}: {e!s}")
+            verbose_logger.warning(f"Failed to get tools from server {server_id}: {e}")
             return []
 
     async def list_tools(
@@ -2822,7 +2822,7 @@ class MCPServerManager:
                 return tools
             except Exception as e:
                 verbose_logger.warning(
-                    f"Failed to list tools from server {server.name}: {e!s}. Continuing with other servers."
+                    f"Failed to list tools from server {server.name}: {e}. Continuing with other servers."
                 )
                 return []
 
@@ -3476,12 +3476,12 @@ class MCPServerManager:
                     www_authenticate=None if server.is_dcr_bridge else challenge_header,
                     server_name=server.name,
                 ) from e
-            verbose_logger.warning(f"Failed to get tools from server {server.name}: {e!s}")
+            verbose_logger.warning(f"Failed to get tools from server {server.name}: {e}")
             raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
         except MCPServerListError:
             raise
         except Exception as e:
-            verbose_logger.warning(f"Failed to get tools from server {server.name}: {e!s}")
+            verbose_logger.warning(f"Failed to get tools from server {server.name}: {e}")
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
     async def get_prompts_from_server(
@@ -3532,7 +3532,7 @@ class MCPServerManager:
             return prefixed_or_original_prompts
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to get prompts from server {server.name}: {e!s}")
+            verbose_logger.warning(f"Failed to get prompts from server {server.name}: {e}")
             return []
 
     async def get_resources_from_server(
@@ -3574,7 +3574,7 @@ class MCPServerManager:
             return prefixed_resources
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to get resources from server {server.name}: {e!s}")
+            verbose_logger.warning(f"Failed to get resources from server {server.name}: {e}")
             return []
 
     async def get_resource_templates_from_server(
@@ -3618,7 +3618,7 @@ class MCPServerManager:
             return prefixed_templates
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to get resource templates from server {server.name}: {e!s}")
+            verbose_logger.warning(f"Failed to get resource templates from server {server.name}: {e}")
             return []
 
     async def read_resource_from_server(
@@ -4215,10 +4215,10 @@ class MCPServerManager:
             verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
             raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
         except ConnectionError as e:
-            verbose_logger.warning(f"Connection error while listing tools from {server_name}: {e!s}")
+            verbose_logger.warning(f"Connection error while listing tools from {server_name}: {e}")
             raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e
         except Exception as e:
-            verbose_logger.warning(f"Error listing tools from {server_name}: {e!s}")
+            verbose_logger.warning(f"Error listing tools from {server_name}: {e}")
             raise_classified_list_failure(e, server_name)
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
@@ -4533,7 +4533,7 @@ class MCPServerManager:
             return result
 
         except Exception as e:
-            error_msg = f"Error calling OpenAPI tool {tool_name}: {e!s}"
+            error_msg = f"Error calling OpenAPI tool {tool_name}: {e}"
             verbose_logger.error(error_msg)
             return CallToolResult(
                 content=[TextContent(type="text", text=error_msg)],
@@ -4639,7 +4639,7 @@ class MCPServerManager:
             HTTPException,
         ) as e:
             # Re-raise guardrail exceptions to properly fail the MCP call
-            verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {e!s}")
+            verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {e}")
             raise e
 
         return hook_result
@@ -4995,7 +4995,7 @@ class MCPServerManager:
             GuardrailRaisedException,
             HTTPException,
         ) as e:
-            verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {e!s}")
+            verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {e}")
             raise e
 
         # If proxy_logging_obj is None, the tool call result is at index 0
@@ -5194,7 +5194,7 @@ class MCPServerManager:
             GuardrailRaisedException,
             HTTPException,
         ) as e:
-            verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {e!s}")
+            verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {e}")
             raise e
 
     async def call_tool(
@@ -5345,7 +5345,7 @@ class MCPServerManager:
                 asyncio.create_task(self._initialize_tool_name_to_mcp_server_name_mapping())
         except RuntimeError as e:  # no running event loop
             verbose_logger.exception(
-                f"No running event loop - skipping tool name to MCP server name mapping initialization: {e!s}"
+                f"No running event loop - skipping tool name to MCP server name mapping initialization: {e}"
             )
 
     async def _initialize_tool_name_to_mcp_server_name_mapping(self):
@@ -5364,12 +5364,12 @@ class MCPServerManager:
                 # at startup we have none, so an upstream 401 is normal.
                 # Swallow it so we keep mapping the remaining servers.
                 verbose_logger.debug(
-                    f"Skipping tool name mapping for server {server.name} due to upstream auth error: {e!s}"
+                    f"Skipping tool name mapping for server {server.name} due to upstream auth error: {e}"
                 )
                 continue
             except Exception as e:
                 verbose_logger.warning(
-                    f"Failed to get tools from server {server.name} during tool name mapping initialization: {e!s}"
+                    f"Failed to get tools from server {server.name} during tool name mapping initialization: {e}"
                 )
                 continue
             for tool in tools:
