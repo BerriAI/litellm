@@ -14,6 +14,7 @@ import litellm
 from litellm.models.credentials import CredentialAccess, CredentialInfo, CredentialItem
 from litellm.proxy.management_endpoints.logging_exporter_access import (
     access_grants,
+    destination_for_credential,
     identity_scope,
     is_logging_credential,
     parse_credential_info,
@@ -278,6 +279,37 @@ def test_resolved_names_excludes_unbuildable(monkeypatch):
         ],
     )
     assert resolved_logging_exporter_names("t1", None) == ("buildable-generic",)
+
+
+def test_backend_without_a_preset_routes_under_generic():
+    """Regression: a backend outside ``PRESET_BY_CALLBACK`` is routed as ``generic``.
+
+    Only a registered name gets an ``OpenTelemetryV2`` logger, and that logger is what
+    emits the gen-AI span to its destinations. Routing an unregistered name under itself
+    delivered the proxy-internal spans but never the LLM call. Registered names keep
+    their own routing so each backend's attribute vocabulary is preserved."""
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+
+    unknown = CredentialItem(
+        credential_name="self-hosted",
+        credential_values={"otel_endpoint": "http://collector.example/v1/traces"},
+        credential_info={"credential_type": "logging", "description": "honeycomb", "access": {"global": True}},
+    )
+    resolved = destination_for_credential(unknown)
+    assert resolved is not None
+    assert resolved[0] == "generic"
+    assert resolved[1].endpoint == "http://collector.example/v1/traces"
+
+    for registered in ("arize", "langfuse_otel", "generic"):
+        assert registered in PRESET_BY_CALLBACK
+    known = CredentialItem(
+        credential_name="lf",
+        credential_values={"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+        credential_info={"credential_type": "logging", "description": "langfuse_otel", "access": {"global": True}},
+    )
+    known_resolved = destination_for_credential(known)
+    assert known_resolved is not None
+    assert known_resolved[0] == "langfuse_otel"
 
 
 def test_resolved_names_keep_every_grant_sharing_one_target(monkeypatch):

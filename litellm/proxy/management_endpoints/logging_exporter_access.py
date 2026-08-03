@@ -116,7 +116,15 @@ def destination_for_credential(credential: CredentialItem) -> 'tuple[str, "OtelD
     ``build_destination`` accepts its values. Shared by the request-time resolver (which fans
     out to the built destinations) and the team/org disclosure (which must not advertise a
     destination that resolves to nothing), so the two cannot drift apart.
+
+    The returned backend is the name the span is routed under, which is the stored one only
+    when ``PRESET_BY_CALLBACK`` has it. A backend outside that registry gets no
+    ``OpenTelemetryV2`` logger, and the logger is what emits the gen-AI span to its
+    destinations, so routing an unregistered name under itself delivered the surrounding
+    trace without the LLM call. ``generic`` is the registered name for a plain OTLP
+    passthrough, which is what ``build_destination`` already fell back to for these.
     """
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
     from litellm.integrations.otel.presets.destinations import build_destination
 
     backend = (credential.credential_info or {}).get("description")
@@ -127,7 +135,9 @@ def destination_for_credential(credential: CredentialItem) -> 'tuple[str, "OtelD
     # the export (e.g. an empty ``otel_endpoint`` becoming the URL ``"None"``).
     values = {str(key): str(value) for key, value in (credential.credential_values or {}).items() if value is not None}
     destination = build_destination(backend, values)
-    return None if destination is None else (backend, destination)
+    if destination is None:
+        return None
+    return (backend if backend in PRESET_BY_CALLBACK else "generic", destination)
 
 
 def access_grants(
