@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import refresh_cached_project
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_helpers.utils import (
@@ -514,6 +515,8 @@ async def update_project(
         litellm_proxy_admin_name,
         premium_user,
         prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
     try:
@@ -671,6 +674,13 @@ async def update_project(
             data=update_data,
             include={"litellm_budget_table": True, "object_permission": True},
         )
+
+        if updated_project is not None:
+            await refresh_cached_project(
+                project_row=updated_project,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
         return updated_project
     except Exception as e:

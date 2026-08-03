@@ -864,3 +864,45 @@ def test_litellm_project_table_has_timestamp_fields():
     fields = LiteLLM_ProjectTable.model_fields
     assert "created_at" in fields, "LiteLLM_ProjectTable must have created_at field"
     assert "updated_at" in fields, "LiteLLM_ProjectTable must have updated_at field"
+
+
+@pytest.mark.asyncio
+async def test_update_project_refreshes_cached_project():
+    """`/project/update` must refresh the cached project object.
+
+    Auth resolves projects through `project_id:{project_id}` before reading the
+    DB, and `_run_project_checks` enforces `blocked`, `models` and the budget off
+    that cached object. Writing the row without refreshing the cache lets a
+    just-blocked project keep serving traffic, and keeps rejecting a project whose
+    access was just widened, until the entry expires.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm_enterprise.proxy.management_endpoints import project_endpoints
+
+    project_id = "project-cache-refresh"
+    existing = MagicMock(project_id=project_id, team_id=None, budget_id=None, object_permission_id=None)
+    updated = MagicMock(project_id=project_id)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as pc,
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch.object(project_endpoints, "refresh_cached_project", new=AsyncMock()) as mock_refresh,
+    ):
+        pc.db.litellm_projecttable.find_unique = AsyncMock(return_value=existing)
+        pc.db.litellm_projecttable.update = AsyncMock(return_value=updated)
+        pc.jsonify_object = MagicMock(side_effect=lambda data: data)
+
+        result = await update_project(
+            data=UpdateProjectRequest(project_id=project_id, blocked=True),
+            http_request=mock.Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    assert result is updated
+    assert pc.db.litellm_projecttable.update.call_args.kwargs["data"]["blocked"] is True
+    mock_refresh.assert_awaited_once()
+    assert mock_refresh.await_args.kwargs["project_row"] is updated
