@@ -5708,6 +5708,18 @@ def test_configured_credential_header_names_reads_env_and_general_settings(monke
     )
 
 
+def test_configured_credential_header_names_resolves_through_the_secret_manager():
+    """The header name can live in a secret manager, so env-only lookup would miss it."""
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    with patch.object(
+        pre_call_utils,
+        "get_secret_str",
+        side_effect=lambda key: "x-vault-mcp-auth" if "MCP" in key else None,
+    ):
+        assert pre_call_utils.configured_credential_header_names(None) == frozenset({"x-vault-mcp-auth"})
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_debug_log_does_not_print_credentials():
     """The request-header debug line carries values the stdout secret filter does not match."""

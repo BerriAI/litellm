@@ -1,7 +1,6 @@
 import asyncio
 import copy
 import json
-import os
 import re
 import time
 from collections import OrderedDict
@@ -53,6 +52,7 @@ _CREDENTIAL_HEADER_NAMES = SpecialHeaders.litellm_credential_header_names() | fr
     {"cookie", "proxy-authorization"}
 )
 _MCP_HEADER_PREFIX = "x-mcp-"
+_TRANSPORT_ONLY_CREDENTIAL_KEYS = frozenset({"provider_specific_header", "headers", "api_key"})
 _NON_CREDENTIAL_MCP_HEADERS = frozenset(
     {SpecialHeaders.mcp_servers.value.lower(), SpecialHeaders.mcp_access_groups.value.lower()}
 )
@@ -102,7 +102,7 @@ def _sanitize_for_log(value: Any) -> str:
 
 
 from litellm.router import Router
-from litellm.secret_managers.main import get_secret_bool
+from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -730,7 +730,7 @@ def configured_credential_header_names(general_settings: Mapping[str, Any] | Non
     name this deployment no longer uses is free, missing the one it does use is not.
     """
     candidates = (
-        os.environ.get("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME"),
+        get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME"),
         general_settings.get("mcp_client_side_auth_header_name") if general_settings else None,
     )
     return frozenset(name.lower() for name in candidates if isinstance(name, str) and name)
@@ -1642,13 +1642,7 @@ async def add_litellm_data_to_request(
     #     self-reference — body.proxy_server_request.body would be the same
     #     dict as body, producing an infinite traversal loop for any consumer
     #     that walks the structure.
-    #   - provider_specific_header, headers, api_key: the transport copies of the
-    #     credential headers preserved by clean_headers. They have to keep the real
-    #     values for the upstream request, so they are dropped from the snapshot
-    #     rather than masked.
-    _body_snapshot_exclude = frozenset(
-        {"secret_fields", "proxy_server_request", "provider_specific_header", "headers", "api_key"}
-    )
+    _body_snapshot_exclude = frozenset({"secret_fields", "proxy_server_request"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
     _body_snapshot = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     data["proxy_server_request"]["body"] = _body_snapshot
 
