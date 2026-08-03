@@ -1,7 +1,7 @@
 import re
 from copy import deepcopy
 from enum import Enum
-from typing import Any, Literal, List, get_type_hints
+from typing import Any, Literal, get_type_hints
 
 import httpx
 
@@ -495,7 +495,7 @@ def normalize_gemini_model_path(model: str) -> str:
     return f"models/{model}"
 
 
-def _check_text_in_content(parts: List[PartType]) -> bool:
+def _check_text_in_content(parts: list[PartType]) -> bool:
     """
     check that user_content has 'text' parameter.
         - Known Vertex Error: Unable to submit request because it must have a text parameter.
