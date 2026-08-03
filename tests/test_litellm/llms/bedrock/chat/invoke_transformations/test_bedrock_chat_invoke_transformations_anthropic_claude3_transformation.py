@@ -550,9 +550,9 @@ def test_output_format_removed_from_bedrock_invoke_request():
 class TestBedrockInvokeCacheControlSanitization:
     """Regression tests for https://github.com/BerriAI/litellm/issues/34248."""
 
-    def _transform(self, model: str) -> dict:
+    def _transform(self, model: str, ttl: str = "1h") -> dict:
         config = AmazonAnthropicClaudeConfig()
-        cache_control = {"type": "ephemeral", "ttl": "1h", "scope": "global"}
+        cache_control = {"type": "ephemeral", "ttl": ttl, "scope": "global"}
         messages = [
             {
                 "role": "system",
@@ -600,6 +600,12 @@ class TestBedrockInvokeCacheControlSanitization:
         request = self._transform("anthropic.claude-sonnet-4-5-20250929-v1:0")
         for cache_control in self._cache_control_blocks(request):
             assert cache_control == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_invalid_ttl_stripped_even_for_extended_ttl_model(self):
+        """Only 5m and 1h are valid ttl values, so anything else is stripped even on Claude 4.5."""
+        request = self._transform("anthropic.claude-sonnet-4-5-20250929-v1:0", ttl="2h")
+        for cache_control in self._cache_control_blocks(request):
+            assert cache_control == {"type": "ephemeral"}
 
     def test_scope_stripped_for_both_model_classes(self):
         """Bedrock never accepts scope in cache_control, regardless of model."""
