@@ -74,13 +74,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         kwargs.setdefault("guardrail_name", "rubrik")
         # `initialize_guardrail` always passes these kwargs explicitly, with
         # value `None` when the user omits `mode` / `default_on` from the
-        # guardrail config. Coerce None (omitted) to the desired default
-        # while preserving any explicit value the caller did set --
-        # in particular `default_on=False` if the user wants the guardrail
-        # off by default.
+        # guardrail config. Follow the standard litellm convention: omitted
+        # resolves to False (off by default, user must opt in explicitly).
         kwargs["event_hook"] = kwargs.get("event_hook") or GuardrailEventHooks.post_call
         if kwargs.get("default_on") is None:
-            kwargs["default_on"] = True
+            kwargs["default_on"] = False
         super().__init__(
             flush_lock=self.flush_lock,
             supported_event_hooks=list(self.get_supported_event_hooks()),
