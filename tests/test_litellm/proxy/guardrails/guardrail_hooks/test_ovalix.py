@@ -771,9 +771,9 @@ async def test_discovery_extracts_name_and_resolves():
     mock_get, mock_post = _mock_handler(g)
     routing = await g._resolve_routing(_alias_request_data("[Weather App] prod"))
     assert routing.application_id == "app-9"
-    assert mock_post.call_args.args[0].endswith("/tracking/litellm/resolve_application")
+    assert mock_post.call_args.args[0].endswith("/tracking/beta/resolve_application")
     assert mock_post.call_args.kwargs["json"] == {"application_name": "Weather App"}
-    assert mock_get.call_args.args[0].endswith("/tracking/litellm/app_name_regex")
+    assert mock_get.call_args.args[0].endswith("/tracking/beta/app_name_regex")
 
 
 @pytest.mark.asyncio
@@ -961,7 +961,7 @@ async def test_file_checkpoint_call_routes_to_litellm_file_endpoint():
 
     with patch.object(g._async_handler, "post", new=_post):
         await g._call_checkpoint("FILE", {"name": "f.txt", "content": "x"}, "file-1", "a", "s", "app-1")
-    assert seen["url"] == "https://t/tracking/litellm/file_checkpoint"
+    assert seen["url"] == "https://t/tracking/beta/file_checkpoint"
 
 
 @pytest.mark.asyncio

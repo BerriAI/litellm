@@ -168,6 +168,7 @@ class OvalixGuardrail(CustomGuardrail):
                 MappingProxyType(
                     {
                         "Authorization": f"Bearer {self._tracker_api_key}",
+                        "x-api-key": self._tracker_api_key or "",
                         "Content-Type": "application/json",
                     }
                 ),
@@ -248,7 +249,7 @@ class OvalixGuardrail(CustomGuardrail):
             raise ValueError("Ovalix: application_id or checkpoint_id not resolved")
 
         url = (
-            f"{self._tracker_api_base}/tracking/litellm/file_checkpoint"
+            f"{self._tracker_api_base}/tracking/beta/file_checkpoint"
             if data_type == "FILE"
             else f"{self._tracker_api_base}/tracking/custom_application/checkpoint"
         )
@@ -494,7 +495,7 @@ class OvalixGuardrail(CustomGuardrail):
     async def _get_app_name_regex(self) -> re.Pattern[str]:
         if self._app_name_regex is not None:
             return self._app_name_regex
-        url = f"{self._tracker_api_base}/tracking/litellm/app_name_regex"
+        url = f"{self._tracker_api_base}/tracking/beta/app_name_regex"
         try:
             response = await self._async_handler.get(url, headers=self._tracker_headers)
             response.raise_for_status()
@@ -581,7 +582,7 @@ class OvalixGuardrail(CustomGuardrail):
         return routing
 
     async def _resolve_via_tracker(self, application_name: str) -> ResolvedRouting | None:
-        url = f"{self._tracker_api_base}/tracking/litellm/resolve_application"
+        url = f"{self._tracker_api_base}/tracking/beta/resolve_application"
         try:
             response = await self._async_handler.post(
                 url, headers=self._tracker_headers, json={"application_name": application_name}
