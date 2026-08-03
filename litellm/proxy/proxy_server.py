@@ -3859,10 +3859,10 @@ class ProxyConfig:
         )
 
         self.model_cost_map_loaded_at: datetime = get_model_cost_map_loaded_at() or utc_now()
-        # Seeded from the row at startup, as close as possible to the boot-time fetch above,
-        # so a request published while this pod was starting is not mistaken for one its own
-        # data already satisfies. None only if that read never happened or failed
-        self.model_cost_map_applied_revision: int | None = None
+        # Starts unapplied rather than adopting the published revision: this pod cannot tell
+        # whether an existing request predates the prices it just fetched, and re-serving one
+        # costs a single fetch where skipping one leaves it priced wrong indefinitely
+        self.model_cost_map_applied_revision: int = 0
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -6471,21 +6471,6 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
 
-    async def seed_model_cost_map_revision(self, prisma_client: PrismaClient) -> None:
-        """
-        Adopt the currently published revision once at startup, before the periodic job runs.
-
-        Without this the first poll adopts whatever it finds, so a manual reload published
-        while this pod was starting would be marked applied without ever being served, and
-        the pod would keep the prices it fetched at import. A missing row means nobody has
-        ever requested a reload, which is revision 0.
-        """
-        try:
-            schedule = await read_reload_schedule(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME)
-            self.model_cost_map_applied_revision = schedule.reload_revision if schedule is not None else 0
-        except Exception as e:
-            verbose_proxy_logger.exception(f"Error seeding model cost map reload revision: {str(e)}")
-
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """
         Check if model cost map needs to be reloaded based on database configuration.
@@ -8163,7 +8148,6 @@ class ProxyStartupEvent:
             config_reload_interval_seconds = 30
 
         ### PERIODIC RELOADS (model cost map, anthropic beta headers) ###
-        await proxy_config.seed_model_cost_map_revision(prisma_client)
         scheduler.add_job(
             proxy_config.check_periodic_reloads,
             "interval",

@@ -9,8 +9,10 @@ reload job and the manual reload endpoints own the dedicated ``last_run_at`` /
 so the Admin UI still reports the last execution after a restart and across pods.
 ``reload_revision`` is a monotonic counter a manual reload increments; each pod records
 the revision it last applied and reloads whenever the row's differs, so a request reaches
-every pod exactly once without any pod clearing it and without comparing clocks. Interval
-reloads stay per-pod, driven by when that pod's own copy of the data was loaded.
+every pod exactly once without any pod clearing it and without comparing clocks. A booting
+pod starts at revision 0 rather than adopting the published one, because it cannot know
+whether that request predates the prices it fetched at import. Interval reloads stay
+per-pod, driven by when that pod's own copy of the data was loaded.
 """
 
 from collections.abc import Mapping
@@ -130,20 +132,20 @@ def reload_schedule_status(schedule: ReloadSchedule | None) -> ReloadScheduleSta
 def pod_reload_is_due(
     *,
     schedule: ReloadSchedule,
-    pod_applied_revision: int | None,
+    pod_applied_revision: int,
     pod_data_loaded_at: datetime,
     current_time: datetime,
     description: str,
 ) -> bool:
     """
     Whether this pod should reload now. A revision it has not applied means a manual reload
-    it has not served; ``pod_applied_revision`` is normally seeded at startup, and is None
-    only if that read failed, in which case the pod adopts rather than re-serving a request
-    its boot-time data may already satisfy. Interval reloads compare against this pod's own
-    data, and a schedule that has never run anywhere fires immediately rather than one
+    it has not served. A pod starts at revision 0, so it serves any request published before
+    it booted; that costs one redundant fetch per boot and is what keeps a request from being
+    marked applied against data fetched before it. Interval reloads compare against this pod's
+    own data, and a schedule that has never run anywhere fires immediately rather than one
     interval later
     """
-    if pod_applied_revision is not None and schedule.reload_revision != pod_applied_revision:
+    if schedule.reload_revision != pod_applied_revision:
         verbose_proxy_logger.info("%s reload triggered by manual reload request", description)
         return True
     if schedule.interval_hours is None:

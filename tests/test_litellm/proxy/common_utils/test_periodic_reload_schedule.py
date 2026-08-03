@@ -103,8 +103,7 @@ def test_next_run_needs_both_interval_and_last_run():
         (ReloadSchedule(reload_revision=4), 3, NOW, True),
         (ReloadSchedule(interval_hours=6, reload_revision=4, last_run_at=LAST_RUN), 3, NOW, True),
         (ReloadSchedule(reload_revision=3), 3, LAST_RUN, False),
-        (ReloadSchedule(reload_revision=4), None, LAST_RUN, False),
-        (ReloadSchedule(interval_hours=6, reload_revision=4), None, NOW, True),
+        (ReloadSchedule(reload_revision=4), 0, LAST_RUN, True),
         (ReloadSchedule(), 0, LAST_RUN, False),
         (ReloadSchedule(interval_hours=6), 0, datetime(2024, 1, 1, 11, 59, tzinfo=timezone.utc), True),
         (
@@ -150,18 +149,19 @@ def test_manual_request_is_identified_not_ordered():
     assert (unapplied, applied) == (True, False)
 
 
-def test_pod_without_a_seeded_revision_adopts_without_reloading():
-    """Fallback when the startup seed failed: the pod cannot tell whether its boot-time data
-    already satisfies the request, and re-serving one every restart is the worse guess"""
+def test_booting_pod_serves_a_request_it_cannot_prove_it_already_has():
+    """A pod that just booted cannot tell whether an outstanding request predates the prices
+    it fetched at import, so it serves it. Adopting instead would strand it on stale prices
+    with no interval configured to rescue it"""
     assert (
         pod_reload_is_due(
             schedule=ReloadSchedule(reload_revision=12),
-            pod_applied_revision=None,
+            pod_applied_revision=0,
             pod_data_loaded_at=NOW,
             current_time=NOW,
             description="test",
         )
-        is False
+        is True
     )
 
 

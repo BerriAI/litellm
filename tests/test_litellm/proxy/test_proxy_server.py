@@ -759,9 +759,7 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypatch):
     """
     Regression (LIT-4882): reload schedules configured from the Admin UI live in the DB and
-    must fire even without store_model_in_db, which used to gate the job that ran them.
-    The pod's revision baseline is seeded before the job can tick, so its first poll cannot
-    swallow a request published while the pod was starting
+    must fire even without store_model_in_db, which used to gate the job that ran them
     """
     monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
@@ -795,7 +793,6 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
 
         assert scheduler.get_job("periodic_reload_job") is not None
         assert scheduler.get_job("add_deployment_job") is None
-        mock_proxy_config.seed_model_cost_map_revision.assert_awaited_once_with(mock_prisma_client)
     finally:
         scheduler.shutdown(wait=False)
 
@@ -4161,11 +4158,16 @@ class TestPriceDataReloadIntegration:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
 
-    def test_startup_seed_lets_a_boot_race_request_through(self):
+    @pytest.mark.parametrize(
+        "published_revision, expect_reload",
+        [(4, True), (0, False)],
+    )
+    def test_booting_pod_serves_an_outstanding_request_once(self, published_revision, expect_reload):
         """
-        Regression: a manual reload published after this pod started must still be served.
-        Seeding the applied revision at startup is the only thing that distinguishes it
-        from a request the pod's own boot-time fetch already satisfied
+        Regression: a manual reload published while this pod was starting must still be
+        served. The pod cannot prove its import-time fetch already covers that request, so
+        it applies it on the first poll and adopts the revision, leaving later polls quiet.
+        A row nobody has ever reloaded (revision 0) costs the pod nothing
         """
         from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4174,12 +4176,10 @@ class TestPriceDataReloadIntegration:
         proxy_config.model_cost_map_loaded_at = frozen_now
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=4))
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row({}, reload_revision=published_revision)
+        )
 
-        asyncio.run(proxy_config.seed_model_cost_map_revision(mock_prisma))
-        assert proxy_config.model_cost_map_applied_revision == 4
-
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=5))
         original_model_cost = litellm.model_cost.copy()
         try:
             with (
@@ -4189,38 +4189,13 @@ class TestPriceDataReloadIntegration:
                 mock_get_map.return_value = {"gpt-4": {"input_cost_per_token": 0.001}}
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
-                mock_get_map.assert_called_once()
-                assert proxy_config.model_cost_map_applied_revision == 5
+                assert mock_get_map.call_count == (1 if expect_reload else 0)
+                assert proxy_config.model_cost_map_applied_revision == published_revision
         finally:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
-
-    def test_startup_seed_treats_a_missing_row_as_never_requested(self):
-        """No row means nobody has ever asked for a reload, so the seed is 0; leaving it
-        unset would make the very first request adopted-but-never-served on this pod"""
-        from litellm.proxy.proxy_server import ProxyConfig
-
-        proxy_config = ProxyConfig()
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
-
-        asyncio.run(proxy_config.seed_model_cost_map_revision(mock_prisma))
-
-        assert proxy_config.model_cost_map_applied_revision == 0
-
-    def test_startup_seed_failure_does_not_block_startup(self):
-        """A database hiccup at boot must not take the proxy down; the pod falls back to
-        adopting on its first poll, which is the pre-seed behavior"""
-        from litellm.proxy.proxy_server import ProxyConfig
-
-        proxy_config = ProxyConfig()
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(side_effect=Exception("connection refused"))
-
-        asyncio.run(proxy_config.seed_model_cost_map_revision(mock_prisma))
-
-        assert proxy_config.model_cost_map_applied_revision is None
 
     def test_distributed_reload_stamps_last_run_without_creating_row(self):
         """
