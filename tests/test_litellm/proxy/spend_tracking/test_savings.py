@@ -8,7 +8,6 @@ import pytest
 import litellm
 from litellm.router import Router
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.router_strategy.savings_baseline import Baseline
 from litellm.proxy.spend_tracking.savings import (
     _baseline_usage,
     compute_autorouter_savings,
@@ -139,7 +138,7 @@ def _savings(baseline: str, selected: str, usage: Usage, continuing: bool = True
     conversation's first turn, where nothing was cached for any model.
     """
     return compute_autorouter_savings(
-        baseline=Baseline(baseline),
+        baseline_model=baseline,
         selected_model=selected,
         selected_provider="anthropic",
         usage=usage,
@@ -298,19 +297,34 @@ def test_autorouter_savings_zero_without_baseline():
     assert result.autorouter == 0.0
 
 
-def test_compute_savings_spend_carries_a_losing_switch_through():
+def test_compute_savings_spend_carries_a_losing_switch_through(monkeypatch):
     """The signed value must survive into SavingsSpend; clamping it here would put the
     dashboard back to only ever showing gains."""
+    monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-sonnet-5")
     result = compute_savings_spend(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
         cache_read_input_tokens=0,
-        routing_decision={"savings_baseline_candidates": ["dear"]},
+        routing_decision={"conversation_continuing": True},
         usage_object=_cached_usage_object(),
-        llm_router=Router(model_list=[{"model_name": "dear", "litellm_params": {"model": "claude-sonnet-5"}}]),
     )
     assert result.autorouter < 0
+
+
+def test_the_driver_is_off_until_a_baseline_is_configured():
+    """No configured counterfactual means there is nothing to measure against, so the
+    driver reports zero rather than inventing a model the operator never named."""
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=1000,
+        cache_read_input_tokens=0,
+        routing_decision={"conversation_continuing": True},
+        usage_object=_cached_usage_object(),
+    )
+    assert result.autorouter == 0.0
+    assert result.compression > 0, "the other drivers keep working"
 
 
 def test_malformed_usage_object_does_not_fail_the_spend_write():
@@ -321,7 +335,7 @@ def test_malformed_usage_object_does_not_fail_the_spend_write():
         custom_llm_provider="anthropic",
         compression_saved_tokens=1000,
         cache_read_input_tokens=0,
-        routing_decision={"savings_baseline_candidates": ["claude-opus-5"]},
+        routing_decision={"conversation_continuing": True},
         usage_object={"prompt_tokens": ["not", "a", "number"]},
     )
     assert result.autorouter == 0.0
@@ -362,13 +376,13 @@ def test_baseline_is_priced_under_its_own_provider():
     decides whether routing reads as a saving or a loss."""
     usage = Usage(prompt_tokens=100_000, completion_tokens=10_000, total_tokens=110_000)
     azure = compute_autorouter_savings(
-        baseline=Baseline("azure_ai/deepseek-r1"),
+        baseline_model="azure_ai/deepseek-r1",
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
         usage=usage,
     )
     deepseek = compute_autorouter_savings(
-        baseline=Baseline("deepseek/deepseek-r1"),
+        baseline_model="deepseek/deepseek-r1",
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
         usage=usage,
@@ -419,7 +433,7 @@ def test_an_undetermined_conversation_shape_stays_conservative():
     """
     usage = _usage(fresh=0, cached=0, written=20_000, out=1_000)
     defaulted = compute_autorouter_savings(
-        baseline=Baseline("anthropic/claude-opus-5"),
+        baseline_model="anthropic/claude-opus-5",
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
         usage=usage,

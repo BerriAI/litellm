@@ -392,7 +392,6 @@ class ComplexityRouter(CustomLogger):
         litellm_router_instance: Router,
         complexity_router_config: dict[str, Any] | None = None,
         default_model: str | None = None,
-        savings_baseline_model: str | None = None,
     ):
         """
         Initialize ComplexityRouter.
@@ -405,7 +404,6 @@ class ComplexityRouter(CustomLogger):
         """
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
-        self.configured_savings_baseline_model: str | None = savings_baseline_model
 
         # Parse config - always create a new instance to avoid singleton mutation
         if complexity_router_config:
@@ -452,34 +450,6 @@ class ComplexityRouter(CustomLogger):
         self._adaptive_init_attempted = False
 
         verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
-
-    def _hardest_tier_models(self) -> tuple[str, ...]:
-        """The model or pool serving the hardest tier this router configures.
-
-        REASONING when it is configured, since that is the tier a request has to be
-        hard enough to reach; otherwise the highest-severity tier present, so a
-        deployment that only defines SIMPLE and MEDIUM is still measured against
-        the best it could actually have picked.
-        """
-        for tier in reversed(TIER_SEVERITY_ORDER):
-            models = self.config.tiers.get(tier.value)
-            if models:
-                return tuple(models) if isinstance(models, list) else (models,)
-        return ()
-
-    @property
-    def savings_baseline_candidates(self) -> tuple[str, ...]:
-        """What this router's savings could be measured against.
-
-        The tier ladder already names what an operator would have had to run to serve
-        the hardest request, so the counterfactual comes from that tier rather than from
-        everything the router can reach; a cheap tier is a choice the router made, not a
-        ceiling it was bounded by. Which of them is dearest is not decided here: that
-        depends on the request's token mix, which does not exist until it has been
-        served, so the candidates travel and the spend path picks between them.
-        """
-        configured = self.configured_savings_baseline_model
-        return (configured,) if configured else self._hardest_tier_models()
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -720,9 +690,6 @@ class ComplexityRouter(CustomLogger):
             cause=cause,
             conversation_continuing=conversation_continuing,
         )
-        candidates = self.savings_baseline_candidates
-        if candidates:
-            decision["savings_baseline_candidates"] = candidates
         if tier is not None:
             decision["tier"] = tier.value
         if score is not None:

@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, NamedTuple
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.router_strategy.savings_baseline import Baseline
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -94,19 +93,6 @@ def _effective_model_info(router: "Router | None", deployment_id: str | None, mo
         return router.get_deployment_model_info(deployment_id, model)
     except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail the spend write
         verbose_proxy_logger.debug("savings: no deployment pricing for %s (%s)", model, e)
-        return None
-
-
-def _resolve_baseline_for(router: "Router | None", candidates: object, baseline_usage: Usage) -> "Baseline | None":
-    """The dearest candidate for this request, or ``None`` when none can be priced."""
-    if router is None or not isinstance(candidates, (list, tuple)) or not candidates:
-        return None
-    try:
-        from litellm.router_strategy.savings_baseline import resolve_baseline
-
-        return resolve_baseline(router, [str(c) for c in candidates], baseline_usage)
-    except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail the spend write
-        verbose_proxy_logger.debug("savings: could not resolve a baseline (%s)", e)
         return None
 
 
@@ -196,13 +182,12 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool) -> Usage:
 
 
 def compute_autorouter_savings(
-    baseline: "Baseline | None",
+    baseline_model: str | None,
     selected_model: str | None,
     selected_provider: str | None,
     usage: Usage,
     conversation_continuing: bool = True,
     selected_info: ModelInfo | None = None,
-    router: "Router | None" = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
 
@@ -220,18 +205,17 @@ def compute_autorouter_savings(
     # No provider argument for the baseline on purpose: it arrives from the routing
     # metadata as a single self-describing string, already qualified by the auto-router,
     # so there is no second field that could disagree with it.
-    baseline_identity = _resolve_model(baseline.model if baseline else None, None)
+    baseline = _resolve_model(baseline_model, None)
     selected = _resolve_model(selected_model, selected_provider)
-    if baseline is None or baseline_identity is None or selected is None:
+    if baseline is None or selected is None:
         return 0.0
     # Same model is only the same cost when it is also the same deployment. Two
     # deployments of one model can carry different negotiated rates, and routing from
     # the dear one to the cheap one is a real saving that short-circuiting on the model
     # name alone reports as zero.
-    baseline_info = _effective_model_info(router, baseline.deployment_id, baseline.model)
-    if baseline_identity == selected and baseline_info == selected_info:
+    if baseline == selected:
         return 0.0
-    baseline_cost = _cost_of_usage(baseline_identity, _baseline_usage(usage, conversation_continuing), baseline_info)
+    baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage, conversation_continuing))
     selected_cost = _cost_of_usage(selected, usage, selected_info)
     if baseline_cost is None or selected_cost is None:
         return 0.0
@@ -281,23 +265,22 @@ def compute_savings_spend(
     if usage is None or not model:
         return SavingsSpend(compression=compression, prompt_caching=prompt_caching)
 
+    # The counterfactual is one model an operator would have run instead of the router,
+    # configured once for the proxy rather than derived per request. Unset means the
+    # driver is off; a routing decision is what says this request was auto-routed at all.
     decision = routing_decision if isinstance(routing_decision, Mapping) else {}
-    # Which candidate is dearest depends on this request's token mix, so the baseline is
-    # picked here, against the usage that actually happened, rather than in the routing
-    # hook against a stand-in for it.
-    candidates = decision.get("savings_baseline_candidates")
-    baseline = _resolve_baseline_for(
-        llm_router, candidates, _baseline_usage(usage, decision.get("conversation_continuing") is not False)
-    )
-    autorouter = compute_autorouter_savings(
-        baseline=baseline,
-        selected_model=model,
-        selected_provider=custom_llm_provider,
-        usage=usage,
-        # Absent means the router never recorded a shape, which is the conservative
-        # reading: charge the cache write rather than claim a first turn's saving.
-        conversation_continuing=decision.get("conversation_continuing") is not False,
-        selected_info=_effective_model_info(llm_router, model_id, model or ""),
-        router=llm_router,
+    autorouter = (
+        compute_autorouter_savings(
+            baseline_model=litellm.autorouter_savings_baseline_model,
+            selected_model=model,
+            selected_provider=custom_llm_provider,
+            usage=usage,
+            # Absent means the router never recorded a shape, which is the conservative
+            # reading: charge the cache write rather than claim a first turn's saving.
+            conversation_continuing=decision.get("conversation_continuing") is not False,
+            selected_info=_effective_model_info(llm_router, model_id, model or ""),
+        )
+        if decision
+        else 0.0
     )
     return SavingsSpend(compression=compression, prompt_caching=prompt_caching, autorouter=autorouter)
