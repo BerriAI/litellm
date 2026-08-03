@@ -1,3 +1,4 @@
+/* eslint-disable no-restricted-imports -- Ant Design theme tokens for remaining antd widgets until migration completes */
 import { theme, ThemeConfig } from "antd";
 
 export const darkModeColors = {
