@@ -4465,6 +4465,7 @@ class Router:
 
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
         function_name = "_ageneric_api_call_with_fallbacks"
+        deployment = None
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             try:
@@ -4543,6 +4544,9 @@ class Router:
             verbose_router_logger.info(f"ageneric_api_call_with_fallbacks(model={model})\033[31m Exception {e}\033[0m")
             if model is not None:
                 self.fail_calls[model] += 1
+            if deployment is not None:
+                self._set_deployment_num_retries_on_exception(e, deployment)
+                self._set_failed_deployment_id_on_exception(e, deployment)
             raise e
 
     async def _aresponses_with_streaming_fallbacks(
