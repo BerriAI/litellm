@@ -3983,6 +3983,19 @@ def test_is_within_off_peak_window_multiple_windows():
     assert _is_within_off_peak_window([], datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)) is False
 
 
+def test_is_within_off_peak_window_normalizes_timezone_aware_input():
+    from datetime import datetime, timedelta, timezone
+
+    # A caller may pass a non-UTC aware datetime; the window is UTC and must be
+    # evaluated in UTC, not against the caller's wall-clock. 09:00 at UTC+8 is
+    # 01:00 UTC, inside the 01:00-05:00 window.
+    tz_plus_8 = timezone(timedelta(hours=8))
+    assert _is_within_off_peak_window("01:00-05:00", datetime(2026, 1, 1, 9, 0, tzinfo=tz_plus_8)) is True
+    assert _is_within_off_peak_window("01:00-05:00", datetime(2026, 1, 1, 12, 0, tzinfo=tz_plus_8)) is True
+    # 06:00 at UTC+8 is 22:00 UTC the previous day, outside the window
+    assert _is_within_off_peak_window("01:00-05:00", datetime(2026, 1, 1, 6, 0, tzinfo=tz_plus_8)) is False
+
+
 def test_is_within_off_peak_window_malformed_returns_false():
     from datetime import datetime, timezone
 
