@@ -1,12 +1,12 @@
 {
   "reportAny": {
-    "limit": 29813
+    "limit": 29808
   },
   "reportArgumentType": {
     "limit": 2645
   },
   "reportAssignmentType": {
-    "limit": 329
+    "limit": 328
   },
   "reportAttributeAccessIssue": {
     "limit": 516
@@ -21,10 +21,10 @@
     "limit": 325
   },
   "reportDuplicateImport": {
-    "limit": 42
+    "limit": 34
   },
   "reportExplicitAny": {
-    "limit": 9473
+    "limit": 9470
   },
   "reportFunctionMemberAccess": {
     "limit": 11
@@ -114,7 +114,7 @@
     "limit": 31978
   },
   "reportUnnecessaryCast": {
-    "limit": 177
+    "limit": 176
   },
   "reportUnnecessaryComparison": {
     "limit": 1021
@@ -138,7 +138,7 @@
     "limit": 204
   },
   "reportUnusedImport": {
-    "limit": 1003
+    "limit": 997
   },
   "reportUnusedVariable": {
     "limit": 1297

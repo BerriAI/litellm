@@ -24,7 +24,7 @@
     "limit": 130
   },
   "ANN401": {
-    "limit": 1851
+    "limit": 1847
   },
   "ASYNC230": {
     "limit": 14
@@ -222,7 +222,7 @@
     "limit": 0
   },
   "RET504": {
-    "limit": 702
+    "limit": 701
   },
   "RUF010": {
     "limit": 0
@@ -264,7 +264,7 @@
     "limit": 61
   },
   "SIM102": {
-    "limit": 324
+    "limit": 323
   },
   "SIM103": {
     "limit": 129
