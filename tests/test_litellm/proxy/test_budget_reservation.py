@@ -2585,3 +2585,48 @@ async def test_team_member_budget_counter_skipped_for_project_scoped_key():
         user_api_key_cache=cache,
     )
     assert counter is None
+
+
+@pytest.mark.asyncio
+async def test_project_budget_counter_reserved_for_project_scoped_key():
+    """Project-scoped keys must reserve against the project budget so
+    concurrent requests cannot collectively race past it."""
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        _get_project_budget_counter,
+    )
+
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(
+        return_value={
+            "project_id": "project-1",
+            "spend": 0.4,
+            "litellm_budget_table": {"max_budget": 10.0},
+        }
+    )
+
+    counter = await _get_project_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", project_id="project-1"),
+        user_api_key_cache=cache,
+    )
+
+    assert counter is not None
+    assert counter.counter_key == "spend:project:project-1"
+    assert counter.source_cache_key == "project_id:project-1"
+    assert counter.max_budget == 10.0
+    assert counter.fallback_spend == 0.4
+    assert counter.entity_type == "Project"
+
+    counter = await _get_project_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed"),
+        user_api_key_cache=cache,
+    )
+    assert counter is None
+
+    cache.async_get_cache = AsyncMock(
+        return_value={"project_id": "project-1", "spend": 0.4, "litellm_budget_table": None}
+    )
+    counter = await _get_project_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", project_id="project-1"),
+        user_api_key_cache=cache,
+    )
+    assert counter is None

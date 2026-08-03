@@ -533,6 +533,7 @@ async def _update_database_and_spend_counters(
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,
             tags=request_tags,
+            project_id=project_id,
         )
     except Exception:
         if budget_reservation is not None:

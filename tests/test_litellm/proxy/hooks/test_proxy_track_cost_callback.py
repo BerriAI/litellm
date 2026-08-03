@@ -474,6 +474,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         budget_reservation=budget_reservation,
         end_user_id="test_end_user_id",
         tags=["tag-a"],
+        project_id=None,
     )
 
 
