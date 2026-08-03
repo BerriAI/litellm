@@ -4,18 +4,24 @@ from typing import Optional
 from unittest.mock import patch
 
 import pytest
+from packaging.requirements import Requirement
 
 from litellm.proxy.client.cli.commands.autoroute import process as process_module
 from litellm.proxy.client.cli.commands.autoroute.process import (
+    CommandResult,
     PidRecord,
     ProcessLaunchError,
+    ProxyRuntimeInstallError,
     UpError,
     clear_pid_record,
+    find_uv,
+    install_proxy_runtime,
     is_port_available,
     is_running,
     launch_proxy,
     missing_proxy_runtime_modules,
     poll_liveliness,
+    proxy_extra_requirements,
     read_pid_record,
     write_pid_record,
 )
@@ -165,3 +171,128 @@ class TestMissingProxyRuntimeModules:
         monkeypatch.setattr(process_module, "_PROXY_RUNTIME_MODULES", ("os", "socket"))
 
         assert missing_proxy_runtime_modules() == ()
+
+
+class TestProxyExtraRequirements:
+    def test_returns_pinned_proxy_deps_without_litellm_or_markers(self):
+        """`up` installs these on demand, so they must be litellm's real proxy dependencies with
+        their version pins intact, must never include litellm itself (that would swap the running
+        install), and must carry no environment markers (they are dropped so the win32-guarded
+        entries still install on the macOS/Linux hosts the CLI supports)."""
+        reqs = proxy_extra_requirements()
+
+        names = {Requirement(r).name for r in reqs}
+        assert {"fastapi", "uvicorn", "apscheduler", "backoff", "orjson", "websockets"} <= names
+        assert "litellm" not in names
+        assert all(str(Requirement(r).specifier) for r in reqs)
+        assert all(";" not in r for r in reqs)
+
+
+class TestFindUv:
+    def test_prefers_uv_on_path(self, monkeypatch):
+        monkeypatch.setattr(process_module.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+
+        assert find_uv() == "/usr/bin/uv"
+
+    def test_falls_back_to_the_installers_local_bin_path(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(process_module.shutil, "which", lambda name: None)
+        uv_path = tmp_path / ".local" / "bin" / "uv"
+        uv_path.parent.mkdir(parents=True)
+        uv_path.write_text("#!/bin/sh\n")
+        uv_path.chmod(0o755)
+        monkeypatch.setattr(process_module.Path, "home", lambda: tmp_path)
+
+        assert find_uv() == str(uv_path)
+
+    def test_returns_none_when_uv_absent_everywhere(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(process_module.shutil, "which", lambda name: None)
+        monkeypatch.setattr(process_module.Path, "home", lambda: tmp_path)
+
+        assert find_uv() is None
+
+
+class TestRunUvInstall:
+    def test_targets_the_current_interpreter_and_never_reinstalls_litellm(self, monkeypatch):
+        """The install must land in the interpreter running `lite` (so the proxy subprocess sees it)
+        and pass only the extra's deps -- passing `litellm` would let uv resolve a different version
+        over the installed (possibly branch/QA) one."""
+        captured = {}
+
+        class _Completed:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        def _fake_run(argv, capture_output, text):
+            captured["argv"] = argv
+            return _Completed()
+
+        monkeypatch.setattr(process_module.subprocess, "run", _fake_run)
+
+        result = process_module._run_uv_install("/bin/uv", ("fastapi>=1", "uvicorn>=1"))
+
+        assert result == CommandResult(returncode=0, output="ok")
+        assert captured["argv"] == [
+            "/bin/uv",
+            "pip",
+            "install",
+            "--python",
+            process_module.sys.executable,
+            "fastapi>=1",
+            "uvicorn>=1",
+        ]
+        assert "litellm" not in captured["argv"][5:]
+
+    def test_prefers_stderr_when_the_command_fails(self, monkeypatch):
+        class _Completed:
+            returncode = 1
+            stdout = "some stdout"
+            stderr = "the real error"
+
+        monkeypatch.setattr(process_module.subprocess, "run", lambda argv, capture_output, text: _Completed())
+
+        assert process_module._run_uv_install("/bin/uv", ("fastapi>=1",)) == CommandResult(
+            returncode=1, output="the real error"
+        )
+
+
+class TestInstallProxyRuntime:
+    def test_raises_when_uv_is_missing(self):
+        with pytest.raises(ProxyRuntimeInstallError) as excinfo:
+            install_proxy_runtime(find_uv_bin=lambda: None)
+
+        assert "litellm[proxy]" in str(excinfo.value)
+
+    def test_raises_when_no_proxy_requirements_are_found(self):
+        with pytest.raises(ProxyRuntimeInstallError) as excinfo:
+            install_proxy_runtime(find_uv_bin=lambda: "/bin/uv", requirements=lambda: ())
+
+        assert "metadata" in str(excinfo.value)
+
+    def test_raises_with_the_command_output_when_install_fails(self):
+        def _run(uv, reqs):
+            return CommandResult(returncode=1, output="network is unreachable")
+
+        with pytest.raises(ProxyRuntimeInstallError) as excinfo:
+            install_proxy_runtime(
+                find_uv_bin=lambda: "/bin/uv",
+                requirements=lambda: ("fastapi>=1",),
+                run_install=_run,
+            )
+
+        assert "network is unreachable" in str(excinfo.value)
+
+    def test_installs_the_discovered_requirements_with_the_found_uv(self):
+        calls = []
+
+        def _run(uv, reqs):
+            calls.append((uv, reqs))
+            return CommandResult(returncode=0, output="")
+
+        install_proxy_runtime(
+            find_uv_bin=lambda: "/bin/uv",
+            requirements=lambda: ("fastapi>=1", "uvicorn>=1"),
+            run_install=_run,
+        )
+
+        assert calls == [("/bin/uv", ("fastapi>=1", "uvicorn>=1"))]
