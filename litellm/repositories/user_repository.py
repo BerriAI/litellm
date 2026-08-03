@@ -195,6 +195,17 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
         return await self.update(user_id, data, id_field="user_id")
 
+    async def backfill_null_user_email(self, user_id: str, user_email: str) -> int:
+        """Set user_email only when the stored value is null, atomically at the database.
+
+        Returns the number of rows updated: 0 means another writer already set an email.
+        """
+        updated_count: int = await self.table.update_many(
+            where={"user_id": user_id, "user_email": None},  # mutable-ok: Prisma query filters are dict-shaped
+            data={"user_email": user_email},  # mutable-ok: Prisma update payloads are dict-shaped
+        )
+        return updated_count
+
     async def delete_user(self, user_id: str) -> LiteLLM_UserTable | None:
         """Delete a user."""
         return await self.delete(user_id, id_field="user_id")
