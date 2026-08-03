@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +19,15 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+
+@dataclass(frozen=True)
+class _FallbackContinuationState:
+    """Router-owned state for continuing a fallback chain after stream failure."""
+
+    litellm_router: LitellmRouter = field(repr=False, compare=False)
+    root_model_group: str
+    remaining_model_groups: tuple[Any, ...]
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
@@ -86,7 +96,7 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
 async def run_async_fallback(
     *args: tuple[Any],
     litellm_router: LitellmRouter,
-    fallback_model_group: Sequence[str],
+    fallback_model_group: Sequence[Any],
     original_model_group: str,
     original_exception: Exception,
     max_fallbacks: int,
@@ -139,8 +149,14 @@ async def run_async_fallback(
             fallback_depth = fallback_depth + 1
             kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks
-            kwargs["_fallback_root_model_group"] = kwargs.get("_fallback_root_model_group", original_model_group)
-            kwargs["_remaining_fallback_model_groups"] = tuple(fallback_model_group[fallback_index + 1 :])
+            kwargs.pop("_fallback_root_model_group", None)
+            kwargs.pop("_remaining_fallback_model_groups", None)
+            kwargs.pop("_fallback_continuation_state", None)
+            kwargs.setdefault("metadata", {})["_fallback_continuation_state"] = _FallbackContinuationState(
+                litellm_router=litellm_router,
+                root_model_group=original_model_group,
+                remaining_model_groups=tuple(fallback_model_group[fallback_index + 1 :]),
+            )
             if include_fallback_errors:
                 kwargs["include_fallback_errors"] = include_fallback_errors
             response = await litellm_router.async_function_with_fallbacks(*args, **kwargs)
