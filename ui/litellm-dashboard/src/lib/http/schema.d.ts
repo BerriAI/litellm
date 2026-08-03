@@ -32870,6 +32870,8 @@ export interface components {
             }[] | null;
             /** Cooldown Time */
             cooldown_time?: number | null;
+            /** Enable Pre Call Checks */
+            enable_pre_call_checks?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
             /** Fallbacks */
