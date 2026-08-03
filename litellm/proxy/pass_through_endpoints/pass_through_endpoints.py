@@ -1666,8 +1666,12 @@ def create_pass_through_route(
             adapter = target
         else:
             adapter = get_instance_fn(value=target, config_file_path=config_file_path)
-        adapter_id = str(uuid.uuid4())
-        litellm.adapters = [{"id": adapter_id, "adapter": adapter}]
+        existing_entry = next((entry for entry in litellm.adapters if entry["adapter"] is adapter), None)
+        if existing_entry is not None:
+            adapter_id = existing_entry["id"]
+        else:
+            adapter_id = str(uuid.uuid4())
+            litellm.adapters = [*litellm.adapters, {"id": adapter_id, "adapter": adapter}]
 
         async def endpoint_func(  # type: ignore
             request: Request,
@@ -1675,6 +1679,20 @@ def create_pass_through_route(
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
+            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                get_request_route,
+            )
+            from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415
+                InitPassThroughEndpointHelpers,
+            )
+
+            path = get_request_route(request)
+            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=path):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
+                )
+
             return await chat_completion_pass_through_endpoint(
                 fastapi_response=fastapi_response,
                 request=request,
