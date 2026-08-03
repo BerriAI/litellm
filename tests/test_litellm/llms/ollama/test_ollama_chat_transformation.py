@@ -906,3 +906,160 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+class TestOllamaStructuredError:
+    """Regression tests for structured Ollama error responses.
+
+    When Ollama returns a structured error such as
+    {"error": "error parsing tool call: ..."} the handler used to assume every
+    payload was success-shaped, subscript chunk["message"], and raise
+    KeyError: 'message' which surfaced to callers as APIConnectionError.
+    Regression: https://github.com/BerriAI/litellm/issues/33622
+    """
+
+    def test_streaming_structured_error_raises_ollama_error(self):
+        from litellm.llms.ollama.common_utils import OllamaError
+
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        with pytest.raises(OllamaError) as exc_info:
+            iterator.chunk_parser({"error": "error parsing tool call: invalid character"})
+
+        assert not isinstance(exc_info.value, KeyError)
+        assert "error parsing tool call" in exc_info.value.message
+        assert "KeyError" not in exc_info.value.message
+
+    def test_streaming_structured_error_maps_to_internal_server_error(self):
+        """The mapped exception must not be APIConnectionError (the mislabel)."""
+        from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+        from litellm.llms.ollama.common_utils import OllamaError
+
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        try:
+            iterator.chunk_parser({"error": "error parsing tool call: invalid character"})
+            pytest.fail("expected OllamaError")
+        except OllamaError as raw_error:
+            with pytest.raises(litellm.InternalServerError) as exc_info:
+                exception_type(
+                    model="ollama_chat/llama3.1",
+                    original_exception=raw_error,
+                    custom_llm_provider="ollama_chat",
+                    completion_kwargs={},
+                    extra_kwargs={},
+                )
+            assert not isinstance(exc_info.value, litellm.APIConnectionError)
+            assert "error parsing tool call" in str(exc_info.value)
+
+    def test_non_streaming_structured_error_raises_ollama_error(self):
+        from litellm.llms.ollama.common_utils import OllamaError
+
+        config = OllamaChatConfig()
+
+        ollama_response = {"error": "error parsing tool call: invalid character"}
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+        with pytest.raises(OllamaError) as exc_info:
+            config.transform_response(
+                model="llama3.1",
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+                api_key=None,
+                json_mode=False,
+            )
+
+        assert "error parsing tool call" in exc_info.value.message
+
+    def test_non_streaming_missing_message_raises_ollama_error(self):
+        """A payload with neither 'message' nor 'error' must not TypeError on Message(**None)."""
+        from litellm.llms.ollama.common_utils import OllamaError
+
+        config = OllamaChatConfig()
+
+        ollama_response = {"done": True, "done_reason": "stop"}
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+        with pytest.raises(OllamaError):
+            config.transform_response(
+                model="llama3.1",
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+                api_key=None,
+                json_mode=False,
+            )
+
+    def test_non_streaming_tool_calls_only_completion_tokens(self):
+        """eval_count default must not be evaluated eagerly against a null content.
+
+        When Ollama returns tool_calls with content=None and omits eval_count, the
+        old eager default computed token_counter(text=response_json["message"]["content"])
+        against None. It must fall back to counting an empty string instead.
+        """
+        config = OllamaChatConfig()
+
+        ollama_response = {
+            "model": "llama3.1",
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"function": {"name": "get_weather", "arguments": {"city": "SF"}}}
+                ],
+            },
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 5,
+        }
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+        result = config.transform_response(
+            model="llama3.1",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[{"role": "user", "content": "Weather?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=False,
+        )
+
+        assert result.choices[0].finish_reason == "tool_calls"
+        assert result.usage.completion_tokens == 0
+        assert result.usage.prompt_tokens == 5
