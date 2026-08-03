@@ -1,7 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { ConfigProvider } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
-import { getAntdTheme } from "@/config/antdTheme";
 import { useDarkMode } from "@/hooks/useDarkMode";
 
 interface ThemeContextType {
@@ -78,7 +76,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
 
   return (
     <ThemeContext.Provider value={{ logoUrl, setLogoUrl, faviconUrl, setFaviconUrl, isDarkMode, toggleDarkMode }}>
-      <ConfigProvider theme={getAntdTheme(isDarkMode)}>{children}</ConfigProvider>
+      {children}
     </ThemeContext.Provider>
   );
 };

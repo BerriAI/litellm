@@ -8,10 +8,12 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
-import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
-import { Switch, Tag } from "antd";
+import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
+import { Tag } from "antd";
+import { Moon, Sun } from "lucide-react";
 import Link from "next/link";
 import React from "react";
+import { Switch } from "@/components/ui/switch";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
@@ -149,14 +151,16 @@ const Navbar: React.FC<NavbarProps> = ({
               </div>
             )}
 
-            <div className="flex shrink-0 items-center border-l border-gray-200 pl-4 dark:border-[#1e1e1e]">
+            <div className="flex shrink-0 items-center gap-1.5 border-l border-gray-200 pl-4 dark:border-[#1e1e1e]">
+              <Sun className="size-3.5 text-gray-500 dark:text-zinc-400" aria-hidden />
               <Switch
                 data-testid="dark-mode-toggle"
                 checked={isDarkMode}
-                onChange={toggleDarkMode}
-                checkedChildren={<MoonOutlined />}
-                unCheckedChildren={<SunOutlined />}
+                onCheckedChange={() => toggleDarkMode()}
+                aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+                size="sm"
               />
+              <Moon className="size-3.5 text-gray-500 dark:text-zinc-400" aria-hidden />
             </div>
 
             {!isPublicPage && (
