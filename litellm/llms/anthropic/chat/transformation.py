@@ -1434,11 +1434,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
                         continue
-                    if not is_thinking_enabled:
-                        _tool_choice = {
-                            "name": RESPONSE_FORMAT_TOOL_NAME,
-                            "type": "tool",
-                        }
+                    # When response_format is combined with caller tools, let
+                    # the model choose between the real tools and the
+                    # internal json_tool_call. Forcing the latter locks the
+                    # first turn to the final-output tool; removing
+                    # tool_choice entirely allows an unstructured final text.
+                    has_caller_tools = bool(non_default_params.get("tools"))
+                    if not is_thinking_enabled and "tool_choice" not in optional_params:
+                        if has_caller_tools:
+                            _tool_choice = {"type": "any"}
+                        else:
+                            _tool_choice = {
+                                "name": RESPONSE_FORMAT_TOOL_NAME,
+                                "type": "tool",
+                            }
                         optional_params["tool_choice"] = _tool_choice
 
                     optional_params = self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
@@ -1774,6 +1783,31 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
+
+        # With response_format emulation, allow real caller tools on the
+        # initial turn, then require the internal output tool after a tool
+        # result has been returned. This preserves structured output without
+        # forcing a placeholder before investigation tools can run.
+        if optional_params.get("json_mode") is True:
+            response_format_tool_present = any(
+                tool.get("name") == RESPONSE_FORMAT_TOOL_NAME
+                for tool in (optional_params.get("tools") or [])
+                if isinstance(tool, dict)
+            )
+            has_tool_result = any(
+                message.get("role") == "tool"
+                or any(
+                    isinstance(block, dict) and block.get("type") == "tool_result"
+                    for block in (message.get("content") or [])
+                )
+                for message in (messages or [])
+                if isinstance(message, dict)
+            )
+            if response_format_tool_present and has_tool_result:
+                optional_params["tool_choice"] = {
+                    "name": RESPONSE_FORMAT_TOOL_NAME,
+                    "type": "tool",
+                }
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
