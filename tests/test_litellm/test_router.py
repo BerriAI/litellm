@@ -7723,10 +7723,6 @@ def test_ensure_deployment_affinity_callback_is_idempotent():
 
 
 def test_count_pre_call_check_tokens_counts_embedding_batches():
-    """An embedding `input` is a `list[str]`, not Responses API input items. Routing it through the
-    Responses transform raised `AttributeError: 'str' object has no attribute 'get'`, which
-    `_pre_call_checks` swallowed, so context-window filtering was silently skipped and an error was
-    logged per request."""
     from litellm.router import Router
 
     router = Router(
@@ -7745,8 +7741,6 @@ def test_count_pre_call_check_tokens_counts_embedding_batches():
 
 
 def test_pre_call_checks_filters_embedding_over_context_window():
-    """The consequence the bug hid: with the count raising, every deployment survived the filter.
-    A batch over `max_input_tokens` must now be dropped."""
     from litellm.router import Router
 
     over_limit = ["token " * 50, "token " * 50]

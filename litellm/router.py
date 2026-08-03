@@ -10257,9 +10257,7 @@ class Router:
         LiteLLMCompletionResponsesConfig transform so the same token_counter path covers
         both API surfaces and `instructions` tokens are included in the count.
 
-        Embeddings also arrive as `input`, but as a `list[str]` batch rather than Responses
-        input items. Those are counted as text, since the Responses transform expects
-        object-shaped items and raises on plain strings.
+        Embeddings send `input` as a `list[str]` batch, counted as text.
         """
         if messages is not None:
             return litellm.token_counter(messages=messages)
