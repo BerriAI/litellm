@@ -672,6 +672,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_policies": ["spoofed-policy"],
         "policy_sources": {"spoofed-policy": "request"},
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
+        "internal_call_origin": "autorouter_classifier",
         "_guardrail_pipelines": [{"name": "spoofed"}],
         "_pipeline_managed_guardrails": ["evaded"],
         "safe_user_metadata": "kept",
@@ -714,6 +715,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_policies",
         "policy_sources",
         "routing_decision",
+        "internal_call_origin",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
     }

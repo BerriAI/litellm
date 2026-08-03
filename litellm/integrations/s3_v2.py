@@ -8,13 +8,14 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 
 import asyncio
 import time
+from collections.abc import Mapping
 from datetime import datetime
-from typing import List, Optional, cast
+from typing import cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
-from litellm.integrations.s3 import get_s3_object_key
+from litellm.integrations.s3 import get_s3_object_key, resolve_sse_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -32,30 +33,31 @@ from .custom_batch_logger import CustomBatchLogger
 class S3Logger(CustomBatchLogger, BaseAWSLLM):
     def __init__(
         self,
-        s3_bucket_name: Optional[str] = None,
-        s3_path: Optional[str] = None,
-        s3_region_name: Optional[str] = None,
-        s3_api_version: Optional[str] = None,
+        s3_bucket_name: str | None = None,
+        s3_path: str | None = None,
+        s3_region_name: str | None = None,
+        s3_api_version: str | None = None,
         s3_use_ssl: bool = True,
-        s3_verify: Optional[bool] = None,
-        s3_endpoint_url: Optional[str] = None,
-        s3_aws_access_key_id: Optional[str] = None,
-        s3_aws_secret_access_key: Optional[str] = None,
-        s3_aws_session_token: Optional[str] = None,
-        s3_aws_session_name: Optional[str] = None,
-        s3_aws_profile_name: Optional[str] = None,
-        s3_aws_role_name: Optional[str] = None,
-        s3_aws_web_identity_token: Optional[str] = None,
-        s3_aws_sts_endpoint: Optional[str] = None,
-        s3_flush_interval: Optional[int] = DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
-        s3_batch_size: Optional[int] = DEFAULT_S3_BATCH_SIZE,
+        s3_verify: bool | None = None,
+        s3_endpoint_url: str | None = None,
+        s3_aws_access_key_id: str | None = None,
+        s3_aws_secret_access_key: str | None = None,
+        s3_aws_session_token: str | None = None,
+        s3_aws_session_name: str | None = None,
+        s3_aws_profile_name: str | None = None,
+        s3_aws_role_name: str | None = None,
+        s3_aws_web_identity_token: str | None = None,
+        s3_aws_sts_endpoint: str | None = None,
+        s3_flush_interval: int | None = DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
+        s3_batch_size: int | None = DEFAULT_S3_BATCH_SIZE,
         s3_config=None,
         s3_use_team_prefix: bool = False,
         s3_strip_base64_files: bool = False,
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
-        s3_server_side_encryption: Optional[str] = None,
-        s3_callback_params_override: Optional[dict] = None,
+        s3_server_side_encryption: str | None = None,
+        s3_sse_kms_key_id: str | None = None,
+        s3_callback_params_override: dict | None = None,
         **kwargs,
     ):
         try:
@@ -94,6 +96,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_use_key_prefix=s3_use_key_prefix,
                 s3_use_virtual_hosted_style=s3_use_virtual_hosted_style,
                 s3_server_side_encryption=s3_server_side_encryption,
+                s3_sse_kms_key_id=s3_sse_kms_key_id,
             )
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
 
@@ -116,39 +119,40 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 flush_interval=s3_flush_interval,
                 batch_size=s3_batch_size,
             )
-            self.log_queue: List[s3BatchLoggingElement] = []
+            self.log_queue: list[s3BatchLoggingElement] = []
 
             # Call BaseAWSLLM's __init__
             BaseAWSLLM.__init__(self)
 
         except Exception as e:
-            print_verbose(f"Got exception on init s3 client {str(e)}")
+            print_verbose(f"Got exception on init s3 client {e!s}")
             raise e
 
     def _init_s3_params(
         self,
-        s3_bucket_name: Optional[str] = None,
-        s3_region_name: Optional[str] = None,
-        s3_api_version: Optional[str] = None,
+        s3_bucket_name: str | None = None,
+        s3_region_name: str | None = None,
+        s3_api_version: str | None = None,
         s3_use_ssl: bool = True,
-        s3_verify: Optional[bool] = None,
-        s3_endpoint_url: Optional[str] = None,
-        s3_aws_access_key_id: Optional[str] = None,
-        s3_aws_secret_access_key: Optional[str] = None,
-        s3_aws_session_token: Optional[str] = None,
-        s3_aws_session_name: Optional[str] = None,
-        s3_aws_profile_name: Optional[str] = None,
-        s3_aws_role_name: Optional[str] = None,
-        s3_aws_web_identity_token: Optional[str] = None,
-        s3_aws_sts_endpoint: Optional[str] = None,
+        s3_verify: bool | None = None,
+        s3_endpoint_url: str | None = None,
+        s3_aws_access_key_id: str | None = None,
+        s3_aws_secret_access_key: str | None = None,
+        s3_aws_session_token: str | None = None,
+        s3_aws_session_name: str | None = None,
+        s3_aws_profile_name: str | None = None,
+        s3_aws_role_name: str | None = None,
+        s3_aws_web_identity_token: str | None = None,
+        s3_aws_sts_endpoint: str | None = None,
         s3_config=None,
-        s3_path: Optional[str] = None,
+        s3_path: str | None = None,
         s3_use_team_prefix: bool = False,
         s3_strip_base64_files: bool = False,
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
-        s3_server_side_encryption: Optional[str] = None,
-        params_source: Optional[dict] = None,
+        s3_server_side_encryption: str | None = None,
+        s3_sse_kms_key_id: str | None = None,
+        params_source: dict | None = None,
     ):
         """
         Initialize the s3 params for this logging callback. Reads from
@@ -197,9 +201,17 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             bool(params.get("s3_use_virtual_hosted_style", False)) or s3_use_virtual_hosted_style
         )
 
-        self.s3_server_side_encryption = params.get("s3_server_side_encryption") or s3_server_side_encryption
+        self.s3_server_side_encryption, self.s3_sse_kms_key_id = resolve_sse_params(
+            params.get("s3_server_side_encryption") or s3_server_side_encryption,
+            params.get("s3_sse_kms_key_id") or s3_sse_kms_key_id,
+        )
 
-        return
+    def _sse_headers(self) -> Mapping[str, str]:
+        candidates = {
+            "x-amz-server-side-encryption": self.s3_server_side_encryption,
+            "x-amz-server-side-encryption-aws-kms-key-id": self.s3_sse_kms_key_id,
+        }
+        return {key: value for key, value in candidates.items() if value}
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._async_log_event_base(
@@ -216,7 +228,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             start_time=start_time,
             end_time=end_time,
         )
-        pass
 
     async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
         """Batch audit logs and upload to S3 under audit_logs/ prefix."""
@@ -226,7 +237,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             now = datetime.now(timezone.utc)
             audit_log_id = audit_log.get("id", "unknown")
 
-            s3_path = cast(Optional[str], self.s3_path) or ""
+            s3_path = cast(str | None, self.s3_path) or ""
             s3_path = s3_path.rstrip("/") + "/" if s3_path else ""
 
             s3_object_key = (
@@ -273,7 +284,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 self.batch_size,
             )
         except Exception as e:
-            verbose_logger.exception(f"s3 Layer Error - {str(e)}")
+            verbose_logger.exception(f"s3 Layer Error - {e!s}")
             self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
@@ -335,11 +346,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 "Content-Language": "en",
                 "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
-                **(
-                    {"x-amz-server-side-encryption": self.s3_server_side_encryption}
-                    if self.s3_server_side_encryption
-                    else {}
-                ),
+                **self._sse_headers(),
             }
             req = requests.Request("PUT", url, data=json_string, headers=headers)
             prepped = req.prepare()
@@ -376,7 +383,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 response.raise_for_status()
                 break
         except Exception as e:
-            verbose_logger.exception(f"Error uploading to s3: {str(e)}")
+            verbose_logger.exception(f"Error uploading to s3: {e!s}")
             self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_send_batch(self):
@@ -403,8 +410,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     def create_s3_batch_logging_element(
         self,
         start_time: datetime,
-        standard_logging_payload: Optional[StandardLoggingPayload],
-    ) -> Optional[s3BatchLoggingElement]:
+        standard_logging_payload: StandardLoggingPayload | None,
+    ) -> s3BatchLoggingElement | None:
         """
         Helper function to create an s3BatchLoggingElement.
 
@@ -443,7 +450,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             f"Creating s3 file with prefix_components={prefix_components},prefix_path={prefix_path} and {s3_file_name}"
         )
         s3_object_key = get_s3_object_key(
-            s3_path=cast(Optional[str], self.s3_path) or "",
+            s3_path=cast(str | None, self.s3_path) or "",
             prefix=prefix_path,
             start_time=start_time,
             s3_file_name=s3_file_name,
@@ -510,11 +517,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 "Content-Language": "en",
                 "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
-                **(
-                    {"x-amz-server-side-encryption": self.s3_server_side_encryption}
-                    if self.s3_server_side_encryption
-                    else {}
-                ),
+                **self._sse_headers(),
             }
             req = requests.Request("PUT", url, data=json_string, headers=headers)
             prepped = req.prepare()
@@ -554,10 +557,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 response.raise_for_status()
                 break
         except Exception as e:
-            verbose_logger.exception(f"Error uploading to s3: {str(e)}")
+            verbose_logger.exception(f"Error uploading to s3: {e!s}")
             self.handle_callback_failure(callback_name="S3Logger")
 
-    async def _download_object_from_s3(self, s3_object_key: str) -> Optional[dict]:
+    async def _download_object_from_s3(self, s3_object_key: str) -> dict | None:
         """
         Download and parse JSON object from S3.
 
@@ -639,13 +642,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             return response.json()
 
         except Exception as e:
-            verbose_logger.exception(f"Error downloading from S3: {str(e)}")
+            verbose_logger.exception(f"Error downloading from S3: {e!s}")
             return None
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
         object_key: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Get the proxy server request from cold storage
 
@@ -663,5 +666,5 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             downloaded_object = await self._download_object_from_s3(object_key)
             return downloaded_object
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving object {object_key} from cold storage: {str(e)}")
+            verbose_logger.exception(f"Error retrieving object {object_key} from cold storage: {e!s}")
             return None

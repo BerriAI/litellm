@@ -3,7 +3,6 @@
 ## Allows jina ai embedding calls - which don't allow 'encoding_format' in payload.
 
 import json
-from typing import Optional
 
 import httpx
 
@@ -86,14 +85,14 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         input: list,
         timeout: float,
         logging_obj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         optional_params: dict,
-        model_response: Optional[EmbeddingResponse] = None,
+        model_response: EmbeddingResponse | None = None,
         client=None,
         aembedding=None,
-        custom_endpoint: Optional[bool] = None,
-        headers: Optional[dict] = None,
+        custom_endpoint: bool | None = None,
+        headers: dict | None = None,
     ) -> EmbeddingResponse:
         api_base, headers = self._validate_environment(
             api_base=api_base,

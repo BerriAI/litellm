@@ -3,13 +3,16 @@ Volcengine Embedding Transformation
 Transforms OpenAI embedding requests to Volcengine format
 """
 
-from typing import List, Optional, Union, Dict, Any
+from typing import Any
+
 import httpx
+
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
 from ..common_utils import get_volcengine_base_url, get_volcengine_headers
 
 
@@ -21,7 +24,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
 
     def __init__(
         self,
-        encoding_format: Optional[str] = None,
+        encoding_format: str | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -32,7 +35,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the list of OpenAI parameters supported by Volcengine embedding models.
 
@@ -50,12 +53,12 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for volcengine embedding API calls.
@@ -80,11 +83,11 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: Dict[str, Any],
-        optional_params: Dict[str, Any],
+        non_default_params: dict[str, Any],
+        optional_params: dict[str, Any],
         model: str,
         drop_params: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Map OpenAI embedding parameters to Volcengine format.
 
@@ -150,7 +153,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -159,7 +162,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         try:
             response_json = raw_response.json()
         except Exception as e:
-            raise ValueError(f"Failed to parse Volcengine response as JSON: {str(e)}")
+            raise ValueError(f"Failed to parse Volcengine response as JSON: {e!s}")
 
         # Volcengine response format matches OpenAI format closely
         # Just need to ensure all required fields are present
@@ -181,11 +184,11 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """Validate environment and return headers"""
         # Get Volcengine headers
@@ -194,9 +197,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         volcengine_headers = get_volcengine_headers(api_key)
         return {**headers, **volcengine_headers}
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """Get error class for Volcengine errors"""
         from ..common_utils import VolcEngineError
 

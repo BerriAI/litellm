@@ -14,7 +14,7 @@ GET    /v1/workflows/runs/{run_id}/messages     - Fetch conversation history
 """
 
 import json
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -47,13 +47,13 @@ def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
 
-def _caller_key(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+def _caller_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """Return the hashed key token that identifies this caller, or None for master key."""
     return user_api_key_dict.token
 
 
 # Status transitions driven by event_type
-_EVENT_STATUS_MAP: Dict[str, str] = {
+_EVENT_STATUS_MAP: dict[str, str] = {
     "step.started": "running",
     "step.failed": "failed",
     "hook.waiting": "paused",
@@ -68,29 +68,29 @@ _EVENT_STATUS_MAP: Dict[str, str] = {
 
 class WorkflowRunCreateRequest(BaseModel):
     workflow_type: str
-    input: Optional[Dict[str, Any]] = None
-    metadata: Optional[Dict[str, Any]] = None
+    input: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 WorkflowRunStatus = Literal["pending", "running", "paused", "completed", "failed"]
 
 
 class WorkflowRunUpdateRequest(BaseModel):
-    status: Optional[WorkflowRunStatus] = None
-    output: Optional[Dict[str, Any]] = None
-    metadata: Optional[Dict[str, Any]] = None
+    status: WorkflowRunStatus | None = None
+    output: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class WorkflowEventCreateRequest(BaseModel):
     event_type: str
     step_name: str
-    data: Optional[Dict[str, Any]] = None
+    data: dict[str, Any] | None = None
 
 
 class WorkflowMessageCreateRequest(BaseModel):
     role: str
     content: str
-    session_id: Optional[str] = None
+    session_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ async def _get_next_sequence_number(prisma_client: Any, run_id: str, table: str)
 async def _require_run(
     prisma_client: Any,
     run_id: str,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> Any:
     """Return the run or raise 404. For non-admin callers, also enforce key ownership."""
     run = await WorkflowRunRepository(prisma_client).table.find_unique(where={"run_id": run_id})
@@ -156,7 +156,7 @@ async def create_workflow_run(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        create_data: Dict[str, Any] = {
+        create_data: dict[str, Any] = {
             "workflow_type": data.workflow_type,
             "created_by": _caller_key(user_api_key_dict),
         }
@@ -177,8 +177,8 @@ async def create_workflow_run(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def list_workflow_runs(
-    workflow_type: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
+    workflow_type: str | None = Query(None),
+    status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=250),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -191,7 +191,7 @@ async def list_workflow_runs(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    where: Dict[str, Any] = {}
+    where: dict[str, Any] = {}
     if workflow_type:
         where["workflow_type"] = workflow_type
     if status:
@@ -266,7 +266,7 @@ async def update_workflow_run(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    update: Dict[str, Any] = {}
+    update: dict[str, Any] = {}
     if data.status is not None:
         update["status"] = data.status
     if data.output is not None:
@@ -323,7 +323,7 @@ async def append_workflow_event(
     for attempt in range(_MAX_SEQUENCE_RETRIES):
         try:
             seq = await _get_next_sequence_number(prisma_client, run_id, "events")
-            event_data: Dict[str, Any] = {
+            event_data: dict[str, Any] = {
                 "run_id": run_id,
                 "event_type": data.event_type,
                 "step_name": data.step_name,
@@ -415,7 +415,7 @@ async def append_workflow_message(
     for attempt in range(_MAX_SEQUENCE_RETRIES):
         try:
             seq = await _get_next_sequence_number(prisma_client, run_id, "messages")
-            msg_data: Dict[str, Any] = {
+            msg_data: dict[str, Any] = {
                 "run_id": run_id,
                 "role": data.role,
                 "content": data.content,

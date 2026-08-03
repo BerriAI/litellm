@@ -12,7 +12,6 @@ Auth: OAuth2 Bearer token (not an API key).
 """
 
 import json
-from typing import List, Optional
 
 from litellm import verbose_logger
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -41,9 +40,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        api_key: Optional[str] = None,  # noqa: ARG002
+        api_key: str | None = None,  # noqa: ARG002
     ) -> str:
         """
         Build the Vertex AI Live WSS endpoint URL.
@@ -73,7 +72,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         self,
         headers: dict,
         model: str,  # noqa: ARG002
-        api_key: Optional[str] = None,  # noqa: ARG002
+        api_key: str | None = None,  # noqa: ARG002
     ) -> dict:
         """
         Return headers with a Bearer token for Vertex AI.
@@ -191,8 +190,8 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         self,
         message: str,
         model: str,
-        session_configuration_request: Optional[str] = None,
-    ) -> List[str]:
+        session_configuration_request: str | None = None,
+    ) -> list[str]:
         """
         Translate OpenAI realtime client messages to Vertex AI format.
 

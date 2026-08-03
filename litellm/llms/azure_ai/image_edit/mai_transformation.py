@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -33,8 +33,8 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
-        optional_params: Dict[str, Any] = {}
+    ) -> dict:
+        optional_params: dict[str, Any] = {}
         supported_params = self.get_supported_openai_params(model)
 
         for key, value in dict(image_edit_optional_params).items():
@@ -87,9 +87,9 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = AzureFoundryModelInfo.get_api_key(api_key)
 
@@ -105,7 +105,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         api_base = AzureFoundryModelInfo.get_api_base(api_base)
@@ -125,12 +125,12 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> tuple[dict, RequestFiles]:
         request_params = {
             "model": model,
             **image_edit_optional_request_params,
@@ -139,7 +139,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
             request_params["prompt"] = prompt
 
         data_without_files = {key: value for key, value in request_params.items() if key not in ["image", "mask"]}
-        files_list: List[Tuple[str, Any]] = []
+        files_list: list[tuple[str, Any]] = []
 
         if image is not None:
             image_list = [image] if not isinstance(image, list) else image

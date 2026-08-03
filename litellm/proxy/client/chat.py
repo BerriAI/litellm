@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, Iterator, List, Optional, Union
+from collections.abc import Iterator
+from typing import Any
 
 import requests
 
@@ -7,7 +8,7 @@ from .exceptions import UnauthorizedError
 
 
 class ChatClient:
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
+    def __init__(self, base_url: str, api_key: str | None = None):
         """
         Initialize the ChatClient.
 
@@ -18,7 +19,7 @@ class ChatClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
@@ -33,16 +34,16 @@ class ChatClient:
     def completions(
         self,
         model: str,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        n: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        presence_penalty: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        user: Optional[str] = None,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        top_p: float | None = None,
+        n: int | None = None,
+        max_tokens: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        user: str | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Create a chat completion.
 
@@ -69,7 +70,7 @@ class ChatClient:
         url = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: Dict[str, Any] = {"model": model, "messages": messages}
+        data: dict[str, Any] = {"model": model, "messages": messages}
 
         # Add optional parameters if provided
         if temperature is not None:
@@ -106,15 +107,15 @@ class ChatClient:
     def completions_stream(
         self,
         model: str,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        n: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        presence_penalty: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        user: Optional[str] = None,
-    ) -> Iterator[Dict[str, Any]]:
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        top_p: float | None = None,
+        n: int | None = None,
+        max_tokens: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        user: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """
         Create a streaming chat completion.
 
@@ -139,7 +140,7 @@ class ChatClient:
         url = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+        data: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
 
         # Add optional parameters if provided
         if temperature is not None:

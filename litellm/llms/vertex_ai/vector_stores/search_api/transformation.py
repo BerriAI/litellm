@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -75,7 +75,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         return VERTEX_SEARCH_DATASTORE_EXTRA_BODY_FIELDS
 
     @classmethod
-    def _filter_extra_body(cls, extra_body: Dict[str, Any], is_engine: bool = False) -> Dict[str, Any]:
+    def _filter_extra_body(cls, extra_body: dict[str, Any], is_engine: bool = False) -> dict[str, Any]:
         """
         Validate ``extra_body`` against the supported-field allowlist for the
         active serving config (engine/app vs data store).
@@ -141,7 +141,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             "write": [],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """
         Validate and set up authentication for Vertex AI RAG API
         """
@@ -152,7 +152,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -191,13 +191,13 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
         """
         Transform a search request for the Vertex AI Search (Discovery Engine) API.
 
@@ -222,7 +222,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         is_engine = bool(litellm_params.get("vertex_engine_id"))
 
-        request_body: Dict[str, Any] = {"query": query, "pageSize": 10}
+        request_body: dict[str, Any] = {"query": query, "pageSize": 10}
         max_num_results = vector_store_search_optional_params.get("max_num_results")
         if max_num_results is not None:
             request_body["pageSize"] = max_num_results
@@ -262,7 +262,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             results = response_json.get("results", [])
 
             # Transform results to standard format
-            search_results: List[VectorStoreSearchResult] = []
+            search_results: list[VectorStoreSearchResult] = []
             for result in results:
                 document = result.get("document", {})
                 derived_data = document.get("derivedStructData", {})
@@ -346,7 +346,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         raise NotImplementedError
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
@@ -355,7 +355,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def calculate_vector_store_cost(
         self,
         response: VectorStoreSearchResponse,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         model_info = get_model_info(
             model="vertex_ai/search_api",
         )

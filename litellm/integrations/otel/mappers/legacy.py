@@ -9,7 +9,8 @@ Like ``GenAIMapper``, each span kind declares its schema as a flat
 ``attribute key -> extractor`` table: one lambda per mapping operation.
 """
 
-from typing import Callable, Final
+from collections.abc import Callable
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (

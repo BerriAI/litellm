@@ -6,7 +6,7 @@ This is to prevent deadlocks and improve reliability
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -60,7 +60,7 @@ class RedisUpdateBuffer:
 
     def __init__(
         self,
-        redis_cache: Optional[RedisCache] = None,
+        redis_cache: RedisCache | None = None,
     ):
         self.redis_cache = redis_cache
 
@@ -74,9 +74,7 @@ class RedisUpdateBuffer:
         """
         from litellm.proxy.proxy_server import general_settings
 
-        _use_redis_transaction_buffer: Optional[Union[bool, str]] = general_settings.get(
-            "use_redis_transaction_buffer", False
-        )
+        _use_redis_transaction_buffer: bool | str | None = general_settings.get("use_redis_transaction_buffer", False)
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
         if _use_redis_transaction_buffer is None:
@@ -203,7 +201,7 @@ class RedisUpdateBuffer:
         verbose_proxy_logger.debug("ALL DAILY SPEND UPDATE TRANSACTIONS: %s", daily_spend_update_transactions)
 
         # Build a list of rpush operations, skipping empty/None transaction sets
-        _queue_configs: List[Tuple[Any, str, ServiceTypes]] = [
+        _queue_configs: list[tuple[Any, str, ServiceTypes]] = [
             (
                 db_spend_update_transactions,
                 REDIS_UPDATE_BUFFER_KEY,
@@ -236,8 +234,8 @@ class RedisUpdateBuffer:
             ),
         ]
 
-        rpush_list: List[RedisPipelineRpushOperation] = []
-        service_types: List[ServiceTypes] = []
+        rpush_list: list[RedisPipelineRpushOperation] = []
+        service_types: list[ServiceTypes] = []
         for transactions, redis_key, service_type in _queue_configs:
             if transactions is None or len(transactions) == 0:
                 continue
@@ -293,12 +291,12 @@ class RedisUpdateBuffer:
 
     @staticmethod
     async def _restore_spend_updates_to_in_memory_queues(
-        db_spend_update_transactions: Optional[DBSpendUpdateTransactions],
-        daily_spend_update_transactions: Optional[Dict[str, BaseDailySpendTransaction]],
-        daily_team_spend_update_transactions: Optional[Dict[str, BaseDailySpendTransaction]],
-        daily_org_spend_update_transactions: Optional[Dict[str, BaseDailySpendTransaction]],
-        daily_end_user_spend_update_transactions: Optional[Dict[str, BaseDailySpendTransaction]],
-        daily_agent_spend_update_transactions: Optional[Dict[str, BaseDailySpendTransaction]],
+        db_spend_update_transactions: DBSpendUpdateTransactions | None,
+        daily_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
+        daily_team_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
+        daily_org_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
+        daily_end_user_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
+        daily_agent_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
         spend_update_queue: SpendUpdateQueue,
         daily_spend_update_queue: DailySpendUpdateQueue,
         daily_team_spend_update_queue: DailySpendUpdateQueue,
@@ -314,7 +312,7 @@ class RedisUpdateBuffer:
         because the source queues were already drained before the rpush.
         """
         if db_spend_update_transactions is not None:
-            entity_entries: List[Tuple[Litellm_EntityType, Optional[Dict[str, float]]]] = [
+            entity_entries: list[tuple[Litellm_EntityType, dict[str, float] | None]] = [
                 (
                     Litellm_EntityType.USER,
                     db_spend_update_transactions.get("user_list_transactions"),
@@ -360,7 +358,7 @@ class RedisUpdateBuffer:
                         )
                     )
 
-        daily_pairs: List[Tuple[Optional[Dict[str, BaseDailySpendTransaction]], DailySpendUpdateQueue]] = [
+        daily_pairs: list[tuple[dict[str, BaseDailySpendTransaction] | None, DailySpendUpdateQueue]] = [
             (daily_spend_update_transactions, daily_spend_update_queue),
             (daily_team_spend_update_transactions, daily_team_spend_update_queue),
             (daily_org_spend_update_transactions, daily_org_spend_update_queue),
@@ -388,7 +386,7 @@ class RedisUpdateBuffer:
         return num_transactions
 
     @staticmethod
-    def _remove_prefix_from_keys(data: Dict[str, Any], prefix: str) -> Dict[str, Any]:
+    def _remove_prefix_from_keys(data: dict[str, Any], prefix: str) -> dict[str, Any]:
         """
         Removes the specified prefix from the keys of a dictionary.
         """
@@ -396,7 +394,7 @@ class RedisUpdateBuffer:
 
     async def get_all_update_transactions_from_redis_buffer(
         self,
-    ) -> Optional[DBSpendUpdateTransactions]:
+    ) -> DBSpendUpdateTransactions | None:
         """
         Gets all the update transactions from Redis
 
@@ -463,13 +461,13 @@ class RedisUpdateBuffer:
 
     async def get_all_transactions_from_redis_buffer_pipeline(
         self,
-    ) -> Tuple[
-        Optional[DBSpendUpdateTransactions],
-        Optional[Dict[str, DailyUserSpendTransaction]],
-        Optional[Dict[str, DailyTeamSpendTransaction]],
-        Optional[Dict[str, DailyOrganizationSpendTransaction]],
-        Optional[Dict[str, DailyEndUserSpendTransaction]],
-        Optional[Dict[str, DailyAgentSpendTransaction]],
+    ) -> tuple[
+        DBSpendUpdateTransactions | None,
+        dict[str, DailyUserSpendTransaction] | None,
+        dict[str, DailyTeamSpendTransaction] | None,
+        dict[str, DailyOrganizationSpendTransaction] | None,
+        dict[str, DailyEndUserSpendTransaction] | None,
+        dict[str, DailyAgentSpendTransaction] | None,
     ]:
         """
         Drains the main 6 Redis buffer queues in a single pipeline round-trip.
@@ -485,7 +483,7 @@ class RedisUpdateBuffer:
         if self.redis_cache is None:
             return None, None, None, None, None, None
 
-        lpop_list: List[RedisPipelineLpopOperation] = [
+        lpop_list: list[RedisPipelineLpopOperation] = [
             RedisPipelineLpopOperation(key=REDIS_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
             RedisPipelineLpopOperation(
                 key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
@@ -516,14 +514,14 @@ class RedisUpdateBuffer:
             raw_results.append(None)
 
         # Slot 0: DBSpendUpdateTransactions
-        db_spend: Optional[DBSpendUpdateTransactions] = None
+        db_spend: DBSpendUpdateTransactions | None = None
         if raw_results[0] is not None:
             parsed = self._parse_list_of_transactions(raw_results[0])
             if len(parsed) > 0:
                 db_spend = self._combine_list_of_transactions(parsed)
 
         # Slots 1-5: daily spend categories
-        daily_results: List[Optional[Dict[str, Any]]] = []
+        daily_results: list[dict[str, Any] | None] = []
         for slot in range(1, 6):
             slot_result = raw_results[slot]
             if slot_result is None:
@@ -535,11 +533,11 @@ class RedisUpdateBuffer:
 
         return (
             db_spend,
-            cast(Optional[Dict[str, DailyUserSpendTransaction]], daily_results[0]),
-            cast(Optional[Dict[str, DailyTeamSpendTransaction]], daily_results[1]),
-            cast(Optional[Dict[str, DailyOrganizationSpendTransaction]], daily_results[2]),
-            cast(Optional[Dict[str, DailyEndUserSpendTransaction]], daily_results[3]),
-            cast(Optional[Dict[str, DailyAgentSpendTransaction]], daily_results[4]),
+            cast(dict[str, DailyUserSpendTransaction] | None, daily_results[0]),
+            cast(dict[str, DailyTeamSpendTransaction] | None, daily_results[1]),
+            cast(dict[str, DailyOrganizationSpendTransaction] | None, daily_results[2]),
+            cast(dict[str, DailyEndUserSpendTransaction] | None, daily_results[3]),
+            cast(dict[str, DailyAgentSpendTransaction] | None, daily_results[4]),
         )
 
     async def store_in_memory_daily_tag_spend_updates_in_redis(
@@ -560,7 +558,7 @@ class RedisUpdateBuffer:
 
     async def get_all_daily_spend_update_transactions_from_redis_buffer(
         self,
-    ) -> Optional[Dict[str, DailyUserSpendTransaction]]:
+    ) -> dict[str, DailyUserSpendTransaction] | None:
         """
         Gets all the daily spend update transactions from Redis
         """
@@ -574,7 +572,7 @@ class RedisUpdateBuffer:
             return None
         list_of_daily_spend_update_transactions = [json.loads(transaction) for transaction in list_of_transactions]
         return cast(
-            Dict[str, DailyUserSpendTransaction],
+            dict[str, DailyUserSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),
@@ -582,7 +580,7 @@ class RedisUpdateBuffer:
 
     async def get_all_daily_team_spend_update_transactions_from_redis_buffer(
         self,
-    ) -> Optional[Dict[str, DailyTeamSpendTransaction]]:
+    ) -> dict[str, DailyTeamSpendTransaction] | None:
         """
         Gets all the daily team spend update transactions from Redis
         """
@@ -596,7 +594,7 @@ class RedisUpdateBuffer:
             return None
         list_of_daily_spend_update_transactions = [json.loads(transaction) for transaction in list_of_transactions]
         return cast(
-            Dict[str, DailyTeamSpendTransaction],
+            dict[str, DailyTeamSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),
@@ -604,7 +602,7 @@ class RedisUpdateBuffer:
 
     async def get_all_daily_org_spend_update_transactions_from_redis_buffer(
         self,
-    ) -> Optional[Dict[str, DailyOrganizationSpendTransaction]]:
+    ) -> dict[str, DailyOrganizationSpendTransaction] | None:
         """
         Gets all the daily organization spend update transactions from Redis
         """
@@ -618,7 +616,7 @@ class RedisUpdateBuffer:
             return None
         list_of_daily_spend_update_transactions = [json.loads(transaction) for transaction in list_of_transactions]
         return cast(
-            Dict[str, DailyOrganizationSpendTransaction],
+            dict[str, DailyOrganizationSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),
@@ -626,7 +624,7 @@ class RedisUpdateBuffer:
 
     async def get_all_daily_end_user_spend_update_transactions_from_redis_buffer(
         self,
-    ) -> Optional[Dict[str, DailyEndUserSpendTransaction]]:
+    ) -> dict[str, DailyEndUserSpendTransaction] | None:
         """
         Gets all the daily end-user spend update transactions from Redis
         """
@@ -640,7 +638,7 @@ class RedisUpdateBuffer:
             return None
         list_of_daily_spend_update_transactions = [json.loads(transaction) for transaction in list_of_transactions]
         return cast(
-            Dict[str, DailyEndUserSpendTransaction],
+            dict[str, DailyEndUserSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),
@@ -648,7 +646,7 @@ class RedisUpdateBuffer:
 
     async def get_all_daily_agent_spend_update_transactions_from_redis_buffer(
         self,
-    ) -> Optional[Dict[str, DailyAgentSpendTransaction]]:
+    ) -> dict[str, DailyAgentSpendTransaction] | None:
         """
         Gets all the daily agent spend update transactions from Redis
         """
@@ -662,7 +660,7 @@ class RedisUpdateBuffer:
             return None
         list_of_daily_spend_update_transactions = [json.loads(transaction) for transaction in list_of_transactions]
         return cast(
-            Dict[str, DailyAgentSpendTransaction],
+            dict[str, DailyAgentSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),
@@ -670,7 +668,7 @@ class RedisUpdateBuffer:
 
     async def get_all_daily_tag_spend_update_transactions_from_redis_buffer(
         self,
-    ) -> Optional[Dict[str, DailyTagSpendTransaction]]:
+    ) -> dict[str, DailyTagSpendTransaction] | None:
         """
         Gets all the daily tag spend update transactions from Redis
         """
@@ -684,7 +682,7 @@ class RedisUpdateBuffer:
             return None
         list_of_daily_spend_update_transactions = [json.loads(transaction) for transaction in list_of_transactions]
         return cast(
-            Dict[str, DailyTagSpendTransaction],
+            dict[str, DailyTagSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),
@@ -692,8 +690,8 @@ class RedisUpdateBuffer:
 
     @staticmethod
     def _parse_list_of_transactions(
-        list_of_transactions: Union[Any, List[Any]],
-    ) -> List[DBSpendUpdateTransactions]:
+        list_of_transactions: Any | list[Any],
+    ) -> list[DBSpendUpdateTransactions]:
         """
         Parses the list of transactions from Redis
         """
@@ -704,7 +702,7 @@ class RedisUpdateBuffer:
 
     @staticmethod
     def _combine_list_of_transactions(
-        list_of_transactions: List[DBSpendUpdateTransactions],
+        list_of_transactions: list[DBSpendUpdateTransactions],
     ) -> DBSpendUpdateTransactions:
         """
         Combines the list of transactions into a single DBSpendUpdateTransactions object

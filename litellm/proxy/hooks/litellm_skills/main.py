@@ -26,7 +26,7 @@ Usage:
 
 import base64
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -74,7 +74,7 @@ class SkillsInjectionHook(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Process skills from container.skills before the LLM call.
 
@@ -98,8 +98,8 @@ class SkillsInjectionHook(CustomLogger):
 
         verbose_proxy_logger.debug(f"SkillsInjectionHook: Processing {len(skills)} skills")
 
-        litellm_skills: List[LiteLLM_SkillsTable] = []
-        anthropic_skills: List[Dict[str, Any]] = []
+        litellm_skills: list[LiteLLM_SkillsTable] = []
+        anthropic_skills: list[dict[str, Any]] = []
 
         # Separate skills by prefix
         for skill in skills:
@@ -137,7 +137,7 @@ class SkillsInjectionHook(CustomLogger):
     def _process_for_messages_api(
         self,
         data: dict,
-        litellm_skills: List[LiteLLM_SkillsTable],
+        litellm_skills: list[LiteLLM_SkillsTable],
         use_anthropic_format: bool = True,
     ) -> dict:
         """
@@ -153,9 +153,9 @@ class SkillsInjectionHook(CustomLogger):
         )
 
         tools = data.get("tools", [])
-        skill_contents: List[str] = []
-        all_skill_files: Dict[str, Dict[str, bytes]] = {}
-        all_module_paths: List[str] = []
+        skill_contents: list[str] = []
+        all_skill_files: dict[str, dict[str, bytes]] = {}
+        all_module_paths: list[str] = []
 
         for skill in litellm_skills:
             # Convert skill to Anthropic-style tool
@@ -208,7 +208,7 @@ class SkillsInjectionHook(CustomLogger):
     def _process_non_anthropic_model(
         self,
         data: dict,
-        litellm_skills: List[LiteLLM_SkillsTable],
+        litellm_skills: list[LiteLLM_SkillsTable],
     ) -> dict:
         """
         Process skills for non-Anthropic models (OpenAI format tools).
@@ -219,9 +219,9 @@ class SkillsInjectionHook(CustomLogger):
         - Stores skill files in metadata for sandbox execution
         """
         tools = data.get("tools", [])
-        skill_contents: List[str] = []
-        all_skill_files: Dict[str, Dict[str, bytes]] = {}
-        all_module_paths: List[str] = []
+        skill_contents: list[str] = []
+        all_skill_files: dict[str, dict[str, bytes]] = {}
+        all_module_paths: list[str] = []
 
         for skill in litellm_skills:
             # Convert skill to OpenAI-style tool
@@ -277,7 +277,7 @@ class SkillsInjectionHook(CustomLogger):
         self,
         skill_id: str,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> Optional[LiteLLM_SkillsTable]:
+    ) -> LiteLLM_SkillsTable | None:
         """
         Fetch a skill from the LiteLLM database.
 
@@ -323,8 +323,8 @@ class SkillsInjectionHook(CustomLogger):
         self,
         request_data: dict,
         response: Any,
-        call_type: Optional[CallTypes],
-    ) -> Optional[Any]:
+        call_type: CallTypes | None,
+    ) -> Any | None:
         """
         Post-call hook to handle automatic code execution.
 
@@ -354,7 +354,7 @@ class SkillsInjectionHook(CustomLogger):
 
         # Get skill files
         skill_files_by_id = litellm_metadata.get("_skill_files") or metadata.get("_skill_files", {})
-        all_skill_files: Dict[str, bytes] = {}
+        all_skill_files: dict[str, bytes] = {}
         for files_dict in skill_files_by_id.values():
             all_skill_files.update(files_dict)
 
@@ -388,7 +388,7 @@ class SkillsInjectionHook(CustomLogger):
             skill_files=all_skill_files,
         )
 
-    def _extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
+    def _extract_tool_calls(self, response: Any) -> list[dict[str, Any]]:
         """Extract tool calls from response, handling both formats."""
         tool_calls = []
 
@@ -438,7 +438,7 @@ class SkillsInjectionHook(CustomLogger):
         self,
         data: dict,
         response: Any,
-        skill_files: Dict[str, bytes],
+        skill_files: dict[str, bytes],
     ) -> Any:
         """
         Execute the code execution loop for messages API (Anthropic format).
@@ -464,7 +464,7 @@ class SkillsInjectionHook(CustomLogger):
         max_tokens = data.get("max_tokens", 4096)
 
         executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
-        generated_files: List[Dict[str, Any]] = []
+        generated_files: list[dict[str, Any]] = []
         current_response = response
 
         for iteration in range(self.max_iterations):
@@ -557,9 +557,9 @@ class SkillsInjectionHook(CustomLogger):
     async def _execute_code(
         self,
         code: str,
-        skill_files: Dict[str, bytes],
+        skill_files: dict[str, bytes],
         executor: Any,
-        generated_files: List[Dict[str, Any]],
+        generated_files: list[dict[str, Any]],
     ) -> str:
         """Execute code in sandbox and return result string."""
         try:
@@ -587,20 +587,20 @@ class SkillsInjectionHook(CustomLogger):
 
             return result or "Code executed successfully"
         except Exception as e:
-            return f"Code execution failed: {str(e)}"
+            return f"Code execution failed: {e!s}"
 
     async def _execute_skill_tool(
         self,
         tool_name: str,
-        tool_input: Dict[str, Any],
-        skill_files: Dict[str, bytes],
+        tool_input: dict[str, Any],
+        skill_files: dict[str, bytes],
         executor: Any,
-        generated_files: List[Dict[str, Any]],
+        generated_files: list[dict[str, Any]],
     ) -> str:
         """Execute a skill tool by generating and running code based on skill content."""
         # Generate code based on available skill modules
         # Look for Python modules in the skill
-        python_modules = [p for p in skill_files.keys() if p.endswith(".py") and not p.endswith("__init__.py")]
+        python_modules = [p for p in skill_files if p.endswith(".py") and not p.endswith("__init__.py")]
 
         # Try to find the main builder/creator module
         main_module = None
@@ -666,7 +666,7 @@ print('No executable skill module found')
         self,
         data: dict,
         response: Any,
-        skill_files: Dict[str, bytes],
+        skill_files: dict[str, bytes],
     ) -> Any:
         """
         Execute the code execution loop until model gives final response.
@@ -701,7 +701,7 @@ print('No executable skill module found')
         kwargs = {k: v for k, v in data.items() if k not in _EXCLUDED_ACOMPLETION_KEYS}
 
         executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
-        generated_files: List[Dict[str, Any]] = []
+        generated_files: list[dict[str, Any]] = []
         current_response: Any = response
 
         for iteration in range(self.max_iterations):
@@ -710,7 +710,7 @@ print('No executable skill module found')
             stop_reason = current_response.choices[0].finish_reason  # type: ignore[union-attr]
 
             # Build assistant message for conversation history
-            assistant_msg_dict: Dict[str, Any] = {
+            assistant_msg_dict: dict[str, Any] = {
                 "role": "assistant",
                 "content": assistant_message.content,
             }
@@ -776,9 +776,9 @@ print('No executable skill module found')
     async def _execute_code_tool(
         self,
         tool_call: Any,
-        skill_files: Dict[str, bytes],
+        skill_files: dict[str, bytes],
         executor: Any,
-        generated_files: List[Dict[str, Any]],
+        generated_files: list[dict[str, Any]],
     ) -> str:
         """Execute a litellm_code_execution tool call and return result string."""
         try:
@@ -821,12 +821,12 @@ print('No executable skill module found')
 
         except Exception as e:
             verbose_proxy_logger.error(f"SkillsInjectionHook: Code execution failed: {e}")
-            return f"Code execution failed: {str(e)}"
+            return f"Code execution failed: {e!s}"
 
     def _attach_files_to_response(
         self,
         response: Any,
-        generated_files: List[Dict[str, Any]],
+        generated_files: list[dict[str, Any]],
     ) -> Any:
         """
         Attach generated files to the response object.

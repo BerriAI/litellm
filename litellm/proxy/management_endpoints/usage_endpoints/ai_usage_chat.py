@@ -4,8 +4,9 @@ usage/spend data by querying the aggregated daily activity endpoints.
 """
 
 import json
+from collections.abc import AsyncIterator, Callable
 from datetime import date
-from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 from typing_extensions import TypedDict
 
@@ -50,7 +51,7 @@ class SSEToolCallEvent(TypedDict, total=False):
     type: Literal["tool_call"]
     tool_name: str
     tool_label: str
-    arguments: Dict[str, str]
+    arguments: dict[str, str]
     status: Literal["running", "complete", "error"]
     error: str
 
@@ -74,7 +75,7 @@ SSEEvent = SSEStatusEvent | SSEToolCallEvent | SSEChunkEvent | SSEDoneEvent | SS
 
 class ToolHandler(TypedDict):
     fetch: Callable[..., Any]
-    summarise: Callable[[Dict[str, Any]], str]
+    summarise: Callable[[dict[str, Any]], str]
     label: str
 
 
@@ -158,7 +159,7 @@ TOOLS_BASE = [_TOOL_USAGE]
 TOOLS_ADMIN = [_TOOL_USAGE, _TOOL_TEAM, _TOOL_TAG]
 
 
-def get_tools_for_role(is_admin: bool) -> List[Dict[str, Any]]:
+def get_tools_for_role(is_admin: bool) -> list[dict[str, Any]]:
     """Return the tool list appropriate for the user's role."""
     return TOOLS_ADMIN if is_admin else TOOLS_BASE
 
@@ -204,7 +205,7 @@ SYSTEM_PROMPT = _SYSTEM_PROMPT_BASE
 # ---------------------------------------------------------------------------
 
 
-def _parse_csv_ids(raw: Optional[str]) -> Optional[List[str]]:
+def _parse_csv_ids(raw: str | None) -> list[str] | None:
     if not raw:
         return None
     return [t.strip() for t in raw.split(",") if t.strip()]
@@ -213,7 +214,7 @@ def _parse_csv_ids(raw: Optional[str]) -> Optional[List[str]]:
 async def _query_activity(
     table_name: str,
     entity_id_field: str,
-    entity_id: Optional[Any],
+    entity_id: Any | None,
     start_date: str,
     end_date: str,
     *,
@@ -253,7 +254,7 @@ async def _query_activity(
     )
 
 
-async def _fetch_usage_data(start_date: str, end_date: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+async def _fetch_usage_data(start_date: str, end_date: str, user_id: str | None = None) -> dict[str, Any]:
     resp = await _query_activity(
         TABLE_DAILY_USER_SPEND,
         ENTITY_FIELD_USER,
@@ -265,7 +266,7 @@ async def _fetch_usage_data(start_date: str, end_date: str, user_id: Optional[st
     return resp.model_dump(mode="json")
 
 
-async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: Optional[str] = None) -> Dict[str, Any]:
+async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: str | None = None) -> dict[str, Any]:
     resp = await _query_activity(
         TABLE_DAILY_TEAM_SPEND,
         ENTITY_FIELD_TEAM,
@@ -276,7 +277,7 @@ async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: Optio
     return resp.model_dump(mode="json")
 
 
-async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: Optional[str] = None) -> Dict[str, Any]:
+async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: str | None = None) -> dict[str, Any]:
     resp = await _query_activity(
         TABLE_DAILY_TAG_SPEND,
         ENTITY_FIELD_TAG,
@@ -293,10 +294,10 @@ async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: Optional[s
 
 
 def _accumulate_breakdown(
-    results: List[Dict[str, Any]], dimension: str, fields: List[str]
-) -> Dict[str, Dict[str, float]]:
+    results: list[dict[str, Any]], dimension: str, fields: list[str]
+) -> dict[str, dict[str, float]]:
     """Aggregate a single breakdown dimension across days."""
-    totals: Dict[str, Dict[str, float]] = {}
+    totals: dict[str, dict[str, float]] = {}
     for day in results:
         for key, entry in day.get("breakdown", {}).get(dimension, {}).items():
             if key not in totals:
@@ -308,15 +309,15 @@ def _accumulate_breakdown(
 
 
 def _ranked_lines(
-    totals: Dict[str, Dict[str, float]],
-    fmt: Callable[[str, Dict[str, float]], str],
+    totals: dict[str, dict[str, float]],
+    fmt: Callable[[str, dict[str, float]], str],
     limit: int,
-) -> List[str]:
+) -> list[str]:
     """Sort by spend descending, format each entry, and truncate."""
     return [fmt(name, vals) for name, vals in sorted(totals.items(), key=lambda x: -x[1].get("spend", 0))[:limit]]
 
 
-def _summarise_usage_data(data: Dict[str, Any]) -> str:
+def _summarise_usage_data(data: dict[str, Any]) -> str:
     meta = data.get("metadata", {})
     results = data.get("results", [])
 
@@ -348,13 +349,13 @@ def _summarise_usage_data(data: Dict[str, Any]) -> str:
     return "\n".join(sections)
 
 
-def _summarise_entity_data(data: Dict[str, Any], entity_label: str) -> str:
+def _summarise_entity_data(data: dict[str, Any], entity_label: str) -> str:
     """Summarise team/tag entity usage data."""
     results = data.get("results", [])
     if not results:
         return f"No {entity_label} usage data found for the given date range."
 
-    totals: Dict[str, Dict[str, Any]] = {}
+    totals: dict[str, dict[str, Any]] = {}
     for day in results:
         for eid, entry in day.get("breakdown", {}).get("entities", {}).items():
             if eid not in totals:
@@ -378,7 +379,7 @@ def _summarise_entity_data(data: Dict[str, Any], entity_label: str) -> str:
 # Tool dispatch registry
 # ---------------------------------------------------------------------------
 
-TOOL_HANDLERS: Dict[str, ToolHandler] = {
+TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_usage_data": ToolHandler(
         fetch=_fetch_usage_data,
         summarise=_summarise_usage_data,
@@ -408,16 +409,16 @@ def _sse(event: SSEEvent) -> str:
 
 def _resolve_fetch_kwargs(
     fn_name: str,
-    fn_args: Dict[str, str],
-    user_id: Optional[str],
+    fn_args: dict[str, str],
+    user_id: str | None,
     is_admin: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build keyword arguments for a tool's fetch function."""
     start_date = fn_args.get("start_date", "")
     end_date = fn_args.get("end_date", "")
     if not start_date or not end_date:
         raise ValueError("Missing required start_date or end_date from tool arguments")
-    kwargs: Dict[str, Any] = {"start_date": start_date, "end_date": end_date}
+    kwargs: dict[str, Any] = {"start_date": start_date, "end_date": end_date}
     if fn_name == "get_usage_data":
         if not is_admin:
             if user_id is None:
@@ -442,8 +443,8 @@ def _resolve_fetch_kwargs(
 async def _execute_tool_call(
     handler: ToolHandler,
     fn_name: str,
-    fn_args: Dict[str, str],
-    user_id: Optional[str],
+    fn_args: dict[str, str],
+    user_id: str | None,
     is_admin: bool,
 ) -> str:
     """Run a single tool and return the summarised result text."""
@@ -454,8 +455,8 @@ async def _execute_tool_call(
 
 async def _process_tool_call(
     tc: Any,
-    chat_messages: List[Dict[str, Any]],
-    user_id: Optional[str],
+    chat_messages: list[dict[str, Any]],
+    user_id: str | None,
     is_admin: bool,
 ) -> AsyncIterator[str]:
     """Execute a single tool call, yielding SSE events for status."""
@@ -494,7 +495,7 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
-async def _stream_final_response(model: str, chat_messages: List[Dict[str, Any]]) -> AsyncIterator[str]:
+async def _stream_final_response(model: str, chat_messages: list[dict[str, Any]]) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
@@ -511,15 +512,15 @@ async def _stream_final_response(model: str, chat_messages: List[Dict[str, Any]]
 
 
 async def stream_usage_ai_chat(
-    messages: List[Dict[str, str]],
-    model: Optional[str] = None,
-    user_id: Optional[str] = None,
+    messages: list[dict[str, str]],
+    model: str | None = None,
+    user_id: str | None = None,
     is_admin: bool = False,
 ) -> AsyncIterator[str]:
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
     truncated = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
-    chat_messages: List[Dict[str, Any]] = [
+    chat_messages: list[dict[str, Any]] = [
         {"role": "system", "content": _build_system_prompt(is_admin)},
         *truncated,
     ]

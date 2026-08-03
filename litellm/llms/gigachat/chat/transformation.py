@@ -7,7 +7,8 @@ Transforms OpenAI-format requests to GigaChat format and back.
 import json
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -44,8 +45,6 @@ def is_valid_json(value: str) -> bool:
 class GigaChatError(BaseLLMException):
     """GigaChat API error."""
 
-    pass
-
 
 class GigaChatConfig(BaseConfig):
     """
@@ -62,36 +61,36 @@ class GigaChatConfig(BaseConfig):
         stream: Enable streaming
     """
 
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    max_tokens: Optional[int] = None
-    repetition_penalty: Optional[float] = None
-    profanity_check: Optional[bool] = None
+    temperature: float | None = None
+    top_p: float | None = None
+    max_tokens: int | None = None
+    repetition_penalty: float | None = None
+    profanity_check: bool | None = None
 
     def __init__(
         self,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        repetition_penalty: Optional[float] = None,
-        profanity_check: Optional[bool] = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
+        repetition_penalty: float | None = None,
+        profanity_check: bool | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
         # Instance variables for current request context
-        self._current_credentials: Optional[str] = None
-        self._current_api_base: Optional[str] = None
+        self._current_credentials: str | None = None
+        self._current_api_base: str | None = None
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """Get complete API URL for chat completions."""
         base = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
@@ -101,11 +100,11 @@ class GigaChatConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Set up headers with OAuth token.
@@ -124,7 +123,7 @@ class GigaChatConfig(BaseConfig):
 
         return headers
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Return list of supported OpenAI parameters."""
         return [
             "stream",
@@ -197,7 +196,7 @@ class GigaChatConfig(BaseConfig):
 
         return optional_params
 
-    def _convert_tools_to_functions(self, tools: List[dict]) -> List[dict]:
+    def _convert_tools_to_functions(self, tools: list[dict]) -> list[dict]:
         """Convert OpenAI tools format to GigaChat functions format."""
         functions = []
         for tool in tools:
@@ -212,7 +211,7 @@ class GigaChatConfig(BaseConfig):
                 )
         return functions
 
-    def _map_tool_choice(self, tool_choice: Union[str, dict]) -> Optional[Union[str, dict]]:
+    def _map_tool_choice(self, tool_choice: str | dict) -> str | dict | None:
         """
         Map OpenAI tool_choice to GigaChat function_call format.
 
@@ -252,7 +251,7 @@ class GigaChatConfig(BaseConfig):
         # Default to None (don't set function_call)
         return None
 
-    def _upload_image(self, image_url: str) -> Optional[str]:
+    def _upload_image(self, image_url: str) -> str | None:
         """
         Upload image to GigaChat and return file_id.
 
@@ -275,7 +274,7 @@ class GigaChatConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -310,7 +309,7 @@ class GigaChatConfig(BaseConfig):
 
         return request_data
 
-    def _transform_messages(self, messages: List[AllMessageValues]) -> List[dict]:
+    def _transform_messages(self, messages: list[AllMessageValues]) -> list[dict]:
         """Transform OpenAI messages to GigaChat format."""
         transformed = []
 
@@ -389,12 +388,12 @@ class GigaChatConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """Transform GigaChat response to OpenAI format."""
         try:
@@ -479,7 +478,7 @@ class GigaChatConfig(BaseConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         """Return GigaChat error class."""
         return GigaChatError(
@@ -490,9 +489,9 @@ class GigaChatConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         """Return streaming response iterator."""
         from .streaming import GigaChatModelResponseIterator
