@@ -7,20 +7,12 @@ import asyncio
 import math
 import os
 import sys
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
     Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
     cast,
 )
 
@@ -64,10 +56,47 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from prometheus_client.metrics import MetricWrapperBase
 else:
     AsyncIOScheduler = Any
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
+
+_NON_ENUM_METRIC_LABELS: frozenset[str] = frozenset(
+    (
+        "guardrail_name",
+        "status",
+        "error_type",
+        "hook_type",
+        "purpose",
+        "file_type",
+        "result",
+    )
+)
+
+
+class _ExcludedLabelMetric:
+    """Proxies a prometheus metric whose declared ``labelnames`` had globally
+    excluded labels removed, dropping those labels from every ``labels(...)``
+    call so the emitted arguments always match the metric's real label set."""
+
+    def __init__(
+        self,
+        metric: MetricWrapperBase,
+        original_labelnames: tuple[str, ...],
+        excluded_labels: frozenset[str],
+    ) -> None:
+        self._metric = metric
+        self._original_labelnames = original_labelnames
+        self._excluded_labels = excluded_labels
+
+    def labels(self, *labelvalues: str, **labelkwargs: str) -> MetricWrapperBase:
+        values = labelvalues or tuple(labelkwargs[name] for name in self._original_labelnames)
+        kept_values = tuple(
+            value for name, value in zip(self._original_labelnames, values) if name not in self._excluded_labels
+        )
+        return self._metric.labels(*kept_values) if kept_values else self._metric
+
 
 # Tiers a caller may name in a request, across the providers that accept the
 # parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock and
@@ -103,7 +132,7 @@ class PrometheusLogger(CustomLogger):
     _ADDITIVE_GUARDRAIL_MODES = frozenset((GuardrailEventHooks.pre_call.value, GuardrailEventHooks.post_call.value))
 
     @staticmethod
-    def get_instance() -> Optional["PrometheusLogger"]:
+    def get_instance() -> PrometheusLogger | None:
         """Find the PrometheusLogger instance from litellm.callbacks, if registered."""
         import litellm
 
@@ -122,6 +151,8 @@ class PrometheusLogger(CustomLogger):
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
 
+            self.exclude_metrics, self.exclude_labels = self._parse_exclude_config()
+
             # Cache resolved label sets per metric. Several entries in
             # ``PrometheusMetricLabels.get_labels`` read module-level toggles
             # (e.g. ``litellm.prometheus_emit_stream_label``,
@@ -134,7 +165,7 @@ class PrometheusLogger(CustomLogger):
             # logger init time pins the label set for the lifetime of the
             # logger so toggling these flags only takes effect after a
             # restart, keeping init-time and runtime label sets in sync.
-            self._cached_metric_labels: Dict[str, List[str]] = {}
+            self._cached_metric_labels: dict[str, list[str]] = {}
 
             _custom_buckets = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
@@ -652,10 +683,10 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            print_verbose(f"Got exception on init prometheus client {str(e)}")
+            print_verbose(f"Got exception on init prometheus client {e!s}")
             raise e
 
-    def _parse_prometheus_config(self) -> Dict[str, List[str]]:
+    def _parse_prometheus_config(self) -> dict[str, list[str]]:
         """Parse prometheus metrics configuration for label filtering and enabled metrics"""
         import litellm
         from litellm.types.integrations.prometheus import PrometheusMetricsConfig
@@ -696,7 +727,45 @@ class PrometheusLogger(CustomLogger):
         self._pretty_print_prometheus_config(label_filters)
         return label_filters
 
-    def _validate_all_configurations(self, parsed_configs: List) -> ValidationResults:
+    def _parse_exclude_config(self) -> tuple[frozenset[str], frozenset[str]]:
+        """Parse and validate the global ``exclude_metrics`` / ``exclude_labels`` settings."""
+        from typing import get_args
+
+        import litellm
+
+        exclude_metrics = frozenset(litellm.prometheus_exclude_metrics or ())
+        exclude_labels = frozenset(litellm.prometheus_exclude_labels or ())
+
+        valid_metrics = frozenset(get_args(DEFINED_PROMETHEUS_METRICS))
+        invalid_metrics = sorted(exclude_metrics - valid_metrics)
+
+        valid_labels = self._all_defined_labels()
+        invalid_labels = sorted(exclude_labels - valid_labels)
+
+        errors = (
+            *(f"Invalid metric name in prometheus_exclude_metrics: {metric}" for metric in invalid_metrics),
+            *(f"Invalid label name in prometheus_exclude_labels: {label}" for label in invalid_labels),
+        )
+        if errors:
+            raise ValueError("Prometheus exclude configuration validation failed:\n" + "\n".join(errors))
+
+        return exclude_metrics, exclude_labels
+
+    @staticmethod
+    def _all_defined_labels() -> frozenset[str]:
+        """Every label a metric can emit: enum labels, hard-coded labels, and configured custom labels / tags."""
+        import litellm
+
+        builtin_labels = frozenset(label.value for label in UserAPIKeyLabelNames)
+        custom_metadata_labels = frozenset(
+            _sanitize_prometheus_label_name(label) for label in litellm.custom_prometheus_metadata_labels
+        )
+        custom_tag_labels = frozenset(
+            _sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags
+        )
+        return builtin_labels | _NON_ENUM_METRIC_LABELS | custom_metadata_labels | custom_tag_labels
+
+    def _validate_all_configurations(self, parsed_configs: list) -> ValidationResults:
         """Validate all metric configurations and return collected errors"""
         metric_errors = []
         label_errors = []
@@ -717,7 +786,7 @@ class PrometheusLogger(CustomLogger):
 
         return ValidationResults(metric_errors=metric_errors, label_errors=label_errors)
 
-    def _validate_single_metric_name(self, metric_name: str) -> Optional[MetricValidationError]:
+    def _validate_single_metric_name(self, metric_name: str) -> MetricValidationError | None:
         """Validate a single metric name"""
         from typing import get_args
 
@@ -728,7 +797,7 @@ class PrometheusLogger(CustomLogger):
             )
         return None
 
-    def _validate_single_metric_labels(self, metric_name: str, labels: List[str]) -> Optional[LabelValidationError]:
+    def _validate_single_metric_labels(self, metric_name: str, labels: list[str]) -> LabelValidationError | None:
         """Validate labels for a single metric"""
         from typing import cast
 
@@ -746,7 +815,7 @@ class PrometheusLogger(CustomLogger):
             )
         return None
 
-    def _build_label_filters(self, parsed_configs: List) -> Dict[str, List[str]]:
+    def _build_label_filters(self, parsed_configs: list) -> dict[str, list[str]]:
         """Build label filters from validated configurations"""
         label_filters = {}
 
@@ -759,7 +828,7 @@ class PrometheusLogger(CustomLogger):
 
         return label_filters
 
-    def _validate_configured_metric_labels(self, metric_name: str, labels: List[str]):
+    def _validate_configured_metric_labels(self, metric_name: str, labels: list[str]):
         """
         Ensure that all the configured labels are valid for the metric
 
@@ -855,7 +924,7 @@ class PrometheusLogger(CustomLogger):
                 verbose_logger.error(label_error.message)
 
     def _pretty_print_invalid_labels_error(
-        self, metric_name: str, invalid_labels: List[str], valid_labels: List[str]
+        self, metric_name: str, invalid_labels: list[str], valid_labels: list[str]
     ) -> None:
         """Pretty print error message for invalid labels using rich"""
         try:
@@ -951,7 +1020,7 @@ class PrometheusLogger(CustomLogger):
             )
             raise ValueError(error.message)
 
-    def _pretty_print_prometheus_config(self, label_filters: Dict[str, List[str]]) -> None:
+    def _pretty_print_prometheus_config(self, label_filters: dict[str, list[str]]) -> None:
         """Pretty print the processed prometheus configuration using rich"""
         try:
             from rich.console import Console
@@ -1015,6 +1084,9 @@ class PrometheusLogger(CustomLogger):
 
     def _is_metric_enabled(self, metric_name: str) -> bool:
         """Check if a metric is enabled based on configuration"""
+        if metric_name in self.exclude_metrics:
+            return False
+
         # If no specific configuration is provided, enable all metrics (default behavior)
         if not hasattr(self, "enabled_metrics"):
             return True
@@ -1032,14 +1104,21 @@ class PrometheusLogger(CustomLogger):
             # Extract metric name from the first argument or 'name' keyword argument
             metric_name = args[0] if args else kwargs.get("name", "")
 
-            if self._is_metric_enabled(metric_name):
-                return metric_class(*args, **kwargs)
-            else:
+            if not self._is_metric_enabled(metric_name):
                 return NoOpMetric()
+
+            original_labelnames = tuple(kwargs.get("labelnames") or ())
+            if not (frozenset(original_labelnames) & self.exclude_labels):
+                return metric_class(*args, **kwargs)
+
+            kept = tuple(name for name in original_labelnames if name not in self.exclude_labels)
+            kept_kwargs = {**kwargs, "labelnames": kept}  # mutable-ok: ** needs a mapping to override labelnames
+            real_metric = metric_class(*args, **kept_kwargs)
+            return _ExcludedLabelMetric(real_metric, original_labelnames, self.exclude_labels)
 
         return factory
 
-    def get_labels_for_metric(self, metric_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
+    def get_labels_for_metric(self, metric_name: DEFINED_PROMETHEUS_METRICS) -> list[str]:
         """
         Get the labels for a metric, filtered if configured.
 
@@ -1059,19 +1138,15 @@ class PrometheusLogger(CustomLogger):
         # Get default labels for this metric from PrometheusMetricLabels
         default_labels = PrometheusMetricLabels.get_labels(metric_name)
 
-        # If no label filtering is configured for this metric, use default labels
-        if metric_name not in self.label_filters:
-            self._cached_metric_labels[metric_name] = default_labels
-            return default_labels
+        resolved_labels = [
+            label
+            for label in default_labels
+            if label not in self.exclude_labels
+            and (metric_name not in self.label_filters or label in self.label_filters[metric_name])
+        ]
 
-        # Get configured labels for this metric
-        configured_labels = self.label_filters[metric_name]
-
-        # Return intersection of configured and default labels to ensure we only use valid labels
-        filtered_labels = [label for label in default_labels if label in configured_labels]
-
-        self._cached_metric_labels[metric_name] = filtered_labels
-        return filtered_labels
+        self._cached_metric_labels[metric_name] = resolved_labels
+        return resolved_labels
 
     @staticmethod
     def _guardrail_is_additive(info: StandardLoggingGuardrailInformation) -> bool:
@@ -1112,7 +1187,7 @@ class PrometheusLogger(CustomLogger):
         self,
         standard_logging_payload: StandardLoggingPayload,
         enum_values: UserAPIKeyLabelValues,
-        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        label_context: PrometheusLabelFactoryContext | None = None,
     ) -> None:
         """Record litellm_overhead_with_guardrails_latency_metric (seconds): SDK overhead +
         pre/post-call guardrail time. Recorded outside the SDK-overhead gate so
@@ -1138,7 +1213,7 @@ class PrometheusLogger(CustomLogger):
         self,
         metric: Any,
         metric_name: DEFINED_PROMETHEUS_METRICS,
-        labels: Dict[str, Optional[str]],
+        labels: dict[str, str | None],
     ) -> None:
         """
         Cap the cardinality of metrics that include the ``end_user`` label.
@@ -1173,7 +1248,7 @@ class PrometheusLogger(CustomLogger):
         counter: Any,
         metric_name: DEFINED_PROMETHEUS_METRICS,
         enum_values: UserAPIKeyLabelValues,
-        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        label_context: PrometheusLabelFactoryContext | None = None,
         amount: float = 1.0,
     ) -> None:
         _labels = prometheus_label_factory(
@@ -1192,7 +1267,7 @@ class PrometheusLogger(CustomLogger):
         )
 
         # unpack kwargs
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+        standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
 
         if standard_logging_payload is None or not isinstance(standard_logging_payload, dict):
             raise ValueError(f"standard_logging_object is required, got={standard_logging_payload}")
@@ -1386,15 +1461,15 @@ class PrometheusLogger(CustomLogger):
     def _increment_token_metrics(
         self,
         standard_logging_payload: StandardLoggingPayload,
-        end_user_id: Optional[str],
-        user_api_key: Optional[str],
-        user_api_key_alias: Optional[str],
-        model: Optional[str],
-        user_api_team: Optional[str],
-        user_api_team_alias: Optional[str],
-        user_id: Optional[str],
+        end_user_id: str | None,
+        user_api_key: str | None,
+        user_api_key_alias: str | None,
+        model: str | None,
+        user_api_team: str | None,
+        user_api_team_alias: str | None,
+        user_id: str | None,
         enum_values: UserAPIKeyLabelValues,
-        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        label_context: PrometheusLabelFactoryContext | None = None,
     ):
         verbose_logger.debug("prometheus Logging - Enters token metrics function")
         # token metrics
@@ -1440,7 +1515,7 @@ class PrometheusLogger(CustomLogger):
         self,
         standard_logging_payload: StandardLoggingPayload,
         enum_values: UserAPIKeyLabelValues,
-        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        label_context: PrometheusLabelFactoryContext | None = None,
     ) -> None:
         """
         Increment per-token-type counters from the Usage object that providers
@@ -1462,7 +1537,7 @@ class PrometheusLogger(CustomLogger):
 
         cache_creation_detail_tokens = PrometheusLogger._resolve_cache_write_tokens(prompt_details)
 
-        detail_metrics: List[Tuple[Any, DEFINED_PROMETHEUS_METRICS, Any]] = [
+        detail_metrics: list[tuple[Any, DEFINED_PROMETHEUS_METRICS, Any]] = [
             (
                 self.litellm_input_cached_tokens_metric,
                 "litellm_input_cached_tokens_metric",
@@ -1563,7 +1638,7 @@ class PrometheusLogger(CustomLogger):
         self,
         standard_logging_payload: StandardLoggingPayload,
         enum_values: UserAPIKeyLabelValues,
-        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        label_context: PrometheusLabelFactoryContext | None = None,
     ):
         """
         Increment cache-related Prometheus metrics based on cache hit/miss status.
@@ -1716,14 +1791,14 @@ class PrometheusLogger(CustomLogger):
 
     async def _increment_remaining_budget_metrics(
         self,
-        user_api_team: Optional[str],
-        user_api_team_alias: Optional[str],
-        user_api_key: Optional[str],
-        user_api_key_alias: Optional[str],
+        user_api_team: str | None,
+        user_api_team_alias: str | None,
+        user_api_key: str | None,
+        user_api_key_alias: str | None,
         litellm_params: dict,
         response_cost: float,
-        user_id: Optional[str] = None,
-        user_api_key_org_id: Optional[str] = None,
+        user_id: str | None = None,
+        user_api_key_org_id: str | None = None,
     ):
         if (
             isinstance(self.litellm_remaining_team_budget_metric, NoOpMetric)
@@ -1796,16 +1871,16 @@ class PrometheusLogger(CustomLogger):
 
     def _increment_top_level_request_and_spend_metrics(
         self,
-        end_user_id: Optional[str],
-        user_api_key: Optional[str],
-        user_api_key_alias: Optional[str],
-        model: Optional[str],
-        user_api_team: Optional[str],
-        user_api_team_alias: Optional[str],
-        user_id: Optional[str],
+        end_user_id: str | None,
+        user_api_key: str | None,
+        user_api_key_alias: str | None,
+        model: str | None,
+        user_api_team: str | None,
+        user_api_team_alias: str | None,
+        user_id: str | None,
         response_cost: float,
         enum_values: UserAPIKeyLabelValues,
-        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        label_context: PrometheusLabelFactoryContext | None = None,
     ):
         PrometheusLogger._inc_labeled_counter(
             self,
@@ -1854,11 +1929,11 @@ class PrometheusLogger(CustomLogger):
 
     def _set_virtual_key_rate_limit_metrics(
         self,
-        user_api_key: Optional[str],
-        user_api_key_alias: Optional[str],
+        user_api_key: str | None,
+        user_api_key_alias: str | None,
         kwargs: dict,
         metadata: dict,
-        model_id: Optional[str] = None,
+        model_id: str | None = None,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -1915,17 +1990,17 @@ class PrometheusLogger(CustomLogger):
     def _set_latency_metrics(
         self,
         kwargs: dict,
-        model: Optional[str],
-        user_api_key: Optional[str],
-        user_api_key_alias: Optional[str],
-        user_api_team: Optional[str],
-        user_api_team_alias: Optional[str],
+        model: str | None,
+        user_api_key: str | None,
+        user_api_key_alias: str | None,
+        user_api_team: str | None,
+        user_api_team_alias: str | None,
         enum_values: UserAPIKeyLabelValues,
-        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        label_context: PrometheusLabelFactoryContext | None = None,
     ):
         # latency metrics
         end_time: datetime = kwargs.get("end_time") or datetime.now()
-        start_time: Optional[datetime] = kwargs.get("start_time")
+        start_time: datetime | None = kwargs.get("start_time")
         api_call_start_time = kwargs.get("api_call_start_time", None)
         completion_start_time = kwargs.get("completion_start_time", None)
         time_to_first_token_seconds = self._safe_duration_seconds(
@@ -2057,16 +2132,14 @@ class PrometheusLogger(CustomLogger):
                 response_cost=0,
             )
         except Exception as e:
-            verbose_logger.exception("prometheus Layer Error(): Exception occured - {}".format(str(e)))
-            pass
-        pass
+            verbose_logger.exception(f"prometheus Layer Error(): Exception occured - {e!s}")
 
     def _extract_status_code(
         self,
-        kwargs: Optional[dict] = None,
-        enum_values: Optional[Any] = None,
-        exception: Optional[Exception] = None,
-    ) -> Optional[int]:
+        kwargs: dict | None = None,
+        enum_values: Any | None = None,
+        exception: Exception | None = None,
+    ) -> int | None:
         """
         Extract HTTP status code from various input formats for validation.
 
@@ -2116,8 +2189,8 @@ class PrometheusLogger(CustomLogger):
 
     def _is_invalid_api_key_request(
         self,
-        status_code: Optional[int],
-        exception: Optional[Exception] = None,
+        status_code: int | None,
+        exception: Exception | None = None,
     ) -> bool:
         """
         Determine if a request has an invalid API key based on status code and exception.
@@ -2155,11 +2228,11 @@ class PrometheusLogger(CustomLogger):
 
     def _should_skip_metrics_for_invalid_key(
         self,
-        kwargs: Optional[dict] = None,
-        user_api_key_dict: Optional[Any] = None,
-        enum_values: Optional[Any] = None,
-        standard_logging_payload: Optional[Union[dict, StandardLoggingPayload]] = None,
-        exception: Optional[Exception] = None,
+        kwargs: dict | None = None,
+        user_api_key_dict: Any | None = None,
+        enum_values: Any | None = None,
+        standard_logging_payload: dict | StandardLoggingPayload | None = None,
+        exception: Exception | None = None,
     ) -> bool:
         """
         Determine if Prometheus metrics should be skipped for invalid API key requests.
@@ -2197,7 +2270,7 @@ class PrometheusLogger(CustomLogger):
         return False
 
     @staticmethod
-    def _extract_api_provider_from_request_data(request_data: dict) -> Optional[str]:
+    def _extract_api_provider_from_request_data(request_data: dict) -> str | None:
         """
         Best-effort provider for the client-side failure path.
 
@@ -2238,7 +2311,7 @@ class PrometheusLogger(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
-        traceback_str: Optional[str] = None,
+        traceback_str: str | None = None,
     ):
         """
         Track client side failures
@@ -2310,8 +2383,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.exception("prometheus Layer Error(): Exception occured - {}".format(str(e)))
-            pass
+            verbose_logger.exception(f"prometheus Layer Error(): Exception occured - {e!s}")
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
@@ -2321,7 +2393,6 @@ class PrometheusLogger(CustomLogger):
         double-counting. It is incremented in async_log_success_event which fires
         for all successful requests (both streaming and non-streaming).
         """
-        pass
 
     def _safe_get(self, obj: Any, key: str, default: Any = None) -> Any:
         """Get value from dict or Pydantic model."""
@@ -2331,7 +2402,7 @@ class PrometheusLogger(CustomLogger):
             return obj.get(key, default)
         return getattr(obj, key, default)
 
-    def _extract_deployment_failure_label_values(self, request_kwargs: dict) -> Dict[str, Optional[str]]:
+    def _extract_deployment_failure_label_values(self, request_kwargs: dict) -> dict[str, str | None]:
         """
         Extract label values for deployment failure metrics from all available
         sources in request_kwargs. Falls back to litellm_params metadata and
@@ -2356,7 +2427,7 @@ class PrometheusLogger(CustomLogger):
         # Extract user_api_key_auth if present (proxy injects this, skipped in merge)
         user_api_key_auth = _litellm_params_metadata.get("user_api_key_auth")
 
-        def _get_api_key_alias() -> Optional[str]:
+        def _get_api_key_alias() -> str | None:
             val = _metadata.get("user_api_key_alias")
             if val is not None:
                 return val
@@ -2367,7 +2438,7 @@ class PrometheusLogger(CustomLogger):
                 return getattr(user_api_key_auth, "key_alias", None)
             return None
 
-        def _get_team_id() -> Optional[str]:
+        def _get_team_id() -> str | None:
             val = _metadata.get("user_api_key_team_id")
             if val is not None:
                 return val
@@ -2378,7 +2449,7 @@ class PrometheusLogger(CustomLogger):
                 return getattr(user_api_key_auth, "team_id", None)
             return None
 
-        def _get_team_alias() -> Optional[str]:
+        def _get_team_alias() -> str | None:
             val = _metadata.get("user_api_key_team_alias")
             if val is not None:
                 return val
@@ -2389,7 +2460,7 @@ class PrometheusLogger(CustomLogger):
                 return getattr(user_api_key_auth, "team_alias", None)
             return None
 
-        def _get_hashed_api_key() -> Optional[str]:
+        def _get_hashed_api_key() -> str | None:
             val = _metadata.get("user_api_key_hash")
             if val is not None:
                 return val
@@ -2536,20 +2607,17 @@ class PrometheusLogger(CustomLogger):
                 label_context=_deployment_label_ctx,
             )
 
-            pass
         except Exception as e:
-            verbose_logger.debug(
-                "Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - {}".format(str(e))
-            )
+            verbose_logger.debug(f"Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - {e!s}")
 
     def _set_deployment_tpm_rpm_limit_metrics(
         self,
         model_info: dict,
         litellm_params: dict,
-        litellm_model_name: Optional[str],
-        model_id: Optional[str],
-        api_base: Optional[str],
-        llm_provider: Optional[str],
+        litellm_model_name: str | None,
+        model_id: str | None,
+        api_base: str | None,
+        llm_provider: str | None,
     ):
         """
         Set the deployment TPM and RPM limits metrics
@@ -2585,7 +2653,7 @@ class PrometheusLogger(CustomLogger):
         self,
         standard_logging_payload: StandardLoggingPayload,
         enum_values: UserAPIKeyLabelValues,
-        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        label_context: PrometheusLabelFactoryContext | None = None,
     ) -> None:
         """
         Populate ``litellm_remaining_tokens_metric`` /
@@ -2655,7 +2723,7 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
         except Exception as e:
             verbose_logger.exception(
-                "Prometheus Error: _async_set_router_remaining_metrics. Exception occured - {}".format(str(e))
+                f"Prometheus Error: _async_set_router_remaining_metrics. Exception occured - {e!s}"
             )
 
     def set_llm_deployment_success_metrics(
@@ -2665,11 +2733,11 @@ class PrometheusLogger(CustomLogger):
         end_time,
         enum_values: UserAPIKeyLabelValues,
         output_tokens: float = 1.0,
-        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        label_context: PrometheusLabelFactoryContext | None = None,
     ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
-            standard_logging_payload: Optional[StandardLoggingPayload] = request_kwargs.get("standard_logging_object")
+            standard_logging_payload: StandardLoggingPayload | None = request_kwargs.get("standard_logging_object")
 
             if standard_logging_payload is None:
                 return
@@ -2700,8 +2768,8 @@ class PrometheusLogger(CustomLogger):
                     llm_provider=llm_provider,
                 )
 
-            remaining_requests: Optional[int] = None
-            remaining_tokens: Optional[int] = None
+            remaining_requests: int | None = None
+            remaining_tokens: int | None = None
             if additional_headers := standard_logging_payload["hidden_params"]["additional_headers"]:
                 # OpenAI / OpenAI Compatible headers
                 remaining_requests = additional_headers.get("x_ratelimit_remaining_requests", None)
@@ -2773,7 +2841,7 @@ class PrometheusLogger(CustomLogger):
 
             # Track deployment Latency
             response_ms: timedelta = end_time - start_time
-            time_to_first_token_response_time: Optional[timedelta] = None
+            time_to_first_token_response_time: timedelta | None = None
 
             if request_kwargs.get("stream", None) is not None and request_kwargs["stream"] is True:
                 # only log ttft for streaming request
@@ -2799,9 +2867,7 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_deployment_latency_per_output_token.labels(**_labels).observe(latency_per_token)
 
         except Exception as e:
-            verbose_logger.exception(
-                "Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {}".format(str(e))
-            )
+            verbose_logger.exception(f"Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {e!s}")
             return
 
     def _record_guardrail_metrics(
@@ -2809,7 +2875,7 @@ class PrometheusLogger(CustomLogger):
         guardrail_name: str,
         latency_seconds: float,
         status: str,
-        error_type: Optional[str],
+        error_type: str | None,
         hook_type: str,
     ):
         """
@@ -2846,7 +2912,7 @@ class PrometheusLogger(CustomLogger):
                     hook_type=hook_type,
                 ).inc()
         except Exception as e:
-            verbose_logger.debug(f"Error recording guardrail metrics: {str(e)}")
+            verbose_logger.debug(f"Error recording guardrail metrics: {e!s}")
 
     ########################################
     # Managed Batch Metric Recording Methods
@@ -2854,11 +2920,11 @@ class PrometheusLogger(CustomLogger):
 
     def record_managed_batch_created(
         self,
-        model: Optional[str],
-        api_provider: Optional[str],
-        user: Optional[str],
-        user_email: Optional[str],
-        api_key_alias: Optional[str],
+        model: str | None,
+        api_provider: str | None,
+        user: str | None,
+        user_email: str | None,
+        api_key_alias: str | None,
     ):
         try:
             self.litellm_managed_batch_created_total.labels(
@@ -2876,9 +2942,9 @@ class PrometheusLogger(CustomLogger):
         size_bytes: int,
         purpose: str,
         file_type: str,
-        model: Optional[str] = None,
-        api_provider: Optional[str] = None,
-        user: Optional[str] = None,
+        model: str | None = None,
+        api_provider: str | None = None,
+        user: str | None = None,
     ):
         """Record the size of a managed file. Uses a gauge (last-seen value per label combination)."""
         try:
@@ -2895,8 +2961,8 @@ class PrometheusLogger(CustomLogger):
     def record_managed_batch_duration(
         self,
         duration_seconds: float,
-        model: Optional[str] = None,
-        api_provider: Optional[str] = None,
+        model: str | None = None,
+        api_provider: str | None = None,
     ):
         try:
             self.litellm_managed_batch_duration_seconds.labels(
@@ -2908,11 +2974,11 @@ class PrometheusLogger(CustomLogger):
 
     def record_managed_file_created(
         self,
-        model: Optional[str],
-        api_provider: Optional[str],
-        user: Optional[str],
-        user_email: Optional[str],
-        api_key_alias: Optional[str],
+        model: str | None,
+        api_provider: str | None,
+        user: str | None,
+        user_email: str | None,
+        api_key_alias: str | None,
     ):
         try:
             self.litellm_managed_file_created_total.labels(
@@ -2935,7 +3001,7 @@ class PrometheusLogger(CustomLogger):
     def record_check_batch_cost_run(
         self,
         jobs_polled: int,
-        processed_models: Optional[List[Tuple[Optional[str], Optional[str]]]] = None,
+        processed_models: list[tuple[str | None, str | None]] | None = None,
     ):
         """
         Record CheckBatchCost polling metrics.
@@ -3008,8 +3074,8 @@ class PrometheusLogger(CustomLogger):
 
     @staticmethod
     def _extract_rate_limit_labels(
-        exception: Optional[Exception],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        exception: Exception | None,
+    ) -> tuple[str | None, str | None]:
         """
         Pull the unified ``category`` / ``rate_limit_type`` fields off any
         exception that declares them (``litellm.RateLimitError`` and bare-
@@ -3049,7 +3115,7 @@ class PrometheusLogger(CustomLogger):
             metadata=_metadata
         )
         _new_model = kwargs.get("model")
-        _tags = cast(List[str], kwargs.get("tags") or [])
+        _tags = cast(list[str], kwargs.get("tags") or [])
 
         enum_values = UserAPIKeyLabelValues(
             requested_model=original_model_group,
@@ -3087,7 +3153,7 @@ class PrometheusLogger(CustomLogger):
         _new_model = kwargs.get("model")
         _metadata_key = get_metadata_variable_name_from_kwargs(kwargs)
         _metadata = kwargs.get(_metadata_key) or {}
-        _tags = cast(List[str], kwargs.get("tags") or [])
+        _tags = cast(list[str], kwargs.get("tags") or [])
         standard_metadata: StandardLoggingMetadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=_metadata
         )
@@ -3116,8 +3182,8 @@ class PrometheusLogger(CustomLogger):
         self,
         state: int,
         litellm_model_name: str,
-        model_id: Optional[str],
-        api_base: Optional[str],
+        model_id: str | None,
+        api_base: str | None,
         api_provider: str,
     ):
         """
@@ -3147,8 +3213,8 @@ class PrometheusLogger(CustomLogger):
     def set_deployment_partial_outage(
         self,
         litellm_model_name: str,
-        model_id: Optional[str],
-        api_base: Optional[str],
+        model_id: str | None,
+        api_base: str | None,
         api_provider: str,
     ):
         self.set_litellm_deployment_state(1, litellm_model_name, model_id, api_base, api_provider)
@@ -3156,8 +3222,8 @@ class PrometheusLogger(CustomLogger):
     def set_deployment_complete_outage(
         self,
         litellm_model_name: str,
-        model_id: Optional[str],
-        api_base: Optional[str],
+        model_id: str | None,
+        api_base: str | None,
         api_provider: str,
     ):
         self.set_litellm_deployment_state(2, litellm_model_name, model_id, api_base, api_provider)
@@ -3201,7 +3267,7 @@ class PrometheusLogger(CustomLogger):
             )
         )
 
-    def _safe_get_remaining_budget(self, max_budget: Optional[float], spend: Optional[float]) -> float:
+    def _safe_get_remaining_budget(self, max_budget: float | None, spend: float | None) -> float:
         if max_budget is None:
             return float("inf")
 
@@ -3212,8 +3278,8 @@ class PrometheusLogger(CustomLogger):
 
     async def _initialize_budget_metrics(
         self,
-        data_fetch_function: Callable[..., Awaitable[Tuple[List[Any], Optional[int]]]],
-        set_metrics_function: Callable[[List[Any]], Awaitable[None]],
+        data_fetch_function: Callable[..., Awaitable[tuple[list[Any], int | None]]],
+        set_metrics_function: Callable[[list[Any]], Awaitable[None]],
         data_type: Literal["teams", "keys", "users", "orgs"],
     ):
         """
@@ -3249,7 +3315,7 @@ class PrometheusLogger(CustomLogger):
                 await set_metrics_function(data)
 
         except Exception as e:
-            verbose_logger.exception(f"Error initializing {data_type} budget metrics: {str(e)}")
+            verbose_logger.exception(f"Error initializing {data_type} budget metrics: {e!s}")
 
     async def _initialize_team_budget_metrics(self):
         """
@@ -3264,7 +3330,7 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.debug("Prometheus: skipping team metrics initialization, DB not initialized")
             return
 
-        async def fetch_teams(page_size: int, page: int) -> Tuple[List[LiteLLM_TeamTable], Optional[int]]:
+        async def fetch_teams(page_size: int, page: int) -> tuple[list[LiteLLM_TeamTable], int | None]:
             teams, total_count = await get_paginated_teams(prisma_client=prisma_client, page_size=page_size, page=page)
             if total_count is None:
                 total_count = len(teams)
@@ -3292,9 +3358,9 @@ class PrometheusLogger(CustomLogger):
 
         async def fetch_keys(
             page_size: int, page: int
-        ) -> Tuple[
-            List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]],
-            Optional[int],
+        ) -> tuple[
+            list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken],
+            int | None,
         ]:
             key_list_response = await _list_key_helper(
                 prisma_client=prisma_client,
@@ -3330,7 +3396,7 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.debug("Prometheus: skipping user metrics initialization, DB not initialized")
             return
 
-        async def fetch_users(page_size: int, page: int) -> Tuple[List[LiteLLM_UserTable], Optional[int]]:
+        async def fetch_users(page_size: int, page: int) -> tuple[list[LiteLLM_UserTable], int | None]:
             skip = (page - 1) * page_size
             users = await UserRepository(prisma_client).table.find_many(
                 skip=skip,
@@ -3356,7 +3422,7 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.debug("Prometheus: skipping org metrics initialization, DB not initialized")
             return
 
-        async def fetch_orgs(page_size: int, page: int) -> Tuple[list, Optional[int]]:
+        async def fetch_orgs(page_size: int, page: int) -> tuple[list, int | None]:
             skip = (page - 1) * page_size
             orgs = await OrganizationRepository(prisma_client).table.find_many(
                 skip=skip,
@@ -3440,20 +3506,20 @@ class PrometheusLogger(CustomLogger):
             self.litellm_teams_count_metric.set(total_teams)
             verbose_logger.debug(f"Prometheus: set litellm_teams_count to {total_teams}")
         except Exception as e:
-            verbose_logger.exception(f"Error initializing user/team count metrics: {str(e)}")
+            verbose_logger.exception(f"Error initializing user/team count metrics: {e!s}")
 
-    async def _set_key_list_budget_metrics(self, keys: List[Union[str, UserAPIKeyAuth]]):
+    async def _set_key_list_budget_metrics(self, keys: list[str | UserAPIKeyAuth]):
         """Helper function to set budget metrics for a list of keys"""
         for key in keys:
             if isinstance(key, UserAPIKeyAuth):
                 self._set_key_budget_metrics(key)
 
-    async def _set_team_list_budget_metrics(self, teams: List[LiteLLM_TeamTable]):
+    async def _set_team_list_budget_metrics(self, teams: list[LiteLLM_TeamTable]):
         """Helper function to set budget metrics for a list of teams"""
         for team in teams:
             self._set_team_budget_metrics(team)
 
-    async def _set_user_list_budget_metrics(self, users: List[LiteLLM_UserTable]):
+    async def _set_user_list_budget_metrics(self, users: list[LiteLLM_UserTable]):
         """Helper function to set budget metrics for a list of users"""
         for user in users:
             self._set_user_budget_metrics(user)
@@ -3472,10 +3538,10 @@ class PrometheusLogger(CustomLogger):
 
     async def _set_team_budget_metrics_after_api_request(
         self,
-        user_api_team: Optional[str],
-        user_api_team_alias: Optional[str],
-        team_spend: Optional[float],
-        team_max_budget: Optional[float],
+        user_api_team: str | None,
+        user_api_team_alias: str | None,
+        team_spend: float | None,
+        team_max_budget: float | None,
         response_cost: float,
     ):
         """
@@ -3503,8 +3569,8 @@ class PrometheusLogger(CustomLogger):
         self,
         team_id: str,
         team_alias: str,
-        spend: Optional[float],
-        max_budget: Optional[float],
+        spend: float | None,
+        max_budget: float | None,
         response_cost: float,
     ) -> LiteLLM_TeamTable:
         """
@@ -3531,7 +3597,7 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting team info: {str(e)}")
+            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting team info: {e!s}")
             return team_object
 
         if team_info:
@@ -3600,7 +3666,7 @@ class PrometheusLogger(CustomLogger):
 
     async def _set_org_budget_metrics_after_api_request(
         self,
-        org_id: Optional[str],
+        org_id: str | None,
         response_cost: float,
     ):
         """
@@ -3629,7 +3695,7 @@ class PrometheusLogger(CustomLogger):
                 include_budget_table=True,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting org info: {str(e)}")
+            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting org info: {e!s}")
             return
 
         if org_info is None:
@@ -3654,8 +3720,8 @@ class PrometheusLogger(CustomLogger):
         org_id: str,
         org_alias: str,
         spend: float,
-        max_budget: Optional[float],
-        budget_reset_at: Optional[datetime],
+        max_budget: float | None,
+        budget_reset_at: datetime | None,
     ):
         """
         Set org budget metrics for a single org
@@ -3735,11 +3801,11 @@ class PrometheusLogger(CustomLogger):
 
     async def _set_api_key_budget_metrics_after_api_request(
         self,
-        user_api_key: Optional[str],
-        user_api_key_alias: Optional[str],
+        user_api_key: str | None,
+        user_api_key_alias: str | None,
         response_cost: float,
-        key_max_budget: Optional[float],
-        key_spend: Optional[float],
+        key_max_budget: float | None,
+        key_spend: float | None,
     ):
         if isinstance(self.litellm_remaining_api_key_budget_metric, NoOpMetric):
             return
@@ -3758,8 +3824,8 @@ class PrometheusLogger(CustomLogger):
         self,
         user_api_key: str,
         user_api_key_alias: str,
-        key_max_budget: Optional[float],
-        key_spend: Optional[float],
+        key_max_budget: float | None,
+        key_spend: float | None,
         response_cost: float,
     ) -> UserAPIKeyAuth:
         """
@@ -3786,15 +3852,15 @@ class PrometheusLogger(CustomLogger):
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting key info: {str(e)}")
+            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting key info: {e!s}")
 
         return user_api_key_dict
 
     async def _set_user_budget_metrics_after_api_request(
         self,
-        user_id: Optional[str],
-        user_spend: Optional[float],
-        user_max_budget: Optional[float],
+        user_id: str | None,
+        user_spend: float | None,
+        user_max_budget: float | None,
         response_cost: float,
     ):
         """
@@ -3820,8 +3886,8 @@ class PrometheusLogger(CustomLogger):
     async def _assemble_user_object(
         self,
         user_id: str,
-        spend: Optional[float],
-        max_budget: Optional[float],
+        spend: float | None,
+        max_budget: float | None,
         response_cost: float,
     ) -> LiteLLM_UserTable:
         """
@@ -3851,7 +3917,7 @@ class PrometheusLogger(CustomLogger):
                 check_db_only=False,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting user info: {str(e)}")
+            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting user info: {e!s}")
             return user_object
 
         if user_info:
@@ -3921,7 +3987,7 @@ class PrometheusLogger(CustomLogger):
         self,
         start_time: Any,
         end_time: Any,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Compute the duration in seconds between two objects.
 
@@ -3941,7 +4007,7 @@ class PrometheusLogger(CustomLogger):
         """
         from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
 
-        prometheus_loggers: List[CustomLogger] = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        prometheus_loggers: list[CustomLogger] = litellm.logging_callback_manager.get_custom_loggers_for_type(
             callback_type=PrometheusLogger
         )
         # we need to get the initialized prometheus logger instance(s) and call logger.initialize_remaining_budget_metrics() on them
@@ -3991,10 +4057,10 @@ class PrometheusLogger(CustomLogger):
 
 
 def _prometheus_labels_from_context(
-    supported_enum_labels: List[str],
+    supported_enum_labels: list[str],
     ctx: PrometheusLabelFactoryContext,
-) -> Dict[str, Optional[str]]:
-    filtered_labels: Dict[str, Optional[str]] = {
+) -> dict[str, str | None]:
+    filtered_labels: dict[str, str | None] = {
         label: ctx._sanitized_enum[label] for label in supported_enum_labels if label in ctx._sanitized_enum
     }
 
@@ -4017,11 +4083,11 @@ def _prometheus_labels_from_context(
 
 
 def prometheus_label_factory(
-    supported_enum_labels: List[str],
+    supported_enum_labels: list[str],
     enum_values: UserAPIKeyLabelValues,
-    tag: Optional[str] = None,
+    tag: str | None = None,
     *,
-    label_context: Optional[PrometheusLabelFactoryContext] = None,
+    label_context: PrometheusLabelFactoryContext | None = None,
 ) -> dict:
     """
     Returns a dictionary of label + values for prometheus.
@@ -4076,7 +4142,7 @@ def prometheus_label_factory(
     return filtered_labels
 
 
-def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
+def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:
     """
     Get custom labels from metadata
     """
@@ -4084,7 +4150,7 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
     if keys is None or len(keys) == 0:
         return {}
 
-    result: Dict[str, str] = {}
+    result: dict[str, str] = {}
 
     for key in keys:
         # Split the dot notation key into parts
@@ -4147,8 +4213,8 @@ def get_service_tier_from_standard_logging_payload(
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(
-    standard_logging_payload: Optional[dict],
-) -> Dict[str, Any]:
+    standard_logging_payload: dict | None,
+) -> dict[str, Any]:
     """
     Combine the metadata sources that can supply custom Prometheus labels.
 
@@ -4206,7 +4272,7 @@ def _tag_matches_wildcard_configured_pattern(tags: Sequence[str], configured_tag
     return any(re.match(pattern=regex_pattern, string=tag) for tag in tags)
 
 
-def get_custom_labels_from_tags(tags: Sequence[str]) -> Dict[str, str]:
+def get_custom_labels_from_tags(tags: Sequence[str]) -> dict[str, str]:
     """
     Get custom labels from tags based on admin configuration.
 
@@ -4234,7 +4300,7 @@ def get_custom_labels_from_tags(tags: Sequence[str]) -> Dict[str, str]:
     if configured_tags is None or len(configured_tags) == 0:
         return {}
 
-    result: Dict[str, str] = {}
+    result: dict[str, str] = {}
 
     for configured_tag in configured_tags:
         label_name = _sanitize_prometheus_label_name(f"tag_{configured_tag}")

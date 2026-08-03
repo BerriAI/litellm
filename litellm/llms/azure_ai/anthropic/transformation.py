@@ -2,14 +2,10 @@
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
 
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-
-if TYPE_CHECKING:
-    pass
 
 
 def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
@@ -37,7 +33,7 @@ class AzureAnthropicConfig(AnthropicConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "azure_ai"
 
     def should_strip_billing_metadata(self) -> bool:
@@ -47,12 +43,12 @@ class AzureAnthropicConfig(AnthropicConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: Union[dict, GenericLiteLLMParams],
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Dict:
+        litellm_params: dict | GenericLiteLLMParams,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
         """
         Validate environment and set up Azure authentication headers.
         Azure supports:
@@ -110,7 +106,7 @@ class AzureAnthropicConfig(AnthropicConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

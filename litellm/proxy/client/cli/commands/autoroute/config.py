@@ -230,11 +230,11 @@ def master_key_from_config(config: dict[str, JsonValue]) -> str | None:
 
 __all__ = [
     "AUTOROUTER_MODEL_NAME",
+    "DEFAULT_KEYWORD_TIER_RULES",
     "TIER_NAMES",
     "AutorouteConfig",
     "ClassifierChoice",
     "ConfigGenerationError",
-    "DEFAULT_KEYWORD_TIER_RULES",
     "DiscoveredModel",
     "HeuristicClassifier",
     "KeywordTierRule",

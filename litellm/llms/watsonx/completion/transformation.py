@@ -1,14 +1,9 @@
 import time
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Union,
 )
 
 import httpx
@@ -73,39 +68,39 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
     - `stream` (bool): If True, the model will return a stream of responses.
     """
 
-    decoding_method: Optional[str] = "sample"
-    temperature: Optional[float] = None
-    max_new_tokens: Optional[int] = None  # litellm.max_tokens
-    min_new_tokens: Optional[int] = None
-    length_penalty: Optional[dict] = None  # e.g {"decay_factor": 2.5, "start_index": 5}
-    stop_sequences: Optional[List[str]] = None  # e.g ["}", ")", "."]
-    top_k: Optional[int] = None
-    top_p: Optional[float] = None
-    repetition_penalty: Optional[float] = None
-    truncate_input_tokens: Optional[int] = None
-    include_stop_sequences: Optional[bool] = False
-    return_options: Optional[Dict[str, bool]] = None
-    random_seed: Optional[int] = None  # e.g 42
-    moderations: Optional[dict] = None
-    stream: Optional[bool] = False
+    decoding_method: str | None = "sample"
+    temperature: float | None = None
+    max_new_tokens: int | None = None  # litellm.max_tokens
+    min_new_tokens: int | None = None
+    length_penalty: dict | None = None  # e.g {"decay_factor": 2.5, "start_index": 5}
+    stop_sequences: list[str] | None = None  # e.g ["}", ")", "."]
+    top_k: int | None = None
+    top_p: float | None = None
+    repetition_penalty: float | None = None
+    truncate_input_tokens: int | None = None
+    include_stop_sequences: bool | None = False
+    return_options: dict[str, bool] | None = None
+    random_seed: int | None = None  # e.g 42
+    moderations: dict | None = None
+    stream: bool | None = False
 
     def __init__(
         self,
-        decoding_method: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_new_tokens: Optional[int] = None,
-        min_new_tokens: Optional[int] = None,
-        length_penalty: Optional[dict] = None,
-        stop_sequences: Optional[List[str]] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        repetition_penalty: Optional[float] = None,
-        truncate_input_tokens: Optional[int] = None,
-        include_stop_sequences: Optional[bool] = None,
-        return_options: Optional[dict] = None,
-        random_seed: Optional[int] = None,
-        moderations: Optional[dict] = None,
-        stream: Optional[bool] = None,
+        decoding_method: str | None = None,
+        temperature: float | None = None,
+        max_new_tokens: int | None = None,
+        min_new_tokens: int | None = None,
+        length_penalty: dict | None = None,
+        stop_sequences: list[str] | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        repetition_penalty: float | None = None,
+        truncate_input_tokens: int | None = None,
+        include_stop_sequences: bool | None = None,
+        return_options: dict | None = None,
+        random_seed: int | None = None,
+        moderations: dict | None = None,
+        stream: bool | None = None,
         **kwargs,
     ) -> None:
         locals_ = locals().copy()
@@ -153,11 +148,11 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: Dict,
-        optional_params: Dict,
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         extra_body = {}
         for k, v in non_default_params.items():
             if k == "max_tokens":
@@ -211,7 +206,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
                 optional_params[mapped_params[param]] = value
         return optional_params
 
-    def get_eu_regions(self) -> List[str]:
+    def get_eu_regions(self) -> list[str]:
         """
         Source: https://www.ibm.com/docs/en/watsonx/saas?topic=integrations-regional-availability
         """
@@ -220,7 +215,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "eu-gb",
         ]
 
-    def get_us_regions(self) -> List[str]:
+    def get_us_regions(self) -> list[str]:
         """
         Source: https://www.ibm.com/docs/en/watsonx/saas?topic=integrations-regional-availability
         """
@@ -228,7 +223,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "us-south",
         ]
 
-    def _build_request_payload(self, model: str, prompt: str, optional_params: Dict) -> Dict:
+    def _build_request_payload(self, model: str, prompt: str, optional_params: dict) -> dict:
         """Shared logic to build request payload"""
         extra_body_params = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
@@ -245,11 +240,11 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
     async def atransform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        litellm_params: Dict,
-        headers: Dict,
-    ) -> Dict:
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
         """Async version of transform_request"""
         from litellm.llms.watsonx.common_utils import (
             aconvert_watsonx_messages_to_prompt,
@@ -264,11 +259,11 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        litellm_params: Dict,
-        headers: Dict,
-    ) -> Dict:
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
         """Sync version of transform_request"""
         provider = model.split("/")[0]
         prompt = convert_watsonx_messages_to_prompt(
@@ -282,13 +277,13 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: Dict,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        litellm_params: Dict,
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
         encoding: str,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -330,12 +325,12 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
         if model.startswith("deployment/"):
@@ -357,9 +352,9 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         return WatsonxTextCompletionResponseIterator(
             streaming_response=streaming_response,

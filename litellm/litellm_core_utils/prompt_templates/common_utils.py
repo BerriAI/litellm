@@ -6,20 +6,14 @@ import io
 import json
 import mimetypes
 import re
+from collections.abc import Mapping, Sequence
 from itertools import groupby
 from os import PathLike
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
     Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
     cast,
 )
 
@@ -57,7 +51,7 @@ if TYPE_CHECKING:
 
 def handle_any_messages_to_chat_completion_str_messages_conversion(
     messages: Any,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """
     Handles any messages to chat completion str messages conversion
 
@@ -68,7 +62,7 @@ def handle_any_messages_to_chat_completion_str_messages_conversion(
     if isinstance(messages, list):
         try:
             return cast(
-                List[Dict[str, str]],
+                list[dict[str, str]],
                 handle_messages_with_content_list_to_str_conversion(messages),
             )
         except Exception:
@@ -85,8 +79,8 @@ def handle_any_messages_to_chat_completion_str_messages_conversion(
 
 
 def handle_messages_with_content_list_to_str_conversion(
-    messages: List[AllMessageValues],
-) -> List[AllMessageValues]:
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
     """
     Handles messages with content list conversion
     """
@@ -97,7 +91,7 @@ def handle_messages_with_content_list_to_str_conversion(
     return messages
 
 
-def strip_name_from_message(message: AllMessageValues, allowed_name_roles: List[str] = ["user"]) -> AllMessageValues:
+def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[str] = ["user"]) -> AllMessageValues:
     """
     Removes 'name' from message
     """
@@ -108,8 +102,8 @@ def strip_name_from_message(message: AllMessageValues, allowed_name_roles: List[
 
 
 def strip_name_from_messages(
-    messages: List[AllMessageValues], allowed_name_roles: List[str] = ["user"]
-) -> List[AllMessageValues]:
+    messages: list[AllMessageValues], allowed_name_roles: list[str] = ["user"]
+) -> list[AllMessageValues]:
     """
     Removes 'name' from messages
     """
@@ -164,7 +158,7 @@ def extract_search_results_text(search_results: object) -> str:
 
 
 def convert_content_list_to_str(
-    message: Union[AllMessageValues, ChatCompletionResponseMessage],
+    message: AllMessageValues | ChatCompletionResponseMessage,
 ) -> str:
     """
     - handles scenario where content is list and not string
@@ -187,7 +181,7 @@ def convert_content_list_to_str(
     return texts
 
 
-def get_str_from_messages(messages: List[AllMessageValues]) -> str:
+def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     """
     Converts a list of messages to a string
     """
@@ -216,8 +210,8 @@ def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
 
 
 def convert_openai_message_to_only_content_messages(
-    messages: List[AllMessageValues],
-) -> List[Dict[str, str]]:
+    messages: list[AllMessageValues],
+) -> list[dict[str, str]]:
     """
     Converts OpenAI messages to only content messages
 
@@ -233,7 +227,7 @@ def convert_openai_message_to_only_content_messages(
     return converted_messages
 
 
-def get_content_from_model_response(response: Union[ModelResponse, dict]) -> str:
+def get_content_from_model_response(response: ModelResponse | dict) -> str:
     """
     Gets content from model response
     """
@@ -258,8 +252,8 @@ def get_content_from_model_response(response: Union[ModelResponse, dict]) -> str
 
 
 def detect_first_expected_role(
-    messages: List[AllMessageValues],
-) -> Optional[Literal["user", "assistant"]]:
+    messages: list[AllMessageValues],
+) -> Literal["user", "assistant"] | None:
     """
     Detect the first expected role based on the message sequence.
 
@@ -294,10 +288,10 @@ def _counts_for_alternation(message: AllMessageValues) -> bool:
 
 
 def _insert_user_continue_message(
-    messages: List[AllMessageValues],
-    user_continue_message: Optional[ChatCompletionUserMessage],
+    messages: list[AllMessageValues],
+    user_continue_message: ChatCompletionUserMessage | None,
     ensure_alternating_roles: bool,
-) -> List[AllMessageValues]:
+) -> list[AllMessageValues]:
     """
     Inserts a user continue message into the messages list.
     Handles three cases:
@@ -354,10 +348,10 @@ def _insert_user_continue_message(
 
 
 def _insert_assistant_continue_message(
-    messages: List[AllMessageValues],
-    assistant_continue_message: Optional[ChatCompletionAssistantMessage] = None,
+    messages: list[AllMessageValues],
+    assistant_continue_message: ChatCompletionAssistantMessage | None = None,
     ensure_alternating_roles: bool = True,
-) -> List[AllMessageValues]:
+) -> list[AllMessageValues]:
     """
     Add assistant continuation messages between consecutive user messages.
 
@@ -385,7 +379,7 @@ def _insert_assistant_continue_message(
                 j -= 1
 
     # Build the result with assistant_continue inserted at the right positions
-    modified_messages: List[AllMessageValues] = []
+    modified_messages: list[AllMessageValues] = []
     for i, message in enumerate(messages):
         if i in insert_before_indexes:
             modified_messages.append(continue_message)
@@ -395,11 +389,11 @@ def _insert_assistant_continue_message(
 
 
 def get_completion_messages(
-    messages: List[AllMessageValues],
-    assistant_continue_message: Optional[ChatCompletionAssistantMessage],
-    user_continue_message: Optional[ChatCompletionUserMessage],
+    messages: list[AllMessageValues],
+    assistant_continue_message: ChatCompletionAssistantMessage | None,
+    user_continue_message: ChatCompletionUserMessage | None,
     ensure_alternating_roles: bool,
-) -> List[AllMessageValues]:
+) -> list[AllMessageValues]:
     """
     Ensures messages alternate between user and assistant roles by adding placeholders
     only when there are consecutive messages of the same role.
@@ -418,7 +412,7 @@ def get_completion_messages(
     return messages
 
 
-def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
+def get_format_from_file_id(file_id: str | None) -> str | None:
     """
     Gets format from file id
 
@@ -447,10 +441,10 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
 
 
 def update_messages_with_model_file_ids(
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     model_id: str | None,
-    model_file_id_mapping: Dict[str, Dict[str, str]],
-) -> List[AllMessageValues]:
+    model_file_id_mapping: dict[str, dict[str, str]],
+) -> list[AllMessageValues]:
     """
     Updates messages with model file ids.
 
@@ -514,9 +508,9 @@ def update_messages_with_model_file_ids(
 
 def update_responses_input_with_model_file_ids(
     input: Any,
-    model_id: Optional[str] = None,
-    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
-) -> Union[str, List[Dict[str, Any]]]:
+    model_id: str | None = None,
+    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+) -> str | list[dict[str, Any]]:
     """
     Updates responses API input with provider-specific file IDs.
     File IDs are always inside the content array, not as direct input_file items.
@@ -591,8 +585,8 @@ def update_responses_input_with_model_file_ids(
 
 
 def _decode_vector_store_ids_in_tools(
-    tools: Optional[List[Dict[str, Any]]],
-) -> Optional[List[Dict[str, Any]]]:
+    tools: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
     """
     Decodes unified (LiteLLM-managed) vector_store_ids in file_search tools to
     provider-native IDs.  Non-unified IDs are passed through unchanged.
@@ -644,10 +638,10 @@ def _decode_vector_store_ids_in_tools(
 
 
 def update_responses_tools_with_model_file_ids(
-    tools: Optional[List[Dict[str, Any]]],
-    model_id: Optional[str] = None,
-    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
-) -> Optional[List[Dict[str, Any]]]:
+    tools: list[dict[str, Any]] | None,
+    model_id: str | None = None,
+    model_file_id_mapping: dict[str, dict[str, str]] | None = None,
+) -> list[dict[str, Any]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
 
@@ -707,7 +701,7 @@ def update_responses_tools_with_model_file_ids(
     return updated_tools
 
 
-def extract_file_metadata(file_data: FileTypes) -> Tuple[Optional[str], Optional[str]]:
+def extract_file_metadata(file_data: FileTypes) -> tuple[str | None, str | None]:
     """
     Resolve (filename, content_type) without reading the file body.
 
@@ -715,8 +709,8 @@ def extract_file_metadata(file_data: FileTypes) -> Tuple[Optional[str], Optional
     it stays O(1) on large uploads. Use this when only metadata is needed (batch
     detection, GCS object naming) and the body must remain a streamable Path/handle.
     """
-    filename: Optional[str] = None
-    content_type: Optional[str] = None
+    filename: str | None = None
+    content_type: str | None = None
     file_content: Any = None
 
     if isinstance(file_data, tuple):
@@ -879,7 +873,7 @@ def _estimate_json_bytes(obj: Any) -> int:
 def unpack_defs(
     schema: dict,
     defs: dict,
-    max_inlined_bytes: Optional[int] = None,
+    max_inlined_bytes: int | None = None,
 ) -> None:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
@@ -915,7 +909,7 @@ def unpack_defs(
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: deque[tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]] = deque(
+    queue: deque[tuple[Any, dict | list | None, str | int | None, dict, set]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -959,9 +953,12 @@ def unpack_defs(
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(target_schema)
                 if parent is not None and key is not None:
-                    if isinstance(parent, dict) and isinstance(key, str):
-                        parent[key] = resolved
-                    elif isinstance(parent, list) and isinstance(key, int):
+                    if (
+                        isinstance(parent, dict)
+                        and isinstance(key, str)
+                        or isinstance(parent, list)
+                        and isinstance(key, int)
+                    ):
                         parent[key] = resolved
                 else:
                     # This is the root schema itself
@@ -1074,7 +1071,7 @@ def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSc
     return AnthropicInputSchema(**filtered)
 
 
-def _get_image_mime_type_from_url(url: str) -> Optional[str]:
+def _get_image_mime_type_from_url(url: str) -> str | None:
     """
     Get mime type for common image URLs
     See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
@@ -1142,7 +1139,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
 def infer_content_type_from_url_and_content(
     url: str,
     content: bytes,
-    current_content_type: Optional[str] = None,
+    current_content_type: str | None = None,
 ) -> str:
     """
     Infer content type from URL extension and binary content when content-type header is missing or generic.
@@ -1232,11 +1229,11 @@ def infer_content_type_from_url_and_content(
     raise ValueError(f"Unable to determine content type from URL: {url}. Response content-type: {current_content_type}")
 
 
-def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
+def get_tool_call_names(tools: list[ChatCompletionToolParam]) -> list[str]:
     """
     Get tool call names from tools
     """
-    tool_call_names: List[str] = []
+    tool_call_names: list[str] = []
     for tool in tools:
         if tool.get("type") == "function":
             tool_call_name = tool.get("function", {}).get("name")
@@ -1254,7 +1251,7 @@ def is_function_call(optional_params: dict) -> bool:
     return False
 
 
-def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
+def get_file_ids_from_messages(messages: list[AllMessageValues]) -> list[str]:
     """
     Gets file ids from messages
     """
@@ -1352,7 +1349,7 @@ def migrate_file_to_image_url(
     return image_url_object
 
 
-def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
+def get_last_user_message(messages: list[AllMessageValues]) -> str | None:
     """
     Get the last consecutive block of messages from the user.
 
@@ -1391,7 +1388,7 @@ def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
     return result if result else None
 
 
-def set_last_user_message(messages: List[AllMessageValues], content: str) -> List[AllMessageValues]:
+def set_last_user_message(messages: list[AllMessageValues], content: str) -> list[AllMessageValues]:
     """
     Set the last user message
 
@@ -1413,10 +1410,10 @@ def set_last_user_message(messages: List[AllMessageValues], content: str) -> Lis
 
 
 def add_system_prompt_to_messages(
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     system_prompt: str,
     merge_with_first_system: bool = False,
-) -> List[AllMessageValues]:
+) -> list[AllMessageValues]:
     """
     Add a system prompt to the messages list.
 
@@ -1436,7 +1433,7 @@ def add_system_prompt_to_messages(
     if merge_with_first_system and messages and messages[0].get("role") == "system":
         first = dict(messages[0])
         existing_content = first.get("content", "")
-        merged_content: Union[str, List[Dict[str, str]]]
+        merged_content: str | list[dict[str, str]]
         if isinstance(existing_content, str):
             merged_content = f"{system_prompt.strip()}\n\n{existing_content}"
         elif isinstance(existing_content, list):
@@ -1451,8 +1448,8 @@ def add_system_prompt_to_messages(
 
 
 def convert_prefix_message_to_non_prefix_messages(
-    messages: List[AllMessageValues],
-) -> List[AllMessageValues]:
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
     """
     For models that don't support {prefix: true} in messages, we need to convert the prefix message to a non-prefix message.
 
@@ -1471,7 +1468,7 @@ def convert_prefix_message_to_non_prefix_messages(
 
     do this in place
     """
-    new_messages: List[AllMessageValues] = []
+    new_messages: list[AllMessageValues] = []
     for message in messages:
         if message.get("prefix"):
             new_messages.append(
@@ -1488,7 +1485,7 @@ def convert_prefix_message_to_non_prefix_messages(
     return new_messages
 
 
-def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
+def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     """
     Extract reasoning content and main content from a message.
 
@@ -1509,8 +1506,8 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
 
 
 def _parse_content_for_reasoning(
-    message_text: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
+    message_text: str | None,
+) -> tuple[str | None, str | None]:
     """
     Parse the content for reasoning
 
@@ -1555,7 +1552,7 @@ def _extract_base64_data(image_url: str) -> str:
     return image_url
 
 
-def extract_images_from_message(message: AllMessageValues) -> List[str]:
+def extract_images_from_message(message: AllMessageValues) -> list[str]:
     """
     Extract images from a message.
 
@@ -1640,7 +1637,7 @@ def hoist_images_from_tool_messages(messages: Sequence[AllMessageValues]) -> Seq
     ]
 
 
-def _attempt_json_repair(s: str) -> Optional[Any]:
+def _attempt_json_repair(s: str) -> Any | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
 
@@ -1699,9 +1696,9 @@ def _attempt_json_repair(s: str) -> Optional[Any]:
 
 
 def parse_tool_call_arguments(
-    arguments: Optional[str],
-    tool_name: Optional[str] = None,
-    context: Optional[str] = None,
+    arguments: str | None,
+    tool_name: str | None = None,
+    context: str | None = None,
 ) -> Any:
     """
     Parse tool call arguments from a JSON string.
@@ -1751,12 +1748,12 @@ def parse_tool_call_arguments(
         if context:
             error_parts.append(f"({context})")
 
-        error_message = " ".join(error_parts) + f". Error: {str(original_error)}. Arguments: {arguments}"
+        error_message = " ".join(error_parts) + f". Error: {original_error!s}. Arguments: {arguments}"
 
         raise ValueError(error_message) from original_error
 
 
-def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
+def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
     """
     Split a string that contains one or more concatenated JSON objects into
     a list of parsed dicts.
@@ -1789,7 +1786,7 @@ def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
         return []
 
     decoder = json.JSONDecoder()
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     idx = 0
     length = len(raw)
 

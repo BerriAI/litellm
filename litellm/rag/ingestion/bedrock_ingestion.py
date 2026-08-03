@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from litellm.types.rag import RAGIngestOptions
 
 
-def _get_str_or_none(value: Any) -> Optional[str]:
+def _get_str_or_none(value: Any) -> str | None:
     """Cast config value to Optional[str]."""
     return str(value) if value is not None else None
 
@@ -85,8 +85,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         BaseRAGIngestion.__init__(self, ingest_options=ingest_options, router=router)
         BaseAWSLLM.__init__(self)
@@ -99,7 +99,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Optional config
         self._data_source_id = self.vector_store_config.get("data_source_id")
         self._s3_bucket = self.vector_store_config.get("s3_bucket")
-        self._s3_prefix: Optional[str] = (
+        self._s3_prefix: str | None = (
             str(self.vector_store_config.get("s3_prefix")) if self.vector_store_config.get("s3_prefix") else None
         )
         self.embedding_model = self.vector_store_config.get("embedding_model") or "amazon.titan-embed-text-v2:0"
@@ -114,13 +114,13 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         )
 
         # Will be set during initialization
-        self.data_source_id: Optional[str] = None
-        self.s3_bucket: Optional[str] = None
+        self.data_source_id: str | None = None
+        self.s3_bucket: str | None = None
         self.s3_prefix: str = self._s3_prefix or "data/"
         self._config_initialized = False
 
         # Track resources we create (for cleanup if needed)
-        self._created_resources: Dict[str, Any] = {}
+        self._created_resources: dict[str, Any] = {}
 
     async def _ensure_config_initialized(self):
         """Lazily initialize KB config - either detect from existing or create new."""
@@ -229,7 +229,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         verbose_logger.debug(f"Creating S3 bucket: {bucket_name}")
 
-        create_params: Dict[str, Any] = {"Bucket": bucket_name}
+        create_params: dict[str, Any] = {"Bucket": bucket_name}
         if self.aws_region_name != "us-east-1":
             create_params["CreateBucketConfiguration"] = {"LocationConstraint": self.aws_region_name}
 
@@ -239,7 +239,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         verbose_logger.info(f"Created S3 bucket: {bucket_name}")
         return bucket_name
 
-    async def _create_opensearch_collection(self, unique_id: str, account_id: str, caller_arn: str) -> Tuple[str, str]:
+    async def _create_opensearch_collection(self, unique_id: str, account_id: str, caller_arn: str) -> tuple[str, str]:
         """Create OpenSearch Serverless collection for vector storage."""
         oss = self._get_boto3_client("opensearchserverless")
         collection_name = f"litellm-kb-{unique_id}"
@@ -602,8 +602,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         Bedrock handles embedding internally - skip this step.
 
@@ -614,13 +614,13 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
         existing_file_id: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Store content in Bedrock Knowledge Base.
 

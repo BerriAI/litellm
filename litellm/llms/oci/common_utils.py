@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from email.utils import formatdate
-from typing import Any, Dict, Optional, Protocol, Tuple
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -42,7 +42,7 @@ class OCIError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[httpx.Headers] = None,
+        headers: httpx.Headers | None = None,
     ):
         super().__init__(
             status_code=status_code,
@@ -177,7 +177,7 @@ _OCI_REGION_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
 _OCI_ACTION_PATH_RE = re.compile(rf"/{OCI_API_VERSION}/actions/[^/?#]+/?$")
 
 
-def get_oci_base_url(optional_params: dict, api_base: Optional[str] = None) -> str:
+def get_oci_base_url(optional_params: dict, api_base: str | None = None) -> str:
     """Return the OCI inference base URL, respecting any explicit api_base override.
 
     If ``api_base`` already ends with a fully-formed OCI action path
@@ -208,7 +208,7 @@ def sign_with_oci_signer(
     optional_params: dict,
     request_data: dict,
     api_base: str,
-) -> Tuple[dict, bytes]:
+) -> tuple[dict, bytes]:
     """Sign a request using an OCI SDK Signer object passed in optional_params."""
     oci_signer = optional_params.get("oci_signer")
     body = json.dumps(request_data).encode("utf-8")
@@ -232,7 +232,7 @@ def sign_with_oci_signer(
         raise OCIError(
             status_code=500,
             message=(
-                f"Failed to sign request with provided oci_signer: {str(e)}. "
+                f"Failed to sign request with provided oci_signer: {e!s}. "
                 "The signer must implement the OCI SDK Signer interface with a "
                 "do_request_sign(request, enforce_content_headers=True) method. "
                 "See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html"
@@ -248,7 +248,7 @@ def sign_with_manual_credentials(
     optional_params: dict,
     request_data: dict,
     api_base: str,
-) -> Tuple[dict, bytes]:
+) -> tuple[dict, bytes]:
     """Sign a request using manually provided OCI credentials (user/fingerprint/tenancy/key)."""
     creds = resolve_oci_credentials(optional_params)
     oci_user = creds["oci_user"]
@@ -280,7 +280,7 @@ def sign_with_manual_credentials(
     content_length = str(len(body))
     x_content_sha256 = sha256_base64(body)
 
-    headers_to_sign: Dict[str, str] = {
+    headers_to_sign: dict[str, str] = {
         "date": date,
         "host": host,
         "content-type": content_type,
@@ -301,7 +301,7 @@ def sign_with_manual_credentials(
     _require_cryptography()
 
     # Resolve the private key — prefer inline PEM content over file path
-    oci_key_content: Optional[str] = None
+    oci_key_content: str | None = None
     if oci_key:
         if not isinstance(oci_key, str):
             raise OCIError(
@@ -361,11 +361,11 @@ def sign_oci_request(
     optional_params: dict,
     request_data: dict,
     api_base: str,
-    api_key: Optional[str] = None,
-    model: Optional[str] = None,
-    stream: Optional[bool] = None,
-    fake_stream: Optional[bool] = None,
-) -> Tuple[dict, bytes]:
+    api_key: str | None = None,
+    model: str | None = None,
+    stream: bool | None = None,
+    fake_stream: bool | None = None,
+) -> tuple[dict, bytes]:
     """
     Route to the appropriate OCI signing method based on what credentials are present.
 
@@ -384,7 +384,7 @@ def sign_oci_request(
 def validate_oci_environment(
     headers: dict,
     optional_params: dict,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
 ) -> dict:
     """
     Populate common OCI request headers (content-type, user-agent).
@@ -410,7 +410,7 @@ def validate_oci_environment(
 
 # Mapping from JSON Schema type names to Python type names, as expected by
 # the OCI Cohere API's CohereParameterDefinition.type field.
-OCI_JSON_TO_PYTHON_TYPES: Dict[str, str] = {
+OCI_JSON_TO_PYTHON_TYPES: dict[str, str] = {
     "string": "str",
     "number": "float",
     "boolean": "bool",
@@ -421,7 +421,7 @@ OCI_JSON_TO_PYTHON_TYPES: Dict[str, str] = {
 }
 
 
-def resolve_oci_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
+def resolve_oci_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     """Inline all ``$ref``/``$defs`` references — OCI does not support JSON Schema ``$ref``."""
     defs = schema.get("$defs", {})
     resolving_stack: set = set()
@@ -483,7 +483,7 @@ def sanitize_oci_schema(schema: Any) -> Any:
     if not isinstance(schema, dict):
         return schema
 
-    sanitized: Dict[str, Any] = {}
+    sanitized: dict[str, Any] = {}
     for key, value in schema.items():
         if key == "title":
             continue
@@ -513,7 +513,7 @@ def sanitize_oci_schema(schema: Any) -> Any:
     return sanitized
 
 
-def enrich_cohere_param_description(description: str, param_schema: Dict[str, Any]) -> str:
+def enrich_cohere_param_description(description: str, param_schema: dict[str, Any]) -> str:
     """Embed schema constraints into a Cohere parameter description.
 
     ``CohereParameterDefinition`` only has ``type``, ``description``, and

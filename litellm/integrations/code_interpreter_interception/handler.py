@@ -11,19 +11,19 @@ import time
 import uuid
 from typing import Any, Literal, TypedDict, cast
 
-import litellm
 from pydantic import ValidationError
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.code_interpreter_interception import (
     CodeInterpreterInterceptionConfig,
 )
 from litellm.types.integrations.custom_logger import (
-    AgenticLoopPlan,
-    AgenticLoopRequestPatch,
     CHAT_COMPLETION_AGENTIC_SURFACE,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    AgenticLoopPlan,
+    AgenticLoopRequestPatch,
     is_interception_internal_key,
 )
 from litellm.types.llms.openai import (

@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Optional, Union
+from typing import Literal
 
 import httpx
 
@@ -25,7 +25,7 @@ class VertexEmbedding(VertexBase):
     def embedding(
         self,
         model: str,
-        input: Union[list, str],
+        input: list | str,
         print_verbose,
         model_response: EmbeddingResponse,
         optional_params: dict,
@@ -33,18 +33,18 @@ class VertexEmbedding(VertexBase):
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
-        timeout: Optional[Union[float, httpx.Timeout]],
-        api_key: Optional[str] = None,
+        timeout: float | httpx.Timeout | None,
+        api_key: str | None = None,
         encoding=None,
-        aembedding: Optional[bool] = False,
-        api_base: Optional[str] = None,
-        client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
-        vertex_project: Optional[str] = None,
-        vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
-        gemini_api_key: Optional[str] = None,
-        extra_headers: Optional[dict] = None,
-        litellm_params: Optional[Dict] = None,
+        aembedding: bool | None = False,
+        api_base: str | None = None,
+        client: AsyncHTTPHandler | HTTPHandler | None = None,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+        gemini_api_key: str | None = None,
+        extra_headers: dict | None = None,
+        litellm_params: dict | None = None,
     ) -> EmbeddingResponse:
         if aembedding is True:
             return self.async_embedding(  # type: ignore
@@ -139,23 +139,23 @@ class VertexEmbedding(VertexBase):
     async def async_embedding(
         self,
         model: str,
-        input: Union[list, str],
+        input: list | str,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
-        timeout: Optional[Union[float, httpx.Timeout]],
-        api_base: Optional[str] = None,
-        client: Optional[AsyncHTTPHandler] = None,
-        vertex_project: Optional[str] = None,
-        vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
-        gemini_api_key: Optional[str] = None,
-        extra_headers: Optional[dict] = None,
+        timeout: float | httpx.Timeout | None,
+        api_base: str | None = None,
+        client: AsyncHTTPHandler | None = None,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+        gemini_api_key: str | None = None,
+        extra_headers: dict | None = None,
         encoding=None,
-        litellm_params: Optional[Dict] = None,
+        litellm_params: dict | None = None,
     ) -> EmbeddingResponse:
         """
         Async embedding implementation

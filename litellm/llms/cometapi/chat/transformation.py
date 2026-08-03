@@ -5,7 +5,8 @@ Based on OpenAI-compatible API interface implementation
 Documentation: [CometAPI Documentation Link]
 """
 
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 import httpx
 
@@ -54,9 +55,9 @@ class CometAPIConfig(OpenAIGPTConfig):
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
-        messages: List[AllMessageValues],
-        tools: Optional[List["ChatCompletionToolParam"]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        messages: list[AllMessageValues],
+        tools: list["ChatCompletionToolParam"] | None = None,
+    ) -> tuple[list[AllMessageValues], list["ChatCompletionToolParam"] | None]:
         """
         Remove cache control flags from messages and tools if not supported
         """
@@ -66,7 +67,7 @@ class CometAPIConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -84,12 +85,12 @@ class CometAPIConfig(OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the CometAPI call.
@@ -122,9 +123,7 @@ class CometAPIConfig(OpenAIGPTConfig):
             return f"{api_base}/v1/{endpoint}"
         return f"{api_base}/{endpoint}"
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """
         Return CometAPI-specific error class
         """
@@ -136,9 +135,9 @@ class CometAPIConfig(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         """
         Get model response iterator for streaming responses

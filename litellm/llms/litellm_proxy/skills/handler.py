@@ -6,7 +6,7 @@ Used by the transformation layer and skills injection hook.
 """
 
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -61,8 +61,8 @@ class LiteLLMSkillsHandler:
     @staticmethod
     async def create_skill(
         data: NewSkillRequest,
-        user_id: Optional[str] = None,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        user_id: str | None = None,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> LiteLLM_SkillsTable:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
@@ -76,7 +76,7 @@ class LiteLLMSkillsHandler:
             # this module FastAPI-free per the project layering rule.
             raise ValueError("Unable to record skill ownership: caller has no identity scope.")
 
-        skill_data: Dict[str, Any] = {
+        skill_data: dict[str, Any] = {
             "skill_id": skill_id,
             "display_title": data.display_title,
             "description": data.description,
@@ -109,13 +109,13 @@ class LiteLLMSkillsHandler:
     async def list_skills(
         limit: int = 20,
         offset: int = 0,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-    ) -> List[LiteLLM_SkillsTable]:
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> list[LiteLLM_SkillsTable]:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
         verbose_logger.debug(f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}")
 
-        find_many_kwargs: Dict[str, Any] = {
+        find_many_kwargs: dict[str, Any] = {
             "take": limit,
             "skip": offset,
             "order": {"created_at": "desc"},
@@ -130,7 +130,7 @@ class LiteLLMSkillsHandler:
         return [_prisma_skill_to_litellm(s) for s in skills]
 
     @staticmethod
-    async def _load_skill(skill_id: str) -> Optional[Any]:
+    async def _load_skill(skill_id: str) -> Any | None:
         """Cache-first read of the Prisma skill row. Owner-scope filtering
         happens on the cached row, so the cache is per-skill not per-caller.
         """
@@ -148,7 +148,7 @@ class LiteLLMSkillsHandler:
     @staticmethod
     async def get_skill(
         skill_id: str,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> LiteLLM_SkillsTable:
         verbose_logger.debug(f"LiteLLMSkillsHandler: Getting skill {skill_id}")
 
@@ -163,8 +163,8 @@ class LiteLLMSkillsHandler:
     @staticmethod
     async def delete_skill(
         skill_id: str,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-    ) -> Dict[str, str]:
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> dict[str, str]:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
         verbose_logger.debug(f"LiteLLMSkillsHandler: Deleting skill {skill_id}")
 
@@ -180,8 +180,8 @@ class LiteLLMSkillsHandler:
     @staticmethod
     async def fetch_skill_from_db(
         skill_id: str,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-    ) -> Optional[LiteLLM_SkillsTable]:
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> LiteLLM_SkillsTable | None:
         """Skills-injection-hook helper: returns None instead of raising on
         not-found / not-authorized so the hook can silently skip."""
         try:

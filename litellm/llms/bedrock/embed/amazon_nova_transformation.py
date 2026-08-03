@@ -12,8 +12,6 @@ Supports:
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
 """
 
-from typing import List, Optional
-
 from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -35,7 +33,7 @@ class AmazonNovaEmbeddingConfig:
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return [
             "dimensions",
         ]
@@ -88,8 +86,8 @@ class AmazonNovaEmbeddingConfig:
         input: str,
         inference_params: dict,
         async_invoke_route: bool = False,
-        model_id: Optional[str] = None,
-        output_s3_uri: Optional[str] = None,
+        model_id: str | None = None,
+        output_s3_uri: str | None = None,
     ) -> dict:
         """
         Transform OpenAI-style input to Nova format.
@@ -208,7 +206,7 @@ class AmazonNovaEmbeddingConfig:
         self,
         model_input: dict,
         model_id: str,
-        output_s3_uri: Optional[str] = None,
+        output_s3_uri: str | None = None,
     ) -> dict:
         """
         Wrap the transformed request in the AWS Bedrock async invoke format.
@@ -240,9 +238,9 @@ class AmazonNovaEmbeddingConfig:
 
     def _transform_response(
         self,
-        response_list: List[dict],
+        response_list: list[dict],
         model: str,
-        batch_data: Optional[List[dict]] = None,
+        batch_data: list[dict] | None = None,
     ) -> EmbeddingResponse:
         """
         Transform Nova response to OpenAI format.
@@ -258,7 +256,7 @@ class AmazonNovaEmbeddingConfig:
             ]
         }
         """
-        embeddings: List[Embedding] = []
+        embeddings: list[Embedding] = []
         total_tokens = 0
 
         for response in response_list:
@@ -302,7 +300,7 @@ class AmazonNovaEmbeddingConfig:
                 if "image" in params:
                     image_count += 1
 
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if image_count > 0:
             prompt_tokens_details = PromptTokensDetailsWrapper(
                 image_count=image_count,

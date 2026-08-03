@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import List, Optional, Union
 
 import httpx
 
@@ -39,10 +38,10 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     def _build_complete_streaming_response(
         self,
-        all_chunks: List[str],
+        all_chunks: list[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    ) -> ModelResponse | TextCompletionResponse | None:
         cohere_model_response_iterator = CohereModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
@@ -123,7 +122,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 kwargs["custom_llm_provider"] = "cohere"
 
                 # Extract user information for tracking
-                passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = kwargs.get(
+                passthrough_logging_payload: PassthroughStandardLoggingPayload | None = kwargs.get(
                     "passthrough_logging_payload"
                 )
                 if passthrough_logging_payload:

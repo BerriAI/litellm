@@ -37,7 +37,7 @@ Safe to enable globally:
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import httpx
 
@@ -72,12 +72,12 @@ class EncryptedContentAffinityCheck(CustomLogger):
         self,
         router: Optional["Router"] = None,
         enable_global_affinity: bool = True,
-        model_group_affinity_config: Optional[Dict[str, List[str]]] = None,
+        model_group_affinity_config: dict[str, list[str]] | None = None,
     ) -> None:
         super().__init__()
         self.router = router
         self.enable_global_affinity = enable_global_affinity
-        self.model_group_affinity_config: Dict[str, List[str]] = model_group_affinity_config or {}
+        self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -85,7 +85,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def has_model_group_affinity_enabled(
-        model_group_affinity_config: Optional[Dict[str, List[str]]],
+        model_group_affinity_config: dict[str, list[str]] | None,
     ) -> bool:
         if not model_group_affinity_config:
             return False
@@ -99,7 +99,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
 
     @staticmethod
-    def _extract_model_id_from_input(request_input: Any) -> Optional[str]:
+    def _extract_model_id_from_input(request_input: Any) -> str | None:
         """
         Scan ``input`` items for litellm-encoded encrypted-content markers and
         return the ``model_id`` embedded in the first one found.
@@ -139,7 +139,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _find_deployment_by_model_id(healthy_deployments: List[dict], model_id: str) -> Optional[dict]:
+    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
@@ -152,7 +152,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _encryption_boundary_key(
         litellm_params: Any,
-    ) -> Optional[tuple]:
+    ) -> tuple | None:
         """
         ``(api_base, api_key)`` pair identifying an Azure resource. Two
         deployments sharing both are interchangeable for ``encrypted_content``
@@ -177,9 +177,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     def _find_deployments_on_same_encryption_boundary(
         self,
-        healthy_deployments: List[dict],
+        healthy_deployments: list[dict],
         model_id: str,
-    ) -> tuple[List[dict], Any]:
+    ) -> tuple[list[dict], Any]:
         """
         Deployments in ``healthy_deployments`` sharing the originating
         deployment's ``(api_base, api_key)``, alongside the originating
@@ -208,11 +208,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
     async def async_filter_deployments(
         self,
         model: str,
-        healthy_deployments: List,
-        messages: Optional[List[AllMessageValues]],
-        request_kwargs: Optional[dict] = None,
-        parent_otel_span: Optional[Span] = None,
-    ) -> List[dict]:
+        healthy_deployments: list,
+        messages: list[AllMessageValues] | None,
+        request_kwargs: dict | None = None,
+        parent_otel_span: Span | None = None,
+    ) -> list[dict]:
         """
         If the request ``input`` contains litellm-encoded item IDs, decode the
         embedded ``model_id`` and pin the request to that deployment. Raises
@@ -225,7 +225,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         retry after the deployment is eligible again.
         """
         request_kwargs = request_kwargs or {}
-        typed_healthy_deployments = cast(List[dict], healthy_deployments)
+        typed_healthy_deployments = cast(list[dict], healthy_deployments)
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
 
@@ -290,7 +290,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         model: str,
         model_id: str,
         originating: Any,
-        parent_otel_span: Optional[Span],
+        parent_otel_span: Span | None,
     ) -> Exception:
         # Public error messages intentionally omit the originating ``model_id`` so
         # an authenticated caller forging encrypted-content markers cannot use the
@@ -343,8 +343,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
     async def _get_origin_cooldown(
         self,
         model_id: str,
-        parent_otel_span: Optional[Span],
-    ) -> Optional[CooldownCacheValue]:
+        parent_otel_span: Span | None,
+    ) -> CooldownCacheValue | None:
         if self.router is None:
             return None
         cooldown_cache = getattr(self.router, "cooldown_cache", None)
