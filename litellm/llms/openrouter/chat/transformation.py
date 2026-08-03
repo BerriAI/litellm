@@ -192,10 +192,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
         """
         Transform the response from OpenRouter API.
 
-        Extracts cost information from response headers if available.
+        Extracts cost and the routed model from the response body when available.
 
         Returns:
-            ModelResponse: The transformed response with cost information.
+            ModelResponse: The transformed response.
         """
         # Call parent transform_response to get the standard ModelResponse
         model_response = super().transform_response(
@@ -227,6 +227,15 @@ class OpenrouterConfig(OpenAIGPTConfig):
                     model_response._hidden_params["additional_headers"][
                         "llm_provider-x-litellm-response-cost"
                     ] = float(response_cost)
+            # Surface the model OpenRouter actually routed to when it differs from the
+            # requested model (openrouter/auto resolves server-side), exposed by the
+            # proxy as the x-litellm-routed-model header.
+            routed_model = response_json.get("model")
+            requested_model = model.split("openrouter/", 1)[-1]
+            if routed_model and routed_model != requested_model:
+                if not hasattr(model_response, "_hidden_params"):
+                    model_response._hidden_params = {}
+                model_response._hidden_params["routed_model"] = routed_model
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass
