@@ -1,9 +1,10 @@
-from litellm._uuid import uuid
-from typing import Any, Coroutine, Optional, Union
+from collections.abc import Coroutine
+from typing import Any
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
 
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.types.utils import FileTypes
 from litellm.utils import (
@@ -26,14 +27,14 @@ class AzureAudioTranscription(AzureChatCompletion):
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        api_version: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        api_version: str | None = None,
         client=None,
-        azure_ad_token: Optional[str] = None,
+        azure_ad_token: str | None = None,
         atranscription: bool = False,
-        litellm_params: Optional[dict] = None,
-    ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+        litellm_params: dict | None = None,
+    ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data = {"model": model, "file": audio_file, **optional_params}
 
         if atranscription is True:
@@ -79,7 +80,8 @@ class AzureAudioTranscription(AzureChatCompletion):
         )
 
         response = azure_client.audio.transcriptions.create(
-            **data, timeout=timeout  # type: ignore
+            **data,
+            timeout=timeout,  # type: ignore
         )
 
         if isinstance(response, BaseModel):
@@ -95,7 +97,12 @@ class AzureAudioTranscription(AzureChatCompletion):
             original_response=stringified_response,
         )
         hidden_params = {"model": model, "custom_llm_provider": "azure"}
-        final_response: TranscriptionResponse = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+        final_response: TranscriptionResponse = convert_to_model_response_object(
+            response_object=stringified_response,
+            model_response_object=model_response,
+            hidden_params=hidden_params,
+            response_type="audio_transcription",
+        )  # type: ignore
         return final_response
 
     async def async_audio_transcriptions(
@@ -106,12 +113,12 @@ class AzureAudioTranscription(AzureChatCompletion):
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: Any,
-        api_version: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         client=None,
         max_retries=None,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> TranscriptionResponse:
         response = None
         try:
@@ -135,19 +142,15 @@ class AzureAudioTranscription(AzureChatCompletion):
                 input=f"audio_file_{uuid.uuid4()}",
                 api_key=async_azure_client.api_key,
                 additional_args={
-                    "headers": {
-                        "Authorization": f"Bearer {async_azure_client.api_key}"
-                    },
+                    "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
                     "api_base": async_azure_client._base_url._uri_reference,
                     "atranscription": True,
                     "complete_input_dict": data,
                 },
             )
 
-            raw_response = (
-                await async_azure_client.audio.transcriptions.with_raw_response.create(
-                    **data, timeout=timeout
-                )
+            raw_response = await async_azure_client.audio.transcriptions.with_raw_response.create(
+                **data, timeout=timeout
             )  # type: ignore
 
             headers = dict(raw_response.headers)
@@ -165,9 +168,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 input=get_audio_file_name(audio_file),
                 api_key=api_key,
                 additional_args={
-                    "headers": {
-                        "Authorization": f"Bearer {async_azure_client.api_key}"
-                    },
+                    "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
                     "api_base": async_azure_client._base_url._uri_reference,
                     "atranscription": True,
                     "complete_input_dict": data,

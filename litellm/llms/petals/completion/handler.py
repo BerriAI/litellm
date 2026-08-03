@@ -1,5 +1,5 @@
 import time
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -19,7 +19,7 @@ from ..common_utils import PetalsError
 def completion(
     model: str,
     messages: list,
-    api_base: Optional[str],
+    api_base: str | None,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -28,7 +28,7 @@ def completion(
     stream=False,
     litellm_params=None,
     logger_fn=None,
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
 ):
     ## Load Config
     config = litellm.PetalsConfig.get_config()
@@ -50,7 +50,7 @@ def completion(
     else:
         prompt = prompt_factory(model=model, messages=messages)
 
-    output_text: Optional[str] = None
+    output_text: str | None = None
     if api_base:
         ## LOGGING
         logging_obj.pre_call(
@@ -97,9 +97,7 @@ def completion(
 
         model = model
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            model, use_fast=False, add_bos_token=False
-        )
+        tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False, add_bos_token=False)
         model_obj = AutoDistributedModelForCausalLM.from_pretrained(model)
 
         ## LOGGING
@@ -129,9 +127,7 @@ def completion(
         model_response.choices[0].message.content = output_text  # type: ignore
 
     prompt_tokens = len(encoding.encode(prompt))
-    completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"].get("content"))
-    )
+    completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content")))
 
     model_response.created = int(time.time())
     model_response.model = model

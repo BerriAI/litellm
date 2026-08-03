@@ -1,9 +1,10 @@
 import base64
 import os
-from typing import Any, Dict, Optional, Union
+from typing import Any
 from urllib.parse import quote
 
 import httpx
+import yaml
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,7 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import KeyManagementSystem
 
-from .base_secret_manager import BaseSecretManager
+from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 from .main import str_to_bool
 
 
@@ -125,8 +126,11 @@ class CyberArkSecretManager(BaseSecretManager):
         """
         # In production, we'd check if the variable exists first
         # For now, we'll attempt to create it and ignore if it already exists
+        raise_if_unsafe_secret_name(secret_name)
         policy_url = f"{self.conjur_addr}/policies/{self.conjur_account}/policy/root"
-        policy_yaml = f"- !variable {secret_name}\n"
+        # Use a real YAML serializer to build the scalar safely.
+        quoted_name = yaml.safe_dump(secret_name, default_style='"').strip()
+        policy_yaml = f"- !variable {quoted_name}\n"
 
         try:
             client = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
@@ -143,9 +147,7 @@ class CyberArkSecretManager(BaseSecretManager):
         except httpx.HTTPStatusError as e:
             # Variable might already exist, which is fine
             if e.response.status_code in [409, 422]:
-                verbose_logger.debug(
-                    f"Variable {secret_name} already exists or policy conflict (expected)"
-                )
+                verbose_logger.debug(f"Variable {secret_name} already exists or policy conflict (expected)")
             else:
                 verbose_logger.warning(
                     f"Could not ensure variable exists: {e.response.status_code} - {e.response.text}"
@@ -165,16 +167,14 @@ class CyberArkSecretManager(BaseSecretManager):
         """
         # URL-encode the secret name to handle slashes and special characters
         encoded_name = quote(secret_name, safe="")
-        return (
-            f"{self.conjur_addr}/secrets/{self.conjur_account}/variable/{encoded_name}"
-        )
+        return f"{self.conjur_addr}/secrets/{self.conjur_account}/variable/{encoded_name}"
 
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Optional[str]:
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
         """
         Reads a secret from CyberArk Conjur using an async HTTPX client.
 
@@ -207,13 +207,9 @@ class CyberArkSecretManager(BaseSecretManager):
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                verbose_logger.debug(
-                    f"Secret {secret_name} not found in CyberArk Conjur"
-                )
+                verbose_logger.debug(f"Secret {secret_name} not found in CyberArk Conjur")
             else:
-                verbose_logger.exception(
-                    f"Error reading secret from CyberArk Conjur: {e}"
-                )
+                verbose_logger.exception(f"Error reading secret from CyberArk Conjur: {e}")
             return None
         except Exception as e:
             verbose_logger.exception(f"Error reading secret from CyberArk Conjur: {e}")
@@ -222,9 +218,9 @@ class CyberArkSecretManager(BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Optional[str]:
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
         """
         Reads a secret from CyberArk Conjur using a sync HTTPX client.
 
@@ -254,13 +250,9 @@ class CyberArkSecretManager(BaseSecretManager):
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                verbose_logger.debug(
-                    f"Secret {secret_name} not found in CyberArk Conjur"
-                )
+                verbose_logger.debug(f"Secret {secret_name} not found in CyberArk Conjur")
             else:
-                verbose_logger.exception(
-                    f"Error reading secret from CyberArk Conjur: {e}"
-                )
+                verbose_logger.exception(f"Error reading secret from CyberArk Conjur: {e}")
             return None
         except Exception as e:
             verbose_logger.exception(f"Error reading secret from CyberArk Conjur: {e}")
@@ -270,11 +262,11 @@ class CyberArkSecretManager(BaseSecretManager):
         self,
         secret_name: str,
         secret_value: str,
-        description: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tags: Optional[Union[dict, list]] = None,
-    ) -> Dict[str, Any]:
+        description: str | None = None,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        tags: dict | list | None = None,
+    ) -> dict[str, Any]:
         """
         Writes a secret to CyberArk Conjur using an async HTTPX client.
 
@@ -300,9 +292,7 @@ class CyberArkSecretManager(BaseSecretManager):
 
             # Now set the secret value
             url = self.get_url(secret_name)
-            response = await async_client.post(
-                url=url, headers=self._get_request_headers(), content=secret_value
-            )
+            response = await async_client.post(url=url, headers=self._get_request_headers(), content=secret_value)
             response.raise_for_status()
 
             # Update cache
@@ -319,9 +309,9 @@ class CyberArkSecretManager(BaseSecretManager):
     async def async_delete_secret(
         self,
         secret_name: str,
-        recovery_window_in_days: Optional[int] = 7,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        recovery_window_in_days: int | None = 7,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> dict:
         """
         CyberArk Conjur does not support direct secret deletion via API.
@@ -337,8 +327,7 @@ class CyberArkSecretManager(BaseSecretManager):
             dict: Response indicating operation not supported
         """
         verbose_logger.warning(
-            "CyberArk Conjur does not support direct secret deletion. "
-            "Secrets must be removed through policy updates."
+            "CyberArk Conjur does not support direct secret deletion. Secrets must be removed through policy updates."
         )
 
         # Clear from cache

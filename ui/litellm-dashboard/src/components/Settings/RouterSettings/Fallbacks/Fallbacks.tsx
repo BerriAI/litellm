@@ -1,5 +1,5 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
-import { ArrowRightIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowRightIcon, PencilAltIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
 import { Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { Tooltip, Typography } from "antd";
 import openai from "openai";
@@ -10,6 +10,7 @@ import NotificationsManager from "../../../molecules/notifications_manager";
 import { getCallbacksCall, setCallbacksCall } from "../../../networking";
 import { isProxyAdminRole } from "@/utils/roles";
 import AddFallbacks from "./AddFallbacks";
+import EditFallbacks from "./EditFallbacks";
 
 type FallbackEntry = { [modelName: string]: string[] };
 type Fallbacks = FallbackEntry[];
@@ -17,10 +18,7 @@ type Fallbacks = FallbackEntry[];
 const modelCardClass =
   "inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-gray-200 bg-gray-50 text-sm font-medium text-gray-800 shrink-0";
 
-function renderModelNameCell(
-  modelName: string,
-  getProviderFromModel?: (modelName: string) => string,
-): React.ReactNode {
+function renderModelNameCell(modelName: string, getProviderFromModel?: (modelName: string) => string): React.ReactNode {
   const provider = getProviderFromModel?.(modelName) ?? modelName;
   return (
     <span className={modelCardClass}>
@@ -49,18 +47,13 @@ function renderFallbacksChain(
   };
   return (
     <span className="grid grid-cols-[auto_1fr] items-start gap-x-2 w-full min-w-0">
-      <span
-        className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-blue-600"
-        aria-hidden
-      >
+      <span className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-blue-600" aria-hidden>
         <ArrowRightIcon className="w-5 h-5 stroke-[2.5]" />
       </span>
       <span className="flex flex-wrap items-start gap-1 min-w-0">
         {list.map((model, i) => (
           <React.Fragment key={model}>
-            {i > 0 && (
-              <Icon icon={ArrowRightIcon} size="xs" className="shrink-0 text-gray-400" />
-            )}
+            {i > 0 && <Icon icon={ArrowRightIcon} size="xs" className="shrink-0 text-gray-400" />}
             <ChainCard modelName={model} />
           </React.Fragment>
         ))}
@@ -73,13 +66,12 @@ interface FallbacksProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
-  modelData: any;
 }
 
 async function testFallbackModelResponse(selectedModel: string, accessToken: string) {
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal != true) {
-    console.log = function () { };
+    console.log = function () {};
   }
   const proxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
   const client = new openai.OpenAI({
@@ -123,11 +115,12 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
   }
 }
 
-const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, modelData }) => {
+const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) => {
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
   const [isDeleting, setIsDeleting] = useState(false);
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [fallbackToEdit, setFallbackToEdit] = useState<FallbackEntry | null>(null);
 
   const { data: modelCostMapData } = useModelCostMap();
   const getProviderFromModel = (model: string): string => {
@@ -142,7 +135,6 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
       return;
     }
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      console.log("callbacks", data);
       let router_settings = data.router_settings;
       if ("model_group_retry_policy" in router_settings) {
         delete router_settings["model_group_retry_policy"];
@@ -154,6 +146,14 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
   const handleDeleteClick = (fallbackEntry: FallbackEntry) => {
     setFallbackToDelete(fallbackEntry);
     setIsDeleteModalOpen(true);
+  };
+
+  const handleEditClick = (fallbackEntry: FallbackEntry) => {
+    setFallbackToEdit(fallbackEntry);
+  };
+
+  const handleEditClose = () => {
+    setFallbackToEdit(null);
   };
 
   const handleDeleteConfirm = async () => {
@@ -251,7 +251,6 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
     <>
       {canModify && (
         <AddFallbacks
-          models={modelData?.data ? modelData.data.map((data: any) => data.model_name) : []}
           accessToken={accessToken || ""}
           value={routerSettings.fallbacks || []}
           onChange={handleFallbacksChange}
@@ -260,8 +259,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
       {!hasFallbacks ? (
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-6 text-center">
           <Typography.Text type="secondary">
-            No fallbacks configured. Add fallbacks to automatically try another model when the primary
-            fails.
+            No fallbacks configured. Add fallbacks to automatically try another model when the primary fails.
           </Typography.Text>
         </div>
       ) : (
@@ -278,9 +276,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
             {routerSettings["fallbacks"].map((item: FallbackEntry, index: number) =>
               Object.entries(item).map(([key, value]) => (
                 <TableRow key={index.toString() + key}>
-                  <TableCell className="align-top">
-                    {renderModelNameCell(key, getProviderFromModel)}
-                  </TableCell>
+                  <TableCell className="align-top">{renderModelNameCell(key, getProviderFromModel)}</TableCell>
                   <TableCell className="align-top">
                     {renderFallbacksChain(key, Array.isArray(value) ? value : [], getProviderFromModel)}
                   </TableCell>
@@ -295,6 +291,18 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
                             className="cursor-pointer hover:text-blue-600"
                           />
                         </Tooltip>
+                        <Tooltip title="Edit fallback">
+                          <span
+                            data-testid="edit-fallback-button"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleEditClick(item)}
+                            onKeyDown={(e) => e.key === "Enter" && handleEditClick(item)}
+                            className="cursor-pointer inline-flex"
+                          >
+                            <Icon icon={PencilAltIcon} size="sm" className="hover:text-blue-600" />
+                          </span>
+                        </Tooltip>
                         <Tooltip title="Delete fallback">
                           <span
                             data-testid="delete-fallback-button"
@@ -304,11 +312,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
                             onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
                             className="cursor-pointer inline-flex"
                           >
-                            <Icon
-                              icon={TrashIcon}
-                              size="sm"
-                              className="hover:text-red-600"
-                            />
+                            <Icon icon={TrashIcon} size="sm" className="hover:text-red-600" />
                           </span>
                         </Tooltip>
                       </>
@@ -319,6 +323,16 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
             )}
           </TableBody>
         </Table>
+      )}
+      {canModify && fallbackToEdit && (
+        <EditFallbacks
+          key={Object.keys(fallbackToEdit)[0]}
+          accessToken={accessToken || ""}
+          fallbackEntry={fallbackToEdit}
+          value={routerSettings.fallbacks || []}
+          onChange={handleFallbacksChange}
+          onClose={handleEditClose}
+        />
       )}
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}

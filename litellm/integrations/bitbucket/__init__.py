@@ -1,16 +1,17 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .bitbucket_prompt_manager import BitBucketPromptManager
-    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    from .bitbucket_prompt_manager import BitBucketPromptManager
 
 from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 
 from .bitbucket_prompt_manager import BitBucketPromptManager
 
 # Global instances
-global_bitbucket_config: Optional[dict] = None
+global_bitbucket_config: dict | None = None
 
 
 def set_global_bitbucket_config(config: dict) -> None:
@@ -29,9 +30,7 @@ def set_global_bitbucket_config(config: dict) -> None:
     litellm.global_bitbucket_config = config  # type: ignore
 
 
-def prompt_initializer(
-    litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec"
-) -> "CustomPromptManagement":
+def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
     """
     Initialize a prompt from a BitBucket repository.
     """
@@ -39,9 +38,7 @@ def prompt_initializer(
     prompt_id = getattr(litellm_params, "prompt_id", None)
 
     if not bitbucket_config:
-        raise ValueError(
-            "bitbucket_config is required for BitBucket prompt integration"
-        )
+        raise ValueError("bitbucket_config is required for BitBucket prompt integration")
 
     try:
         bitbucket_prompt_manager = BitBucketPromptManager(
@@ -61,6 +58,6 @@ prompt_initializer_registry = {
 # Export public API
 __all__ = [
     "BitBucketPromptManager",
-    "set_global_bitbucket_config",
     "global_bitbucket_config",
+    "set_global_bitbucket_config",
 ]

@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from .base_cache import BaseCache
 
@@ -12,13 +12,11 @@ else:
 
 
 class DiskCache(BaseCache):
-    def __init__(self, disk_cache_dir: Optional[str] = None):
+    def __init__(self, disk_cache_dir: str | None = None):
         try:
             import diskcache as dc
         except ModuleNotFoundError as e:
-            raise ModuleNotFoundError(
-                "Please install litellm with `litellm[caching]` to use disk caching."
-            ) from e
+            raise ModuleNotFoundError("Please install litellm with `litellm[caching]` to use disk caching.") from e
 
         # if users don't provider one, use the default litellm cache
         if disk_cache_dir is None:
@@ -60,11 +58,12 @@ class DiskCache(BaseCache):
         return return_val
 
     def increment_cache(self, key, value: int, **kwargs) -> int:
-        # get the value
-        init_value = self.get_cache(key=key) or 0
-        value = init_value + value  # type: ignore
-        self.set_cache(key, value, **kwargs)
-        return value
+        with self.disk_cache.transact():
+            cached_value = self.get_cache(key=key)
+            init_value = cached_value if isinstance(cached_value, int) else 0
+            new_value = init_value + value
+            self.set_cache(key, new_value, **kwargs)
+            return new_value
 
     async def async_get_cache(self, key, **kwargs):
         return self.get_cache(key=key, **kwargs)
@@ -77,11 +76,7 @@ class DiskCache(BaseCache):
         return return_val
 
     async def async_increment(self, key, value: int, **kwargs) -> int:
-        # get the value
-        init_value = await self.async_get_cache(key=key) or 0
-        value = init_value + value  # type: ignore
-        await self.async_set_cache(key, value, **kwargs)
-        return value
+        return self.increment_cache(key=key, value=value, **kwargs)
 
     def flush_cache(self):
         self.disk_cache.clear()

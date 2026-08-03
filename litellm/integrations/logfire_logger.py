@@ -3,19 +3,19 @@
 
 import os
 import traceback
-from litellm._uuid import uuid
 from enum import Enum
-from typing import Any, Dict, NamedTuple
+from typing import Any, NamedTuple
 
 from typing_extensions import LiteralString
 
 from litellm._logging import print_verbose, verbose_logger
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 
 class SpanConfig(NamedTuple):
     message_template: LiteralString
-    span_data: Dict[str, Any]
+    span_data: dict[str, Any]
 
 
 class LogfireLevel(str, Enum):
@@ -35,29 +35,21 @@ class LogfireLogger:
             if logfire.DEFAULT_LOGFIRE_INSTANCE.config.send_to_logfire:
                 logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
         except Exception as e:
-            print_verbose(f"Got exception on init logfire client {str(e)}")
+            print_verbose(f"Got exception on init logfire client {e}")
             raise e
 
     def _get_span_config(self, payload) -> SpanConfig:
-        if (
-            payload["call_type"] == "completion"
-            or payload["call_type"] == "acompletion"
-        ):
+        if payload["call_type"] == "completion" or payload["call_type"] == "acompletion":
             return SpanConfig(
                 message_template="Chat Completion with {request_data[model]!r}",
                 span_data={"request_data": payload},
             )
-        elif (
-            payload["call_type"] == "embedding" or payload["call_type"] == "aembedding"
-        ):
+        elif payload["call_type"] == "embedding" or payload["call_type"] == "aembedding":
             return SpanConfig(
                 message_template="Embedding Creation with {request_data[model]!r}",
                 span_data={"request_data": payload},
             )
-        elif (
-            payload["call_type"] == "image_generation"
-            or payload["call_type"] == "aimage_generation"
-        ):
+        elif payload["call_type"] == "image_generation" or payload["call_type"] == "aimage_generation":
             return SpanConfig(
                 message_template="Image Generation with {request_data[model]!r}",
                 span_data={"request_data": payload},
@@ -98,16 +90,12 @@ class LogfireLogger:
         try:
             import logfire
 
-            verbose_logger.debug(
-                f"logfire Logging - Enters logging function for model {kwargs}"
-            )
+            verbose_logger.debug(f"logfire Logging - Enters logging function for model {kwargs}")
 
             if not response_obj:
                 response_obj = {}
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
+            metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
             messages = kwargs.get("messages")
             optional_params = kwargs.get("optional_params", {})
             call_type = kwargs.get("call_type", "completion")
@@ -169,11 +157,6 @@ class LogfireLogger:
                 )
             print_verbose(f"\ndd Logger - Logging payload = {payload}")
 
-            print_verbose(
-                f"Logfire Layer Logging - final response object: {response_obj}"
-            )
+            print_verbose(f"Logfire Layer Logging - final response object: {response_obj}")
         except Exception as e:
-            verbose_logger.debug(
-                f"Logfire Layer Error - {str(e)}\n{traceback.format_exc()}"
-            )
-            pass
+            verbose_logger.debug(f"Logfire Layer Error - {e}\n{traceback.format_exc()}")

@@ -4,6 +4,8 @@ import pytest
 from fastapi import Request
 from litellm_enterprise.proxy.auth.user_api_key_auth import enterprise_custom_auth
 
+from litellm.proxy._types import UserAPIKeyAuth
+
 
 @pytest.mark.asyncio
 async def test_enterprise_custom_auth_none_user_auth():
@@ -49,16 +51,19 @@ async def test_enterprise_custom_auth_returns_string():
     mock_user_auth = AsyncMock(return_value="sk-test-key")
     request = MagicMock(spec=Request)
 
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.enterprise_custom_auth", mock_user_auth
-    ), patch("litellm.proxy.proxy_server.master_key", "sk-1234"), patch(
-        "litellm.proxy.proxy_server.prisma_client", MagicMock()
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.enterprise_custom_auth",
+            mock_user_auth,
+        ),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
     ):
         # Verify the key is correctly handled in _user_api_key_auth_builder
         with patch(
-            "litellm.proxy.auth.user_api_key_auth.get_key_object"
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key"
         ) as mock_get_key_object:
-            mock_get_key_object.return_value = MagicMock(
+            mock_get_key_object.return_value = UserAPIKeyAuth(
                 token="sk-test-key",
                 user_role="internal_user",
                 team_id=None,
@@ -82,9 +87,7 @@ async def test_enterprise_custom_auth_returns_string():
             except Exception as e:
                 print("error:", e)
 
-            # Verify get_key_object was called with the correct key
+            # Verify the key lookup was called with the correct hashed key
             mock_get_key_object.assert_called_once()
-            # The key should be hashed before being passed to get_key_object
-            assert mock_get_key_object.call_args[1]["hashed_token"] == hash_token(
-                "sk-test-key"
-            )
+            # The key should be hashed before being passed to the resolver
+            assert mock_get_key_object.call_args[0][0] == hash_token("sk-test-key")

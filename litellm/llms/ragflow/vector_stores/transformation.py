@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -24,17 +24,13 @@ else:
 class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
     """Vector store configuration for RAGFlow datasets."""
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         api_key = litellm_params.get("api_key")
         if api_key is None:
             # Try to get from environment variable
             api_key = get_secret_str("RAGFLOW_API_KEY")
         if api_key is None:
-            raise ValueError(
-                "api_key is required (set RAGFLOW_API_KEY env var or pass in litellm_params)"
-            )
+            raise ValueError("api_key is required (set RAGFLOW_API_KEY env var or pass in litellm_params)")
         return {
             "headers": {
                 "Authorization": f"Bearer {api_key}",
@@ -48,17 +44,13 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
             "write": [],
         }
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """Validate environment and set headers for RAGFlow API."""
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = litellm_params.api_key or get_secret_str("RAGFLOW_API_KEY")
 
         if api_key is None:
-            raise ValueError(
-                "RAGFLOW_API_KEY is required (set env var or pass in litellm_params)"
-            )
+            raise ValueError("RAGFLOW_API_KEY is required (set env var or pass in litellm_params)")
 
         headers.update(
             {
@@ -70,7 +62,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -82,10 +74,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         - Default: http://localhost:9380
         """
         api_base = (
-            api_base
-            or litellm_params.get("api_base")
-            or get_secret_str("RAGFLOW_API_BASE")
-            or "http://localhost:9380"
+            api_base or litellm_params.get("api_base") or get_secret_str("RAGFLOW_API_BASE") or "http://localhost:9380"
         )
 
         # Remove trailing slashes
@@ -97,31 +86,27 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """RAGFlow vector stores are management-only, search is not supported."""
-        raise NotImplementedError(
-            "RAGFlow vector stores support dataset management only, not search/retrieval"
-        )
+        raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
 
     def transform_search_vector_store_response(
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         """RAGFlow vector stores are management-only, search is not supported."""
-        raise NotImplementedError(
-            "RAGFlow vector stores support dataset management only, not search/retrieval"
-        )
+        raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
 
     def transform_create_vector_store_request(
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform create request to RAGFlow POST /api/v1/datasets format.
 
@@ -136,7 +121,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
             raise ValueError("name is required for RAGFlow dataset creation")
 
         # Build request body
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "name": name,
         }
 
@@ -172,9 +157,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
 
         return url, request_body
 
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         """
         Transform RAGFlow response to VectorStoreCreateResponse format.
 

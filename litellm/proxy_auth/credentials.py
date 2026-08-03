@@ -7,7 +7,7 @@ It follows the same TokenCredential protocol used by Azure SDK.
 
 import time
 from dataclasses import dataclass
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass
@@ -71,7 +71,7 @@ class AzureADCredential:
         cred = AzureADCredential(credential=azure_cred)
     """
 
-    def __init__(self, credential: Optional[Any] = None):
+    def __init__(self, credential: Any | None = None):
         """
         Initialize with an optional Azure credential.
 
@@ -103,8 +103,7 @@ class AzureADCredential:
                 self._initialized = True
             except ImportError:
                 raise ImportError(
-                    "azure-identity is required for AzureADCredential. "
-                    "Install it with: pip install azure-identity"
+                    "azure-identity is required for AzureADCredential. Install it with: pip install azure-identity"
                 )
 
         result = self._credential.get_token(scope)
@@ -138,7 +137,7 @@ class GenericOAuth2Credential:
         self.client_id = client_id
         self.client_secret = client_secret
         self.token_url = token_url
-        self._cached_token: Optional[AccessToken] = None
+        self._cached_token: AccessToken | None = None
 
     def get_token(self, scope: str) -> AccessToken:
         """
@@ -215,7 +214,7 @@ class ProxyAuthHandler:
         """
         self.credential = credential
         self.scope = scope
-        self._cached_token: Optional[AccessToken] = None
+        self._cached_token: AccessToken | None = None
 
     def get_token(self) -> AccessToken:
         """

@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from litellm.integrations.opentelemetry import OpenTelemetry
 
@@ -25,7 +25,7 @@ class LevoConfig:
 
     def __init__(
         self,
-        otlp_auth_headers: Optional[str],
+        otlp_auth_headers: str | None,
         protocol: Protocol,
         endpoint: str,
     ):
@@ -56,17 +56,11 @@ class LevoLogger(OpenTelemetry):
 
         # Validate required env vars
         if not api_key:
-            raise ValueError(
-                "LEVOAI_API_KEY environment variable is required for Levo integration."
-            )
+            raise ValueError("LEVOAI_API_KEY environment variable is required for Levo integration.")
         if not org_id:
-            raise ValueError(
-                "LEVOAI_ORG_ID environment variable is required for Levo integration."
-            )
+            raise ValueError("LEVOAI_ORG_ID environment variable is required for Levo integration.")
         if not workspace_id:
-            raise ValueError(
-                "LEVOAI_WORKSPACE_ID environment variable is required for Levo integration."
-            )
+            raise ValueError("LEVOAI_WORKSPACE_ID environment variable is required for Levo integration.")
         if not collector_url:
             raise ValueError(
                 "LEVOAI_COLLECTOR_URL environment variable is required for Levo integration. "

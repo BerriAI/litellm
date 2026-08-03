@@ -1,5 +1,4 @@
 import json
-from typing import Optional
 
 import litellm
 from litellm import verbose_logger
@@ -20,10 +19,32 @@ class ModelResponseIterator:
             processed_chunk = litellm.ModelResponseStream(**chunk)
 
             text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            tool_use: ChatCompletionToolCallChunk | None = None
             is_finished = False
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: ChatCompletionUsageBlock | None = None
+
+            # Usage-only final chunk (OpenAI ``stream_options.include_usage``)
+            # arrives with an empty ``choices`` list — return usage without
+            # indexing ``choices[0]``.
+            if len(processed_chunk.choices) == 0:
+                final_usage = getattr(processed_chunk, "usage", None)
+                return GenericStreamingChunk(
+                    text="",
+                    tool_use=None,
+                    is_finished=False,
+                    finish_reason="",
+                    usage=(
+                        ChatCompletionUsageBlock(
+                            prompt_tokens=final_usage.prompt_tokens or 0,
+                            completion_tokens=final_usage.completion_tokens or 0,
+                            total_tokens=final_usage.total_tokens or 0,
+                        )
+                        if final_usage is not None
+                        else None
+                    ),
+                    index=0,
+                )
 
             if processed_chunk.choices[0].delta.content is not None:  # type: ignore
                 text = processed_chunk.choices[0].delta.content  # type: ignore
@@ -53,7 +74,7 @@ class ModelResponseIterator:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
 
-            usage_chunk: Optional[Usage] = getattr(processed_chunk, "usage", None)
+            usage_chunk: Usage | None = getattr(processed_chunk, "usage", None)
             if usage_chunk is not None:
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=usage_chunk.prompt_tokens,
@@ -105,9 +126,7 @@ class ModelResponseIterator:
         except StopIteration:
             raise StopIteration
         except ValueError as e:
-            verbose_logger.debug(
-                f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here."
-            )
+            verbose_logger.debug(f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here.")
             return GenericStreamingChunk(
                 text="",
                 is_finished=False,
@@ -152,9 +171,7 @@ class ModelResponseIterator:
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
-            verbose_logger.debug(
-                f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here."
-            )
+            verbose_logger.debug(f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here.")
             return GenericStreamingChunk(
                 text="",
                 is_finished=False,

@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import MakeMCPPublicForm from "./MakeMCPPublicForm";
-import { MCPServerData } from "../../mcp_hub_table_columns";
+import { MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 
 // Mock the networking function
 vi.mock("../../networking", () => ({
@@ -63,9 +63,15 @@ vi.mock("antd", () => ({
   ),
 }));
 
-// Additional @tremor/react mocks (Button is already mocked globally)
+// Additional @tremor/react mocks.
+// NOTE: the comment used to say "Button is already mocked globally" — that was
+// incorrect. A file-level vi.mock fully replaces the setup-level mock from
+// tests/setupTests.ts, so we must re-apply the Button/Tooltip overrides here.
+// Without them, the real Tremor Button leaks through and its useTooltip(300)
+// schedules a native setTimeout that can fire post-teardown -> "window is not defined".
 vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
+  const React = await import("react");
   return {
     ...actual,
     Text: ({ children, className }: any) => <span className={className}>{children}</span>,
@@ -75,6 +81,12 @@ vi.mock("@tremor/react", async (importOriginal) => {
         {children}
       </span>
     ),
+    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) => (
+      <button {...props} ref={ref}>
+        {children}
+      </button>
+    )),
+    Tooltip: ({ children }: any) => <>{children}</>,
   };
 });
 

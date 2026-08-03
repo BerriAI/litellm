@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Optional, Union
+from typing import Literal
 
 import httpx
 
@@ -25,7 +25,7 @@ class VertexEmbedding(VertexBase):
     def embedding(
         self,
         model: str,
-        input: Union[list, str],
+        input: list | str,
         print_verbose,
         model_response: EmbeddingResponse,
         optional_params: dict,
@@ -33,18 +33,18 @@ class VertexEmbedding(VertexBase):
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
-        timeout: Optional[Union[float, httpx.Timeout]],
-        api_key: Optional[str] = None,
+        timeout: float | httpx.Timeout | None,
+        api_key: str | None = None,
         encoding=None,
-        aembedding: Optional[bool] = False,
-        api_base: Optional[str] = None,
-        client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
-        vertex_project: Optional[str] = None,
-        vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
-        gemini_api_key: Optional[str] = None,
-        extra_headers: Optional[dict] = None,
-        litellm_params: Optional[Dict] = None,
+        aembedding: bool | None = False,
+        api_base: str | None = None,
+        client: AsyncHTTPHandler | HTTPHandler | None = None,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+        gemini_api_key: str | None = None,
+        extra_headers: dict | None = None,
+        litellm_params: dict | None = None,
     ) -> EmbeddingResponse:
         if aembedding is True:
             return self.async_embedding(  # type: ignore
@@ -65,9 +65,7 @@ class VertexEmbedding(VertexBase):
                 litellm_params=litellm_params,
             )
 
-        should_use_v1beta1_features = self.is_using_v1beta1_features(
-            optional_params=optional_params
-        )
+        should_use_v1beta1_features = self.is_using_v1beta1_features(optional_params=optional_params)
 
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -130,14 +128,10 @@ class VertexEmbedding(VertexBase):
 
         _json_response = response.json()
         ## LOGGING POST-CALL
-        logging_obj.post_call(
-            input=input, api_key=None, original_response=_json_response
-        )
+        logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 
-        model_response = (
-            litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
-                response=_json_response, model=model, model_response=model_response
-            )
+        model_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
+            response=_json_response, model=model, model_response=model_response
         )
 
         return model_response
@@ -145,30 +139,28 @@ class VertexEmbedding(VertexBase):
     async def async_embedding(
         self,
         model: str,
-        input: Union[list, str],
+        input: list | str,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
-        timeout: Optional[Union[float, httpx.Timeout]],
-        api_base: Optional[str] = None,
-        client: Optional[AsyncHTTPHandler] = None,
-        vertex_project: Optional[str] = None,
-        vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
-        gemini_api_key: Optional[str] = None,
-        extra_headers: Optional[dict] = None,
+        timeout: float | httpx.Timeout | None,
+        api_base: str | None = None,
+        client: AsyncHTTPHandler | None = None,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+        gemini_api_key: str | None = None,
+        extra_headers: dict | None = None,
         encoding=None,
-        litellm_params: Optional[Dict] = None,
+        litellm_params: dict | None = None,
     ) -> EmbeddingResponse:
         """
         Async embedding implementation
         """
-        should_use_v1beta1_features = self.is_using_v1beta1_features(
-            optional_params=optional_params
-        )
+        should_use_v1beta1_features = self.is_using_v1beta1_features(optional_params=optional_params)
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -205,9 +197,7 @@ class VertexEmbedding(VertexBase):
         if timeout:
             _async_client_params["timeout"] = timeout
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI
-            )
+            client = get_async_httpx_client(params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI)
         else:
             client = client  # type: ignore
         ## LOGGING
@@ -232,14 +222,10 @@ class VertexEmbedding(VertexBase):
 
         _json_response = response.json()
         ## LOGGING POST-CALL
-        logging_obj.post_call(
-            input=input, api_key=None, original_response=_json_response
-        )
+        logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 
-        model_response = (
-            litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
-                response=_json_response, model=model, model_response=model_response
-            )
+        model_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
+            response=_json_response, model=model, model_response=model_response
         )
 
         return model_response

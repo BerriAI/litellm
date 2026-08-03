@@ -1,22 +1,31 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Literal
 
+import httpx
 from fastapi import HTTPException, status
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.router_utils.common_utils import _is_proxy_admin_request
 
-# Router-internal mock_testing_* flag names — kept in sync with
-# ``litellm.types.router.MockRouterTestingParams`` by the test
-# ``test_mock_testing_kwarg_names_matches_dataclass``. Hardcoding (rather
-# than deriving via ``dataclasses.fields(MockRouterTestingParams)`` at
+# Client-supplied params that make the router or the call path fabricate a
+# failure or a delay instead of calling the provider. The ``mock_testing_*``
+# names are kept in sync with ``litellm.types.router.MockRouterTestingParams``
+# by ``test_gated_mock_params_cover_mock_router_testing_params``. Hardcoding
+# (rather than deriving via ``dataclasses.fields(MockRouterTestingParams)`` at
 # import time) avoids a cyclic import: ``litellm.types.router`` imports
 # back into proxy modules before this module finishes loading.
-_MOCK_TESTING_KWARG_NAMES: tuple = (
+GATED_MOCK_PARAM_NAMES: tuple[str, ...] = (
     "mock_testing_fallbacks",
     "mock_testing_context_fallbacks",
     "mock_testing_content_policy_fallbacks",
+    "mock_testing_rate_limit_error",
+    "mock_timeout",
+    "mock_delay",
 )
+
+MOCK_TESTING_CONFIG_KEY = "dangerously_allow_mock_testing_request_params"
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -44,6 +53,24 @@ def _route_user_config_request(data: dict, route_type: str):
 def _is_a2a_agent_model(model_name: Any) -> bool:
     """Check if the model name is for an A2A agent (a2a/ prefix)."""
     return isinstance(model_name, str) and model_name.startswith("a2a/")
+
+
+def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, team_id: str | None) -> None:
+    if not isinstance(model_name, str) or not model_name:
+        return
+    if not isinstance(llm_router, litellm.Router):
+        return
+    deployments = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
+    if llm_router._are_all_deployments_blocked(deployments):
+        raise litellm.PermissionDeniedError(
+            message="Model is blocked",
+            model=model_name,
+            llm_provider="",
+            response=httpx.Response(
+                status_code=403,
+                request=httpx.Request(method="POST", url="https://github.com/BerriAI/litellm"),
+            ),
+        )
 
 
 ROUTE_ENDPOINT_MAPPING = {
@@ -74,6 +101,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "avideo_extension": "/videos/extensions",
     "acreate_realtime_client_secret": "/realtime/client_secrets",
     "arealtime_calls": "/realtime/calls",
+    "acreate_realtime_transcription_session": "/realtime/transcription_sessions",
     "acreate_container": "/containers",
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
@@ -94,6 +122,12 @@ ROUTE_ENDPOINT_MAPPING = {
     "aget_interaction": "/interactions/{interaction_id}",
     "adelete_interaction": "/interactions/{interaction_id}",
     "acancel_interaction": "/interactions/{interaction_id}/cancel",
+    # Google Managed Agents API routes
+    "acreate_agent": "/v1beta/agents",
+    "alist_agents": "/v1beta/agents",
+    "aget_agent": "/v1beta/agents/{name}",
+    "adelete_agent": "/v1beta/agents/{name}",
+    "alist_agent_versions": "/v1beta/agents/{name}/versions",
     # OpenAI Evals API routes
     "acreate_eval": "/evals",
     "alist_evals": "/evals",
@@ -118,15 +152,70 @@ class ProxyModelNotFoundError(HTTPException):
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
-def get_team_id_from_data(data: dict) -> Optional[str]:
+REQUIRED_BODY_PARAM_BY_ROUTE: Mapping[str, str] = {
+    "acompletion": "messages",
+    "aembedding": "input",
+}
+
+
+class ProxyMissingRequiredParamError(HTTPException):
+    def __init__(self, route: str, param: str):
+        detail = {"error": f"{route}: Missing required parameter: '{param}'."}
+        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+        self.type = "invalid_request_error"
+        self.param = param
+
+
+def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
+    required_param = REQUIRED_BODY_PARAM_BY_ROUTE.get(route_type)
+    if required_param is None or data.get(required_param) is not None:
+        return
+    raise ProxyMissingRequiredParamError(
+        route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
+        param=required_param,
+    )
+
+
+class MockTestingParamsDisabledError(HTTPException):
+    def __init__(self, params: tuple[str, ...]):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+                "error": (
+                    f"Mock testing request params are disabled on this proxy: {', '.join(params)}. "
+                    f"An admin can enable them by setting `general_settings.{MOCK_TESTING_CONFIG_KEY}: true` "
+                    "in config.yaml. This setting cannot be changed from the Admin UI or the API."
+                )
+            },
+        )
+
+
+def raise_if_mock_testing_params_disallowed(data: Mapping[str, object], *, allowed: bool) -> None:
+    """Reject client-supplied mock testing params unless an admin opted in.
+
+    Rejecting (rather than silently dropping) keeps a request that asked for a
+    synthetic failure from returning a normal success, which reads as a passing
+    fallback test that never ran.
+    """
+    if allowed:
+        return
+    present = tuple(name for name in GATED_MOCK_PARAM_NAMES if name in data)
+    if present:
+        raise MockTestingParamsDisabledError(params=present)
+
+
+def mock_testing_params_allowed() -> bool:
+    """Read the opt-in from the running proxy's ``general_settings``."""
+    from litellm.proxy import proxy_server
+
+    return proxy_server.general_settings.get(MOCK_TESTING_CONFIG_KEY, False) is True
+
+
+def get_team_id_from_data(data: dict) -> str | None:
     """
     Get the team id from the data's metadata or litellm_metadata params.
     """
-    if (
-        "metadata" in data
-        and data["metadata"] is not None
-        and "user_api_key_team_id" in data["metadata"]
-    ):
+    if "metadata" in data and data["metadata"] is not None and "user_api_key_team_id" in data["metadata"]:
         return data["metadata"].get("user_api_key_team_id")
     elif (
         "litellm_metadata" in data
@@ -137,7 +226,7 @@ def get_team_id_from_data(data: dict) -> Optional[str]:
     return None
 
 
-_shared_session_lock: Optional[asyncio.Lock] = None
+_shared_session_lock: asyncio.Lock | None = None
 
 
 def _get_shared_session_lock() -> asyncio.Lock:
@@ -166,16 +255,14 @@ async def add_shared_session_to_data(data: dict) -> None:
         data: Dictionary to add the shared session to
     """
     try:
-        import litellm.proxy.proxy_server as proxy_server
         from litellm._logging import verbose_proxy_logger
+        from litellm.proxy import proxy_server
 
         session = proxy_server.shared_aiohttp_session
 
         if session is not None and not session.closed:
             data["shared_session"] = session
-            verbose_proxy_logger.info(
-                f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(session)})"
-            )
+            verbose_proxy_logger.info(f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(session)})")
         elif session is not None and session.closed:
             # Session was created at startup but has since closed — recreate it
             # Use lock to prevent concurrent recreation (avoids session/connector leak)
@@ -198,13 +285,9 @@ async def add_shared_session_to_data(data: dict) -> None:
                         "SESSION REUSE: Shared aiohttp session is None after re-check, recreating..."
                     )
                 try:
-                    new_session = (
-                        await proxy_server._initialize_shared_aiohttp_session()
-                    )
+                    new_session = await proxy_server._initialize_shared_aiohttp_session()
                 except Exception:
-                    verbose_proxy_logger.exception(
-                        "SESSION REUSE: Exception during shared session recreation"
-                    )
+                    verbose_proxy_logger.exception("SESSION REUSE: Exception during shared session recreation")
                     new_session = None
                 if new_session is not None:
                     proxy_server.shared_aiohttp_session = new_session
@@ -214,9 +297,7 @@ async def add_shared_session_to_data(data: dict) -> None:
                         "SESSION REUSE: Failed to recreate shared session, continuing without session reuse"
                     )
         else:
-            verbose_proxy_logger.info(
-                "SESSION REUSE: No shared session available for this request"
-            )
+            verbose_proxy_logger.info("SESSION REUSE: No shared session available for this request")
     except Exception:
         # Continue without session reuse — this outer handler covers import failures
         # and other unexpected errors to avoid breaking the request path.
@@ -232,10 +313,10 @@ async def add_shared_session_to_data(data: dict) -> None:
             pass
 
 
-async def route_request(  # noqa: PLR0915 - Complex routing function, refactoring tracked separately
+async def route_request(
     data: dict,
-    llm_router: Optional[LitellmRouter],
-    user_model: Optional[str],
+    llm_router: LitellmRouter | None,
+    user_model: str | None,
     route_type: Literal[
         "acompletion",
         "atext_completion",
@@ -255,6 +336,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "_arealtime",  # private function for realtime API
         "acreate_realtime_client_secret",
         "arealtime_calls",
+        "acreate_realtime_transcription_session",
         "_aresponses_websocket",  # private function for responses WebSocket mode
         "aimage_edit",
         "agenerate_content",
@@ -311,6 +393,11 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "aget_interaction",
         "adelete_interaction",
         "acancel_interaction",
+        "acreate_agent",
+        "alist_agents",
+        "aget_agent",
+        "adelete_agent",
+        "alist_agent_versions",
         "asend_message",
         "call_mcp_tool",
         "acancel_batch",
@@ -327,22 +414,22 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "acancel_run",
         "adelete_run",
     ],
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     """
     Common helper to route the request
     """
+    raise_if_required_body_param_missing(route_type=route_type, data=data)
+
     await add_shared_session_to_data(data)
 
-    # Strip router-internal mock_testing_* flags. Combined with an
-    # unauthorized fallback in ``router_settings_override`` they let a
-    # caller deterministically execute requests against restricted
-    # models. VERIA-44.
-    for _key in _MOCK_TESTING_KWARG_NAMES:
-        data.pop(_key, None)
+    raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
+
+    data.pop("enable_tag_filtering", None)
 
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
+    is_proxy_admin_without_team = team_id is None and _is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
@@ -387,6 +474,8 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "num_retries",
             "timeout",
             "model_group_retry_policy",
+            "routing_strategy",
+            "enable_tag_filtering",
         ]
 
         # Merge override settings into data (only if not already set in request)
@@ -400,6 +489,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         else:
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
+        _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
         if route_type in [
@@ -414,26 +504,22 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "aget_run",
             "acancel_run",
             "adelete_run",
-            "acreate_realtime_client_secret",
-            "arealtime_calls",
         ]:
             # If a model is provided, get its credentials from the router
             model = data.get("model")
             if model and llm_router:
                 try:
                     # Try to get deployment credentials for this model
-                    deployment_creds = llm_router.get_deployment_credentials(
-                        model_id=model
-                    )
+                    deployment_creds = llm_router.get_deployment_credentials(model_id=model)
                     if not deployment_creds:
                         # Try by model group name
-                        deployment = llm_router.get_deployment_by_model_group_name(
-                            model_group_name=model
-                        )
-                        if deployment and deployment.litellm_params:
-                            deployment_creds = deployment.litellm_params.model_dump(
-                                exclude_none=True
-                            )
+                        deployment = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                        if (
+                            deployment
+                            and deployment.litellm_params
+                            and not llm_router._is_deployment_blocked(deployment)
+                        ):
+                            deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
 
                     # If we found credentials, merge them into data (but don't override user-provided values)
                     if deployment_creds:
@@ -464,6 +550,15 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "acancel_interaction",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
+        # Managed Agents API: these don't need model routing
+        if route_type in [
+            "acreate_agent",
+            "alist_agents",
+            "aget_agent",
+            "adelete_agent",
+            "alist_agent_versions",
+        ]:
+            return getattr(llm_router, f"{route_type}")(**data)
         if route_type in [
             "avideo_list",
             "avideo_status",
@@ -486,22 +581,20 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             # These endpoints don't need a model, use custom_llm_provider directly
             return getattr(litellm, f"{route_type}")(**data)
 
-        team_model_name = (
-            llm_router.map_team_model(data["model"], team_id)
-            if team_id is not None
-            else None
-        )
+        team_model_name = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
         if team_model_name is not None:
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
 
-        elif data["model"] in router_model_names or llm_router.has_model_id(
-            data["model"]
-        ):
-            return getattr(llm_router, f"{route_type}")(**data)
-
         elif (
-            llm_router.model_group_alias is not None
+            (
+                is_proxy_admin_without_team
+                and data["model"] not in router_model_names
+                and data["model"] in llm_router.team_public_model_names
+            )
+            or data["model"] in router_model_names
+            or llm_router.has_model_id(data["model"])
+            or llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):
             return getattr(llm_router, f"{route_type}")(**data)
@@ -511,16 +604,11 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.router_general_settings.pass_through_all_models:
                 return getattr(litellm, f"{route_type}")(**data)
-            elif (
-                llm_router.default_deployment is not None
-                or len(llm_router.pattern_router.patterns) > 0
-            ):
+            elif llm_router.default_deployment is not None or len(llm_router.pattern_router.patterns) > 0:
                 return getattr(llm_router, f"{route_type}")(**data)
             elif data["model"] in llm_router.deployment_names:
                 # Only match deployment_names if no wildcard matched
-                return getattr(llm_router, f"{route_type}")(
-                    **data, specific_deployment=True
-                )
+                return getattr(llm_router, f"{route_type}")(**data, specific_deployment=True)
             elif route_type in [
                 "amoderation",
                 "aget_responses",
@@ -529,6 +617,10 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",
+                "avector_store_retrieve",
+                "avector_store_list",
+                "avector_store_update",
+                "avector_store_delete",
                 "avector_store_file_create",
                 "avector_store_file_list",
                 "avector_store_file_retrieve",
@@ -569,16 +661,12 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                     route_a2a_agent_request,
                 )
 
-                result = await route_a2a_agent_request(
-                    data, route_type, user_api_key_dict=user_api_key_dict
-                )
+                result = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
                 if result is not None:
                     return result
                 # Fall through to raise exception below if result is None
 
-    elif user_model is not None:
-        return getattr(litellm, f"{route_type}")(**data)
-    elif route_type == "allm_passthrough_route":
+    elif user_model is not None or route_type == "allm_passthrough_route":
         return getattr(litellm, f"{route_type}")(**data)
 
     # if no route found then it's a bad request

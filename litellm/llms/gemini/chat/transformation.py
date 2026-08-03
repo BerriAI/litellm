@@ -1,5 +1,6 @@
-from typing import List, Optional, cast
+from typing import cast
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
@@ -40,25 +41,25 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
-    temperature: Optional[float] = None
-    max_output_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    response_mime_type: Optional[str] = None
-    response_schema: Optional[dict] = None
-    candidate_count: Optional[int] = None
-    stop_sequences: Optional[list] = None
+    temperature: float | None = None
+    max_output_tokens: int | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    response_mime_type: str | None = None
+    response_schema: dict | None = None
+    candidate_count: int | None = None
+    stop_sequences: list | None = None
 
     def __init__(
         self,
-        temperature: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        response_mime_type: Optional[str] = None,
-        response_schema: Optional[dict] = None,
-        candidate_count: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
+        temperature: float | None = None,
+        max_output_tokens: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        response_mime_type: str | None = None,
+        response_schema: dict | None = None,
+        candidate_count: int | None = None,
+        stop_sequences: list | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -72,7 +73,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def is_model_gemini_audio_model(self, model: str) -> bool:
         return "tts" in model
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         supported_params = [
             "temperature",
             "top_p",
@@ -91,6 +92,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
+            "include_server_side_tool_invocations",
             "service_tier",
         ]
         if supports_reasoning(model, custom_llm_provider="gemini"):
@@ -101,8 +103,11 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         return supported_params
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: Optional[str] = None
-    ) -> List[ContentType]:
+        self,
+        messages: list[AllMessageValues],
+        model: str | None = None,
+        litellm_params: dict | None = None,
+    ) -> list[ContentType]:
         """
         Google AI Studio Gemini does not support HTTP/HTTPS URLs for files.
         Convert them to base64 data instead.
@@ -110,13 +115,13 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         for message in messages:
             _message_content = message.get("content")
             if _message_content is not None and isinstance(_message_content, list):
-                _parts: List[PartType] = []
+                _parts: list[PartType] = []
                 for element in _message_content:
                     if element.get("type") == "image_url":
                         img_element = element
-                        _image_url: Optional[str] = None
-                        format: Optional[str] = None
-                        detail: Optional[str] = None
+                        _image_url: str | None = None
+                        format: str | None = None
+                        detail: str | None = None
                         if isinstance(img_element.get("image_url"), dict):
                             _image_url = img_element["image_url"].get("url")  # type: ignore
                             format = img_element["image_url"].get("format")  # type: ignore
@@ -124,14 +129,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                         else:
                             _image_url = img_element.get("image_url")  # type: ignore
                         if _image_url and "https://" in _image_url:
-                            image_obj = convert_to_anthropic_image_obj(
-                                _image_url, format=format
-                            )
-                            converted_image_url = (
-                                convert_generic_image_chunk_to_openai_image_obj(
-                                    image_obj
-                                )
-                            )
+                            image_obj = convert_to_anthropic_image_obj(_image_url, format=format)
+                            converted_image_url = convert_generic_image_chunk_to_openai_image_obj(image_obj)
                             if detail is not None:
                                 img_element["image_url"] = {  # type: ignore
                                     "url": converted_image_url,
@@ -141,14 +140,26 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                                 img_element["image_url"] = converted_image_url  # type: ignore
                     elif element.get("type") == "file":
                         file_element = cast(ChatCompletionFileObject, element)
-                        file_id = file_element["file"].get("file_id")
+                        _file_field = file_element.get("file")
+                        if _file_field is None:
+                            raise litellm.BadRequestError(
+                                message="Content block has type='file' but is missing the required 'file' field",
+                                model=model,
+                                llm_provider="gemini",
+                            )
+                        file_id = _file_field.get("file_id")
                         if file_id and ("http://" in file_id or "https://" in file_id):
                             # Convert HTTP/HTTPS file URL to base64 data
                             try:
                                 base64_data = convert_url_to_base64(file_id)
-                                file_element["file"]["file_data"] = base64_data  # type: ignore
-                                file_element["file"].pop("file_id", None)  # type: ignore
+                                _file_field["file_data"] = base64_data  # type: ignore
+                                _file_field.pop("file_id", None)  # type: ignore
                             except Exception:
                                 # If conversion fails, leave as is and let the API handle it
                                 pass
-        return _gemini_convert_messages_with_history(messages=messages, model=model)
+        return _gemini_convert_messages_with_history(
+            messages=messages,
+            model=model,
+            litellm_params=litellm_params,
+            custom_llm_provider="gemini",
+        )

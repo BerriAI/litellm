@@ -104,6 +104,7 @@ async def test_add_metrics_from_log(clean_env):
     logger._add_metrics_from_log(log=payload, kwargs=kwargs, status_code="200")
 
     # Should have 3 series: total_latency, llm_api_latency, request_count
+    # (no overhead metric because payload has no hidden_params litellm_overhead_time_ms)
     assert len(logger.log_queue) == 3
 
     metrics = {s["metric"]: s for s in logger.log_queue}
@@ -123,6 +124,72 @@ async def test_add_metrics_from_log(clean_env):
     assert count["type"] == 1  # count
     assert count["points"][0]["value"] == 1.0
     assert "status_code:200" in count["tags"]
+
+
+@pytest.mark.asyncio
+async def test_overhead_latency_metric_emitted(clean_env):
+    """Test that litellm.overhead.latency is emitted when hidden_params contains litellm_overhead_time_ms."""
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
+
+    now = datetime.now()
+    start_time = now - timedelta(seconds=2)
+    api_call_start_time = now - timedelta(seconds=1)
+
+    payload = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4o",
+        hidden_params={
+            "litellm_overhead_time_ms": 250.0,  # 250 ms of overhead
+        },
+    )
+
+    kwargs = {
+        "start_time": start_time,
+        "api_call_start_time": api_call_start_time,
+        "end_time": now,
+    }
+
+    logger._add_metrics_from_log(log=payload, kwargs=kwargs, status_code="200")
+
+    metrics = {s["metric"]: s for s in logger.log_queue}
+
+    # Overhead metric must be present
+    assert (
+        "litellm.overhead.latency" in metrics
+    ), f"Expected 'litellm.overhead.latency' in emitted metrics, got: {list(metrics.keys())}"
+    overhead = metrics["litellm.overhead.latency"]
+    assert overhead["type"] == 3  # gauge
+    # 250 ms → 0.25 s
+    assert abs(overhead["points"][0]["value"] - 0.25) < 1e-6
+    # status_code should NOT be in overhead tags (it is a latency metric, not a request count)
+    assert not any(tag.startswith("status_code:") for tag in overhead["tags"])
+
+
+@pytest.mark.asyncio
+async def test_overhead_latency_metric_absent_when_no_hidden_params(clean_env):
+    """Test that litellm.overhead.latency is NOT emitted when hidden_params has no overhead value."""
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
+
+    now = datetime.now()
+    start_time = now - timedelta(seconds=2)
+    api_call_start_time = now - timedelta(seconds=1)
+
+    payload = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4o",
+        # No hidden_params / no litellm_overhead_time_ms
+    )
+
+    kwargs = {
+        "start_time": start_time,
+        "api_call_start_time": api_call_start_time,
+        "end_time": now,
+    }
+
+    logger._add_metrics_from_log(log=payload, kwargs=kwargs, status_code="200")
+
+    metrics = {s["metric"]: s for s in logger.log_queue}
+    assert "litellm.overhead.latency" not in metrics
 
 
 @pytest.mark.asyncio

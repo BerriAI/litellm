@@ -10,8 +10,6 @@ Model name format:
 - Agent: ragflow/agent/{agent_id}/{model_name}
 """
 
-from typing import List, Optional, Tuple
-
 import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.openai import OpenAIConfig
@@ -28,7 +26,7 @@ class RAGFlowConfig(OpenAIConfig):
     - ragflow/agent/{agent_id}/{model_name} for agent endpoints
     """
 
-    def _parse_ragflow_model(self, model: str) -> Tuple[str, str, str]:
+    def _parse_ragflow_model(self, model: str) -> tuple[str, str, str]:
         """
         Parse RAGFlow model name format: ragflow/{endpoint_type}/{id}/{model_name}
 
@@ -49,31 +47,25 @@ class RAGFlowConfig(OpenAIConfig):
             )
 
         if parts[0] != "ragflow":
-            raise ValueError(
-                f"Invalid RAGFlow model format: {model}. Must start with 'ragflow/'"
-            )
+            raise ValueError(f"Invalid RAGFlow model format: {model}. Must start with 'ragflow/'")
 
         endpoint_type = parts[1]
         if endpoint_type not in ["chat", "agent"]:
-            raise ValueError(
-                f"Invalid RAGFlow endpoint type: {endpoint_type}. Must be 'chat' or 'agent'"
-            )
+            raise ValueError(f"Invalid RAGFlow endpoint type: {endpoint_type}. Must be 'chat' or 'agent'")
 
         entity_id = parts[2]
-        model_name = "/".join(
-            parts[3:]
-        )  # Handle model names that might contain slashes
+        model_name = "/".join(parts[3:])  # Handle model names that might contain slashes
 
         return endpoint_type, entity_id, model_name
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the RAGFlow API call.
@@ -94,19 +86,10 @@ class RAGFlowConfig(OpenAIConfig):
             Complete URL for the API call
         """
         # Get api_base from multiple sources: input param, litellm_params, environment, or global litellm setting
-        if (
-            litellm_params
-            and hasattr(litellm_params, "api_base")
-            and litellm_params.api_base
-        ):
+        if litellm_params and hasattr(litellm_params, "api_base") and litellm_params.api_base:
             api_base = api_base or litellm_params.api_base
 
-        api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret("RAGFLOW_API_BASE")
-            or get_secret_str("RAGFLOW_API_BASE")
-        )
+        api_base = api_base or litellm.api_base or get_secret("RAGFLOW_API_BASE") or get_secret_str("RAGFLOW_API_BASE")
 
         if api_base is None:
             raise ValueError(
@@ -142,10 +125,10 @@ class RAGFlowConfig(OpenAIConfig):
     def _get_openai_compatible_provider_info(
         self,
         model: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         custom_llm_provider: str,
-    ) -> Tuple[Optional[str], Optional[str], str]:
+    ) -> tuple[str | None, str | None, str]:
         """
         Get OpenAI-compatible provider information for RAGFlow.
 
@@ -164,16 +147,11 @@ class RAGFlowConfig(OpenAIConfig):
 
         # Get api_base from multiple sources: input param, environment, or global litellm setting
         dynamic_api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret("RAGFLOW_API_BASE")
-            or get_secret_str("RAGFLOW_API_BASE")
+            api_base or litellm.api_base or get_secret("RAGFLOW_API_BASE") or get_secret_str("RAGFLOW_API_BASE")
         )
 
         # Get api_key from multiple sources: input param, environment, or global litellm setting
-        dynamic_api_key = (
-            api_key or litellm.api_key or get_secret_str("RAGFLOW_API_KEY")
-        )
+        dynamic_api_key = api_key or litellm.api_key or get_secret_str("RAGFLOW_API_KEY")
 
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
 
@@ -181,11 +159,11 @@ class RAGFlowConfig(OpenAIConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for RAGFlow API.
@@ -203,11 +181,7 @@ class RAGFlowConfig(OpenAIConfig):
             Updated headers dictionary
         """
         # Use api_key from litellm_params if available, otherwise fall back to other sources
-        if (
-            litellm_params
-            and hasattr(litellm_params, "api_key")
-            and litellm_params.api_key
-        ):
+        if litellm_params and hasattr(litellm_params, "api_key") and litellm_params.api_key:
             api_key = api_key or litellm_params.api_key
 
         # Get api_key from multiple sources: input param, litellm_params, environment, or global litellm setting
@@ -235,7 +209,7 @@ class RAGFlowConfig(OpenAIConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -266,6 +240,4 @@ class RAGFlowConfig(OpenAIConfig):
                 actual_model = model
 
         # Use parent's transform_request with the actual model name
-        return super().transform_request(
-            actual_model, messages, optional_params, litellm_params, headers
-        )
+        return super().transform_request(actual_model, messages, optional_params, litellm_params, headers)

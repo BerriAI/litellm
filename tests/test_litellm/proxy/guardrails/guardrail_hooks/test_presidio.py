@@ -585,6 +585,50 @@ async def test_logging_hook_multiple_content_items(presidio_guardrail):
 
 
 @pytest.mark.asyncio
+async def test_logging_only_does_not_mask_pre_call_request(
+    mock_user_api_key, mock_cache
+):
+    """
+    A guardrail configured with `logging_only` must only mask PII for logs/traces,
+    never for the request sent to the model. `async_pre_call_hook` should leave the
+    request untouched so the model receives (and replies based on) the real input.
+
+    Regression test for the case where the pre-call hook masked the live request,
+    causing the model's response to contain anonymization tokens (e.g. <PERSON>)
+    instead of the real output.
+    """
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        logging_only=True,
+        pii_entities_config={PiiEntityType.PHONE_NUMBER: PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("555-123-4567", "[PHONE]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    original_text = "My phone is 555-123-4567"
+    test_data = {
+        "messages": [{"role": "user", "content": original_text}],
+        "model": "gpt-4",
+    }
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    # The live request must be unchanged: PII reaches the model intact.
+    assert result["messages"][0]["content"] == original_text
+    assert "[PHONE]" not in result["messages"][0]["content"]
+
+    print("✓ logging_only leaves the pre-call request unmasked")
+
+
+@pytest.mark.asyncio
 async def test_presidio_sets_guardrail_information_in_request_data():
     """
     Test that Presidio populates guardrail information into request_data metadata.
@@ -2330,6 +2374,164 @@ async def test_apply_to_output_streaming_bytes_only_logs_warning():
 
 
 @pytest.mark.asyncio
+async def test_output_parse_pii_streaming_responses_events_passthrough(
+    mock_user_api_key,
+):
+    """
+    Regression test: when output_parse_pii=True and pii_tokens exist, /v1/responses
+    streaming events must pass through instead of being dropped.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    response_events = [
+        {"type": "response.created", "response": {"id": "resp_1"}},
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_1", "status": "completed"},
+        },
+    ]
+
+    async def mock_stream():
+        for event in response_events:
+            yield event
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == response_events
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_streaming_responses_completed_event_unmasked(
+    mock_user_api_key,
+):
+    """
+    When output_parse_pii=True, a /v1/responses ``response.completed`` event
+    (a Pydantic ResponseCompletedEvent, as produced in production) must have its
+    output text unmasked in-place before being forwarded to the client.
+    """
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    completed_event = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            output=[
+                GenericResponseOutputItem(
+                    type="message",
+                    id="msg_1",
+                    status="completed",
+                    role="assistant",
+                    content=[
+                        OutputText(
+                            type="output_text",
+                            text="Reach me at <EMAIL_ADDRESS_1> today.",
+                            annotations=[],
+                        )
+                    ],
+                )
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+
+    async def mock_stream():
+        yield completed_event
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == [completed_event]
+    assert (
+        collected[0].response.output[0].content[0].text
+        == "Reach me at john@example.com today."
+    )
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_streaming_mixed_chunks_flushes_buffered(
+    mock_user_api_key,
+):
+    """
+    Regression test: when output_parse_pii=True and a stream mixes buffered
+    ModelResponseStream chunks with a /v1/responses event, the buffered chat
+    chunks must still be forwarded (in order) instead of being dropped at the
+    saw_non_chat_chunk early return.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-mixed-unmask-1",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+    response_completed = FakeResponsesEvent("response.completed")
+
+    async def mock_stream():
+        yield model_chunk
+        yield response_completed
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == [model_chunk, response_completed]
+
+
+@pytest.mark.asyncio
 async def test_anonymize_text_uses_correct_positions_no_parse_pii():
     """
     Regression test for anonymizer offset bug (fixes #24160).
@@ -2398,11 +2600,9 @@ async def test_anonymize_text_uses_correct_positions_no_parse_pii():
         )
 
     expected = "My name is <PERSON>, my email is <EMAIL_ADDRESS>, phone <PHONE_NUMBER>"
-    assert result == expected, (
-        f"anonymize_text produced garbled output with PII remnants.\n"
-        f"Expected: {expected!r}\n"
-        f"Got:      {result!r}"
-    )
+    assert (
+        result == expected
+    ), f"anonymize_text produced garbled output with PII remnants.\nExpected: {expected!r}\nGot:      {result!r}"
     assert masked_entity_count == {
         "PERSON": 1,
         "EMAIL_ADDRESS": 1,
@@ -2495,3 +2695,157 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
     assert pii_tokens.get("<PERSON_1>") == "John Smith"
     assert pii_tokens.get("<EMAIL_ADDRESS_2>") == "john@example.com"
     assert pii_tokens.get("<PHONE_NUMBER_3>") == "555-867-5309"
+
+
+def test_unmask_sse_bytes_chunk_replaces_text_delta():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello <PERSON_1>, how are you?"},
+    }
+    chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+
+    decoded = result.decode("utf-8")
+    parsed = json.loads(decoded.split("data: ", 1)[1].strip())
+    assert parsed["delta"]["text"] == "Hello Bobby, how are you?"
+
+
+def test_unmask_sse_bytes_chunk_ignores_non_text_delta():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+
+    # message_start event — no delta
+    event = {"type": "message_start", "message": {"id": "msg_01", "role": "assistant"}}
+    chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+    assert result == chunk
+
+    # input_json_delta — should not be touched
+    event2 = {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {"type": "input_json_delta", "partial_json": '{"name": "<PERSON_1>"}'},
+    }
+    chunk2 = ("data: " + json.dumps(event2) + "\n\n").encode("utf-8")
+    result2 = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk2, pii_tokens)
+    assert result2 == chunk2
+
+
+def test_unmask_sse_bytes_chunk_handles_malformed_json():
+    chunk = b"data: {not valid json}\n\n"
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        chunk, {"<PERSON_1>": "Bobby"}
+    )
+    assert result == chunk
+
+
+def test_unmask_sse_bytes_chunk_handles_unicode_decode_error():
+    chunk = b"\xff\xfe invalid utf-8"
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        chunk, {"<PERSON_1>": "Bobby"}
+    )
+    assert result == chunk
+
+
+def test_unmask_sse_bytes_chunk_non_ascii_pii_not_escaped():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "José"}
+    event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello <PERSON_1>!"},
+    }
+    chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+
+    decoded = result.decode("utf-8")
+    assert "Jos\\u" not in decoded
+    parsed = json.loads(decoded.split("data: ", 1)[1].strip())
+    assert parsed["delta"]["text"] == "Hello José!"
+
+
+def test_unmask_sse_bytes_chunk_handles_crlf_line_endings():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hi <PERSON_1>!"},
+    }
+    crlf_chunk = ("data: " + json.dumps(event) + "\r\ndata: [DONE]\r\n").encode("utf-8")
+
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        crlf_chunk, pii_tokens
+    )
+
+    decoded = result.decode("utf-8")
+    parsed = json.loads(decoded.split("data: ", 1)[1].split("\n")[0].strip())
+    assert parsed["delta"]["text"] == "Hi Bobby!"
+    assert "data: [DONE]" in decoded
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_unmaskes_bytes_chunks(mock_user_api_key):
+    import json
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    request_data = {"metadata": {"pii_tokens": pii_tokens}}
+
+    def _make_sse_chunk(text: str) -> bytes:
+        event = {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": text},
+        }
+        return ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+    async def mock_stream():
+        yield _make_sse_chunk("Hello <PERSON_1>!")
+        yield _make_sse_chunk(" How can I help?")
+
+    chunks = []
+    async for chunk in guardrail._stream_pii_unmasking(mock_stream(), request_data):
+        chunks.append(chunk)
+
+    assert len(chunks) == 2
+    first = chunks[0].decode("utf-8")
+    first_event = json.loads(first.split("data: ", 1)[1].strip())
+    assert first_event["delta"]["text"] == "Hello Bobby!"
+
+    second = chunks[1].decode("utf-8")
+    second_event = json.loads(second.split("data: ", 1)[1].strip())
+    assert second_event["delta"]["text"] == " How can I help?"
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_passthrough_when_no_tokens(mock_user_api_key):
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    raw_chunk = b"data: {}\n\n"
+    request_data: dict = {"metadata": {}}
+
+    async def mock_stream():
+        yield raw_chunk
+
+    chunks = []
+    async for chunk in guardrail._stream_pii_unmasking(mock_stream(), request_data):
+        chunks.append(chunk)
+
+    assert chunks == [raw_chunk]

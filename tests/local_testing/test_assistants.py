@@ -1,22 +1,13 @@
-# What is this?
-## Unit Tests for OpenAI Assistants API
-import json
 import os
 import sys
-import traceback
-
-from dotenv import load_dotenv
-
-load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import asyncio
-import logging
 
 import pytest
+from dotenv import load_dotenv
 from openai.types.beta.assistant import Assistant
-from typing_extensions import override
+from openai.types.beta.assistant_deleted import AssistantDeleted
+
+load_dotenv()
+sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import create_thread, get_thread
@@ -25,40 +16,264 @@ from litellm.llms.openai.openai import (
     AsyncAssistantEventHandler,
     AsyncCursorPage,
     MessageData,
-    OpenAIAssistantsAPI,
+    OpenAIMessage as Message,
+    Run,
+    SyncCursorPage,
+    Thread,
 )
-from litellm.llms.openai.openai import OpenAIMessage as Message
-from litellm.llms.openai.openai import SyncCursorPage, Thread
 
-"""
-V0 Scope:
+ASSISTANT_INSTRUCTIONS = (
+    "You are a personal math tutor. When asked a question, write and run Python "
+    "code to answer the question."
+)
+ASSISTANT_ID = "asst_test"
+THREAD_ID = "thread_test"
+MESSAGE_ID = "msg_test"
+RUN_ID = "run_test"
 
-- Add Message -> `/v1/threads/{thread_id}/messages`
-- Run Thread -> `/v1/threads/{thread_id}/run`
-"""
+
+def _assistant(**overrides):
+    data = {
+        "id": ASSISTANT_ID,
+        "object": "assistant",
+        "created_at": 1,
+        "name": "Math Tutor",
+        "description": None,
+        "model": "gpt-4.1",
+        "instructions": ASSISTANT_INSTRUCTIONS,
+        "tools": [],
+        "metadata": {},
+        "top_p": 1.0,
+        "temperature": 1.0,
+        "response_format": "auto",
+    }
+    data.update(overrides)
+    return Assistant(**data)
 
 
-def _add_azure_related_dynamic_params(data: dict) -> dict:
-    data["api_version"] = "2024-02-15-preview"
-    data["api_base"] = os.getenv("AZURE_AI_API_BASE")
-    data["api_key"] = os.getenv("AZURE_AI_API_KEY")
+def _thread(thread_id=THREAD_ID):
+    return Thread(id=thread_id, object="thread", created_at=1, metadata={})
+
+
+def _message(thread_id=THREAD_ID):
+    return Message(
+        id=MESSAGE_ID,
+        object="thread.message",
+        created_at=1,
+        thread_id=thread_id,
+        role="user",
+        content=[
+            {
+                "type": "text",
+                "text": {"value": "Hey, how's it going?", "annotations": []},
+            }
+        ],
+        assistant_id=None,
+        run_id=None,
+        attachments=[],
+        metadata={},
+        status="completed",
+    )
+
+
+def _run(thread_id=THREAD_ID, assistant_id=ASSISTANT_ID):
+    return Run(
+        id=RUN_ID,
+        object="thread.run",
+        created_at=1,
+        assistant_id=assistant_id,
+        thread_id=thread_id,
+        status="completed",
+        started_at=1,
+        expires_at=None,
+        cancelled_at=None,
+        failed_at=None,
+        completed_at=1,
+        last_error=None,
+        model="gpt-4.1",
+        instructions=ASSISTANT_INSTRUCTIONS,
+        tools=[],
+        metadata={},
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        required_action=None,
+        incomplete_details=None,
+        temperature=1.0,
+        top_p=1.0,
+        max_prompt_tokens=None,
+        max_completion_tokens=None,
+        truncation_strategy={"type": "auto", "last_messages": None},
+        response_format="auto",
+        tool_choice="auto",
+        parallel_tool_calls=True,
+    )
+
+
+def _sync_page(data):
+    first_id = data[0].id if data else None
+    return SyncCursorPage(
+        data=data,
+        object="list",
+        first_id=first_id,
+        last_id=first_id,
+        has_more=False,
+    )
+
+
+def _async_page(data):
+    first_id = data[0].id if data else None
+    return AsyncCursorPage(
+        data=data,
+        object="list",
+        first_id=first_id,
+        last_id=first_id,
+        has_more=False,
+    )
+
+
+class _FakeAssistantEventHandler(AssistantEventHandler):
+    def until_done(self):
+        return None
+
+
+class _FakeAsyncAssistantEventHandler(AsyncAssistantEventHandler):
+    async def until_done(self):
+        return None
+
+
+class _FakeAssistantStream:
+    def __enter__(self):
+        return _FakeAssistantEventHandler()
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeAsyncAssistantStream:
+    async def __aenter__(self):
+        return _FakeAsyncAssistantEventHandler()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _SyncAssistants:
+    def list(self, **_kwargs):
+        return _sync_page([_assistant()])
+
+    def create(self, **kwargs):
+        return _assistant(**kwargs)
+
+    def delete(self, assistant_id):
+        return AssistantDeleted(
+            id=assistant_id, object="assistant.deleted", deleted=True
+        )
+
+
+class _AsyncAssistants:
+    async def list(self, **_kwargs):
+        return _async_page([_assistant()])
+
+    async def create(self, **kwargs):
+        return _assistant(**kwargs)
+
+    async def delete(self, assistant_id):
+        return AssistantDeleted(
+            id=assistant_id, object="assistant.deleted", deleted=True
+        )
+
+
+class _SyncMessages:
+    def create(self, thread_id, **_kwargs):
+        return _message(thread_id)
+
+    def list(self, thread_id):
+        return _sync_page([_message(thread_id)])
+
+
+class _AsyncMessages:
+    async def create(self, thread_id, **_kwargs):
+        return _message(thread_id)
+
+    async def list(self, thread_id):
+        return _async_page([_message(thread_id)])
+
+
+class _SyncRuns:
+    def create_and_poll(self, thread_id, assistant_id, **_kwargs):
+        return _run(thread_id=thread_id, assistant_id=assistant_id)
+
+    def stream(self, **_kwargs):
+        return _FakeAssistantStream()
+
+
+class _AsyncRuns:
+    async def create_and_poll(self, thread_id, assistant_id, **_kwargs):
+        return _run(thread_id=thread_id, assistant_id=assistant_id)
+
+    def stream(self, **_kwargs):
+        return _FakeAsyncAssistantStream()
+
+
+class _SyncThreads:
+    def __init__(self):
+        self.messages = _SyncMessages()
+        self.runs = _SyncRuns()
+
+    def create(self, **_kwargs):
+        return _thread()
+
+    def retrieve(self, thread_id):
+        return _thread(thread_id)
+
+
+class _AsyncThreads:
+    def __init__(self):
+        self.messages = _AsyncMessages()
+        self.runs = _AsyncRuns()
+
+    async def create(self, **_kwargs):
+        return _thread()
+
+    async def retrieve(self, thread_id):
+        return _thread(thread_id)
+
+
+class _FakeBeta:
+    def __init__(self, *, async_mode):
+        self.assistants = _AsyncAssistants() if async_mode else _SyncAssistants()
+        self.threads = _AsyncThreads() if async_mode else _SyncThreads()
+
+
+class _FakeAssistantClient:
+    def __init__(self, *, async_mode):
+        self.beta = _FakeBeta(async_mode=async_mode)
+
+
+@pytest.fixture
+def assistant_client(sync_mode):
+    return _FakeAssistantClient(async_mode=not sync_mode)
+
+
+def _request_data(provider, assistant_client, **kwargs):
+    data = {"custom_llm_provider": provider, "client": assistant_client, **kwargs}
+    if provider == "azure":
+        data.update(
+            {
+                "api_version": "2024-02-15-preview",
+                "api_base": "https://example.azure.test",
+                "api_key": "test-key",
+            }
+        )
     return data
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
-@pytest.mark.parametrize(
-    "sync_mode",
-    [True, False],
-)
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_get_assistants(provider, sync_mode):
-    data = {
-        "custom_llm_provider": provider,
-    }
-    if provider == "azure":
-        data = _add_azure_related_dynamic_params(data)
+async def test_get_assistants(provider, sync_mode, assistant_client):
+    data = _request_data(provider, assistant_client)
 
-    if sync_mode == True:
+    if sync_mode:
         assistants = litellm.get_assistants(**data)
         assert isinstance(assistants, SyncCursorPage)
     else:
@@ -67,276 +282,152 @@ async def test_get_assistants(provider, sync_mode):
 
 
 @pytest.mark.parametrize("provider", ["azure", "openai"])
-@pytest.mark.parametrize(
-    "sync_mode",
-    [True, False],
-)
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio()
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_create_delete_assistants(provider, sync_mode):
-    litellm.ssl_verify = False
-    litellm._turn_on_debug()
-    data = {
-        "custom_llm_provider": provider,
-        "model": "gpt-4.1",
-        "instructions": "You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
-        "name": "Math Tutor",
-        "tools": [{"type": "code_interpreter"}],
-    }
-    if provider == "azure":
-        data = _add_azure_related_dynamic_params(data)
+async def test_create_delete_assistants(provider, sync_mode, assistant_client):
+    data = _request_data(
+        provider,
+        assistant_client,
+        model="gpt-4.1",
+        instructions=ASSISTANT_INSTRUCTIONS,
+        name="Math Tutor",
+        tools=[{"type": "code_interpreter"}],
+    )
 
-    if sync_mode == True:
+    if sync_mode:
         assistant = litellm.create_assistants(**data)
-
-        print("New assistants", assistant)
         assert isinstance(assistant, Assistant)
-        assert (
-            assistant.instructions
-            == "You are a personal math tutor. When asked a question, write and run Python code to answer the question."
-        )
+        assert assistant.instructions == ASSISTANT_INSTRUCTIONS
         assert assistant.id is not None
 
-        # delete the created assistant
-        delete_data = {
-            "custom_llm_provider": provider,
-            "assistant_id": assistant.id,
-        }
-        if provider == "azure":
-            delete_data = _add_azure_related_dynamic_params(delete_data)
-        response = litellm.delete_assistant(**delete_data)
-        print("Response deleting assistant", response)
+        response = litellm.delete_assistant(
+            **_request_data(
+                provider,
+                assistant_client,
+                assistant_id=assistant.id,
+            )
+        )
         assert response.id == assistant.id
     else:
         assistant = await litellm.acreate_assistants(**data)
-        print("New assistants", assistant)
         assert isinstance(assistant, Assistant)
-        assert (
-            assistant.instructions
-            == "You are a personal math tutor. When asked a question, write and run Python code to answer the question."
-        )
+        assert assistant.instructions == ASSISTANT_INSTRUCTIONS
         assert assistant.id is not None
 
-        # delete the created assistant
-        delete_data = {
-            "custom_llm_provider": provider,
-            "assistant_id": assistant.id,
-        }
-        if provider == "azure":
-            delete_data = _add_azure_related_dynamic_params(delete_data)
-        response = await litellm.adelete_assistant(**delete_data)
-        print("Response deleting assistant", response)
+        response = await litellm.adelete_assistant(
+            **_request_data(
+                provider,
+                assistant_client,
+                assistant_id=assistant.id,
+            )
+        )
         assert response.id == assistant.id
 
 
-@pytest.mark.parametrize("provider", ["openai", "azure"])
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_create_thread_litellm(sync_mode, provider) -> Thread:
+async def _create_thread_litellm(sync_mode, provider, assistant_client) -> Thread:
     message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
-    data = {
-        "custom_llm_provider": provider,
-        "message": [message],
-    }
-    if provider == "azure":
-        data = _add_azure_related_dynamic_params(data)
+    data = _request_data(provider, assistant_client, message=[message])
 
     if sync_mode:
         new_thread = create_thread(**data)
     else:
         new_thread = await litellm.acreate_thread(**data)
 
-    assert isinstance(
-        new_thread, Thread
-    ), f"type of thread={type(new_thread)}. Expected Thread-type"
-
+    assert isinstance(new_thread, Thread)
     return new_thread
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_get_thread_litellm(provider, sync_mode):
-    new_thread = test_create_thread_litellm(sync_mode, provider)
+async def test_create_thread_litellm(sync_mode, provider, assistant_client):
+    await _create_thread_litellm(sync_mode, provider, assistant_client)
 
-    if asyncio.iscoroutine(new_thread):
-        _new_thread = await new_thread
-    else:
-        _new_thread = new_thread
 
-    data = {
-        "custom_llm_provider": provider,
-        "thread_id": _new_thread.id,
-    }
-    if provider == "azure":
-        data = _add_azure_related_dynamic_params(data)
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_get_thread_litellm(provider, sync_mode, assistant_client):
+    new_thread = await _create_thread_litellm(sync_mode, provider, assistant_client)
+    data = _request_data(provider, assistant_client, thread_id=new_thread.id)
 
     if sync_mode:
         received_thread = get_thread(**data)
     else:
         received_thread = await litellm.aget_thread(**data)
 
-    assert isinstance(
-        received_thread, Thread
-    ), f"type of thread={type(received_thread)}. Expected Thread-type"
-    return new_thread
+    assert isinstance(received_thread, Thread)
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_add_message_litellm(sync_mode, provider):
+async def test_add_message_litellm(sync_mode, provider, assistant_client):
+    new_thread = await _create_thread_litellm(sync_mode, provider, assistant_client)
     message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
-    new_thread = test_create_thread_litellm(sync_mode, provider)
+    data = _request_data(provider, assistant_client, thread_id=new_thread.id, **message)
 
-    if asyncio.iscoroutine(new_thread):
-        _new_thread = await new_thread
-    else:
-        _new_thread = new_thread
-    # add message to thread
-    message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
-
-    data = {"custom_llm_provider": provider, "thread_id": _new_thread.id, **message}
-    if provider == "azure":
-        data = _add_azure_related_dynamic_params(data)
     if sync_mode:
         added_message = litellm.add_message(**data)
     else:
         added_message = await litellm.a_add_message(**data)
 
-    print(f"added message: {added_message}")
-
     assert isinstance(added_message, Message)
 
 
-@pytest.mark.parametrize(
-    "provider",
-    [
-        "azure",
-        "openai",
-    ],
-)  #
-@pytest.mark.parametrize(
-    "sync_mode",
-    [
-        True,
-        False,
-    ],
-)
-@pytest.mark.parametrize(
-    "is_streaming",
-    [True, False],
-)  #
+@pytest.mark.parametrize("provider", ["azure", "openai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("is_streaming", [True, False])
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
-    """
-    - Get Assistants
-    - Create thread
-    - Create run w/ Assistants + Thread
-    """
-    import openai
+async def test_aarun_thread_litellm(
+    sync_mode, provider, is_streaming, assistant_client
+):
+    get_assistants_data = _request_data(provider, assistant_client)
+    if sync_mode:
+        assistants = litellm.get_assistants(**get_assistants_data)
+    else:
+        assistants = await litellm.aget_assistants(**get_assistants_data)
 
-    try:
-        get_assistants_data = {
-            "custom_llm_provider": provider,
-        }
-        if provider == "azure":
-            get_assistants_data = _add_azure_related_dynamic_params(get_assistants_data)
-        if sync_mode:
-            assistants = litellm.get_assistants(**get_assistants_data)
+    assistant_id = assistants.data[0].id
+    new_thread = await _create_thread_litellm(sync_mode, provider, assistant_client)
+    message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
+    thread_data = _request_data(provider, assistant_client, thread_id=new_thread.id)
+    message_data = _request_data(
+        provider, assistant_client, thread_id=new_thread.id, **message
+    )
+
+    if sync_mode:
+        added_message = litellm.add_message(**message_data)
+        assert isinstance(added_message, Message)
+
+        if is_streaming:
+            run = litellm.run_thread_stream(assistant_id=assistant_id, **thread_data)
+            with run as run:
+                assert isinstance(run, AssistantEventHandler)
+                run.until_done()
         else:
-            assistants = await litellm.aget_assistants(**get_assistants_data)
+            run = litellm.run_thread(
+                assistant_id=assistant_id, stream=is_streaming, **thread_data
+            )
+            assert run.status == "completed"
+            messages = litellm.get_messages(**thread_data)
+            assert isinstance(messages.data[0], Message)
+    else:
+        added_message = await litellm.a_add_message(**message_data)
+        assert isinstance(added_message, Message)
 
-        ## get the first assistant ###
-        try:
-            assistant_id = assistants.data[0].id
-        except IndexError:
-            pytest.skip("No assistants found")
-
-        new_thread = test_create_thread_litellm(sync_mode=sync_mode, provider=provider)
-
-        if asyncio.iscoroutine(new_thread):
-            _new_thread = await new_thread
+        if is_streaming:
+            run = litellm.arun_thread_stream(assistant_id=assistant_id, **thread_data)
+            async with run as run:
+                assert isinstance(run, AsyncAssistantEventHandler)
+                await run.until_done()
         else:
-            _new_thread = new_thread
-
-        thread_id = _new_thread.id
-
-        # add message to thread
-        message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
-
-        data = {"custom_llm_provider": provider, "thread_id": _new_thread.id, **message}
-        if provider == "azure":
-            data = _add_azure_related_dynamic_params(data)
-
-        if sync_mode:
-            added_message = litellm.add_message(**data)
-
-            if is_streaming:
-                run = litellm.run_thread_stream(assistant_id=assistant_id, **data)
-                with run as run:
-                    assert isinstance(run, AssistantEventHandler)
-                    print(run)
-                    run.until_done()
-            else:
-                run = litellm.run_thread(
-                    assistant_id=assistant_id, stream=is_streaming, **data
-                )
-                if run.status == "completed":
-                    messages = litellm.get_messages(
-                        thread_id=_new_thread.id, custom_llm_provider=provider
-                    )
-                    assert isinstance(messages.data[0], Message)
-                elif (
-                    run.status == "failed"
-                    and run.last_error
-                    and "No connection matching model" in run.last_error.message
-                ):
-                    pytest.skip(f"Azure deployment not found: {run.last_error.message}")
-                else:
-                    pytest.fail(
-                        "An unexpected error occurred when running the thread, {}".format(
-                            run
-                        )
-                    )
-
-        else:
-            added_message = await litellm.a_add_message(**data)
-
-            if is_streaming:
-                run = litellm.arun_thread_stream(assistant_id=assistant_id, **data)
-                async with run as run:
-                    print(f"run: {run}")
-                    assert isinstance(
-                        run,
-                        AsyncAssistantEventHandler,
-                    )
-                    print(run)
-                    await run.until_done()
-            else:
-                run = await litellm.arun_thread(
-                    custom_llm_provider=provider,
-                    thread_id=thread_id,
-                    assistant_id=assistant_id,
-                )
-
-                if run.status == "completed":
-                    messages = await litellm.aget_messages(
-                        thread_id=_new_thread.id, custom_llm_provider=provider
-                    )
-                    assert isinstance(messages.data[0], Message)
-                elif (
-                    run.status == "failed"
-                    and run.last_error
-                    and "No connection matching model" in run.last_error.message
-                ):
-                    pytest.skip(f"Azure deployment not found: {run.last_error.message}")
-                else:
-                    pytest.fail(
-                        "An unexpected error occurred when running the thread, {}".format(
-                            run
-                        )
-                    )
-    except openai.APIError as e:
-        pass
+            run = await litellm.arun_thread(
+                custom_llm_provider=provider,
+                thread_id=new_thread.id,
+                assistant_id=assistant_id,
+                client=assistant_client,
+            )
+            assert run.status == "completed"
+            messages = await litellm.aget_messages(**thread_data)
+            assert isinstance(messages.data[0], Message)

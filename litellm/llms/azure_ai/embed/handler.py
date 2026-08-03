@@ -1,5 +1,3 @@
-from typing import List, Optional, Union
-
 from openai import OpenAI
 
 import litellm
@@ -19,17 +17,14 @@ from .cohere_transformation import AzureAICohereConfig
 class AzureAIEmbedding(OpenAIChatCompletion):
     def _process_response(
         self,
-        image_embedding_responses: Optional[List],
-        text_embedding_responses: Optional[List],
-        image_embeddings_idx: List[int],
+        image_embedding_responses: list | None,
+        text_embedding_responses: list | None,
+        image_embeddings_idx: list[int],
         model_response: EmbeddingResponse,
-        input: List,
+        input: list,
     ):
         combined_responses = []
-        if (
-            image_embedding_responses is not None
-            and text_embedding_responses is not None
-        ):
+        if image_embedding_responses is not None and text_embedding_responses is not None:
             # Combine and order the results
             text_idx = 0
             image_idx = 0
@@ -60,9 +55,9 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         logging_obj,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_key: str | None,
+        api_base: str | None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> EmbeddingResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             client = get_async_httpx_client(
@@ -70,12 +65,12 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 params={"timeout": timeout},
             )
 
-        url = "{}/images/embeddings".format(api_base)
+        url = f"{api_base}/images/embeddings"
 
         response = await client.post(
             url=url,
             json=data,  # type: ignore
-            headers={"Authorization": "Bearer {}".format(api_key)},
+            headers={"Authorization": f"Bearer {api_key}"},
         )
 
         embedding_response = response.json()
@@ -97,9 +92,9 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         logging_obj,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_key: str | None,
+        api_base: str | None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ):
         if api_base is None:
             raise ValueError(
@@ -113,12 +108,12 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         if client is None or not isinstance(client, HTTPHandler):
             client = HTTPHandler(timeout=timeout, concurrent_limit=1)
 
-        url = "{}/images/embeddings".format(api_base)
+        url = f"{api_base}/images/embeddings"
 
         response = client.post(
             url=url,
             json=data,  # type: ignore
-            headers={"Authorization": "Bearer {}".format(api_key)},
+            headers={"Authorization": f"Bearer {api_key}"},
         )
 
         embedding_response = response.json()
@@ -135,25 +130,23 @@ class AzureAIEmbedding(OpenAIChatCompletion):
     async def async_embedding(
         self,
         model: str,
-        input: List,
+        input: list,
         timeout: float,
         logging_obj,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         client=None,
     ) -> EmbeddingResponse:
         (
             image_embeddings_request,
             v1_embeddings_request,
             image_embeddings_idx,
-        ) = AzureAICohereConfig()._transform_request(
-            input=input, optional_params=optional_params, model=model
-        )
+        ) = AzureAICohereConfig()._transform_request(input=input, optional_params=optional_params, model=model)
 
-        image_embedding_responses: Optional[List] = None
-        text_embedding_responses: Optional[List] = None
+        image_embedding_responses: list | None = None
+        text_embedding_responses: list | None = None
 
         if image_embeddings_request["input"]:
             image_response = await self.async_image_embedding(
@@ -200,16 +193,16 @@ class AzureAIEmbedding(OpenAIChatCompletion):
     def embedding(
         self,
         model: str,
-        input: List,
+        input: list,
         timeout: float,
         logging_obj,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         client=None,
         aembedding=None,
-        max_retries: Optional[int] = None,
+        max_retries: int | None = None,
         shared_session=None,
     ) -> EmbeddingResponse:
         """
@@ -236,12 +229,10 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_request,
             v1_embeddings_request,
             image_embeddings_idx,
-        ) = AzureAICohereConfig()._transform_request(
-            input=input, optional_params=optional_params, model=model
-        )
+        ) = AzureAICohereConfig()._transform_request(input=input, optional_params=optional_params, model=model)
 
-        image_embedding_responses: Optional[List] = None
-        text_embedding_responses: Optional[List] = None
+        image_embedding_responses: list | None = None
+        text_embedding_responses: list | None = None
 
         if image_embeddings_request["input"]:
             image_response = self.image_embedding(
@@ -270,11 +261,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 optional_params,
                 api_key,
                 api_base,
-                client=(
-                    client
-                    if client is not None and isinstance(client, OpenAI)
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, OpenAI) else None),
                 aembedding=aembedding,
                 shared_session=shared_session,
             )

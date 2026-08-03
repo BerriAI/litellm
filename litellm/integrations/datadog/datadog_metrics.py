@@ -3,7 +3,6 @@ import gzip
 import os
 import time
 from datetime import datetime
-from typing import List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -34,15 +33,11 @@ class DatadogMetricsLogger(CustomBatchLogger):
         self.dd_site = os.getenv("DD_SITE", "datadoghq.com")
 
         if not self.dd_api_key:
-            verbose_logger.warning(
-                "Datadog Metrics: DD_API_KEY is required. Integration will not work."
-            )
+            verbose_logger.warning("Datadog Metrics: DD_API_KEY is required. Integration will not work.")
 
         self.upload_url = f"https://api.{self.dd_site}/api/v2/series"
 
-        self.async_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
         # Initialize lock
         self.flush_lock = asyncio.Lock()
@@ -64,8 +59,8 @@ class DatadogMetricsLogger(CustomBatchLogger):
     def _extract_tags(
         self,
         log: StandardLoggingPayload,
-        status_code: Optional[Union[str, int]] = None,
-    ) -> List[str]:
+        status_code: str | int | None = None,
+    ) -> list[str]:
         """
         Builds the list of tags for a Datadog metric point
         """
@@ -109,7 +104,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         self,
         log: StandardLoggingPayload,
         kwargs: dict,
-        status_code: Union[str, int] = "200",
+        status_code: str | int = "200",
     ):
         """
         Extracts latencies and appends Datadog metric series to the queue
@@ -144,7 +139,25 @@ class DatadogMetricsLogger(CustomBatchLogger):
             }
             self.log_queue.append(series_llm_latency)
 
-        # 3. Request Count / Status Code
+        # 3. LiteLLM Overhead Latency Metric (total - llm_api time)
+        hidden_params = log.get("hidden_params", {}) or {}
+        litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+        if litellm_overhead_time_ms is not None:
+            overhead_tags = self._extract_tags(log)  # no status_code on latency metric
+            series_overhead: DatadogMetricSeries = {
+                "metric": "litellm.overhead.latency",
+                "type": 3,  # gauge
+                "points": [
+                    {
+                        "timestamp": timestamp,
+                        "value": litellm_overhead_time_ms / 1000,  # convert ms → seconds
+                    }
+                ],
+                "tags": overhead_tags,
+            }
+            self.log_queue.append(series_overhead)
+
+        # 4. Request Count / Status Code
         series_count: DatadogMetricSeries = {
             "metric": "litellm.llm_api.request_count",
             "type": 1,  # count
@@ -156,54 +169,40 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
 
             if standard_logging_object is None:
                 return
 
-            self._add_metrics_from_log(
-                log=standard_logging_object, kwargs=kwargs, status_code="200"
-            )
+            self._add_metrics_from_log(log=standard_logging_object, kwargs=kwargs, status_code="200")
 
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Metrics: Error in async_log_success_event: {str(e)}"
-            )
+            verbose_logger.exception(f"Datadog Metrics: Error in async_log_success_event: {e}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
 
             if standard_logging_object is None:
                 return
 
             # Extract status code from error information
             status_code = "500"  # default
-            error_information = (
-                standard_logging_object.get("error_information", {}) or {}
-            )
+            error_information = standard_logging_object.get("error_information", {}) or {}
             error_code = error_information.get("error_code")  # type: ignore
             if error_code is not None:
                 status_code = str(error_code)
 
-            self._add_metrics_from_log(
-                log=standard_logging_object, kwargs=kwargs, status_code=status_code
-            )
+            self._add_metrics_from_log(log=standard_logging_object, kwargs=kwargs, status_code=status_code)
 
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Metrics: Error in async_log_failure_event: {str(e)}"
-            )
+            verbose_logger.exception(f"Datadog Metrics: Error in async_log_failure_event: {e}")
 
     async def async_send_batch(self):
         if not self.log_queue:
@@ -215,9 +214,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         try:
             await self._upload_to_datadog(payload_data)
         except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Metrics: Error in async_send_batch: {str(e)}"
-            )
+            verbose_logger.exception(f"Datadog Metrics: Error in async_send_batch: {e}")
             raise
 
     async def _upload_to_datadog(self, payload: DatadogMetricsPayload):
@@ -237,7 +234,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
         headers["Content-Encoding"] = "gzip"
 
         response = await self.async_client.post(
-            self.upload_url, content=compressed_data, headers=headers  # type: ignore
+            self.upload_url,
+            content=compressed_data,
+            headers=headers,  # type: ignore
         )
 
         response.raise_for_status()
@@ -280,7 +279,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
     async def get_request_response_payload(
         self,
         request_id: str,
-        start_time_utc: Optional[datetime],
-        end_time_utc: Optional[datetime],
-    ) -> Optional[dict]:
+        start_time_utc: datetime | None,
+        end_time_utc: datetime | None,
+    ) -> dict | None:
         pass

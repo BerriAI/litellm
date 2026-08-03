@@ -363,7 +363,7 @@ class BaseResponsesAPITest(ABC):
         litellm._turn_on_debug()
 
         response = await litellm.aresponses(
-            model="gpt-4o",
+            model="gpt-5.5",
             input="Tell me a three sentence bedtime story about a unicorn.",
         )
         print("Initial response=", json.dumps(response, indent=4, default=str))
@@ -746,7 +746,8 @@ class BaseResponsesAPITest(ABC):
         E2E test for Shell tool on OpenAI Responses API.
         Passes tools=[{"type": "shell", "environment": {"type": "container_auto"}}];
         validates that the request is accepted and returns a valid response.
-        Only runs for OpenAI/Azure (Responses API with shell support).
+        Only runs for OpenAI; offline coverage for the Azure route lives in
+        tests/test_litellm/responses/test_responses_api_request_body.py.
         """
         base_completion_call_args = self.get_base_completion_call_args()
         model = (
@@ -754,8 +755,10 @@ class BaseResponsesAPITest(ABC):
             or base_completion_call_args.get("model")
             or ""
         )
-        if "openai/" not in str(model) and "azure/" not in str(model):
-            pytest.skip("Shell tool e2e is only run for OpenAI/Azure Responses API")
+        if "openai/" not in str(model):
+            pytest.skip(
+                "Shell tool e2e is OpenAI-only; no Azure deployment supports the shell tool yet, re-enable once one exists"
+            )
         tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
         input_msg = "List files in /mnt/data and show python --version."
         try:
@@ -765,13 +768,16 @@ class BaseResponsesAPITest(ABC):
                 max_output_tokens=256,
                 tools=tools,
                 tool_choice="auto",
+                timeout=90,
             )
+        except litellm.Timeout:
+            pytest.skip("Provider did not answer the shell tool request within 90s")
         except litellm.InternalServerError:
             pytest.skip("Skipping test due to litellm.InternalServerError")
         except litellm.BadRequestError as e:
             if "shell" in str(e).lower() and "not supported" in str(e).lower():
                 pytest.skip(
-                    "Shell tool is not supported for this model (e.g. gpt-4o); use a model that supports shell"
+                    "Shell tool is not supported for this model (e.g. gpt-5.5); use a model that supports shell"
                 )
             raise
         validate_responses_api_response(response, final_chunk=True)
@@ -785,7 +791,7 @@ class BaseResponsesAPITest(ABC):
 
         Calls aresponses(..., tools=[shell], stream=True), then iterates the stream and
         asserts at least one event is shell-related or response output contains shell_call.
-        Skips when model does not support shell (e.g. gpt-4o).
+        Skips when model does not support shell (e.g. gpt-5.5).
         """
         base_completion_call_args = self.get_base_completion_call_args()
         model = (

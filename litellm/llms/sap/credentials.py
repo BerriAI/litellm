@@ -1,17 +1,20 @@
 from __future__ import annotations
-from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple, Union
-from datetime import datetime, timedelta, timezone
-from threading import Lock
-from pathlib import Path
-from dataclasses import dataclass
+
 import json
 import os
 import tempfile
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from threading import Lock
+from typing import Any, Final
+
 import httpx
 
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client, HTTPHandler
-from litellm._logging import verbose_logger
 import litellm
+from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 
@@ -30,16 +33,14 @@ def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
 
 
-def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
+def _get_nested(d: dict[str, Any] | str, path: Sequence[str]) -> Any:
     cur: Any = d
     if isinstance(cur, str):
         # This shouldn't happen if service keys are pre-parsed correctly
         try:
             cur = json.loads(cur)
         except json.JSONDecodeError:
-            verbose_logger.warning(
-                "SAP service key or VCAP service is a string but not valid JSON."
-            )
+            verbose_logger.warning("SAP service key or VCAP service is a string but not valid JSON.")
             return None
     for k in path:
         if not isinstance(cur, dict):
@@ -53,7 +54,7 @@ def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
     return cur
 
 
-def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
+def _load_json_env(var_name: str) -> dict[str, Any] | None:
     raw = os.environ.get(var_name)
     if not raw:
         return None
@@ -63,18 +64,18 @@ def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _str_or_none(value) -> Optional[str]:
+def _str_or_none(value) -> str | None:
     try:
         return str(value) if value is not None else None
     except Exception:
         return None
 
 
-def _load_vcap() -> Dict[str, Any]:
+def _load_vcap() -> dict[str, Any]:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
 
 
-def _get_vcap_service(label: str) -> Optional[Dict[str, Any]]:
+def _get_vcap_service(label: str) -> dict[str, Any] | None:
     for services in _load_vcap().values():
         for svc in services:
             if svc.get("label") == label:
@@ -85,52 +86,45 @@ def _get_vcap_service(label: str) -> Optional[Dict[str, Any]]:
 @dataclass
 class Source:
     name: str
-    get: Callable[[CredentialsValue], Optional[str]]
+    get: Callable[[CredentialsValue], str | None]
 
 
 @dataclass(frozen=True)
 class CredentialsValue:
     name: str
-    vcap_key: Optional[Tuple[str, ...]] = None
-    default: Optional[str] = None
-    transform_fn: Optional[Callable[[str], str]] = None
+    vcap_key: tuple[str, ...] | None = None
+    default: str | None = None
+    transform_fn: Callable[[str], str] | None = None
 
 
-CREDENTIAL_VALUES: Final[List[CredentialsValue]] = [
+CREDENTIAL_VALUES: Final[list[CredentialsValue]] = [
     CredentialsValue("client_id", ("clientid",)),
     CredentialsValue("client_secret", ("clientsecret",)),
     CredentialsValue(
         "auth_url",
         ("url",),
-        transform_fn=lambda url: url.rstrip("/")
-        + ("" if url.endswith(AUTH_ENDPOINT_SUFFIX) else AUTH_ENDPOINT_SUFFIX),
+        transform_fn=lambda url: url.rstrip("/") + ("" if url.endswith(AUTH_ENDPOINT_SUFFIX) else AUTH_ENDPOINT_SUFFIX),
     ),
     CredentialsValue(
         "base_url",
         ("serviceurls", "AI_API_URL"),
-        transform_fn=lambda url: url.rstrip("/")
-        + ("" if url.endswith("/v2") else "/v2"),
+        transform_fn=lambda url: url.rstrip("/") + ("" if url.endswith("/v2") else "/v2"),
     ),
     CredentialsValue(
         "cert_url",
         ("certurl",),
-        transform_fn=lambda url: url.rstrip("/")
-        + ("" if url.endswith(AUTH_ENDPOINT_SUFFIX) else AUTH_ENDPOINT_SUFFIX),
+        transform_fn=lambda url: url.rstrip("/") + ("" if url.endswith(AUTH_ENDPOINT_SUFFIX) else AUTH_ENDPOINT_SUFFIX),
     ),
     # file paths (kept for config compatibility)
     CredentialsValue("cert_file_path"),
     CredentialsValue("key_file_path"),
     # inline PEMs from VCAP
-    CredentialsValue(
-        "cert_str", ("certificate",), transform_fn=lambda s: s.replace("\\n", "\n")
-    ),
-    CredentialsValue(
-        "key_str", ("key",), transform_fn=lambda s: s.replace("\\n", "\n")
-    ),
+    CredentialsValue("cert_str", ("certificate",), transform_fn=lambda s: s.replace("\\n", "\n")),
+    CredentialsValue("key_str", ("key",), transform_fn=lambda s: s.replace("\\n", "\n")),
 ]
 
 
-def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
+def init_conf(profile: str | None = None) -> dict[str, Any]:
     """
     Loads config JSON from:
       1) $AICORE_CONFIG if set, otherwise
@@ -143,14 +137,7 @@ def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
     cfg_path = (
         Path(cfg_env)
         if cfg_env
-        else (
-            home
-            / (
-                "config.json"
-                if profile in (None, "", "default")
-                else f"config_{profile}.json"
-            )
-        )
+        else (home / ("config.json" if profile in (None, "", "default") else f"config_{profile}.json"))
     )
 
     if cfg_path and cfg_path.exists():
@@ -162,9 +149,7 @@ def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
 
     # If an explicit non-default profile was requested but not found, raise.
     if cfg_env or (profile not in (None, "", "default")):
-        raise FileNotFoundError(
-            f"Unable to locate profile config file at '{cfg_path}' in AICORE_HOME '{home}'"
-        )
+        raise FileNotFoundError(f"Unable to locate profile config file at '{cfg_path}' in AICORE_HOME '{home}'")
 
     return {}
 
@@ -173,7 +158,7 @@ def _env_name(name: str) -> str:
     return f"AICORE_{name.upper()}"
 
 
-def extract_credentials(source: Source) -> Dict[str, str]:
+def extract_credentials(source: Source) -> dict[str, str]:
     """Extract all credentials from a source."""
     credentials = {}
     for cv in CREDENTIAL_VALUES:
@@ -183,7 +168,7 @@ def extract_credentials(source: Source) -> Dict[str, str]:
     return credentials
 
 
-def resolve_credentials(sources: List[Source]) -> Dict[str, str]:
+def resolve_credentials(sources: list[Source]) -> dict[str, str]:
     """Extract credentials from the first source that has any defined."""
     for source in sources:
         credentials = extract_credentials(source)
@@ -193,22 +178,20 @@ def resolve_credentials(sources: List[Source]) -> Dict[str, str]:
     raise ValueError("No credentials found in any source")
 
 
-def resolve_resource_group(sources: List[Source]) -> Optional[str]:
+def resolve_resource_group(sources: list[Source]) -> str | None:
     """Find resource_group from the first source that defines it."""
     rg_cred = CredentialsValue("resource_group", default="default")
     for source in sources:
         value = source.get(rg_cred)
         if value is not None:
-            verbose_logger.debug(
-                f"Resolved GEN AI Hub resource_group from source {source.name}"
-            )
+            verbose_logger.debug(f"Resolved GEN AI Hub resource_group from source {source.name}")
             return value
     return rg_cred.default
 
 
 def _parse_service_key_once(
-    service_key: Optional[Union[str, dict]]
-) -> Optional[Dict[str, Any]]:
+    service_key: str | dict | None,
+) -> dict[str, Any] | None:
     """
     Pre-parse service_key if it's a string to avoid repeated JSON parsing.
 
@@ -222,9 +205,7 @@ def _parse_service_key_once(
         try:
             return json.loads(service_key)
         except json.JSONDecodeError:
-            verbose_logger.warning(
-                "SAP service key is a string but not valid JSON. Skipping this source."
-            )
+            verbose_logger.warning("SAP service key is a string but not valid JSON. Skipping this source.")
             return None
     verbose_logger.warning(
         f"SAP service key has unexpected type '{type(service_key).__name__}'. Expected str or dict. Ignoring."
@@ -232,28 +213,20 @@ def _parse_service_key_once(
     return None
 
 
-def _resolve_credential_from_service_key(
-    service_key: Optional[Union[str, dict]], cv: CredentialsValue
-) -> Optional[str]:
+def _resolve_credential_from_service_key(service_key: str | dict | None, cv: CredentialsValue) -> str | None:
     if service_key is None:
         return None
-    val = _str_or_none(
-        _get_nested(
-            service_key, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,)
-        )
-    )
+    val = _str_or_none(_get_nested(service_key, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,)))
     if val is None:
-        return _str_or_none(
-            _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))
-        )
+        return _str_or_none(_get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,)))
     return val
 
 
 def fetch_credentials(
-    service_key: Optional[Union[str, dict]] = None,
-    profile: Optional[str] = None,
+    service_key: str | dict | None = None,
+    profile: str | None = None,
     **kwargs,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Resolution order (first-source-wins):
 
@@ -275,9 +248,7 @@ def fetch_credentials(
     """
     config = init_conf(profile)
 
-    service_key = _parse_service_key_once(
-        service_key or litellm.sap_service_key or os.environ.get(SERVICE_KEY_ENV_VAR)
-    )
+    service_key = _parse_service_key_once(service_key or litellm.sap_service_key or os.environ.get(SERVICE_KEY_ENV_VAR))
     vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
     sources = [
@@ -325,14 +296,14 @@ def fetch_credentials(
 
 
 def validate_credentials(
-    auth_url: Optional[str] = None,
-    base_url: Optional[str] = None,
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
-    cert_str: Optional[str] = None,
-    key_str: Optional[str] = None,
-    cert_file_path: Optional[str] = None,
-    key_file_path: Optional[str] = None,
+    auth_url: str | None = None,
+    base_url: str | None = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    cert_str: str | None = None,
+    key_str: str | None = None,
+    cert_file_path: str | None = None,
+    key_file_path: str | None = None,
 ) -> None:
     """
     Validate SAP AI Core credentials for completeness and consistency.
@@ -384,7 +355,7 @@ def _request_token(
     if client_secret:
         data["client_secret"] = client_secret
 
-    resp: Optional[httpx.Response] = None
+    resp: httpx.Response | None = None
     try:
         if cert_pair:
             with httpx.Client(cert=cert_pair) as raw_client:
@@ -405,13 +376,13 @@ def _request_token(
 
 
 def get_token_creator(
-    service_key: Optional[Union[str, dict]] = None,
-    profile: Optional[str] = None,
+    service_key: str | dict | None = None,
+    profile: str | None = None,
     *,
     timeout: float = 30.0,
     expiry_buffer_minutes: int = 60,
     **overrides,
-) -> Tuple[Callable[[], str], str, str]:
+) -> tuple[Callable[[], str], str, str]:
     """
     Creates a callable that fetches and caches an OAuth2 bearer token
     using credentials from `fetch_credentials()`.
@@ -432,9 +403,7 @@ def get_token_creator(
     """
 
     # Resolve credentials using your helper
-    credentials: Dict[str, str] = fetch_credentials(
-        service_key=service_key, profile=profile, **overrides
-    )
+    credentials: dict[str, str] = fetch_credentials(service_key=service_key, profile=profile, **overrides)
 
     auth_url = credentials.get("auth_url")
     base_url = credentials.get("base_url")
@@ -458,8 +427,8 @@ def get_token_creator(
     )
 
     lock = Lock()
-    token: Optional[str] = None
-    token_expiry: Optional[datetime] = None
+    token: str | None = None
+    token_expiry: datetime | None = None
 
     def _fetch_token() -> tuple[str, datetime]:
         # Case 1: secret-based auth
@@ -496,19 +465,13 @@ def get_token_creator(
                 cert_pair=(cert_file_path, key_file_path),
             )
         # Defensive guard: should never reach here due to validate_credentials()
-        raise ValueError(
-            "Invalid authentication configuration: no valid credentials found. "
-        )
+        raise ValueError("Invalid authentication configuration: no valid credentials found. ")
 
     def get_token() -> str:
         nonlocal token, token_expiry
         with lock:
             now = datetime.now(timezone.utc)
-            if (
-                token is None
-                or token_expiry is None
-                or token_expiry - now < timedelta(minutes=expiry_buffer_minutes)
-            ):
+            if token is None or token_expiry is None or token_expiry - now < timedelta(minutes=expiry_buffer_minutes):
                 token, token_expiry = _fetch_token()
             return token
 

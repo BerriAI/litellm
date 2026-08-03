@@ -114,6 +114,40 @@ def test_update_metadata_with_tags_in_header_with_tags(mock_request):
     assert result == {"existing": "value", "tags": ["tag1", "tag2", "tag3"]}
 
 
+def test_get_response_headers_filters_excluded_custom_headers():
+    """
+    Regression test:
+    Ensure excluded headers from FastAPI defaults (e.g. content-length: 0)
+    do not override passthrough response headers.
+    """
+    upstream_headers = httpx.Headers(
+        {
+            "content-type": "application/json",
+            "x-amzn-requestid": "req-123",
+            "content-length": "999",  # should be excluded
+        }
+    )
+
+    custom_headers = {
+        "x-litellm-version": "1.84.0",
+        "content-length": "0",  # should be excluded
+        "server": "uvicorn",  # should be excluded
+    }
+
+    result = HttpPassThroughEndpointHelpers.get_response_headers(
+        headers=upstream_headers,
+        litellm_call_id="call-123",
+        custom_headers=custom_headers,
+    )
+
+    assert result["content-type"] == "application/json"
+    assert result["x-amzn-requestid"] == "req-123"
+    assert result["x-litellm-version"] == "1.84.0"
+    assert result["x-litellm-call-id"] == "call-123"
+    assert "content-length" not in result
+    assert "server" not in result
+
+
 def test_init_kwargs_for_pass_through_endpoint_basic(
     mock_request, mock_user_api_key_dict
 ):
@@ -451,7 +485,7 @@ def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict
 
     # Create a parsed body with pricing parameters that should be filtered out
     parsed_body = {
-        "model": "gpt-4",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "test"}],
         # Standard pricing params (should be filtered)
         "input_cost_per_token": 0.00002,
@@ -491,7 +525,7 @@ def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict
         _parsed_body=parsed_body,
         litellm_call_id="test-call-id",
         logging_obj=LiteLLMLoggingObj(
-            model="gpt-4",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": "test"}],
             stream=False,
             call_type="completion",
@@ -520,7 +554,7 @@ def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict
     assert "tiered_pricing" not in parsed_body
 
     # Verify valid OpenAI parameters remain in parsed_body
-    assert parsed_body["model"] == "gpt-4"
+    assert parsed_body["model"] == "gpt-5.5"
     assert parsed_body["messages"] == [{"role": "user", "content": "test"}]
     assert parsed_body["temperature"] == 0.7
     assert parsed_body["max_tokens"] == 100
@@ -560,7 +594,7 @@ def test_custom_pricing_used_in_cost_calculation():
             )
         ],
         created=1234567890,
-        model="gpt-4",
+        model="gpt-5.5",
         object="chat.completion",
         usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
     )
@@ -568,7 +602,7 @@ def test_custom_pricing_used_in_cost_calculation():
     # Test 1: Standard pricing (should use default model pricing)
     standard_cost = completion_cost(
         completion_response=resp,
-        model="gpt-4",
+        model="gpt-5.5",
     )
     print(f"Standard cost: {standard_cost}")
 

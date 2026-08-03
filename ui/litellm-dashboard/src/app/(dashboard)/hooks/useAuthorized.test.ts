@@ -1,14 +1,22 @@
 /* @vitest-environment jsdom */
 import React from "react";
 import { renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import useAuthorized from "./useAuthorized";
 
 // Unmock useAuthorized to test the actual implementation
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 
-const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock, getUiConfigMock, decodeTokenMock, checkTokenValidityMock, buildLoginUrlWithReturnMock } = vi.hoisted(() => ({
+const {
+  replaceMock,
+  clearTokenCookiesMock,
+  getProxyBaseUrlMock,
+  getUiConfigMock,
+  decodeTokenMock,
+  checkTokenValidityMock,
+  buildLoginUrlWithReturnMock,
+} = vi.hoisted(() => ({
   replaceMock: vi.fn(),
   clearTokenCookiesMock: vi.fn(),
   getProxyBaseUrlMock: vi.fn(() => "http://proxy.example"),
@@ -16,12 +24,6 @@ const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock, getUiConfigMock
   decodeTokenMock: vi.fn(),
   checkTokenValidityMock: vi.fn(),
   buildLoginUrlWithReturnMock: vi.fn((baseUrl: string) => baseUrl),
-}));
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({
-    replace: replaceMock,
-  }),
 }));
 
 vi.mock("@/components/networking", async (importOriginal) => {
@@ -83,7 +85,28 @@ const clearCookie = () => {
 };
 
 describe("useAuthorized", () => {
+  const originalLocation = window.location;
+
+  beforeEach(() => {
+    Object.defineProperty(window, "location", {
+      value: {
+        href: "http://proxy.example/ui/?page=api-keys",
+        origin: "http://proxy.example",
+        hostname: "proxy.example",
+        pathname: "/ui/",
+        search: "?page=api-keys",
+        protocol: "http:",
+        replace: replaceMock,
+      },
+      writable: true,
+    });
+  });
+
   afterEach(() => {
+    Object.defineProperty(window, "location", {
+      value: originalLocation,
+      writable: true,
+    });
     replaceMock.mockReset();
     clearTokenCookiesMock.mockReset();
     getProxyBaseUrlMock.mockClear();
@@ -102,7 +125,7 @@ describe("useAuthorized", () => {
       admin_ui_disabled: false,
       sso_configured: false,
     });
-    
+
     const decodedPayload = {
       key: "api-key-123",
       user_id: "user-1",
@@ -112,7 +135,7 @@ describe("useAuthorized", () => {
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
     };
-    
+
     decodeTokenMock.mockReturnValue(decodedPayload);
     checkTokenValidityMock.mockReturnValue(true);
 
@@ -156,7 +179,7 @@ describe("useAuthorized", () => {
       expect(clearTokenCookiesMock).toHaveBeenCalled();
     });
 
-    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     expect(result.current.accessToken).toBeNull();
     expect(result.current.userRole).toBe("Undefined Role");
   });
@@ -189,7 +212,7 @@ describe("useAuthorized", () => {
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     });
 
     expect(result.current.accessToken).toBe("api-key-123");
@@ -213,7 +236,7 @@ describe("useAuthorized", () => {
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     });
 
     expect(clearTokenCookiesMock).not.toHaveBeenCalled();
@@ -248,7 +271,7 @@ describe("useAuthorized", () => {
       expect(clearTokenCookiesMock).toHaveBeenCalled();
     });
 
-    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     expect(checkTokenValidityMock).toHaveBeenCalledWith(token);
   });
 });

@@ -6,16 +6,16 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Invoke
 
 import base64
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -49,7 +49,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         This is a base invoke agent model mapping. For Invoke Agent - define a bedrock provider specific config that extends this class.
 
@@ -73,12 +73,12 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -90,21 +90,15 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         endpoint_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
-            aws_region_name=self._get_aws_region_name(
-                optional_params=optional_params, model=model
-            ),
+            aws_region_name=self._get_aws_region_name(optional_params=optional_params, model=model),
             endpoint_type="agent",
         )
 
         agent_id, agent_alias_id = self._get_agent_id_and_alias_id(model)
         session_id = self._get_session_id(optional_params)
         encoded_agent_id = encode_url_path_segment(agent_id, field_name="agent_id")
-        encoded_agent_alias_id = encode_url_path_segment(
-            agent_alias_id, field_name="agent_alias_id"
-        )
-        encoded_session_id = encode_url_path_segment(
-            session_id, field_name="session_id"
-        )
+        encoded_agent_alias_id = encode_url_path_segment(agent_alias_id, field_name="agent_alias_id")
+        encoded_session_id = encode_url_path_segment(session_id, field_name="session_id")
 
         endpoint_url = f"{endpoint_url}/agents/{encoded_agent_id}/agentAliases/{encoded_agent_alias_id}/sessions/{encoded_session_id}/text"
 
@@ -116,11 +110,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
         return self._sign_request(
             service_name="bedrock",
             headers=headers,
@@ -142,9 +136,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         # Split the model string by '/' and extract components
         parts = model.split("/")
         if len(parts) != 3 or parts[0] != "agent":
-            raise ValueError(
-                "Invalid model format. Expected format: 'model=agent/AGENT_ID/ALIAS_ID'"
-            )
+            raise ValueError("Invalid model format. Expected format: 'model=agent/AGENT_ID/ALIAS_ID'")
 
         return parts[1], parts[2]  # Return (agent_id, agent_alias_id)
 
@@ -155,7 +147,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -202,9 +194,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                         parsed_event = {
                             "headers": headers,
                             "payload": {
-                                "bytes": base64.b64encode(
-                                    message.encode("utf-8")
-                                ).decode("utf-8")
+                                "bytes": base64.b64encode(message.encode("utf-8")).decode("utf-8")
                             },  # Re-encode for consistency
                         }
                         events.append(parsed_event)
@@ -222,9 +212,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                             }
                             events.append(parsed_event)
                         except json.JSONDecodeError as e:
-                            verbose_logger.warning(
-                                f"Failed to parse trace event JSON: {e}"
-                            )
+                            verbose_logger.warning(f"Failed to parse trace event JSON: {e}")
                 else:
                     verbose_logger.debug(f"Unknown event type: {event_type}")
 
@@ -234,16 +222,14 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
         return events
 
-    def _parse_message_from_event(self, event, parser) -> Optional[str]:
+    def _parse_message_from_event(self, event, parser) -> str | None:
         """Extract message content from an AWS event, adapted from AWSEventStreamDecoder."""
         try:
             response_dict = event.to_response_dict()
             verbose_logger.debug(f"Response dict: {response_dict}")
 
             # Use the same response shape parsing as the existing decoder
-            parsed_response = parser.parse(
-                response_dict, self._get_response_stream_shape()
-            )
+            parsed_response = parser.parse(response_dict, self._get_response_stream_shape())
             verbose_logger.debug(f"Parsed response: {parsed_response}")
 
             if response_dict["status_code"] != 200:
@@ -258,11 +244,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                 error_message = exception_status + " " + error_message
                 raise BedrockError(
                     status_code=response_dict["status_code"],
-                    message=(
-                        json.dumps(error_message)
-                        if isinstance(error_message, dict)
-                        else error_message
-                    ),
+                    message=(json.dumps(error_message) if isinstance(error_message, dict) else error_message),
                 )
 
             if "chunk" in parsed_response:
@@ -294,14 +276,12 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             )
         except Exception as e:
             verbose_logger.debug(f"Error extracting headers: {e}")
-            return InvokeAgentEventHeaders(
-                event_type="", content_type="", message_type=""
-            )
+            return InvokeAgentEventHeaders(event_type="", content_type="", message_type="")
 
     def _get_response_stream_shape(self):
-        from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
+        from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
 
-        return BEDROCK_RESPONSE_STREAM_SHAPE
+        return get_bedrock_response_stream_shape()
 
     def _extract_response_content(self, events: InvokeAgentEventList) -> str:
         """Extract the final response content from parsed events."""
@@ -311,9 +291,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             headers = event.get("headers", {})
             payload = event.get("payload")
 
-            event_type = headers.get(
-                "event_type"
-            )  # Note: using event_type not event-type
+            event_type = headers.get("event_type")  # Note: using event_type not event-type
 
             if event_type == "chunk" and payload:
                 # Extract base64 encoded content from chunk events
@@ -321,9 +299,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                 encoded_bytes = chunk_payload.get("bytes", "")
                 if encoded_bytes:
                     try:
-                        decoded_content = base64.b64decode(encoded_bytes).decode(
-                            "utf-8"
-                        )
+                        decoded_content = base64.b64decode(encoded_bytes).decode("utf-8")
                         response_parts.append(decoded_content)
                     except Exception as e:
                         verbose_logger.warning(f"Failed to decode chunk content: {e}")
@@ -338,7 +314,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             model=None,
         )
 
-        response_model: Optional[str] = None
+        response_model: str | None = None
 
         for event in events:
             if not self._is_trace_event(event):
@@ -370,7 +346,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         payload = event.get("payload")
         return event_type == "trace" and payload is not None
 
-    def _get_trace_data(self, event: InvokeAgentEvent) -> Optional[InvokeAgentTrace]:
+    def _get_trace_data(self, event: InvokeAgentEvent) -> InvokeAgentTrace | None:
         """Extract trace data from a trace event."""
         payload = event.get("payload")
         if not payload:
@@ -383,45 +359,35 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         self, trace_data: InvokeAgentTrace, usage_info: InvokeAgentUsage
     ) -> None:
         """Extract usage information from preprocessing trace."""
-        pre_processing: Optional[InvokeAgentPreProcessingTrace] = trace_data.get(
-            "preProcessingTrace"
-        )
+        pre_processing: InvokeAgentPreProcessingTrace | None = trace_data.get("preProcessingTrace")
         if not pre_processing:
             return
 
-        model_output: Optional[InvokeAgentModelInvocationOutput] = (
-            pre_processing.get("modelInvocationOutput")
-            or InvokeAgentModelInvocationOutput()
+        model_output: InvokeAgentModelInvocationOutput | None = (
+            pre_processing.get("modelInvocationOutput") or InvokeAgentModelInvocationOutput()
         )
         if not model_output:
             return
 
-        metadata: Optional[InvokeAgentMetadata] = (
-            model_output.get("metadata") or InvokeAgentMetadata()
-        )
+        metadata: InvokeAgentMetadata | None = model_output.get("metadata") or InvokeAgentMetadata()
         if not metadata:
             return
 
-        usage: Optional[Union[InvokeAgentUsage, Dict]] = metadata.get("usage", {})
+        usage: InvokeAgentUsage | dict | None = metadata.get("usage", {})
         if not usage:
             return
 
         usage_info["inputTokens"] += usage.get("inputTokens", 0)
         usage_info["outputTokens"] += usage.get("outputTokens", 0)
 
-    def _extract_orchestration_model(
-        self, trace_data: InvokeAgentTrace
-    ) -> Optional[str]:
+    def _extract_orchestration_model(self, trace_data: InvokeAgentTrace) -> str | None:
         """Extract model information from orchestration trace."""
-        orchestration_trace: Optional[InvokeAgentOrchestrationTrace] = trace_data.get(
-            "orchestrationTrace"
-        )
+        orchestration_trace: InvokeAgentOrchestrationTrace | None = trace_data.get("orchestrationTrace")
         if not orchestration_trace:
             return None
 
-        model_invocation: Optional[InvokeAgentModelInvocationInput] = (
-            orchestration_trace.get("modelInvocationInput")
-            or InvokeAgentModelInvocationInput()
+        model_invocation: InvokeAgentModelInvocationInput | None = (
+            orchestration_trace.get("modelInvocationInput") or InvokeAgentModelInvocationInput()
         )
         if not model_invocation:
             return None
@@ -454,8 +420,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             usage = Usage(
                 prompt_tokens=usage_info.get("inputTokens", 0),
                 completion_tokens=usage_info.get("outputTokens", 0),
-                total_tokens=usage_info.get("inputTokens", 0)
-                + usage_info.get("outputTokens", 0),
+                total_tokens=usage_info.get("inputTokens", 0) + usage_info.get("outputTokens", 0),
             )
             setattr(model_response, "usage", usage)
 
@@ -468,19 +433,17 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
             # Get the raw binary content
             raw_content = raw_response.content
-            verbose_logger.debug(
-                f"Processing {len(raw_content)} bytes of AWS event stream data"
-            )
+            verbose_logger.debug(f"Processing {len(raw_content)} bytes of AWS event stream data")
 
             # Parse the AWS event stream format
             events = self._parse_aws_event_stream(raw_content)
@@ -501,11 +464,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             )
 
         except Exception as e:
-            verbose_logger.error(
-                f"Error processing Bedrock Invoke Agent response: {str(e)}"
-            )
+            verbose_logger.error(f"Error processing Bedrock Invoke Agent response: {e}")
             raise BedrockError(
-                message=f"Error processing response: {str(e)}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 
@@ -513,23 +474,21 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message)
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         return True

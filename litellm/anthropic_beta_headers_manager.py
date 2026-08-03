@@ -25,14 +25,13 @@ Environment Variables:
 import json
 import os
 from importlib.resources import files
-from typing import Dict, List, Optional, Set
 
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 
 # Cache for the loaded configuration
-_BETA_HEADERS_CONFIG: Optional[Dict] = None
+_BETA_HEADERS_CONFIG: dict | None = None
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -44,13 +43,11 @@ class GetAnthropicBetaHeadersConfig:
     """
 
     @staticmethod
-    def load_local_beta_headers_config() -> Dict:
+    def load_local_beta_headers_config() -> dict:
         """Load the local backup beta headers config bundled with the package."""
         try:
             content = json.loads(
-                files("litellm")
-                .joinpath("anthropic_beta_headers_config.json")
-                .read_text(encoding="utf-8")
+                files("litellm").joinpath("anthropic_beta_headers_config.json").read_text(encoding="utf-8")
             )
             return content
         except Exception as e:
@@ -70,16 +67,14 @@ class GetAnthropicBetaHeadersConfig:
         """Check if fetched config is a non-empty dict with expected structure."""
         if not isinstance(fetched_config, dict):
             verbose_logger.warning(
-                "LiteLLM: Fetched beta headers config is not a dict (type=%s). "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched beta headers config is not a dict (type=%s). Falling back to local backup.",
                 type(fetched_config).__name__,
             )
             return False
 
         if len(fetched_config) == 0:
             verbose_logger.warning(
-                "LiteLLM: Fetched beta headers config is empty. "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched beta headers config is empty. Falling back to local backup.",
             )
             return False
 
@@ -95,8 +90,7 @@ class GetAnthropicBetaHeadersConfig:
 
         if not has_provider:
             verbose_logger.warning(
-                "LiteLLM: Fetched beta headers config missing provider keys. "
-                "Falling back to local backup.",
+                "LiteLLM: Fetched beta headers config missing provider keys. Falling back to local backup.",
             )
             return False
 
@@ -147,20 +141,16 @@ def get_beta_headers_config(url: str) -> dict:
         content = GetAnthropicBetaHeadersConfig.fetch_remote_beta_headers_config(url)
     except Exception as e:
         verbose_logger.warning(
-            "LiteLLM: Failed to fetch remote beta headers config from %s: %s. "
-            "Falling back to local backup.",
+            "LiteLLM: Failed to fetch remote beta headers config from %s: %s. Falling back to local backup.",
             url,
             str(e),
         )
         return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
 
     # Validate the fetched config
-    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(
-        fetched_config=content
-    ):
+    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(fetched_config=content):
         verbose_logger.warning(
-            "LiteLLM: Fetched beta headers config failed integrity check. "
-            "Using local backup instead. url=%s",
+            "LiteLLM: Fetched beta headers config failed integrity check. Using local backup instead. url=%s",
             url,
         )
         return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
@@ -168,7 +158,7 @@ def get_beta_headers_config(url: str) -> dict:
     return content
 
 
-def _load_beta_headers_config() -> Dict:
+def _load_beta_headers_config() -> dict:
     """
     Load the beta headers configuration.
     Uses caching to avoid repeated fetches/file reads.
@@ -192,7 +182,7 @@ def _load_beta_headers_config() -> Dict:
     return _BETA_HEADERS_CONFIG
 
 
-def reload_beta_headers_config() -> Dict:
+def reload_beta_headers_config() -> dict:
     """
     Force reload the beta headers configuration from source (remote or local).
     Clears the cache and fetches fresh configuration.
@@ -222,9 +212,9 @@ def get_provider_name(provider: str) -> str:
 
 
 def filter_and_transform_beta_headers(
-    beta_headers: List[str],
+    beta_headers: list[str],
     provider: str,
-) -> List[str]:
+) -> list[str]:
     """
     Filter and transform beta headers based on provider's mapping configuration.
 
@@ -249,16 +239,14 @@ def filter_and_transform_beta_headers(
     # Get the header mapping for this provider
     provider_mapping = config.get(provider, {})
 
-    filtered_headers: Set[str] = set()
+    filtered_headers: set[str] = set()
 
     for header in beta_headers:
         header = header.strip()
 
         # Check if header is in the mapping
         if header not in provider_mapping:
-            verbose_logger.debug(
-                f"Dropping unknown beta header '{header}' for provider '{provider}' (not in mapping)"
-            )
+            verbose_logger.debug(f"Dropping unknown beta header '{header}' for provider '{provider}' (not in mapping)")
             continue
 
         # Get the mapped header value
@@ -266,9 +254,7 @@ def filter_and_transform_beta_headers(
 
         # Skip if header is unsupported (null value)
         if mapped_header is None:
-            verbose_logger.debug(
-                f"Dropping unsupported beta header '{header}' for provider '{provider}'"
-            )
+            verbose_logger.debug(f"Dropping unsupported beta header '{header}' for provider '{provider}'")
             continue
 
         # Add the mapped header
@@ -302,7 +288,7 @@ def is_beta_header_supported(
 def get_provider_beta_header(
     anthropic_beta_header: str,
     provider: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Get the provider-specific beta header name for a given Anthropic beta header.
 
@@ -403,7 +389,7 @@ def update_request_with_filtered_beta(
     return headers, request_data
 
 
-def get_unsupported_headers(provider: str) -> List[str]:
+def get_unsupported_headers(provider: str) -> list[str]:
     """
     Get all beta headers that are unsupported by a provider (have null values in mapping).
 

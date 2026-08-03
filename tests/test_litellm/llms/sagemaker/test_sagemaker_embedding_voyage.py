@@ -17,6 +17,9 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import embedding
+from litellm.llms.sagemaker.embedding.cohere_transformation import (
+    SagemakerCohereEmbeddingConfig,
+)
 from litellm.llms.sagemaker.embedding.transformation import SagemakerEmbeddingConfig
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse, Usage
@@ -53,6 +56,172 @@ class TestSagemakerEmbeddingFactory:
         assert isinstance(config1, VoyageEmbeddingConfig)
         assert isinstance(config2, VoyageEmbeddingConfig)
         assert isinstance(config3, VoyageEmbeddingConfig)
+
+    def test_get_model_config_cohere_model(self):
+        """Cohere SageMaker endpoints route to SagemakerCohereEmbeddingConfig"""
+        for endpoint_name in (
+            "cohere.embed-multilingual-v3",
+            "cohere-embed-english-v3-prod",
+            "my-cohere-marketplace-endpoint",
+            "COHERE-EMBED-V4",
+        ):
+            config = SagemakerEmbeddingConfig.get_model_config(endpoint_name)
+            assert isinstance(config, SagemakerCohereEmbeddingConfig), endpoint_name
+
+
+class TestSagemakerCohereEmbeddingConfig:
+    """Cohere-specific SageMaker embedding request/response transforms"""
+
+    def setup_method(self):
+        self.config = SagemakerCohereEmbeddingConfig()
+
+    MODEL = "cohere.embed-multilingual-v3"
+
+    def test_transform_request_uses_cohere_payload(self):
+        """Bug repro: request must use `texts` + `input_type`, not HF `inputs`"""
+        result = self.config.transform_embedding_request(
+            model=self.MODEL,
+            input=["hello"],
+            optional_params={"input_type": "search_query"},
+            headers={},
+        )
+        assert "inputs" not in result
+        assert result["texts"] == ["hello"]
+        assert result["input_type"] == "search_query"
+
+    def test_transform_request_default_input_type(self):
+        result = self.config.transform_embedding_request(
+            model=self.MODEL,
+            input=["hello"],
+            optional_params={},
+            headers={},
+        )
+        assert result["texts"] == ["hello"]
+        assert result["input_type"] == "search_document"
+
+    def test_transform_request_normalizes_string_input(self):
+        result = self.config.transform_embedding_request(
+            model=self.MODEL,
+            input="hello",
+            optional_params={},
+            headers={},
+        )
+        assert result["texts"] == ["hello"]
+
+    def test_map_openai_params_dimensions_to_output_dimension(self):
+        params = self.config.map_openai_params(
+            non_default_params={"dimensions": 512, "encoding_format": "float"},
+            optional_params={},
+            model=self.MODEL,
+            drop_params=False,
+        )
+        assert params["output_dimension"] == 512
+        assert params["embedding_types"] == ["float"]
+
+    def test_map_openai_params_input_type_from_non_default_params(self):
+        params = self.config.map_openai_params(
+            non_default_params={"input_type": "search_query"},
+            optional_params={},
+            model=self.MODEL,
+            drop_params=False,
+        )
+        assert params["input_type"] == "search_query"
+
+    def test_get_optional_params_embeddings_preserves_input_type(self):
+        """Exercises get_optional_params_embeddings, not transform in isolation."""
+        from litellm.utils import get_optional_params_embeddings
+
+        optional_params = get_optional_params_embeddings(
+            model=self.MODEL,
+            custom_llm_provider="sagemaker",
+            input_type="search_query",
+        )
+        assert optional_params.get("input_type") == "search_query"
+
+        body = self.config.transform_embedding_request(
+            model=self.MODEL,
+            input=["hello"],
+            optional_params=optional_params,
+            headers={},
+        )
+        assert body["texts"] == ["hello"]
+        assert body["input_type"] == "search_query"
+
+    def test_get_optional_params_embeddings_maps_dimensions_without_duplicate(self):
+        """dimensions must map to output_dimension only, not also stay as dimensions."""
+        from litellm.utils import get_optional_params_embeddings
+
+        optional_params = get_optional_params_embeddings(
+            model=self.MODEL,
+            custom_llm_provider="sagemaker",
+            dimensions=512,
+            input_type="search_query",
+        )
+        assert optional_params.get("output_dimension") == 512
+        assert "dimensions" not in optional_params
+        assert optional_params.get("input_type") == "search_query"
+
+    def test_transform_response_parses_cohere_payload(self):
+        cohere_response = {
+            "embeddings": [[0.1, 0.2, 0.3]],
+            "meta": {"billed_units": {"input_tokens": 2}},
+        }
+        mock_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(cohere_response).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"input": ["hello"]}
+
+        result = self.config.transform_embedding_response(
+            model=self.MODEL,
+            raw_response=mock_response,
+            model_response=EmbeddingResponse(),
+            logging_obj=logging_obj,
+            api_key=None,
+            request_data={"texts": ["hello"], "input_type": "search_query"},
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert result.object == "list"
+        assert len(result.data) == 1
+        assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert result.usage.prompt_tokens == 2
+
+    def test_transform_response_does_not_double_call_post_call(self):
+        """
+        Greptile review fix: SageMaker handler already calls
+        `logging_obj.post_call` once before invoking
+        `transform_embedding_response`. The transform must NOT call it again,
+        otherwise callbacks, cost calculators, and log handlers double-fire
+        for every Cohere SageMaker embedding call.
+        """
+        cohere_response = {
+            "embeddings": [[0.1, 0.2, 0.3]],
+            "meta": {"billed_units": {"input_tokens": 2}},
+        }
+        mock_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(cohere_response).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"input": ["hello"]}
+
+        self.config.transform_embedding_response(
+            model=self.MODEL,
+            raw_response=mock_response,
+            model_response=EmbeddingResponse(),
+            logging_obj=logging_obj,
+            api_key=None,
+            request_data={"texts": ["hello"], "input_type": "search_query"},
+            optional_params={},
+            litellm_params={},
+        )
+
+        logging_obj.post_call.assert_not_called()
 
 
 class TestVoyageEmbeddingConfig:

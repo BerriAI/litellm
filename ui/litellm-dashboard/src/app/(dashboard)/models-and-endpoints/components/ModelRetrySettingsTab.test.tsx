@@ -8,9 +8,17 @@ import ModelRetrySettingsTab from "./ModelRetrySettingsTab";
 // directly so the component can be tested in isolation.
 vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
+  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts. A file-level
+  // vi.mock fully replaces the setup-level mock, so without this the real Tremor Button
+  // leaks through and its useTooltip(300) schedules a native setTimeout that can fire
+  // post-teardown -> "window is not defined".
   return {
     ...actual,
     TabPanel: ({ children }: { children: React.ReactNode }) => React.createElement("div", null, children),
+    Button: React.forwardRef<HTMLButtonElement, any>(({ children, variant, size, loading, ...props }, ref) =>
+      React.createElement("button", { ...props, ref }, children),
+    ),
+    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
     // Keep Select/SelectItem as the real implementation so scope-switching is testable
   };
 });
@@ -82,7 +90,7 @@ describe("ModelRetrySettingsTab", () => {
     expect(inputs[0]).toHaveValue("0");
   });
 
-  it("should fall back to globalRetryPolicy when no model-specific value is set (model scope)", () => {
+  it("should leave model-scope rows empty with the inherited value as placeholder when there is no override", () => {
     const globalRetryPolicy: GlobalRetryPolicy = {
       TimeoutErrorRetries: 7,
     };
@@ -97,12 +105,45 @@ describe("ModelRetrySettingsTab", () => {
       />,
     );
 
-    // The TimeoutError row is 3rd (index 2)
+    // No override exists, so the input is empty and the inherited value is only
+    // a placeholder -- this is what keeps 0 ("zero retries") distinct from
+    // "inherit the global value".
     const inputs = screen.getAllByRole("spinbutton");
-    expect(inputs[2]).toHaveValue("7");
+    expect(inputs[2]).toHaveValue(""); // TimeoutError row
+    expect(inputs[2]).toHaveAttribute("placeholder", "7"); // inherited from global
+    expect(inputs[0]).toHaveValue(""); // BadRequestError row (no global)
+    expect(inputs[0]).toHaveAttribute("placeholder", "1"); // inherited from defaultRetry
+  });
 
-    // Rows without a global value fall back to defaultRetry
-    expect(inputs[0]).toHaveValue("1");
+  it("should clear a model-group override when Reset is clicked", async () => {
+    const user = userEvent.setup();
+    const setModelGroupRetryPolicy = vi.fn();
+    render(
+      <ModelRetrySettingsTab
+        {...buildProps({
+          selectedModelGroup: "gpt-4",
+          modelGroupRetryPolicy: { "gpt-4": { BadRequestErrorRetries: 5 } },
+          setModelGroupRetryPolicy,
+          defaultRetry: 0,
+        })}
+      />,
+    );
+
+    // Reset only renders for rows that actually have an override
+    const resetButtons = screen.getAllByRole("button", { name: /reset/i });
+    expect(resetButtons).toHaveLength(1);
+
+    await user.click(resetButtons[0]);
+
+    const updater = setModelGroupRetryPolicy.mock.calls.at(-1)![0];
+    const result = updater({ "gpt-4": { BadRequestErrorRetries: 5 } });
+    expect(result["gpt-4"]).not.toHaveProperty("BadRequestErrorRetries");
+  });
+
+  it("should disable the Save button while a save is in flight", () => {
+    render(<ModelRetrySettingsTab {...buildProps({ isSaving: true })} />);
+
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
   });
 
   it("should prefer model-specific retry count over the global value (model scope)", () => {

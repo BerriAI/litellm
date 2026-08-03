@@ -4,8 +4,9 @@ Main Search function for LiteLLM.
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -24,11 +25,11 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 
 
 def _build_search_optional_params(
-    max_results: Optional[int] = None,
-    search_domain_filter: Optional[List[str]] = None,
-    max_tokens_per_page: Optional[int] = None,
-    country: Optional[str] = None,
-) -> Dict[str, Any]:
+    max_results: int | None = None,
+    search_domain_filter: list[str] | None = None,
+    max_tokens_per_page: int | None = None,
+    country: str | None = None,
+) -> dict[str, Any]:
     """
     Helper function to build optional_params dict from Perplexity Search API parameters.
 
@@ -41,7 +42,7 @@ def _build_search_optional_params(
     Returns:
         Dict with non-None optional parameters
     """
-    optional_params: Dict[str, Any] = {}
+    optional_params: dict[str, Any] = {}
 
     if max_results is not None:
         optional_params["max_results"] = max_results
@@ -57,16 +58,16 @@ def _build_search_optional_params(
 
 @client
 async def asearch(
-    query: Union[str, List[str]],
+    query: str | list[str],
     search_provider: str,
-    max_results: Optional[int] = None,
-    search_domain_filter: Optional[List[str]] = None,
-    max_tokens_per_page: Optional[int] = None,
-    country: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
+    max_results: int | None = None,
+    search_domain_filter: list[str] | None = None,
+    max_tokens_per_page: int | None = None,
+    country: str | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    extra_headers: dict[str, Any] | None = None,
     **kwargs,
 ) -> SearchResponse:
     """
@@ -144,9 +145,7 @@ async def asearch(
             response = init_response
 
         if response is None:
-            raise ValueError(
-                f"Got an unexpected None response from the Search API: {response}"
-            )
+            raise ValueError(f"Got an unexpected None response from the Search API: {response}")
 
         return response
     except Exception as e:
@@ -162,18 +161,18 @@ async def asearch(
 
 @client
 def search(
-    query: Union[str, List[str]],
+    query: str | list[str],
     search_provider: str,
-    max_results: Optional[int] = None,
-    search_domain_filter: Optional[List[str]] = None,
-    max_tokens_per_page: Optional[int] = None,
-    country: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
+    max_results: int | None = None,
+    search_domain_filter: list[str] | None = None,
+    max_tokens_per_page: int | None = None,
+    country: str | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    extra_headers: dict[str, Any] | None = None,
     **kwargs,
-) -> Union[SearchResponse, Coroutine[Any, Any, SearchResponse]]:
+) -> SearchResponse | Coroutine[Any, Any, SearchResponse]:
     """
     Synchronous Search function.
 
@@ -230,23 +229,19 @@ def search(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("asearch", False) is True
 
         # Validate query parameter
         if not isinstance(query, (str, list)):
-            raise ValueError(
-                f"query must be a string or list of strings, got {type(query)}"
-            )
+            raise ValueError(f"query must be a string or list of strings, got {type(query)}")
 
         if isinstance(query, list) and not all(isinstance(q, str) for q in query):
             raise ValueError("All items in query list must be strings")
 
         # Get provider config
-        search_provider_config: Optional[BaseSearchConfig] = (
-            ProviderConfigManager.get_provider_search_config(
-                provider=SearchProviders(search_provider),
-            )
+        search_provider_config: BaseSearchConfig | None = ProviderConfigManager.get_provider_search_config(
+            provider=SearchProviders(search_provider),
         )
 
         if search_provider_config is None:
@@ -283,6 +278,7 @@ def search(
         complete_url = search_provider_config.get_complete_url(
             api_base=api_base,
             optional_params=optional_params,
+            api_key=api_key,
         )
 
         # Pre Call logging

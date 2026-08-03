@@ -12,8 +12,6 @@ Supports:
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
 """
 
-from typing import List, Optional
-
 from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -35,14 +33,12 @@ class AmazonNovaEmbeddingConfig:
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return [
             "dimensions",
         ]
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         """Map OpenAI-style parameters to Nova parameters."""
         for k, v in non_default_params.items():
             if k == "dimensions":
@@ -70,9 +66,7 @@ class AmazonNovaEmbeddingConfig:
         # Split by comma to separate metadata from data
         # Format: data:image/jpeg;base64,<base64_data>
         if "," not in data_url:
-            raise ValueError(
-                f"Invalid data URL format (missing comma): {data_url[:50]}..."
-            )
+            raise ValueError(f"Invalid data URL format (missing comma): {data_url[:50]}...")
 
         metadata, base64_data = data_url.split(",", 1)
 
@@ -92,8 +86,8 @@ class AmazonNovaEmbeddingConfig:
         input: str,
         inference_params: dict,
         async_invoke_route: bool = False,
-        model_id: Optional[str] = None,
-        output_s3_uri: Optional[str] = None,
+        model_id: str | None = None,
+        output_s3_uri: str | None = None,
     ) -> dict:
         """
         Transform OpenAI-style input to Nova format.
@@ -129,9 +123,7 @@ class AmazonNovaEmbeddingConfig:
         if "dimensions" in embedding_params:
             embedding_params["embeddingDimension"] = embedding_params.pop("dimensions")
         elif "embedding_dimension" in embedding_params:
-            embedding_params["embeddingDimension"] = embedding_params.pop(
-                "embedding_dimension"
-            )
+            embedding_params["embeddingDimension"] = embedding_params.pop("embedding_dimension")
 
         # Add required embeddingPurpose if not provided (required by Nova API)
         if "embeddingPurpose" not in embedding_params:
@@ -214,7 +206,7 @@ class AmazonNovaEmbeddingConfig:
         self,
         model_input: dict,
         model_id: str,
-        output_s3_uri: Optional[str] = None,
+        output_s3_uri: str | None = None,
     ) -> dict:
         """
         Wrap the transformed request in the AWS Bedrock async invoke format.
@@ -246,9 +238,9 @@ class AmazonNovaEmbeddingConfig:
 
     def _transform_response(
         self,
-        response_list: List[dict],
+        response_list: list[dict],
         model: str,
-        batch_data: Optional[List[dict]] = None,
+        batch_data: list[dict] | None = None,
     ) -> EmbeddingResponse:
         """
         Transform Nova response to OpenAI format.
@@ -264,7 +256,7 @@ class AmazonNovaEmbeddingConfig:
             ]
         }
         """
-        embeddings: List[Embedding] = []
+        embeddings: list[Embedding] = []
         total_tokens = 0
 
         for response in response_list:
@@ -308,7 +300,7 @@ class AmazonNovaEmbeddingConfig:
                 if "image" in params:
                     image_count += 1
 
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if image_count > 0:
             prompt_tokens_details = PromptTokensDetailsWrapper(
                 image_count=image_count,
@@ -322,9 +314,7 @@ class AmazonNovaEmbeddingConfig:
 
         return EmbeddingResponse(data=embeddings, model=model, usage=usage)
 
-    def _transform_async_invoke_response(
-        self, response: dict, model: str
-    ) -> EmbeddingResponse:
+    def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
 

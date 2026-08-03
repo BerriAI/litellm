@@ -56,10 +56,7 @@ class PromptSpec(BaseModel):
         if "prompt_info" not in data:
             data["prompt_info"] = PromptInfo(prompt_type="config")
         elif "prompt_info" in data:
-            if (
-                isinstance(data["prompt_info"], dict)
-                and data["prompt_info"].get("prompt_type") is None
-            ):
+            if isinstance(data["prompt_info"], dict) and data["prompt_info"].get("prompt_type") is None:
                 data["prompt_info"]["prompt_type"] = "config"
         super().__init__(**data)
 
@@ -73,9 +70,7 @@ class PromptTemplateBase(BaseModel):
 class PromptInfoResponse(BaseModel):
     prompt_spec: PromptSpec
     raw_prompt_template: Optional[PromptTemplateBase] = None
-    environments: Optional[List[str]] = (
-        None  # All environments this prompt is deployed to
-    )
+    environments: Optional[List[str]] = None  # All environments this prompt is deployed to
 
 
 class ListPromptsResponse(BaseModel):

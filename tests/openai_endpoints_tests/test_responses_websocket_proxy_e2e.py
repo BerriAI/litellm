@@ -6,7 +6,7 @@ and validates the streamed response events.
 
 Requires:
   - Proxy running: python -m litellm.proxy.proxy_cli --config <config> --port 4000
-  - Model configured in proxy (e.g. gpt-4o-mini)
+  - Model configured in proxy (e.g. gpt-5-mini)
 
 See: https://developers.openai.com/api/docs/guides/websocket-mode/
 """
@@ -21,7 +21,7 @@ import pytest
 # ── Configuration ─────────────────────────────────────────────────────────────
 PROXY_BASE_URL = os.environ.get("LITELLM_PROXY_BASE_URL", "ws://0.0.0.0:4000")
 PROXY_MASTER_KEY = os.environ.get("LITELLM_PROXY_KEY", "sk-1234")
-PROXY_MODEL = os.environ.get("LITELLM_PROXY_RESPONSES_MODEL", "gpt-4o-mini")
+PROXY_MODEL = os.environ.get("LITELLM_PROXY_RESPONSES_MODEL", "gpt-5-mini")
 # ──────────────────────────────────────────────────────────────────────────────
 
 

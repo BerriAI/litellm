@@ -4,11 +4,13 @@ Documentation: https://api-dashboard.search.brave.com/app/documentation/web-sear
 """
 
 from __future__ import annotations
-from datetime import datetime, timezone
-from dateutil import parser  # type: ignore[import-untyped]
-from typing import Dict, List, Literal, Optional, TypedDict, Union
-import httpx
+
 import re
+from datetime import datetime, timezone
+from typing import Literal, TypedDict
+
+import httpx
+from dateutil import parser  # type: ignore[import-untyped]
 
 _ISO_YMD = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")
 _UNIX_TIMESTAMP = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")
@@ -20,16 +22,15 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResponse,
     SearchResult,
 )
-
 from litellm.secret_managers.main import get_secret_str
 
 
 def to_yyyy_mm_dd(
-    s: Union[str, int, float, None],
+    s: str | float | None,
     *,
     dayfirst: bool = False,
     yearfirst: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """
     Convert a string/int/float to YYYY-MM-DD; return None if parsing fails.
     """
@@ -107,20 +108,24 @@ class BraveSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("BRAVE_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("BRAVE_API_KEY",),
+            base_env_var="BRAVE_API_BASE",
+            default_api_base=self.BRAVE_API_BASE,
+        )
 
         if not api_key:
-            raise ValueError(
-                "BRAVE_API_KEY is not set. Set `BRAVE_API_KEY` environment variable."
-            )
+            raise ValueError("BRAVE_API_KEY is not set. Set `BRAVE_API_KEY` environment variable.")
 
         headers["X-Subscription-Token"] = api_key
         headers["Accept"] = "application/json"
@@ -131,9 +136,9 @@ class BraveSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -156,12 +161,12 @@ class BraveSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
-        api_key: Optional[str] = None,
-        search_engine_id: Optional[str] = None,
+        api_key: str | None = None,
+        search_engine_id: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Brave Search API format.
 
@@ -191,10 +196,7 @@ class BraveSearchConfig(BaseSearchConfig):
 
         # Only include "include_fetch_metadata" if it is not explicitly set to False
         # This parameter results (more often than not) in a timestamp which we can use for last_updated
-        if (
-            "include_fetch_metadata" in optional_params
-            and optional_params["include_fetch_metadata"] is False
-        ):
+        if "include_fetch_metadata" in optional_params and optional_params["include_fetch_metadata"] is False:
             request_data["include_fetch_metadata"] = False
         else:
             request_data["include_fetch_metadata"] = True
@@ -209,19 +211,14 @@ class BraveSearchConfig(BaseSearchConfig):
             # Convert to multiple "site:domain" clauses, joined by OR
             domains = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
-                request_data["q"] = self._append_domain_filters(
-                    request_data["q"], domains
-                )
+                request_data["q"] = self._append_domain_filters(request_data["q"], domains)
 
         # Convert to dict before dynamic key assignments
         result_data = dict(request_data)
 
         # Pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # Store params in special key for URL building (Brave Search API uses GET not POST)
@@ -231,7 +228,7 @@ class BraveSearchConfig(BaseSearchConfig):
         }
 
     @staticmethod
-    def _append_domain_filters(query: str, domains: List[str]) -> str:
+    def _append_domain_filters(query: str, domains: list[str]) -> str:
         """
         Add site: filters to emulate domain restriction in Brave.
         """
@@ -243,7 +240,7 @@ class BraveSearchConfig(BaseSearchConfig):
     def transform_search_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Optional[LiteLLMLoggingObj],
+        logging_obj: LiteLLMLoggingObj | None,
         **kwargs,
     ) -> SearchResponse:
         """
@@ -252,7 +249,7 @@ class BraveSearchConfig(BaseSearchConfig):
         response_json = raw_response.json()
 
         # Transform results to SearchResult objects
-        results: List[SearchResult] = []
+        results: list[SearchResult] = []
 
         query_params = raw_response.request.url.params if raw_response.request else {}
         sections_to_process = self._sections_from_params(dict(query_params))
@@ -271,9 +268,7 @@ class BraveSearchConfig(BaseSearchConfig):
                 url = result.get("url", "")
                 snippet = result.get("description", "")
                 date = to_yyyy_mm_dd(result.get("page_age") or result.get("age"))
-                last_updated = to_yyyy_mm_dd(
-                    result.get("fetched_content_timestamp", "")
-                )
+                last_updated = to_yyyy_mm_dd(result.get("fetched_content_timestamp", ""))
 
                 search_result = SearchResult(
                     title=title,
@@ -291,14 +286,14 @@ class BraveSearchConfig(BaseSearchConfig):
         )
 
     @staticmethod
-    def _sections_from_params(query_params: dict) -> List[str]:
+    def _sections_from_params(query_params: dict) -> list[str]:
         """
         Returns a list of sections the user has requested via the Brave Search
         API's `result_filter` parameter. If no `result_filter` parameter is
         provided, returns all sections.
         """
         raw_filter = query_params.get("result_filter")
-        requested_filters: List[str] = []
+        requested_filters: list[str] = []
 
         if raw_filter and isinstance(raw_filter, str):
             requested_filters = [part.strip() for part in raw_filter.split(",")]

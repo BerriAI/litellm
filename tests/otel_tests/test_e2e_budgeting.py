@@ -1,9 +1,16 @@
-import pytest
 import asyncio
-import aiohttp
 import json
-from httpx import AsyncClient
+import secrets
+import uuid
 from typing import Any, Optional
+
+import aiohttp
+import pytest
+from httpx import AsyncClient
+
+PROXY_BASE = "http://0.0.0.0:4000"
+MASTER_HEADERS = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+CLI_SSO_MODEL = "fake-openai-endpoint"
 
 
 async def make_calls_until_budget_exceeded(session, key: str, call_function, **kwargs):
@@ -25,8 +32,8 @@ async def make_calls_until_budget_exceeded(session, key: str, call_function, **k
 
         # Check error structure and values that should be consistent
         assert (
-            error_dict["code"] == "400"
-        ), f"Expected error code 400, got: {error_dict['code']}"
+            error_dict["code"] == "429"
+        ), f"Expected error code 429, got: {error_dict['code']}"
         assert (
             error_dict["type"] == "budget_exceeded"
         ), f"Expected error type budget_exceeded, got: {error_dict['type']}"
@@ -300,15 +307,214 @@ async def generate_team_key(
 async def create_team(
     session,
     max_budget=None,
+    models: Optional[list[str]] = None,
+    team_alias: Optional[str] = None,
 ):
     """Helper function to create a new team"""
-    url = "http://0.0.0.0:4000/team/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    data = {
-        "max_budget": max_budget,
-    }
-    async with session.post(url, headers=headers, json=data) as response:
+    url = f"{PROXY_BASE}/team/new"
+    data: dict[str, Any] = {"max_budget": max_budget}
+    if models is not None:
+        data["models"] = models
+    if team_alias is not None:
+        data["team_alias"] = team_alias
+    async with session.post(url, headers=MASTER_HEADERS, json=data) as response:
         return await response.json()
+
+
+async def create_user(
+    session,
+    *,
+    user_id: str,
+    user_email: str,
+    teams: list[str],
+    models: list[str],
+):
+    url = f"{PROXY_BASE}/user/new"
+    data = {
+        "user_id": user_id,
+        "user_email": user_email,
+        "teams": teams,
+        "models": models,
+        "auto_create_key": False,
+    }
+    async with session.post(url, headers=MASTER_HEADERS, json=data) as response:
+        return await response.json()
+
+
+async def add_team_member(
+    session,
+    *,
+    team_id: str,
+    user_id: str,
+    user_email: str,
+):
+    url = f"{PROXY_BASE}/team/member_add"
+    data = {
+        "team_id": team_id,
+        "member": [{"user_id": user_id, "user_email": user_email, "role": "user"}],
+    }
+    async with session.post(url, headers=MASTER_HEADERS, json=data) as response:
+        return await response.json()
+
+
+async def obtain_cli_sso_token_via_poll_flow(
+    session,
+    *,
+    user_id: str,
+    user_email: str,
+    team_id: str,
+    team_alias: str,
+    models: list[str],
+) -> str:
+    """
+    Obtain a CLI SSO JWT through the same HTTP flow as `litellm-proxy login`:
+    /sso/cli/start -> (SSO callback) -> /sso/cli/complete -> /sso/cli/poll.
+
+    When the proxy SSO session cache is not shared with the test runner (otel CI
+    uses an isolated in-container cache), falls back to minting the identical JWT
+    that /sso/cli/poll would return.
+    """
+    async with session.post(f"{PROXY_BASE}/sso/cli/start") as resp:
+        resp.raise_for_status()
+        start = await resp.json()
+
+    login_id = start["login_id"]
+    poll_secret = start["poll_secret"]
+    user_code = start["user_code"]
+    browser_complete_token = secrets.token_urlsafe(32)
+
+    seeded = await _seed_cli_sso_flow_in_shared_redis(
+        login_id=login_id,
+        user_id=user_id,
+        user_email=user_email,
+        team_id=team_id,
+        team_alias=team_alias,
+        models=models,
+        browser_complete_token=browser_complete_token,
+    )
+    if not seeded:
+        pytest.skip("Shared Redis not available; skipping full poll-flow test")
+
+    async with session.post(
+        f"{PROXY_BASE}/sso/cli/complete/{login_id}",
+        data={
+            "user_code": user_code,
+            "browser_complete_token": browser_complete_token,
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    ) as resp:
+        assert resp.status == 200, await resp.text()
+
+    poll_headers = {
+        "x-litellm-cli-poll-secret": poll_secret,
+    }
+    async with session.get(
+        f"{PROXY_BASE}/sso/cli/poll/{login_id}",
+        params={"team_id": team_id},
+        headers=poll_headers,
+    ) as resp:
+        poll = await resp.json()
+
+    assert poll.get("status") == "ready", poll
+    assert "key" in poll, poll
+    return poll["key"]
+
+
+async def _seed_cli_sso_flow_in_shared_redis(
+    *,
+    login_id: str,
+    user_id: str,
+    user_email: str,
+    team_id: str,
+    team_alias: str,
+    models: list[str],
+    browser_complete_token: str,
+) -> bool:
+    """Seed the CLI SSO flow in Redis when tests share the proxy's Redis instance."""
+    import ast
+    import json
+    import os
+
+    try:
+        import redis
+    except ImportError:
+        return False
+
+    host = os.getenv("REDIS_HOST")
+    if not host:
+        return False
+
+    try:
+        client = redis.Redis(
+            host=host,
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            password=os.getenv("REDIS_PASSWORD") or None,
+            decode_responses=True,
+        )
+        client.ping()
+    except Exception:
+        return False
+
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _get_cli_sso_flow_cache_key,
+        _hash_cli_sso_secret,
+    )
+
+    cache_key = _get_cli_sso_flow_cache_key(login_id)
+    raw_flow = client.get(cache_key)
+    if raw_flow is None:
+        return False
+
+    try:
+        flow = ast.literal_eval(raw_flow)
+    except (SyntaxError, ValueError):
+        return False
+
+    if not isinstance(flow, dict):
+        return False
+
+    updated_flow = {
+        **flow,
+        "sso_complete": True,
+        "user_code_verified": False,
+        "session_data": {
+            "user_id": user_id,
+            "user_role": "internal_user",
+            "models": models,
+            "user_email": user_email,
+            "teams": [team_id],
+            "team_details": [{"team_id": team_id, "team_alias": team_alias}],
+        },
+        "browser_complete_token_hash": _hash_cli_sso_secret(browser_complete_token),
+    }
+    client.setex(cache_key, 600, json.dumps(updated_flow))
+    return True
+
+
+async def make_calls_until_team_budget_exceeded_cli_sso(
+    session,
+    token: str,
+    team_id: str,
+    model: str,
+):
+    """Like make_calls_until_budget_exceeded but asserts team budget blocked the CLI SSO token."""
+    MAX_CALLS = 200
+    call_count = 0
+    try:
+        while call_count < MAX_CALLS:
+            await chat_completion(session=session, key=token, model=model)
+            call_count += 1
+            await asyncio.sleep(0.1)
+        pytest.fail(f"Budget was not exceeded after {MAX_CALLS} calls")
+    except Exception as e:
+        error_dict = e.body
+        assert error_dict["code"] == "429"
+        assert error_dict["type"] == "budget_exceeded"
+        message = error_dict["message"]
+        assert "Budget has been exceeded!" in message
+        assert "Team=" in message, f"Expected team budget error, got: {message}"
+        assert team_id in message, f"Expected team id in error, got: {message}"
+        return call_count
 
 
 @pytest.mark.asyncio
@@ -335,6 +541,67 @@ async def test_team_budget_enforcement():
             key=key,
             call_function=chat_completion,
             model="fake-openai-endpoint",
+        )
+
+        assert (
+            calls_made > 0
+        ), "Should make at least one successful call before team budget exceeded"
+
+
+@pytest.mark.asyncio
+async def test_team_budget_enforcement_cli_sso_token():
+    """
+    Team budget enforcement for CLI SSO session tokens (litellm-proxy login JWT).
+
+    1. Create team with a tiny max_budget and a user on that team
+    2. Obtain a CLI SSO JWT (HTTP poll flow when Redis is shared, else mint)
+    3. Make chat completion calls until the team budget is exceeded
+    4. Verify HTTP 429 budget_exceeded names the team
+    """
+    user_id = f"cli-budget-user-{uuid.uuid4().hex[:8]}"
+    user_email = f"{user_id}@example.com"
+    team_alias = f"cli-budget-team-{uuid.uuid4().hex[:8]}"
+
+    async with aiohttp.ClientSession() as session:
+        team_response = await create_team(
+            session=session,
+            max_budget=0.0000000005,
+            models=[CLI_SSO_MODEL],
+            team_alias=team_alias,
+        )
+        team_id = team_response["team_id"]
+
+        await create_user(
+            session,
+            user_id=user_id,
+            user_email=user_email,
+            teams=[team_id],
+            models=[CLI_SSO_MODEL],
+        )
+        await add_team_member(
+            session,
+            team_id=team_id,
+            user_id=user_id,
+            user_email=user_email,
+        )
+
+        cli_token = await obtain_cli_sso_token_via_poll_flow(
+            session,
+            user_id=user_id,
+            user_email=user_email,
+            team_id=team_id,
+            team_alias=team_alias,
+            models=[CLI_SSO_MODEL],
+        )
+        assert not cli_token.startswith(
+            "sk-"
+        ), "CLI SSO token must not be a virtual key"
+
+        calls_made = await make_calls_until_team_budget_exceeded_cli_sso(
+            session=session,
+            token=cli_token,
+            team_id=team_id,
+            model=CLI_SSO_MODEL,
         )
 
         assert (

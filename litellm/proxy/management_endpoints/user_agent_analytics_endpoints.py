@@ -3,7 +3,7 @@ User Agent Analytics Endpoints
 
 This module provides optimized endpoints for tracking user agent activity metrics including:
 - Daily Active Users (DAU) by tags for configurable number of days
-- Weekly Active Users (WAU) by tags for configurable number of weeks  
+- Weekly Active Users (WAU) by tags for configurable number of weeks
 - Monthly Active Users (MAU) by tags for configurable number of months
 - Summary analytics by tags
 
@@ -12,13 +12,18 @@ user metrics from tag activity data and return time series for dashboard visuali
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import DailyTagSpendRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 # Constants for analytics periods
 MAX_DAYS = 7  # Number of days to show in DAU analytics
@@ -35,16 +40,14 @@ class TagActiveUsersResponse(BaseModel):
     tag: str
     active_users: int
     date: str  # The specific date or period identifier
-    period_start: Optional[str] = (
-        None  # For WAU/MAU, this will be the start of the period
-    )
-    period_end: Optional[str] = None  # For WAU/MAU, this will be the end of the period
+    period_start: str | None = None  # For WAU/MAU, this will be the start of the period
+    period_end: str | None = None  # For WAU/MAU, this will be the end of the period
 
 
 class ActiveUsersAnalyticsResponse(BaseModel):
     """Response for active users analytics"""
 
-    results: List[TagActiveUsersResponse]
+    results: list[TagActiveUsersResponse]
 
 
 class TagSummaryMetrics(BaseModel):
@@ -62,7 +65,7 @@ class TagSummaryMetrics(BaseModel):
 class TagSummaryResponse(BaseModel):
     """Response for tag summary analytics"""
 
-    results: List[TagSummaryMetrics]
+    results: list[TagSummaryMetrics]
 
 
 class DistinctTagResponse(BaseModel):
@@ -74,15 +77,15 @@ class DistinctTagResponse(BaseModel):
 class DistinctTagsResponse(BaseModel):
     """Response for all distinct user agent tags"""
 
-    results: List[DistinctTagResponse]
+    results: list[DistinctTagResponse]
 
 
 class PerUserMetrics(BaseModel):
     """Metrics for individual user"""
 
     user_id: str
-    user_email: Optional[str] = None
-    user_agent: Optional[str] = None
+    user_email: str | None = None
+    user_agent: str | None = None
     successful_requests: int = 0
     failed_requests: int = 0
     total_requests: int = 0
@@ -93,7 +96,7 @@ class PerUserMetrics(BaseModel):
 class PerUserAnalyticsResponse(BaseModel):
     """Response for per-user analytics"""
 
-    results: List[PerUserMetrics]
+    results: list[PerUserMetrics]
     total_count: int
     page: int
     page_size: int
@@ -147,7 +150,7 @@ async def get_distinct_user_agent_tags(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch distinct user agent tags: {str(e)}",
+            detail=f"Failed to fetch distinct user agent tags: {e}",
         )
 
 
@@ -158,11 +161,11 @@ async def get_distinct_user_agent_tags(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_daily_active_users(
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -193,9 +196,7 @@ async def get_daily_active_users(
         # Calculate end_date as UTC today + 1 day
         from datetime import timezone
 
-        end_dt = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ) + timedelta(days=1)
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         end_date = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range (last MAX_DAYS days)
@@ -203,9 +204,7 @@ async def get_daily_active_users(
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s)
-        where_clause = (
-            "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
-        )
+        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
 
         # Handle multiple tag filters (takes precedence over single tag filter)
@@ -235,9 +234,7 @@ async def get_daily_active_users(
         db_response = await prisma_client.db.query_raw(sql_query, *params)
 
         results = [
-            TagActiveUsersResponse(
-                tag=row["tag"], active_users=row["active_users"], date=row["date"]
-            )
+            TagActiveUsersResponse(tag=row["tag"], active_users=row["active_users"], date=row["date"])
             for row in db_response
         ]
 
@@ -246,7 +243,7 @@ async def get_daily_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch DAU analytics: {str(e)}",
+            detail=f"Failed to fetch DAU analytics: {e}",
         )
 
 
@@ -257,11 +254,11 @@ async def get_daily_active_users(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_weekly_active_users(
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -296,22 +293,16 @@ async def get_weekly_active_users(
         # Calculate end_date as UTC today + 1 day
         from datetime import timezone
 
-        end_dt = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ) + timedelta(days=1)
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         end_date = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range for all weeks (49 days total)
         # Start from 48 days before end_date to cover exactly MAX_WEEKS complete weeks
-        start_dt = end_dt - timedelta(
-            days=(MAX_WEEKS * 7 - 1)
-        )  # MAX_WEEKS weeks * 7 days - 1
+        start_dt = end_dt - timedelta(days=(MAX_WEEKS * 7 - 1))  # MAX_WEEKS weeks * 7 days - 1
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s)
-        where_clause = (
-            "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
-        )
+        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
 
         # Handle multiple tag filters (takes precedence over single tag filter)
@@ -361,9 +352,7 @@ async def get_weekly_active_users(
             TagActiveUsersResponse(
                 tag=row["tag"],
                 active_users=row["active_users"],
-                date=row[
-                    "date"
-                ],  # This will be "Week 1 (Jan 15)", "Week 2 (Jan 8)", etc.
+                date=row["date"],  # This will be "Week 1 (Jan 15)", "Week 2 (Jan 8)", etc.
                 period_start=row["period_start"],
                 period_end=row["period_end"],
             )
@@ -375,7 +364,7 @@ async def get_weekly_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch WAU analytics: {str(e)}",
+            detail=f"Failed to fetch WAU analytics: {e}",
         )
 
 
@@ -386,11 +375,11 @@ async def get_weekly_active_users(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_monthly_active_users(
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -425,22 +414,16 @@ async def get_monthly_active_users(
         # Calculate end_date as UTC today + 1 day
         from datetime import timezone
 
-        end_dt = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ) + timedelta(days=1)
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         end_date = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range for all months (210 days total)
         # Start from 209 days before end_date to cover exactly MAX_MONTHS complete months
-        start_dt = end_dt - timedelta(
-            days=(MAX_MONTHS * 30 - 1)
-        )  # MAX_MONTHS months * 30 days - 1
+        start_dt = end_dt - timedelta(days=(MAX_MONTHS * 30 - 1))  # MAX_MONTHS months * 30 days - 1
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s)
-        where_clause = (
-            "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
-        )
+        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
 
         # Handle multiple tag filters (takes precedence over single tag filter)
@@ -502,7 +485,7 @@ async def get_monthly_active_users(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch MAU analytics: {str(e)}",
+            detail=f"Failed to fetch MAU analytics: {e}",
         )
 
 
@@ -515,11 +498,11 @@ async def get_monthly_active_users(
 async def get_tag_summary(
     start_date: str = Query(description="Start date in YYYY-MM-DD format"),
     end_date: str = Query(description="End date in YYYY-MM-DD format"),
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -602,12 +585,12 @@ async def get_tag_summary(
     except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid date format. Use YYYY-MM-DD: {str(e)}",
+            detail=f"Invalid date format. Use YYYY-MM-DD: {e}",
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch tag summary analytics: {str(e)}",
+            detail=f"Failed to fetch tag summary analytics: {e}",
         )
 
 
@@ -618,11 +601,11 @@ async def get_tag_summary(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_per_user_analytics(
-    tag_filter: Optional[str] = Query(
+    tag_filter: str | None = Query(
         default=None,
         description="Filter by specific tag (optional)",
     ),
-    tag_filters: Optional[List[str]] = Query(
+    tag_filters: list[str] | None = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
@@ -657,9 +640,7 @@ async def get_per_user_analytics(
         # Calculate end_date as UTC today + 1 day
         from datetime import timezone
 
-        end_dt = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ) + timedelta(days=1)
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         end_date = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range (last 30 days)
@@ -667,7 +648,7 @@ async def get_per_user_analytics(
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build where clause with date range
-        where_clause: Dict[str, Any] = {"date": {"gte": start_date, "lte": end_date}}
+        where_clause: dict[str, Any] = {"date": {"gte": start_date, "lte": end_date}}
 
         # Add tag filtering if provided
         if tag_filters and len(tag_filters) > 0:
@@ -676,9 +657,7 @@ async def get_per_user_analytics(
             where_clause["tag"] = {"contains": tag_filter}
 
         # Get all tag records in the date range with optional tag filtering
-        tag_records = await prisma_client.db.litellm_dailytagspend.find_many(
-            where=where_clause
-        )
+        tag_records = await DailyTagSpendRepository(prisma_client).table.find_many(where=where_clause)
 
         # Get unique api_keys
         api_keys = set(record.api_key for record in tag_records if record.api_key)
@@ -693,28 +672,22 @@ async def get_per_user_analytics(
             )
 
         # Lookup user_id for each api_key
-        api_key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+        api_key_records = await VerificationTokenRepository(prisma_client).table.find_many(
             where={"token": {"in": list(api_keys)}}
         )
 
         # Create mapping from api_key to user_id
-        api_key_to_user_id = {
-            record.token: record.user_id for record in api_key_records if record.user_id
-        }
+        api_key_to_user_id = {record.token: record.user_id for record in api_key_records if record.user_id}
 
         # Get user emails for the user_ids
         user_ids = list(set(api_key_to_user_id.values()))
-        user_records = await prisma_client.db.litellm_usertable.find_many(
-            where={"user_id": {"in": user_ids}}
-        )
+        user_records = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": user_ids}})
 
         # Create mapping from user_id to user_email
-        user_id_to_email = {
-            record.user_id: record.user_email for record in user_records
-        }
+        user_id_to_email = {record.user_id: record.user_email for record in user_records}
 
         # Aggregate metrics by user
-        user_metrics: Dict[str, PerUserMetrics] = {}
+        user_metrics: dict[str, PerUserMetrics] = {}
 
         for record in tag_records:
             if record.api_key in api_key_to_user_id:
@@ -733,17 +706,13 @@ async def get_per_user_analytics(
                         user_metrics[user_id].user_agent = tag
 
                 # Aggregate metrics
-                user_metrics[user_id].successful_requests += (
-                    record.successful_requests or 0
-                )
+                user_metrics[user_id].successful_requests += record.successful_requests or 0
                 user_metrics[user_id].failed_requests += record.failed_requests or 0
                 user_metrics[user_id].total_requests += record.api_requests or 0
                 # Calculate total_tokens from prompt_tokens + completion_tokens
                 prompt_tokens = record.prompt_tokens or 0
                 completion_tokens = record.completion_tokens or 0
-                user_metrics[user_id].total_tokens += int(
-                    prompt_tokens + completion_tokens
-                )
+                user_metrics[user_id].total_tokens += int(prompt_tokens + completion_tokens)
                 user_metrics[user_id].spend += record.spend or 0.0
 
         # Convert to list and sort by successful requests (descending)
@@ -771,5 +740,5 @@ async def get_per_user_analytics(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch per-user analytics: {str(e)}",
+            detail=f"Failed to fetch per-user analytics: {e}",
         )

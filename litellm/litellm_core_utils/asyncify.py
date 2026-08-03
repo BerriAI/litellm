@@ -1,6 +1,6 @@
 import asyncio
 import functools
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 
 import anyio
 import anyio.to_thread
@@ -22,7 +22,7 @@ def asyncify(
     function: Callable[T_ParamSpec, T_Retval],
     *,
     cancellable: bool = False,
-    limiter: Optional[anyio.CapacityLimiter] = None,
+    limiter: anyio.CapacityLimiter | None = None,
 ) -> Callable[T_ParamSpec, Awaitable[T_Retval]]:
     """
     Take a blocking function and create an async one that receives the same
@@ -45,9 +45,7 @@ def asyncify(
     and returns the result.
     """
 
-    async def wrapper(
-        *args: T_ParamSpec.args, **kwargs: T_ParamSpec.kwargs
-    ) -> T_Retval:
+    async def wrapper(*args: T_ParamSpec.args, **kwargs: T_ParamSpec.kwargs) -> T_Retval:
         partial_f = functools.partial(function, *args, **kwargs)
 
         # In `v4.1.0` anyio added the `abandon_on_cancel` argument and deprecated the old

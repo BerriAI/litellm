@@ -18,14 +18,19 @@ from litellm.types.guardrails import ApplyGuardrailRequest, ApplyGuardrailRespon
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_endpoint_returns_correct_response():
+async def test_apply_guardrail_endpoint_returns_correct_response(
+    mock_proxy_logging_ctx,
+):
     """Test that apply_guardrail endpoint returns ApplyGuardrailResponse object"""
     from litellm.proxy.guardrails.guardrail_endpoints import apply_guardrail
 
     # Mock the guardrail registry
-    with patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
-    ) as mock_registry:
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
+        ) as mock_registry,
+        mock_proxy_logging_ctx(),
+    ):
         # Create a mock guardrail
         mock_guardrail = Mock(spec=CustomGuardrail)
         # Apply guardrail returns GenericGuardrailAPIInputs (dict with texts key)
@@ -49,7 +54,9 @@ async def test_apply_guardrail_endpoint_returns_correct_response():
 
         # Call the endpoint
         response = await apply_guardrail(
-            request=request, user_api_key_dict=user_api_key_dict
+            fastapi_request=Mock(),
+            request=request,
+            user_api_key_dict=user_api_key_dict,
         )
 
         # Verify the response is of the correct type
@@ -65,15 +72,18 @@ async def test_apply_guardrail_endpoint_returns_correct_response():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_endpoint_guardrail_not_found():
+async def test_apply_guardrail_endpoint_guardrail_not_found(mock_proxy_logging_ctx):
     """Test that apply_guardrail endpoint raises exception when guardrail not found"""
     from litellm.proxy._types import ProxyException
     from litellm.proxy.guardrails.guardrail_endpoints import apply_guardrail
 
     # Mock the guardrail registry to return None
-    with patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
-    ) as mock_registry:
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
+        ) as mock_registry,
+        mock_proxy_logging_ctx(),
+    ):
         mock_registry.get_initialized_guardrail_callback.return_value = None
 
         # Create the request
@@ -86,26 +96,35 @@ async def test_apply_guardrail_endpoint_guardrail_not_found():
 
         # Verify exception is raised
         with pytest.raises(ProxyException) as exc_info:
-            await apply_guardrail(request=request, user_api_key_dict=user_api_key_dict)
+            await apply_guardrail(
+                fastapi_request=Mock(),
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         assert "non-existent-guardrail" in exc_info.value.message
         assert "not found" in exc_info.value.message
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_endpoint_with_presidio_guardrail():
+async def test_apply_guardrail_endpoint_with_presidio_guardrail(mock_proxy_logging_ctx):
     """Test apply_guardrail endpoint with a Presidio-like guardrail"""
     from litellm.proxy.guardrails.guardrail_endpoints import apply_guardrail
 
     # Mock the guardrail registry
-    with patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
-    ) as mock_registry:
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
+        ) as mock_registry,
+        mock_proxy_logging_ctx(),
+    ):
         # Create a mock guardrail that simulates Presidio behavior
         mock_guardrail = Mock(spec=CustomGuardrail)
         # Simulate masking PII entities - returns GenericGuardrailAPIInputs (dict with texts key)
         mock_guardrail.apply_guardrail = AsyncMock(
-            return_value={"texts": ["My name is [PERSON] and my email is [EMAIL_ADDRESS]"]}
+            return_value={
+                "texts": ["My name is [PERSON] and my email is [EMAIL_ADDRESS]"]
+            }
         )
 
         # Configure the registry to return our mock guardrail
@@ -124,7 +143,9 @@ async def test_apply_guardrail_endpoint_with_presidio_guardrail():
 
         # Call the endpoint
         response = await apply_guardrail(
-            request=request, user_api_key_dict=user_api_key_dict
+            fastapi_request=Mock(),
+            request=request,
+            user_api_key_dict=user_api_key_dict,
         )
 
         # Verify the response is of the correct type
@@ -138,14 +159,17 @@ async def test_apply_guardrail_endpoint_with_presidio_guardrail():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_endpoint_without_optional_params():
+async def test_apply_guardrail_endpoint_without_optional_params(mock_proxy_logging_ctx):
     """Test apply_guardrail endpoint without optional language and entities parameters"""
     from litellm.proxy.guardrails.guardrail_endpoints import apply_guardrail
 
     # Mock the guardrail registry
-    with patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
-    ) as mock_registry:
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
+        ) as mock_registry,
+        mock_proxy_logging_ctx(),
+    ):
         # Create a mock guardrail
         mock_guardrail = Mock(spec=CustomGuardrail)
         # Returns GenericGuardrailAPIInputs (dict with texts key)
@@ -166,7 +190,9 @@ async def test_apply_guardrail_endpoint_without_optional_params():
 
         # Call the endpoint
         response = await apply_guardrail(
-            request=request, user_api_key_dict=user_api_key_dict
+            fastapi_request=Mock(),
+            request=request,
+            user_api_key_dict=user_api_key_dict,
         )
 
         # Verify the response is of the correct type

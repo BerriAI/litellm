@@ -4,7 +4,7 @@ Azure Anthropic handler - reuses AnthropicChatCompletion logic with Azure authen
 
 import copy
 import json
-from typing import TYPE_CHECKING, Callable, Union
+from collections.abc import Callable
 
 import httpx
 
@@ -17,9 +17,6 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from .transformation import AzureAnthropicConfig
-
-if TYPE_CHECKING:
-    pass
 
 
 class AzureAnthropicChatCompletion(AnthropicChatCompletion):
@@ -44,7 +41,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
         api_key,
         logging_obj,
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         acompletion=None,
         logger_fn=None,
@@ -119,11 +116,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
-                    client=(
-                        client
-                        if client is not None and isinstance(client, AsyncHTTPHandler)
-                        else None
-                    ),
+                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
                 )
             else:
                 return self.acompletion_function(

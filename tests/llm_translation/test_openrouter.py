@@ -11,7 +11,7 @@ import litellm
 def test_completion_openrouter_reasoning_content():
     litellm._turn_on_debug()
     resp = litellm.completion(
-        model="openrouter/anthropic/claude-3.7-sonnet",
+        model="openrouter/anthropic/claude-sonnet-4",
         messages=[{"role": "user", "content": "Hello world"}],
         reasoning={"effort": "high"},
     )

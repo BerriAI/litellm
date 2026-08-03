@@ -1,6 +1,6 @@
 import json
 import threading
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -53,17 +53,16 @@ class MlflowLogger(CustomLogger):
 
     def _extract_and_set_chat_attributes(self, span, kwargs, response_obj):
         try:
-            from mlflow.tracing.utils import set_span_chat_messages  # type: ignore
-            from mlflow.tracing.utils import set_span_chat_tools  # type: ignore
+            from mlflow.tracing.utils import (
+                set_span_chat_messages,  # type: ignore
+                set_span_chat_tools,  # type: ignore
+            )
         except ImportError:
             return
 
         inputs = self._construct_input(kwargs)
         input_messages = inputs.get("messages", [])
-        output_messages = [
-            c.message.model_dump(exclude_none=True)
-            for c in getattr(response_obj, "choices", [])
-        ]
+        output_messages = [c.message.model_dump(exclude_none=True) for c in getattr(response_obj, "choices", [])]
         if messages := [*input_messages, *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):
@@ -130,9 +129,7 @@ class MlflowLogger(CustomLogger):
 
         # If this is the final chunk, end the span. The final chunk
         # has the assembled streaming response (key differs between sync/async paths).
-        final_response = kwargs.get("complete_streaming_response") or kwargs.get(
-            "async_complete_streaming_response"
-        )
+        final_response = kwargs.get("complete_streaming_response") or kwargs.get("async_complete_streaming_response")
         if final_response:
             end_time_ns = int(end_time.timestamp() * 1e9)
 
@@ -156,9 +153,7 @@ class MlflowLogger(CustomLogger):
                 span.add_event(
                     SpanEvent(
                         name="streaming_chunk",
-                        attributes={
-                            "delta": json.dumps(choice.delta.model_dump, default=str)
-                        },
+                        attributes={"delta": json.dumps(choice.delta.model_dump, default=str)},
                     )
                 )
         except Exception:
@@ -192,9 +187,7 @@ class MlflowLogger(CustomLogger):
             "call_type": kwargs.get("call_type"),
             "model": kwargs.get("model"),
         }
-        standard_obj: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object"
-        )
+        standard_obj: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
         if standard_obj:
             attributes.update(
                 {
@@ -224,7 +217,7 @@ class MlflowLogger(CustomLogger):
             )
         return attributes
 
-    def _get_span_type(self, call_type: Optional[str]) -> str:
+    def _get_span_type(self, call_type: str | None) -> str:
         from mlflow.entities import SpanType
 
         if call_type in ["completion", "acompletion"]:
@@ -267,9 +260,7 @@ class MlflowLogger(CustomLogger):
                 span_type=span_type,
                 inputs=inputs,
                 attributes=attributes,
-                tags=self._transform_tag_list_to_dict(
-                    attributes.get("request_tags", [])
-                ),
+                tags=self._transform_tag_list_to_dict(attributes.get("request_tags", [])),
                 start_time_ns=start_time_ns,
             )
 

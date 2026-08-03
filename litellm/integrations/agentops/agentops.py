@@ -4,7 +4,8 @@ AgentOps integration for LiteLLM - Provides OpenTelemetry tracing for LLM calls
 
 import os
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Any
+
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
@@ -12,9 +13,9 @@ from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 @dataclass
 class AgentOpsConfig:
     endpoint: str = "https://otlp.agentops.cloud/v1/traces"
-    api_key: Optional[str] = None
-    service_name: Optional[str] = None
-    deployment_environment: Optional[str] = None
+    api_key: str | None = None
+    service_name: str | None = None
+    deployment_environment: str | None = None
     auth_endpoint: str = "https://api.agentops.ai/v3/auth/token"
 
     @classmethod
@@ -47,7 +48,7 @@ class AgentOps(OpenTelemetry):
 
     def __init__(
         self,
-        config: Optional[AgentOpsConfig] = None,
+        config: AgentOpsConfig | None = None,
     ):
         if config is None:
             config = AgentOpsConfig.from_env()
@@ -65,9 +66,7 @@ class AgentOps(OpenTelemetry):
 
         headers = f"Authorization=Bearer {jwt_token}" if jwt_token else None
 
-        otel_config = OpenTelemetryConfig(
-            exporter="otlp_http", endpoint=config.endpoint, headers=headers
-        )
+        otel_config = OpenTelemetryConfig(exporter="otlp_http", endpoint=config.endpoint, headers=headers)
 
         # Initialize OpenTelemetry with our config
         super().__init__(config=otel_config, callback_name="agentops")
@@ -84,7 +83,7 @@ class AgentOps(OpenTelemetry):
 
         self.resource_attributes = resource_attrs
 
-    def _fetch_auth_token(self, api_key: str, auth_endpoint: str) -> Dict[str, Any]:
+    def _fetch_auth_token(self, api_key: str, auth_endpoint: str) -> dict[str, Any]:
         """
         Fetch JWT authentication token from AgentOps API
 

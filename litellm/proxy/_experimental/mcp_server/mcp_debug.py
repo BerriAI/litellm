@@ -85,7 +85,7 @@ Usage with curl::
          http://localhost:4000/mcp/atlassian_mcp
 """
 
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 from starlette.types import Message, Send
 
@@ -125,14 +125,14 @@ class MCPDebug:
     )
 
     @staticmethod
-    def _mask(value: Optional[str]) -> str:
+    def _mask(value: str | None) -> str:
         """Mask a single value for safe display in headers."""
         if not value:
             return "(none)"
         return MCPDebug._masker._mask_value(value)
 
     @staticmethod
-    def is_debug_enabled(headers: Dict[str, str]) -> bool:
+    def is_debug_enabled(headers: dict[str, str]) -> bool:
         """
         Check if the client opted into MCP debug mode.
 
@@ -147,9 +147,9 @@ class MCPDebug:
     @staticmethod
     def resolve_auth_resolution(
         server: "MCPServer",
-        mcp_auth_header: Optional[str],
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
-        oauth2_headers: Optional[Dict[str, str]],
+        mcp_auth_header: str | None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        oauth2_headers: dict[str, str] | None,
     ) -> str:
         """
         Determine which auth priority will be used for the outbound MCP call.
@@ -162,8 +162,7 @@ class MCPDebug:
         has_server_specific = bool(
             mcp_server_auth_headers
             and (
-                mcp_server_auth_headers.get(server.alias or "")
-                or mcp_server_auth_headers.get(server.server_name or "")
+                mcp_server_auth_headers.get(server.alias or "") or mcp_server_auth_headers.get(server.server_name or "")
             )
         )
         if has_server_specific or mcp_auth_header:
@@ -179,13 +178,13 @@ class MCPDebug:
     @staticmethod
     def build_debug_headers(
         *,
-        inbound_headers: Dict[str, str],
-        oauth2_headers: Optional[Dict[str, str]],
-        litellm_api_key: Optional[str],
+        inbound_headers: dict[str, str],
+        oauth2_headers: dict[str, str] | None,
+        litellm_api_key: str | None,
         auth_resolution: str,
-        server_url: Optional[str],
-        server_auth_type: Optional[str],
-    ) -> Dict[str, str]:
+        server_url: str | None,
+        server_auth_type: str | None,
+    ) -> dict[str, str]:
         """
         Build masked debug response headers.
 
@@ -210,7 +209,7 @@ class MCPDebug:
         dict
             Headers to include in the response (all values masked).
         """
-        debug: Dict[str, str] = {}
+        debug: dict[str, str] = {}
 
         # --- Inbound auth summary ---
         inbound_parts = []
@@ -219,9 +218,7 @@ class MCPDebug:
                 if k.lower() == hdr_name:
                     inbound_parts.append(f"{hdr_name}={MCPDebug._mask(v)}")
                     break
-        debug[f"{_RESPONSE_HEADER_PREFIX}-inbound-auth"] = (
-            "; ".join(inbound_parts) if inbound_parts else "(none)"
-        )
+        debug[f"{_RESPONSE_HEADER_PREFIX}-inbound-auth"] = "; ".join(inbound_parts) if inbound_parts else "(none)"
 
         # --- OAuth2 token ---
         oauth2_token = (oauth2_headers or {}).get("Authorization")
@@ -230,31 +227,24 @@ class MCPDebug:
             litellm_raw = litellm_api_key.removeprefix("Bearer ").strip()
             if oauth2_raw == litellm_raw:
                 debug[f"{_RESPONSE_HEADER_PREFIX}-oauth2-token"] = (
-                    f"{MCPDebug._mask(oauth2_token)} "
-                    f"(SAME_AS_LITELLM_KEY - likely misconfigured)"
+                    f"{MCPDebug._mask(oauth2_token)} (SAME_AS_LITELLM_KEY - likely misconfigured)"
                 )
             else:
-                debug[f"{_RESPONSE_HEADER_PREFIX}-oauth2-token"] = MCPDebug._mask(
-                    oauth2_token
-                )
+                debug[f"{_RESPONSE_HEADER_PREFIX}-oauth2-token"] = MCPDebug._mask(oauth2_token)
         else:
-            debug[f"{_RESPONSE_HEADER_PREFIX}-oauth2-token"] = MCPDebug._mask(
-                oauth2_token
-            )
+            debug[f"{_RESPONSE_HEADER_PREFIX}-oauth2-token"] = MCPDebug._mask(oauth2_token)
 
         # --- Auth resolution ---
         debug[f"{_RESPONSE_HEADER_PREFIX}-auth-resolution"] = auth_resolution
 
         # --- Server info ---
         debug[f"{_RESPONSE_HEADER_PREFIX}-outbound-url"] = server_url or "(unknown)"
-        debug[f"{_RESPONSE_HEADER_PREFIX}-server-auth-type"] = (
-            server_auth_type or "(none)"
-        )
+        debug[f"{_RESPONSE_HEADER_PREFIX}-server-auth-type"] = server_auth_type or "(none)"
 
         return debug
 
     @staticmethod
-    def wrap_send_with_debug_headers(send: Send, debug_headers: Dict[str, str]) -> Send:
+    def wrap_send_with_debug_headers(send: Send, debug_headers: dict[str, str]) -> Send:
         """
         Return a new ASGI ``send`` callable that injects *debug_headers*
         into the ``http.response.start`` message.
@@ -273,14 +263,14 @@ class MCPDebug:
     @staticmethod
     def maybe_build_debug_headers(
         *,
-        raw_headers: Optional[Dict[str, str]],
-        scope: Dict,
-        mcp_servers: Optional[List[str]],
-        mcp_auth_header: Optional[str],
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
-        oauth2_headers: Optional[Dict[str, str]],
-        client_ip: Optional[str],
-    ) -> Dict[str, str]:
+        raw_headers: dict[str, str] | None,
+        scope: dict,
+        mcp_servers: list[str] | None,
+        mcp_auth_header: str | None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        oauth2_headers: dict[str, str] | None,
+        client_ip: str | None,
+    ) -> dict[str, str]:
         """
         Build debug headers if debug mode is enabled, otherwise return empty dict.
 
@@ -296,14 +286,12 @@ class MCPDebug:
             global_mcp_server_manager,
         )
 
-        server_url: Optional[str] = None
-        server_auth_type: Optional[str] = None
+        server_url: str | None = None
+        server_auth_type: str | None = None
         auth_resolution = "no-auth"
 
         for server_name in mcp_servers or []:
-            server = global_mcp_server_manager.get_mcp_server_by_name(
-                server_name, client_ip=client_ip
-            )
+            server = global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
             if server:
                 server_url = server.url
                 server_auth_type = server.auth_type

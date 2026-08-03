@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -51,21 +51,16 @@ class OpenAIContainerConfig(BaseContainerConfig):
         self,
         container_create_optional_params: ContainerCreateOptionalRequestParams,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(container_create_optional_params)
 
     def validate_environment(
         self,
         headers: dict,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("OPENAI_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
         headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
@@ -75,7 +70,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """Get the complete URL for OpenAI container API."""
@@ -92,16 +87,14 @@ class OpenAIContainerConfig(BaseContainerConfig):
     def transform_container_create_request(
         self,
         name: str,
-        container_create_optional_request_params: Dict,
+        container_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """Transform the container creation request for OpenAI API."""
         # Remove extra_headers from optional params as they're handled separately
         container_create_optional_request_params = {
-            k: v
-            for k, v in container_create_optional_request_params.items()
-            if k not in ["extra_headers"]
+            k: v for k, v in container_create_optional_request_params.items() if k not in ["extra_headers"]
         }
 
         # Create the request data
@@ -131,16 +124,11 @@ class OpenAIContainerConfig(BaseContainerConfig):
             provider="openai",
         )
 
-        if (
-            not hasattr(container_obj, "_hidden_params")
-            or container_obj._hidden_params is None
-        ):
+        if not hasattr(container_obj, "_hidden_params") or container_obj._hidden_params is None:
             container_obj._hidden_params = {}
         if "additional_headers" not in container_obj._hidden_params:
             container_obj._hidden_params["additional_headers"] = {}
-        container_obj._hidden_params["additional_headers"][
-            "llm_provider-x-litellm-response-cost"
-        ] = container_cost
+        container_obj._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = container_cost
 
         return container_obj
 
@@ -149,11 +137,11 @@ class OpenAIContainerConfig(BaseContainerConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_query: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """Transform the container list request for OpenAI API.
 
         OpenAI API expects the following request:
@@ -196,16 +184,14 @@ class OpenAIContainerConfig(BaseContainerConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Transform the OpenAI container retrieve request."""
         # For container retrieve, we just need to construct the URL
-        encoded_container_id = encode_url_path_segment(
-            container_id, field_name="container_id"
-        )
+        encoded_container_id = encode_url_path_segment(container_id, field_name="container_id")
         url = join_container_api_base_path(api_base, f"/{encoded_container_id}")
 
         # No additional data needed for GET request
-        data: Dict[str, Any] = {}
+        data: dict[str, Any] = {}
 
         return url, data
 
@@ -227,20 +213,18 @@ class OpenAIContainerConfig(BaseContainerConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Transform the container delete request for OpenAI API.
 
         OpenAI API expects the following request:
         - DELETE /v1/containers/{container_id}
         """
         # Construct the URL for container delete
-        encoded_container_id = encode_url_path_segment(
-            container_id, field_name="container_id"
-        )
+        encoded_container_id = encode_url_path_segment(container_id, field_name="container_id")
         url = join_container_api_base_path(api_base, f"/{encoded_container_id}")
 
         # No data needed for DELETE request
-        data: Dict[str, Any] = {}
+        data: dict[str, Any] = {}
 
         return url, data
 
@@ -263,24 +247,22 @@ class OpenAIContainerConfig(BaseContainerConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_query: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """Transform the container file list request for OpenAI API.
 
         OpenAI API expects the following request:
         - GET /v1/containers/{container_id}/files
         """
         # Construct the URL for container files
-        encoded_container_id = encode_url_path_segment(
-            container_id, field_name="container_id"
-        )
+        encoded_container_id = encode_url_path_segment(container_id, field_name="container_id")
         url = join_container_api_base_path(api_base, f"/{encoded_container_id}/files")
 
         # Prepare query parameters
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if after is not None:
             params["after"] = after
         if limit is not None:
@@ -314,23 +296,19 @@ class OpenAIContainerConfig(BaseContainerConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Transform the container file content request for OpenAI API.
 
         OpenAI API expects the following request:
         - GET /v1/containers/{container_id}/files/{file_id}/content
         """
         # Construct the URL for container file content
-        encoded_container_id = encode_url_path_segment(
-            container_id, field_name="container_id"
-        )
+        encoded_container_id = encode_url_path_segment(container_id, field_name="container_id")
         encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
-        url = join_container_api_base_path(
-            api_base, f"/{encoded_container_id}/files/{encoded_file_id}/content"
-        )
+        url = join_container_api_base_path(api_base, f"/{encoded_container_id}/files/{encoded_file_id}/content")
 
         # No query parameters needed
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
 
         return url, params
 
@@ -349,7 +327,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 

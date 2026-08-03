@@ -3,14 +3,15 @@ A2A Protocol Transformation for LiteLLM
 """
 
 import uuid
-from typing import Any, Dict, Iterator, List, Optional, Union
+from collections.abc import Iterator
+from typing import Any
 
 import httpx
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..common_utils import (
     A2AError,
@@ -30,11 +31,11 @@ class A2AConfig(BaseConfig):
     @staticmethod
     def resolve_agent_config_from_registry(
         model: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        headers: Optional[Dict[str, Any]],
-        optional_params: Dict[str, Any],
-    ) -> tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+        api_base: str | None,
+        api_key: str | None,
+        headers: dict[str, Any] | None,
+        optional_params: dict[str, Any],
+    ) -> tuple[str | None, str | None, dict[str, Any] | None]:
         """
         Resolve agent configuration from registry if model format is "a2a/<agent-name>".
 
@@ -55,9 +56,7 @@ class A2AConfig(BaseConfig):
         agent_name = model.split("/", 1)[1] if "/" in model else None
 
         # Only lookup if agent name exists and some config is missing
-        if not agent_name or (
-            api_base is not None and api_key is not None and headers is not None
-        ):
+        if not agent_name or (api_base is not None and api_key is not None and headers is not None):
             return api_base, api_key, headers
 
         # Try registry lookup (only available in proxy context)
@@ -84,17 +83,14 @@ class A2AConfig(BaseConfig):
 
                     # Merge other litellm_params (timeout, max_retries, etc.)
                     for key, value in agent.litellm_params.items():
-                        if (
-                            key not in ["api_key", "api_base", "headers", "model"]
-                            and key not in optional_params
-                        ):
+                        if key not in ["api_key", "api_base", "headers", "model"] and key not in optional_params:
                             optional_params[key] = value
         except ImportError:
             pass  # Registry not available (not running in proxy context)
 
         return api_base, api_key, headers
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Return list of supported OpenAI parameters"""
         return [
             "stream",
@@ -127,11 +123,11 @@ class A2AConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set headers for A2A requests.
@@ -160,12 +156,12 @@ class A2AConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete A2A agent endpoint URL.
@@ -195,7 +191,7 @@ class A2AConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -252,12 +248,12 @@ class A2AConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: Any,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform A2A JSON-RPC 2.0 response to OpenAI format.
@@ -283,7 +279,7 @@ class A2AConfig(BaseConfig):
         except Exception as e:
             raise A2AError(
                 status_code=raw_response.status_code,
-                message=f"Failed to parse A2A response: {str(e)}",
+                message=f"Failed to parse A2A response: {e}",
                 headers=dict(raw_response.headers),
             )
 
@@ -317,13 +313,32 @@ class A2AConfig(BaseConfig):
         # Set ID from response
         model_response.id = response_json.get("id", str(uuid.uuid4()))
 
+        # A2A agents don't return token usage; estimate it so per-token pricing
+        # produces real cost and callers don't receive usage of 0/0/0.
+        try:
+            from litellm.utils import token_counter
+
+            prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+            completion_tokens = token_counter(model="gpt-3.5-turbo", text=text, count_response_tokens=True)
+            setattr(
+                model_response,
+                "usage",
+                Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                ),
+            )
+        except Exception:  # noqa: BLE001 - best-effort estimate; a tokenizer hiccup must not break the response
+            pass
+
         return model_response
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator, Any],
+        streaming_response: Iterator | Any,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> BaseModelResponseIterator:
         """
         Get streaming iterator for A2A responses.
@@ -342,7 +357,7 @@ class A2AConfig(BaseConfig):
             json_mode=json_mode,
         )
 
-    def _openai_message_to_a2a_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
+    def _openai_message_to_a2a_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """
         Convert OpenAI message to A2A message format.
 
@@ -361,9 +376,7 @@ class A2AConfig(BaseConfig):
             "messageId": str(uuid.uuid4()),
         }
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """Return appropriate error class for A2A errors"""
         # Convert headers to dict if needed
         headers_dict = dict(headers) if isinstance(headers, httpx.Headers) else headers

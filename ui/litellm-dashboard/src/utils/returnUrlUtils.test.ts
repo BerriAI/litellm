@@ -3,6 +3,7 @@ import {
   clearStoredReturnUrl,
   consumeReturnUrl,
   getCurrentUrl,
+  getLoginUrl,
   getReturnUrl,
   getReturnUrlFromParams,
   getStoredReturnUrl,
@@ -16,9 +17,7 @@ describe("returnUrlUtils", () => {
   beforeEach(() => {
     // Clear cookies before each test
     document.cookie.split(";").forEach((c) => {
-      document.cookie = c
-        .replace(/^ +/, "")
-        .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+      document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
     });
 
     // Reset location mock
@@ -100,6 +99,29 @@ describe("returnUrlUtils", () => {
     });
   });
 
+  describe("getLoginUrl", () => {
+    it("should build a relative login URL with a trailing slash", () => {
+      expect(getLoginUrl()).toBe("/ui/login/");
+    });
+
+    it("should prepend the given base URL and keep the trailing slash", () => {
+      expect(getLoginUrl("http://proxy.example")).toBe("http://proxy.example/ui/login/");
+    });
+
+    it("should keep the trailing slash before the query when composed with buildLoginUrlWithReturn", () => {
+      Object.defineProperty(window, "location", {
+        value: {
+          ...window.location,
+          href: "http://localhost:3000/ui?page=api-keys",
+        },
+        writable: true,
+      });
+
+      const loginUrl = buildLoginUrlWithReturn(getLoginUrl());
+      expect(loginUrl).toBe("/ui/login/?redirect_to=http%3A%2F%2Flocalhost%3A3000%2Fui%3Fpage%3Dapi-keys");
+    });
+  });
+
   describe("buildLoginUrlWithReturn", () => {
     it("should build login URL with return URL parameter", () => {
       Object.defineProperty(window, "location", {
@@ -111,9 +133,7 @@ describe("returnUrlUtils", () => {
       });
 
       const loginUrl = buildLoginUrlWithReturn("/ui/login");
-      expect(loginUrl).toBe(
-        "/ui/login?redirect_to=http%3A%2F%2Flocalhost%3A3000%2Fui%3Fcreate%3Dtrue%26team_id%3D123"
-      );
+      expect(loginUrl).toBe("/ui/login?redirect_to=http%3A%2F%2Flocalhost%3A3000%2Fui%3Fcreate%3Dtrue%26team_id%3D123");
     });
 
     it("should not add return URL if already on login page", () => {

@@ -138,7 +138,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
           placeholder="Search model names..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="border rounded px-3 py-2 w-64 h-10 text-sm"
+          className="border rounded-sm px-3 py-2 w-64 h-10 text-sm"
         />
       </div>
       <div>
@@ -146,7 +146,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         <select
           value={selectedProvider}
           onChange={(e) => setSelectedProvider(e.target.value)}
-          className="border rounded px-3 py-2 text-sm text-gray-600 w-40 h-10"
+          className="border rounded-sm px-3 py-2 text-sm text-gray-600 w-40 h-10"
         >
           <option value="" className="text-sm text-gray-600">
             All Providers
@@ -164,7 +164,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         <select
           value={selectedMode}
           onChange={(e) => setSelectedMode(e.target.value)}
-          className="border rounded px-3 py-2 text-sm text-gray-600 w-32 h-10"
+          className="border rounded-sm px-3 py-2 text-sm text-gray-600 w-32 h-10"
         >
           <option value="" className="text-sm text-gray-600">
             All Modes
@@ -182,7 +182,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         <select
           value={selectedFeature}
           onChange={(e) => setSelectedFeature(e.target.value)}
-          className="border rounded px-3 py-2 text-sm text-gray-600 w-48 h-10"
+          className="border rounded-sm px-3 py-2 text-sm text-gray-600 w-48 h-10"
         >
           <option value="" className="text-sm text-gray-600">
             All Features

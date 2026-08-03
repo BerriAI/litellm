@@ -1,4 +1,4 @@
-from typing import Any, Dict, cast
+from typing import Any, cast
 
 import litellm
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -14,7 +14,7 @@ class VideoGenerationRequestUtils:
         model: str,
         video_generation_provider_config: BaseVideoConfig,
         video_generation_optional_params: VideoCreateOptionalRequestParams,
-    ) -> Dict:
+    ) -> dict:
         """
         Get optional parameters for the video generation API.
 
@@ -46,7 +46,7 @@ class VideoGenerationRequestUtils:
 
     @staticmethod
     def get_requested_video_generation_optional_param(
-        params: Dict[str, Any],
+        params: dict[str, Any],
     ) -> VideoCreateOptionalRequestParams:
         """
         Filter parameters to only include those defined in VideoCreateOptionalRequestParams.
@@ -69,21 +69,18 @@ class VideoGenerationRequestUtils:
         base_params_raw = {
             key: value
             for key, value in params.items()
-            if key not in {"kwargs", "extra_body", "prompt", "model"}
-            and value is not None
+            if key not in {"kwargs", "extra_body", "prompt", "model"} and value is not None
         }
         base_params = filter_out_litellm_params(kwargs=base_params_raw)
 
-        cleaned_kwargs = filter_out_litellm_params(
-            kwargs={k: v for k, v in raw_kwargs.items() if v is not None}
-        )
+        cleaned_kwargs = filter_out_litellm_params(kwargs={k: v for k, v in raw_kwargs.items() if v is not None})
 
-        optional_params: Dict[str, Any] = {
+        optional_params: dict[str, Any] = {
             **base_params,
             **cleaned_kwargs,
         }
 
-        merged_extra_body: Dict[str, Any] = {}
+        merged_extra_body: dict[str, Any] = {}
         for extra_body_candidate in (top_level_extra_body, kwargs_extra_body):
             if isinstance(extra_body_candidate, dict):
                 for key, value in extra_body_candidate.items():

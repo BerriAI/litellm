@@ -4,7 +4,7 @@ Constants and helpers for ChatGPT subscription OAuth.
 
 import os
 import platform
-from typing import Any, Optional, Union
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -110,10 +110,10 @@ class ChatGPTAuthError(BaseLLMException):
         self,
         status_code,
         message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[httpx.Headers, dict]] = None,
-        body: Optional[dict] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: httpx.Headers | dict | None = None,
+        body: dict | None = None,
     ):
         super().__init__(
             status_code=status_code,
@@ -161,11 +161,7 @@ def _terminal_user_agent() -> str:
         token = f"WezTerm/{wezterm_version}" if wezterm_version else "WezTerm"
         return _sanitize_user_agent_token(token) or "WezTerm"
 
-    if (
-        os.getenv("ITERM_SESSION_ID")
-        or os.getenv("ITERM_PROFILE")
-        or os.getenv("ITERM_PROFILE_NAME")
-    ):
+    if os.getenv("ITERM_SESSION_ID") or os.getenv("ITERM_PROFILE") or os.getenv("ITERM_PROFILE_NAME"):
         return "iTerm.app"
 
     if os.getenv("TERM_SESSION_ID"):
@@ -225,16 +221,14 @@ def get_chatgpt_user_agent(originator: str) -> str:
     terminal_ua = _terminal_user_agent()
     suffix = os.getenv("CHATGPT_USER_AGENT_SUFFIX", "").strip()
     suffix = f" ({suffix})" if suffix else ""
-    candidate = (
-        f"{originator}/{version} ({os_type} {os_version}; {arch}) {terminal_ua}{suffix}"
-    )
+    candidate = f"{originator}/{version} ({os_type} {os_version}; {arch}) {terminal_ua}{suffix}"
     return _safe_header_value(candidate) or DEFAULT_USER_AGENT
 
 
 def get_chatgpt_default_headers(
     access_token: str,
-    account_id: Optional[str],
-    session_id: Optional[str] = None,
+    account_id: str | None,
+    session_id: str | None = None,
 ) -> dict:
     originator = get_chatgpt_originator()
     user_agent = get_chatgpt_user_agent(originator)
@@ -256,7 +250,7 @@ def get_chatgpt_default_instructions() -> str:
     return os.getenv("CHATGPT_DEFAULT_INSTRUCTIONS") or CHATGPT_DEFAULT_INSTRUCTIONS
 
 
-def _normalize_litellm_params(litellm_params: Optional[Any]) -> dict:
+def _normalize_litellm_params(litellm_params: Any | None) -> dict:
     if litellm_params is None:
         return {}
     if isinstance(litellm_params, dict):
@@ -274,7 +268,7 @@ def _normalize_litellm_params(litellm_params: Optional[Any]) -> dict:
     return {}
 
 
-def get_chatgpt_session_id(litellm_params: Optional[Any]) -> Optional[str]:
+def get_chatgpt_session_id(litellm_params: Any | None) -> str | None:
     params = _normalize_litellm_params(litellm_params)
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
@@ -292,5 +286,5 @@ def get_chatgpt_session_id(litellm_params: Optional[Any]) -> Optional[str]:
     return None
 
 
-def ensure_chatgpt_session_id(litellm_params: Optional[Any]) -> str:
+def ensure_chatgpt_session_id(litellm_params: Any | None) -> str:
     return get_chatgpt_session_id(litellm_params) or str(uuid4())

@@ -9,7 +9,14 @@ export function getEventDisplayName(callType: string, model: string): string {
   const isMcp = MCP_CALL_TYPES.includes(callType);
 
   if (isMcp) {
-    return raw.replace(/^mcp:\s*/i, "").split("/").pop() || raw || "mcp_tool";
+    return (
+      raw
+        .replace(/^mcp:\s*/i, "")
+        .split("/")
+        .pop() ||
+      raw ||
+      "mcp_tool"
+    );
   }
 
   const lastSegment = raw.split("/").pop() || raw;

@@ -1,6 +1,5 @@
 import enum
 import heapq
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -11,9 +10,7 @@ from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
 
 class SchedulerCacheKeys(enum.Enum):
     queue = "scheduler:queue"
-    default_in_memory_ttl = (
-        DEFAULT_IN_MEMORY_TTL  # cache queue in-memory for 5s when redis cache available
-    )
+    default_in_memory_ttl = DEFAULT_IN_MEMORY_TTL  # cache queue in-memory for 5s when redis cache available
 
 
 class FlowItem(BaseModel):
@@ -27,23 +24,19 @@ class Scheduler:
 
     def __init__(
         self,
-        polling_interval: Optional[float] = None,
-        redis_cache: Optional[RedisCache] = None,
+        polling_interval: float | None = None,
+        redis_cache: RedisCache | None = None,
     ):
         """
         polling_interval: float or null - frequency of polling queue. Default is 3ms.
         """
         self.queue: list = []
-        default_in_memory_ttl: Optional[float] = None
+        default_in_memory_ttl: float | None = None
         if redis_cache is not None:
             # if redis-cache available frequently poll that instead of using in-memory.
             default_in_memory_ttl = SchedulerCacheKeys.default_in_memory_ttl.value
-        self.cache = DualCache(
-            redis_cache=redis_cache, default_in_memory_ttl=default_in_memory_ttl
-        )
-        self.polling_interval = (
-            polling_interval or DEFAULT_POLLING_INTERVAL
-        )  # default to 3ms
+        self.cache = DualCache(redis_cache=redis_cache, default_in_memory_ttl=default_in_memory_ttl)
+        self.polling_interval = polling_interval or DEFAULT_POLLING_INTERVAL  # default to 3ms
 
     async def add_request(self, request: FlowItem):
         # We use the priority directly, as lower values indicate higher priority
@@ -69,9 +62,7 @@ class Scheduler:
         """
         queue = await self.get_queue(model_name=model_name)
         if not queue:
-            raise Exception(
-                "Incorrectly setup. Queue is invalid. Queue={}".format(queue)
-            )
+            raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
         # ------------
         # Setup values
@@ -101,17 +92,13 @@ class Scheduler:
         filtered_queue = [item for item in queue if item[1] != request_id]
         heapq.heapify(filtered_queue)  # restore heap invariant after filtering
         await self.save_queue(queue=filtered_queue, model_name=model_name)
-        print_verbose(
-            f"Removed request_id: {request_id} from queue for model: {model_name}"
-        )
+        print_verbose(f"Removed request_id: {request_id} from queue for model: {model_name}")
 
     async def peek(self, id: str, model_name: str, health_deployments: list) -> bool:
         """Return if the id is at the top of the queue. Don't pop the value from heap."""
         queue = await self.get_queue(model_name=model_name)
         if not queue:
-            raise Exception(
-                "Incorrectly setup. Queue is invalid. Queue={}".format(queue)
-            )
+            raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
         # ------------
         # Setup values
@@ -132,7 +119,7 @@ class Scheduler:
         Return a queue for that specific model group
         """
         if self.cache is not None:
-            _cache_key = "{}:{}".format(SchedulerCacheKeys.queue.value, model_name)
+            _cache_key = f"{SchedulerCacheKeys.queue.value}:{model_name}"
             response = await self.cache.async_get_cache(key=_cache_key)
             if response is None or not isinstance(response, list):
                 return []
@@ -145,6 +132,5 @@ class Scheduler:
         Save the updated queue of the model group
         """
         if self.cache is not None:
-            _cache_key = "{}:{}".format(SchedulerCacheKeys.queue.value, model_name)
+            _cache_key = f"{SchedulerCacheKeys.queue.value}:{model_name}"
             await self.cache.async_set_cache(key=_cache_key, value=queue)
-        return None

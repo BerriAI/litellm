@@ -1,6 +1,6 @@
 #### Video Endpoints #####
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import orjson
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
@@ -44,7 +44,7 @@ router = APIRouter()
 async def video_generation(
     request: Request,
     fastapi_response: Response,
-    input_reference: Optional[UploadFile] = File(None),
+    input_reference: UploadFile | None = File(None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -160,7 +160,7 @@ async def video_list(
 
     # Read query parameters
     query_params = dict(request.query_params)
-    data: Dict[str, Any] = {"query_params": query_params}
+    data: dict[str, Any] = {"query_params": query_params}
 
     # Extract custom_llm_provider from headers, query params, or body
     custom_llm_provider = (
@@ -245,7 +245,7 @@ async def video_status(
     )
 
     # Create data with video_id
-    data: Dict[str, Any] = {"video_id": video_id}
+    data: dict[str, Any] = {"video_id": video_id}
 
     decoded = decode_video_id_with_provider(video_id)
     provider_from_id = decoded.get("custom_llm_provider")
@@ -264,9 +264,7 @@ async def video_status(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded
-        )
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 
@@ -346,7 +344,7 @@ async def video_content(
     )
 
     # Create data with video_id
-    data: Dict[str, Any] = {"video_id": video_id}
+    data: dict[str, Any] = {"video_id": video_id}
 
     decoded = decode_video_id_with_provider(video_id)
     provider_from_id = decoded.get("custom_llm_provider")
@@ -364,9 +362,7 @@ async def video_content(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded
-        )
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
@@ -396,9 +392,7 @@ async def video_content(
         return Response(
             content=video_bytes,
             media_type="video/mp4",
-            headers={
-                "Content-Disposition": f"attachment; filename=video_{video_id}.mp4"
-            },
+            headers={"Content-Disposition": f"attachment; filename=video_{video_id}.mp4"},
         )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
@@ -478,9 +472,7 @@ async def video_remix(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded
-        )
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 
@@ -566,9 +558,7 @@ async def video_create_character(
     if video_file:
         data["video"] = video_file[0]
 
-    target_model_name = extract_model_from_target_model_names(
-        data.get("target_model_names")
-    )
+    target_model_name = extract_model_from_target_model_names(data.get("target_model_names"))
     if target_model_name and not data.get("model"):
         data["model"] = target_model_name
 
@@ -602,11 +592,7 @@ async def video_create_character(
         )
         if target_model_name:
             hidden_params = getattr(response, "_hidden_params", {}) or {}
-            provider_for_encoding = (
-                hidden_params.get("custom_llm_provider")
-                or custom_llm_provider
-                or "openai"
-            )
+            provider_for_encoding = hidden_params.get("custom_llm_provider") or custom_llm_provider or "openai"
             model_id_for_encoding = hidden_params.get("model_id") or data.get("model")
             response = encode_character_id_in_response(
                 response=response,
@@ -668,7 +654,7 @@ async def video_get_character(
     )
 
     original_requested_character_id = character_id
-    data: Dict[str, Any] = {"character_id": character_id}
+    data: dict[str, Any] = {"character_id": character_id}
 
     decoded = decode_character_id_with_provider(character_id)
     provider_from_id = decoded.get("custom_llm_provider")
@@ -687,9 +673,7 @@ async def video_get_character(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded
-        )
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 
@@ -798,9 +782,7 @@ async def video_edit(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded
-        )
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 
@@ -900,9 +882,7 @@ async def video_extension(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded
-        )
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 

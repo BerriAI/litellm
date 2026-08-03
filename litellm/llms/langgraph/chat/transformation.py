@@ -9,7 +9,7 @@ Non-streaming endpoint: POST /runs/wait
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import httpx
 
@@ -38,8 +38,6 @@ else:
 class LangGraphError(BaseLLMException):
     """Exception class for LangGraph API errors."""
 
-    pass
-
 
 class LangGraphConfig(BaseConfig):
     """
@@ -54,9 +52,9 @@ class LangGraphConfig(BaseConfig):
 
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
         """
         Get LangGraph API base and key from params or environment.
 
@@ -65,15 +63,13 @@ class LangGraphConfig(BaseConfig):
         """
         from litellm.secret_managers.main import get_secret_str
 
-        api_base = (
-            api_base or get_secret_str("LANGGRAPH_API_BASE") or "http://localhost:2024"
-        )
+        api_base = api_base or get_secret_str("LANGGRAPH_API_BASE") or "http://localhost:2024"
 
         api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
 
         return api_base, api_key
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         LangGraph supports minimal OpenAI params since it's an agent runtime.
         """
@@ -93,12 +89,12 @@ class LangGraphConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the LangGraph request.
@@ -137,16 +133,16 @@ class LangGraphConfig(BaseConfig):
                 return parts[1]
         return model
 
-    def _convert_messages_to_langgraph_format(
-        self, messages: List[AllMessageValues]
-    ) -> List[Dict[str, str]]:
+    def _convert_messages_to_langgraph_format(self, messages: list[AllMessageValues]) -> list[dict[str, Any]]:
         """
         Convert OpenAI-format messages to LangGraph format.
 
         OpenAI format: {"role": "user", "content": "..."}
         LangGraph format: {"role": "human", "content": "..."}
+
+        Preserves per-message ``metadata`` when present (e.g. A2A ``skillId``).
         """
-        langgraph_messages: List[Dict[str, str]] = []
+        langgraph_messages: list[dict[str, Any]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -169,14 +165,22 @@ class LangGraphConfig(BaseConfig):
             if not isinstance(content, str):
                 content = str(content)
 
-            langgraph_messages.append({"role": langgraph_role, "content": content})
+            langgraph_message: dict[str, Any] = {
+                "role": langgraph_role,
+                "content": content,
+            }
+            message_metadata = msg.get("metadata")
+            if isinstance(message_metadata, dict) and message_metadata:
+                langgraph_message["metadata"] = message_metadata
+
+            langgraph_messages.append(langgraph_message)
 
         return langgraph_messages
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -196,7 +200,7 @@ class LangGraphConfig(BaseConfig):
         assistant_id = self._get_assistant_id(model, optional_params)
         langgraph_messages = self._convert_messages_to_langgraph_format(messages)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "assistant_id": assistant_id,
             "input": {"messages": langgraph_messages},
         }
@@ -255,9 +259,7 @@ class LangGraphConfig(BaseConfig):
                             return msg.get("content", "")
 
         # Fallback: try to serialize the whole response
-        verbose_logger.warning(
-            "Could not extract content from LangGraph response, returning raw"
-        )
+        verbose_logger.warning("Could not extract content from LangGraph response, returning raw")
         return json.dumps(response_json)
 
     def get_streaming_response(
@@ -279,9 +281,9 @@ class LangGraphConfig(BaseConfig):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, "AsyncHTTPHandler"]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for synchronous streaming.
@@ -307,14 +309,10 @@ class LangGraphConfig(BaseConfig):
         )
 
         if response.status_code != 200:
-            raise LangGraphError(
-                status_code=response.status_code, message=str(response.read())
-            )
+            raise LangGraphError(status_code=response.status_code, message=str(response.read()))
 
         # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(
-            model=model, raw_response=response
-        )
+        completion_stream = self.get_streaming_response(model=model, raw_response=response)
 
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -343,8 +341,8 @@ class LangGraphConfig(BaseConfig):
         data: dict,
         messages: list,
         client: Optional["AsyncHTTPHandler"] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for asynchronous streaming.
@@ -356,9 +354,7 @@ class LangGraphConfig(BaseConfig):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                llm_provider=cast(Any, "langgraph"), params={}
-            )
+            client = get_async_httpx_client(llm_provider=cast(Any, "langgraph"), params={})
 
         verbose_logger.debug(f"Making async streaming request to: {api_base}")
 
@@ -372,14 +368,10 @@ class LangGraphConfig(BaseConfig):
         )
 
         if response.status_code != 200:
-            raise LangGraphError(
-                status_code=response.status_code, message=str(await response.aread())
-            )
+            raise LangGraphError(status_code=response.status_code, message=str(await response.aread()))
 
         # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(
-            model=model, raw_response=response
-        )
+        completion_stream = self.get_streaming_response(model=model, raw_response=response)
 
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -418,12 +410,12 @@ class LangGraphConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform the LangGraph response to LiteLLM ModelResponse format.
@@ -449,9 +441,7 @@ class LangGraphConfig(BaseConfig):
                 from litellm.utils import token_counter
 
                 prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-                completion_tokens = token_counter(
-                    model="gpt-3.5-turbo", text=content, count_response_tokens=True
-                )
+                completion_tokens = token_counter(model="gpt-3.5-turbo", text=content, count_response_tokens=True)
                 total_tokens = prompt_tokens + completion_tokens
 
                 usage = Usage(
@@ -461,14 +451,14 @@ class LangGraphConfig(BaseConfig):
                 )
                 setattr(model_response, "usage", usage)
             except Exception as e:
-                verbose_logger.warning(f"Failed to calculate token usage: {str(e)}")
+                verbose_logger.warning(f"Failed to calculate token usage: {e}")
 
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing LangGraph response: {str(e)}")
+            verbose_logger.error(f"Error processing LangGraph response: {e}")
             raise LangGraphError(
-                message=f"Error processing response: {str(e)}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 
@@ -476,11 +466,11 @@ class LangGraphConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate and set up environment for LangGraph requests.
@@ -493,16 +483,14 @@ class LangGraphConfig(BaseConfig):
 
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return LangGraphError(status_code=status_code, message=error_message)
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """
         LangGraph has native streaming support, so we don't need to fake stream.

@@ -14,6 +14,8 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 from litellm.llms.github_copilot.responses.transformation import (
@@ -22,13 +24,26 @@ from litellm.llms.github_copilot.responses.transformation import (
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
 
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    """Pin litellm.model_cost to the bundled local backup so tests don't depend
+    on remote catalog fetches (and don't change behavior across remote refreshes)."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
+    )
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
+
+
 class TestGithubCopilotResponsesAPITransformation:
     """Test GitHub Copilot Responses API configuration and transformations"""
 
     def test_github_copilot_provider_config_registration(self):
-        """Test that GitHub Copilot provider returns GithubCopilotResponsesAPIConfig"""
+        """Test that GitHub Copilot provider returns the native Responses API
+        config for a Responses-capable catalog model. Exercises the full stack:
+        catalog lookup -> github_copilot_supports_responses_api -> native config."""
         config = ProviderConfigManager.get_provider_responses_api_config(
-            model="github_copilot/gpt-5.1-codex",
+            model="github_copilot/gpt-5.3-codex",
             provider=LlmProviders.GITHUB_COPILOT,
         )
 
@@ -373,3 +388,418 @@ class TestGithubCopilotResponsesAPITransformation:
 
         # Non-reasoning items should pass through unchanged
         assert result == message_item
+
+
+class TestGithubCopilotResponsesAPIRouting:
+    """``ProviderConfigManager.get_provider_responses_api_config`` for github_copilot
+    returns the native Responses config only when the model has ``mode=responses``
+    in the (already-merged) model info; otherwise returns None so the dispatcher
+    routes through the chat-completions translation bridge."""
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
+    )
+    def test_returns_config_when_mode_is_responses(self, mock_get_info):
+        """``mode=responses`` returns native config."""
+        mock_get_info.return_value = {"mode": "responses"}
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-responses-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
+    )
+    def test_returns_none_when_mode_is_chat(self, mock_get_info):
+        """``mode=chat`` returns None so dispatcher uses bridge."""
+        mock_get_info.return_value = {"mode": "chat"}
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-chat-only-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
+    )
+    def test_returns_none_when_mode_is_unset_and_no_endpoints(self, mock_get_info):
+        """Entry without ``mode`` and without ``supported_endpoints`` returns None
+        (conservative default)."""
+        mock_get_info.return_value = {}
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    def test_returns_config_when_mode_unset_but_endpoints_have_responses(self):
+        """``mode`` unset but ``supported_endpoints`` declaring /v1/responses
+        returns native config (endpoint-list fallback for stale-but-correct
+        catalog entries that lack ``mode``).
+
+        Exercises the real ``_cached_get_model_info_helper`` plumbing via
+        ``register_model`` (no mock). ``supported_endpoints`` is not carried on
+        the normalized ``ModelInfoBase`` the helper returns, so the gate must
+        read it from the raw ``litellm.model_cost`` entry; a mock-based test
+        would mask that.
+        """
+        litellm.register_model(
+            {
+                "github_copilot/test-endpoints-only-model": {
+                    "litellm_provider": "github_copilot",
+                    "max_tokens": 1,
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                    "supported_endpoints": [
+                        "/v1/chat/completions",
+                        "/v1/responses",
+                    ],
+                }
+            }
+        )
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/test-endpoints-only-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    def test_mode_chat_overrides_endpoints_with_responses(self):
+        """``mode=chat`` is a hard opt-out: forces bridge even when
+        ``supported_endpoints`` includes /v1/responses. Lets users force the
+        bridge for dual-endpoint models without clearing endpoint metadata.
+
+        Exercises the real ``_cached_get_model_info_helper`` plumbing via
+        ``register_model`` (no mock) so the ``mode``-over-endpoints precedence
+        is verified against the actual model-info resolution.
+        """
+        litellm.register_model(
+            {
+                "github_copilot/test-chat-override-model": {
+                    "litellm_provider": "github_copilot",
+                    "max_tokens": 1,
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                    "mode": "chat",
+                    "supported_endpoints": [
+                        "/v1/chat/completions",
+                        "/v1/responses",
+                    ],
+                }
+            }
+        )
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/test-chat-override-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    def test_returns_config_when_model_is_none(self):
+        """Follow-up GET/DELETE operations pass model=None and keep the native
+        config path (no per-model lookup is possible)."""
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
+    )
+    def test_returns_none_when_get_model_info_raises(self, mock_get_info):
+        """Catalog lookup failure (model not registered) returns None
+        (conservative default; bridge handles unknown models safely)."""
+        mock_get_info.side_effect = Exception("model not in catalog")
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/never-seen-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
+    )
+    def test_user_override_via_register_model(self, mock_get_info):
+        """User-supplied per-deployment ``model_info`` flows through
+        ``litellm.register_model`` (called by the router) into the merged
+        catalog read by ``_cached_get_model_info_helper``. Setting ``mode=responses``
+        for a model whose catalog entry says ``mode=chat`` therefore opts in
+        to native dispatch without any per-call argument plumbing."""
+        mock_get_info.return_value = {"mode": "responses"}
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-chat-only-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
+    )
+    def test_realistic_chat_only_entry_returns_none(self, mock_get_info):
+        """Realistic ``model_prices_and_context_window.json`` shape for a
+        chat-only Copilot model (e.g. github_copilot/gemini-3.1-pro-preview)
+        returns None so /v1/responses calls fall back to the bridge."""
+        mock_get_info.return_value = {
+            "litellm_provider": "github_copilot",
+            "max_input_tokens": 136000,
+            "max_output_tokens": 64000,
+            "max_tokens": 64000,
+            "mode": "chat",
+            "supported_endpoints": ["/v1/chat/completions"],
+            "supports_function_calling": True,
+            "supports_tool_choice": True,
+            "supports_parallel_function_calling": True,
+            "supports_vision": True,
+            "supports_reasoning": True,
+        }
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-chat-only-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
+    )
+    def test_realistic_responses_only_entry_returns_config(self, mock_get_info):
+        """Realistic catalog entry for a Responses-only Copilot model
+        (e.g. github_copilot/gpt-5.5) returns the native config."""
+        mock_get_info.return_value = {
+            "litellm_provider": "github_copilot",
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000,
+            "max_tokens": 128000,
+            "mode": "responses",
+            "supported_endpoints": ["/v1/responses"],
+            "supports_function_calling": True,
+            "supports_tool_choice": True,
+            "supports_parallel_function_calling": True,
+            "supports_response_schema": True,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+            "supports_xhigh_reasoning_effort": True,
+        }
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-responses-only-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+
+class TestGithubCopilotReasoningStreamItemIdNormalization:
+    """GitHub Copilot's native /responses stream tags every reasoning-summary
+    event with a different item_id (and the reasoning output_item.added /
+    output_item.done ids also differ). Strict clients (Vercel ai-sdk) key
+    reasoning state by item_id and crash when a summary delta references an
+    unregistered id. The config normalizes every reasoning event in an
+    output_index group to the id from its output_item.added."""
+
+    def _config(self):
+        with patch(
+            "litellm.llms.github_copilot.responses.transformation.Authenticator"
+        ):
+            return GithubCopilotResponsesAPIConfig()
+
+    def _transform(self, config, chunk):
+        return config.transform_streaming_response(
+            model="github_copilot/gpt-5.5",
+            parsed_chunk=chunk,
+            logging_obj=MagicMock(),
+        )
+
+    def test_summary_events_normalized_to_output_item_added_id(self):
+        config = self._config()
+
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_rs_id", "type": "reasoning"},
+            },
+        )
+
+        summary_chunks = [
+            {
+                "type": "response.reasoning_summary_part.added",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_part_added",
+                "part": {"type": "summary_text", "text": ""},
+            },
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_delta_1",
+                "delta": "Hello",
+            },
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_delta_2",
+                "delta": " world",
+            },
+            {
+                "type": "response.reasoning_summary_text.done",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_text_done",
+                "text": "Hello world",
+            },
+            {
+                "type": "response.reasoning_summary_part.done",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_part_done",
+                "part": {"type": "summary_text", "text": "Hello world"},
+            },
+        ]
+        for chunk in summary_chunks:
+            event = self._transform(config, chunk)
+            assert event.item_id == "stable_rs_id"
+
+    def test_reasoning_output_item_done_normalized_to_added_id(self):
+        config = self._config()
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_rs_id", "type": "reasoning"},
+            },
+        )
+        event = self._transform(
+            config,
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "id": "different_done_id",
+                    "type": "reasoning",
+                    "encrypted_content": "ENC",
+                },
+            },
+        )
+        assert event.item.id == "stable_rs_id"
+
+    def test_interleaved_message_item_does_not_corrupt_mapping(self):
+        config = self._config()
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_rs_id", "type": "reasoning"},
+            },
+        )
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 1,
+                "item": {"id": "msg_id", "type": "message"},
+            },
+        )
+        event = self._transform(
+            config,
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_delta",
+                "delta": "x",
+            },
+        )
+        assert event.item_id == "stable_rs_id"
+
+    def test_event_without_registered_item_passes_through_unchanged(self):
+        config = self._config()
+        event = self._transform(
+            config,
+            {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "item_id": "msg_native_id",
+                "delta": "hi",
+            },
+        )
+        assert event.item_id == "msg_native_id"
+
+    def test_message_text_events_normalized_to_output_item_added_id(self):
+        config = self._config()
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_msg_id", "type": "message"},
+            },
+        )
+        for chunk in [
+            {
+                "type": "response.content_part.added",
+                "output_index": 0,
+                "content_index": 0,
+                "item_id": "bad_cp_added",
+                "part": {"type": "output_text", "text": ""},
+            },
+            {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "item_id": "bad_text_delta",
+                "delta": "Paris",
+            },
+            {
+                "type": "response.output_text.done",
+                "output_index": 0,
+                "content_index": 0,
+                "item_id": "bad_text_done",
+                "text": "Paris",
+            },
+        ]:
+            event = self._transform(config, chunk)
+            assert event.item_id == "stable_msg_id"
+
+    def test_event_without_output_index_passes_through_unchanged(self):
+        config = self._config()
+        event = self._transform(
+            config,
+            {
+                "type": "response.completed",
+                "response": {"id": "resp_1", "status": "completed", "output": []},
+            },
+        )
+        assert event.type == "response.completed"
+
+    def test_normalization_continues_after_a_terminal_event(self):
+        config = self._config()
+        self._transform(
+            config,
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"id": "stable_rs_id", "type": "reasoning"},
+            },
+        )
+        self._transform(
+            config,
+            {
+                "type": "response.completed",
+                "response": {"id": "resp_1", "status": "completed", "output": []},
+            },
+        )
+        event = self._transform(
+            config,
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "summary_index": 0,
+                "item_id": "bad_delta",
+                "delta": "x",
+            },
+        )
+        assert event.item_id == "stable_rs_id"

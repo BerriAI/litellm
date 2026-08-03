@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -28,9 +28,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/flux-pro/v1.1-ultra"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Flux Pro v1.1-ultra.
         """
@@ -64,8 +62,8 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
             "size": "aspect_ratio",
         }
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     # Use mapped parameter name if exists
                     mapped_key = param_mapping.get(k, k)
@@ -195,8 +193,8 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the Flux Pro v1.1-ultra response to litellm ImageResponse format.
@@ -256,8 +254,6 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
             if "timings" in response_data:
                 model_response._hidden_params["timings"] = response_data["timings"]
             if "has_nsfw_concepts" in response_data:
-                model_response._hidden_params["has_nsfw_concepts"] = response_data[
-                    "has_nsfw_concepts"
-                ]
+                model_response._hidden_params["has_nsfw_concepts"] = response_data["has_nsfw_concepts"]
 
         return model_response

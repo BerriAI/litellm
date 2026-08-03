@@ -55,9 +55,7 @@ class WatsonXAIEndpoint(str, Enum):
     CHAT = "/ml/v1/text/chat"
     CHAT_STREAM = "/ml/v1/text/chat_stream"
     DEPLOYMENT_TEXT_GENERATION = "/ml/v1/deployments/{deployment_id}/text/generation"
-    DEPLOYMENT_TEXT_GENERATION_STREAM = (
-        "/ml/v1/deployments/{deployment_id}/text/generation_stream"
-    )
+    DEPLOYMENT_TEXT_GENERATION_STREAM = "/ml/v1/deployments/{deployment_id}/text/generation_stream"
     DEPLOYMENT_CHAT = "/ml/v1/deployments/{deployment_id}/text/chat"
     DEPLOYMENT_CHAT_STREAM = "/ml/v1/deployments/{deployment_id}/text/chat_stream"
     EMBEDDINGS = "/ml/v1/text/embeddings"

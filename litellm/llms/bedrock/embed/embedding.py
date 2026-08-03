@@ -5,7 +5,8 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 import urllib.parse
-from typing import Any, Callable, List, Optional, Tuple, Union, get_args
+from collections.abc import Callable
+from typing import Any, get_args
 
 import httpx
 
@@ -41,7 +42,7 @@ class BedrockEmbedding(BaseAWSLLM):
     def _load_credentials(
         self,
         optional_params: dict,
-    ) -> Tuple[Any, str]:
+    ) -> tuple[Any, str]:
         try:
             from botocore.credentials import Credentials
         except ImportError:
@@ -63,15 +64,11 @@ class BedrockEmbedding(BaseAWSLLM):
             # check env #
             litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
 
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
-            ):
+            if litellm_aws_region_name is not None and isinstance(litellm_aws_region_name, str):
                 aws_region_name = litellm_aws_region_name
 
             standard_aws_region_name = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
-            ):
+            if standard_aws_region_name is not None and isinstance(standard_aws_region_name, str):
                 aws_region_name = standard_aws_region_name
 
             if aws_region_name is None:
@@ -95,8 +92,8 @@ class BedrockEmbedding(BaseAWSLLM):
 
     def _make_sync_call(
         self,
-        client: Optional[HTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
+        client: HTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
         api_base: str,
         headers: dict,
         data: dict,
@@ -123,8 +120,8 @@ class BedrockEmbedding(BaseAWSLLM):
 
     async def _make_async_call(
         self,
-        client: Optional[AsyncHTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
+        client: AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
         api_base: str,
         headers: dict,
         data: dict,
@@ -135,9 +132,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = get_async_httpx_client(
-                params=_params, llm_provider=litellm.LlmProviders.BEDROCK
-            )
+            client = get_async_httpx_client(params=_params, llm_provider=litellm.LlmProviders.BEDROCK)
         else:
             client = client
 
@@ -154,34 +149,26 @@ class BedrockEmbedding(BaseAWSLLM):
 
     def _transform_response(
         self,
-        response_list: List[dict],
+        response_list: list[dict],
         model: str,
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
-        is_async_invoke: Optional[bool] = False,
-        batch_data: Optional[List[dict]] = None,
-    ) -> Optional[EmbeddingResponse]:
+        is_async_invoke: bool | None = False,
+        batch_data: list[dict] | None = None,
+    ) -> EmbeddingResponse | None:
         """
         Transforms the response from the Bedrock embedding provider to the OpenAI format.
         """
-        returned_response: Optional[EmbeddingResponse] = None
+        returned_response: EmbeddingResponse | None = None
 
         # Handle async invoke responses (single response with invocationArn)
-        if (
-            is_async_invoke
-            and len(response_list) == 1
-            and "invocationArn" in response_list[0]
-        ):
+        if is_async_invoke and len(response_list) == 1 and "invocationArn" in response_list[0]:
             if provider == "twelvelabs":
-                returned_response = (
-                    TwelveLabsMarengoEmbeddingConfig()._transform_async_invoke_response(
-                        response=response_list[0], model=model
-                    )
+                returned_response = TwelveLabsMarengoEmbeddingConfig()._transform_async_invoke_response(
+                    response=response_list[0], model=model
                 )
             elif provider == "nova":
-                returned_response = (
-                    AmazonNovaEmbeddingConfig()._transform_async_invoke_response(
-                        response=response_list[0], model=model
-                    )
+                returned_response = AmazonNovaEmbeddingConfig()._transform_async_invoke_response(
+                    response=response_list[0], model=model
                 )
             else:
                 # For other providers, create a generic async response
@@ -211,24 +198,18 @@ class BedrockEmbedding(BaseAWSLLM):
         else:
             # Handle regular invoke responses
             if model == "amazon.titan-embed-image-v1":
-                returned_response = (
-                    AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
-                        response_list=response_list, model=model, batch_data=batch_data
-                    )
+                returned_response = AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
+                    response_list=response_list, model=model, batch_data=batch_data
                 )
             elif model == "amazon.titan-embed-text-v1":
-                returned_response = AmazonTitanG1Config()._transform_response(
-                    response_list=response_list, model=model
-                )
+                returned_response = AmazonTitanG1Config()._transform_response(response_list=response_list, model=model)
             elif model == "amazon.titan-embed-text-v2:0":
-                returned_response = AmazonTitanV2Config()._transform_response(
-                    response_list=response_list, model=model
-                )
+                returned_response = AmazonTitanV2Config()._transform_response(response_list=response_list, model=model)
+            elif model == "amazon.titan-embed-g1-text-02":
+                returned_response = AmazonTitanG1Config()._transform_response(response_list=response_list, model=model)
             elif provider == "twelvelabs":
-                returned_response = (
-                    TwelveLabsMarengoEmbeddingConfig()._transform_response(
-                        response_list=response_list, model=model
-                    )
+                returned_response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+                    response_list=response_list, model=model
                 )
             elif provider == "nova":
                 returned_response = AmazonNovaEmbeddingConfig()._transform_response(
@@ -239,29 +220,25 @@ class BedrockEmbedding(BaseAWSLLM):
         # Validate returned response
         ##########################################################
         if returned_response is None:
-            raise Exception(
-                "Unable to map model response to known provider format. model={}".format(
-                    model
-                )
-            )
+            raise Exception(f"Unable to map model response to known provider format. model={model}")
         return returned_response
 
     def _single_func_embeddings(
         self,
-        client: Optional[HTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
-        batch_data: List[dict],
+        client: HTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
+        batch_data: list[dict],
         credentials: Any,
-        extra_headers: Optional[dict],
+        extra_headers: dict | None,
         endpoint_url: str,
         aws_region_name: str,
         model: str,
         logging_obj: Any,
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
-        api_key: Optional[str] = None,
-        is_async_invoke: Optional[bool] = False,
+        api_key: str | None = None,
+        is_async_invoke: bool | None = False,
     ):
-        responses: List[dict] = []
+        responses: list[dict] = []
         for data in batch_data:
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
@@ -287,9 +264,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     "headers": prepped.headers,
                 },
             )
-            headers_for_request = (
-                dict(prepped.headers) if hasattr(prepped, "headers") else {}
-            )
+            headers_for_request = dict(prepped.headers) if hasattr(prepped, "headers") else {}
             response = self._make_sync_call(
                 client=client,
                 timeout=timeout,
@@ -318,20 +293,20 @@ class BedrockEmbedding(BaseAWSLLM):
 
     async def _async_single_func_embeddings(
         self,
-        client: Optional[AsyncHTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
-        batch_data: List[dict],
+        client: AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
+        batch_data: list[dict],
         credentials: Any,
-        extra_headers: Optional[dict],
+        extra_headers: dict | None,
         endpoint_url: str,
         aws_region_name: str,
         model: str,
         logging_obj: Any,
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
-        api_key: Optional[str] = None,
-        is_async_invoke: Optional[bool] = False,
+        api_key: str | None = None,
+        is_async_invoke: bool | None = False,
     ):
-        responses: List[dict] = []
+        responses: list[dict] = []
         for data in batch_data:
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
@@ -359,9 +334,7 @@ class BedrockEmbedding(BaseAWSLLM):
             )
             # Convert CaseInsensitiveDict to regular dict for httpx compatibility
             # This ensures custom headers are properly forwarded, especially with IAM roles and custom api_base
-            headers_for_request = (
-                dict(prepped.headers) if hasattr(prepped, "headers") else {}
-            )
+            headers_for_request = dict(prepped.headers) if hasattr(prepped, "headers") else {}
             response = await self._make_async_call(
                 client=client,
                 timeout=timeout,
@@ -388,29 +361,27 @@ class BedrockEmbedding(BaseAWSLLM):
             batch_data=batch_data,
         )
 
-    def embeddings(  # noqa: PLR0915
+    def embeddings(
         self,
         model: str,
-        input: List[str],
-        api_base: Optional[str],
+        input: list[str],
+        api_base: str | None,
         model_response: EmbeddingResponse,
         print_verbose: Callable,
         encoding,
         logging_obj,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]],
-        timeout: Optional[Union[float, httpx.Timeout]],
-        aembedding: Optional[bool],
-        extra_headers: Optional[dict],
+        client: HTTPHandler | AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
+        aembedding: bool | None,
+        extra_headers: dict | None,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ) -> EmbeddingResponse:
         credentials, aws_region_name = self._load_credentials(optional_params)
 
         ### TRANSFORMATION ###
-        unencoded_model_id = (
-            optional_params.pop("model_id", None) or model
-        )  # default to model if not passed
+        unencoded_model_id = optional_params.pop("model_id", None) or model  # default to model if not passed
         modelId = urllib.parse.quote(unencoded_model_id, safe="")
         aws_region_name = self._get_aws_region_name(
             optional_params={"aws_region_name": aws_region_name},
@@ -429,16 +400,12 @@ class BedrockEmbedding(BaseAWSLLM):
             )
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
-            k: v
-            for k, v in inference_params.items()
-            if k.lower() not in self.aws_authentication_params
+            k: v for k, v in inference_params.items() if k.lower() not in self.aws_authentication_params
         }
-        inference_params.pop(
-            "user", None
-        )  # make sure user is not passed in for bedrock call
+        inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
 
-        data: Optional[CohereEmbeddingRequest] = None
-        batch_data: Optional[List] = None
+        data: CohereEmbeddingRequest | None = None
+        batch_data: list | None = None
         if provider == "cohere":
             data = BedrockCohereEmbeddingConfig()._transform_request(
                 model=model, input=input, inference_params=inference_params
@@ -447,14 +414,15 @@ class BedrockEmbedding(BaseAWSLLM):
             "amazon.titan-embed-image-v1",
             "amazon.titan-embed-text-v1",
             "amazon.titan-embed-text-v2:0",
+            "amazon.titan-embed-g1-text-02",
         ]:
             batch_data = []
             for i in input:
                 if model == "amazon.titan-embed-image-v1":
-                    transformed_request: (
-                        AmazonEmbeddingRequest
-                    ) = AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
-                        input=i, inference_params=inference_params
+                    transformed_request: AmazonEmbeddingRequest = (
+                        AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
+                            input=i, inference_params=inference_params
+                        )
                     )
                 elif model == "amazon.titan-embed-text-v1":
                     transformed_request = AmazonTitanG1Config()._transform_request(
@@ -462,6 +430,10 @@ class BedrockEmbedding(BaseAWSLLM):
                     )
                 elif model == "amazon.titan-embed-text-v2:0":
                     transformed_request = AmazonTitanV2Config()._transform_request(
+                        input=i, inference_params=inference_params
+                    )
+                elif model == "amazon.titan-embed-g1-text-02":
+                    transformed_request = AmazonTitanG1Config()._transform_request(
                         input=i, inference_params=inference_params
                     )
                 else:
@@ -472,6 +444,7 @@ class BedrockEmbedding(BaseAWSLLM):
                                 "amazon.titan-embed-image-v1",
                                 "amazon.titan-embed-text-v1",
                                 "amazon.titan-embed-text-v2:0",
+                                "amazon.titan-embed-g1-text-02",
                             ],
                         )
                     )
@@ -479,14 +452,12 @@ class BedrockEmbedding(BaseAWSLLM):
         elif provider == "twelvelabs":
             batch_data = []
             for i in input:
-                twelvelabs_request = (
-                    TwelveLabsMarengoEmbeddingConfig()._transform_request(
-                        input=i,
-                        inference_params=inference_params,
-                        async_invoke_route=has_async_invoke,
-                        model_id=modelId,
-                        output_s3_uri=inference_params.get("output_s3_uri"),
-                    )
+                twelvelabs_request = TwelveLabsMarengoEmbeddingConfig()._transform_request(
+                    input=i,
+                    inference_params=inference_params,
+                    async_invoke_route=has_async_invoke,
+                    model_id=modelId,
+                    output_s3_uri=inference_params.get("output_s3_uri"),
                 )
                 batch_data.append(twelvelabs_request)
         elif provider == "nova":
@@ -504,9 +475,7 @@ class BedrockEmbedding(BaseAWSLLM):
         ### SET RUNTIME ENDPOINT ###
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
-            aws_bedrock_runtime_endpoint=optional_params.pop(
-                "aws_bedrock_runtime_endpoint", None
-            ),
+            aws_bedrock_runtime_endpoint=optional_params.pop("aws_bedrock_runtime_endpoint", None),
             aws_region_name=aws_region_name,
         )
         if has_async_invoke:
@@ -517,11 +486,7 @@ class BedrockEmbedding(BaseAWSLLM):
         if batch_data is not None:
             if aembedding:
                 return self._async_single_func_embeddings(  # type: ignore
-                    client=(
-                        client
-                        if client is not None and isinstance(client, AsyncHTTPHandler)
-                        else None
-                    ),
+                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
                     timeout=timeout,
                     batch_data=batch_data,
                     credentials=credentials,
@@ -535,11 +500,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     is_async_invoke=has_async_invoke,
                 )
             returned_response = self._single_func_embeddings(
-                client=(
-                    client
-                    if client is not None and isinstance(client, HTTPHandler)
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                 timeout=timeout,
                 batch_data=batch_data,
                 credentials=credentials,
@@ -574,9 +535,7 @@ class BedrockEmbedding(BaseAWSLLM):
 
         ## ROUTING ##
         # Convert CaseInsensitiveDict to regular dict for httpx compatibility
-        headers_for_request = (
-            dict(prepped.headers) if hasattr(prepped, "headers") else {}
-        )
+        headers_for_request = dict(prepped.headers) if hasattr(prepped, "headers") else {}
         return cohere_embedding(
             model=model,
             input=input,
@@ -653,9 +612,7 @@ class BedrockEmbedding(BaseAWSLLM):
         if logging_obj is not None:
             # Create custom curl command for GET request
             masked_headers = logging_obj._get_masked_headers(prepped.headers)
-            formatted_headers = " ".join(
-                [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
-            )
+            formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
             custom_curl = "\n\nGET Request Sent from LiteLLM:\n"
             custom_curl += "curl -X GET \\\n"
             custom_curl += f"{prepped.url} \\\n"
@@ -685,15 +642,11 @@ class BedrockEmbedding(BaseAWSLLM):
                 input=invocation_arn,
                 api_key="",
                 original_response=response,
-                additional_args={
-                    "complete_input_dict": {"invocation_arn": invocation_arn}
-                },
+                additional_args={"complete_input_dict": {"invocation_arn": invocation_arn}},
             )
 
         # Parse response
         if response.status_code == 200:
             return response.json()
         else:
-            raise Exception(
-                f"Failed to get async invoke status: {response.status_code} - {response.text}"
-            )
+            raise Exception(f"Failed to get async invoke status: {response.status_code} - {response.text}")

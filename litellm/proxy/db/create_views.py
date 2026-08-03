@@ -11,7 +11,7 @@ _db = Any
 _VIEW_NOT_FOUND_MARKERS = ("does not exist", "no such table", "undefined table")
 
 
-async def create_missing_views(db: _db):  # noqa: PLR0915
+async def create_missing_views(db: _db):
     """
     --------------------------------------------------
     NOTE: Copy of `litellm/db_scripts/create_views.py`.
@@ -34,8 +34,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         # If an error occurs, the view does not exist, so create it
-        await db.execute_raw(
-            """
+        await db.execute_raw("""
                 CREATE VIEW "LiteLLM_VerificationTokenView" AS
                 SELECT
                 v.*,
@@ -47,8 +46,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
                 FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id
                 LEFT JOIN "LiteLLM_ProjectTable" p ON v.project_id = p.project_id;
-            """
-        )
+            """)
 
         verbose_logger.debug("LiteLLM_VerificationTokenView Created!")
 
@@ -156,9 +154,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
 
         verbose_logger.debug("MonthlyGlobalSpendPerKey Created!")
     try:
-        await db.query_raw(
-            """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
-        )
+        await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1""")
         verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Exists!")
     except Exception as e:
         error_msg = str(e).lower()
@@ -226,8 +222,6 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
 
         verbose_logger.debug("Last30dTopEndUsersSpend Created!")
 
-    return
-
 
 async def should_create_missing_views(db: _db) -> bool:
     """
@@ -244,7 +238,7 @@ async def should_create_missing_views(db: _db) -> bool:
 
     result = await db.query_raw(query=sql_query)
 
-    verbose_logger.debug("Estimated Row count of LiteLLM_SpendLogs = {}".format(result))
+    verbose_logger.debug(f"Estimated Row count of LiteLLM_SpendLogs = {result}")
     if (
         result
         and isinstance(result, list)

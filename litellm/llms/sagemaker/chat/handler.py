@@ -1,6 +1,6 @@
 import json
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Callable, Optional, Union
 
 import httpx
 
@@ -30,9 +30,7 @@ class SagemakerChatHandler(BaseAWSLLM):
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
         aws_profile_name = optional_params.pop("aws_profile_name", None)
-        optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
+        optional_params.pop("aws_bedrock_runtime_endpoint", None)  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
@@ -41,15 +39,11 @@ class SagemakerChatHandler(BaseAWSLLM):
             # check env #
             litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
 
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
-            ):
+            if litellm_aws_region_name is not None and isinstance(litellm_aws_region_name, str):
                 aws_region_name = litellm_aws_region_name
 
             standard_aws_region_name = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
-            ):
+            if standard_aws_region_name is not None and isinstance(standard_aws_region_name, str):
                 aws_region_name = standard_aws_region_name
 
             if aws_region_name is None:
@@ -75,7 +69,7 @@ class SagemakerChatHandler(BaseAWSLLM):
         data: dict,
         optional_params: dict,
         aws_region_name: str,
-        extra_headers: Optional[dict] = None,
+        extra_headers: dict | None = None,
     ):
         try:
             from botocore.auth import SigV4Auth
@@ -97,9 +91,7 @@ class SagemakerChatHandler(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        request = AWSRequest(
-            method="POST", url=api_base, data=encoded_data, headers=headers
-        )
+        request = AWSRequest(method="POST", url=api_base, data=encoded_data, headers=headers)
         sigv4.add_auth(request)
         if (
             extra_headers is not None and "Authorization" in extra_headers
@@ -120,12 +112,12 @@ class SagemakerChatHandler(BaseAWSLLM):
         logging_obj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict={},
         logger_fn=None,
         acompletion: bool = False,
         headers: dict = {},
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ):
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         credentials, aws_region_name = self._load_credentials(optional_params)

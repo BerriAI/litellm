@@ -28,9 +28,7 @@ class VertexAIGPTOSSTransformation(OpenAIGPTConfig):
                 "functions",
             ]
             base_gpt_series_params = [
-                param
-                for param in base_gpt_series_params
-                if param not in TOOL_CALLING_PARAMS_TO_REMOVE
+                param for param in base_gpt_series_params if param not in TOOL_CALLING_PARAMS_TO_REMOVE
             ]
 
         return base_gpt_series_params

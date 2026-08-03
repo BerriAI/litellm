@@ -5,42 +5,35 @@ Our unified API follows the OpenAI standard.
 More information on our website: https://endpoints.ai.cloud.ovh.net
 """
 
-from typing import Optional, Union, List
-
 import httpx
-from litellm.utils import ModelResponseStream
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.llms.ovhcloud.utils import OVHCloudException
+
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import ModelResponseStream
 
 
 class OVHCloudChatConfig(OpenAIGPTConfig):
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "ovhcloud"
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
-        api_base = (
-            "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
-            if api_base is None
-            else api_base.rstrip("/")
-        )
+        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
         complete_url = f"{api_base}/chat/completions"
         return complete_url
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OVHCloudException(
             message=error_message,
             status_code=status_code,
@@ -54,23 +47,19 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         return mapped_openai_params
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
         extra_body = optional_params.pop("extra_body", {})
-        response = super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
         return response
 
@@ -87,9 +76,7 @@ class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
         try:
             if "error" in chunk:
                 error_chunk = chunk["error"]
-                error_message = "OVHCloud Error: {}".format(
-                    error_chunk.get("message", "Unknown error")
-                )
+                error_message = "OVHCloud Error: {}".format(error_chunk.get("message", "Unknown error"))
                 raise OVHCloudException(
                     message=error_message,
                     status_code=error_chunk.get("code", 400),
@@ -98,10 +85,16 @@ class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
 
             new_choices = []
             for choice in chunk["choices"]:
-                if "delta" in choice and "reasoning" in choice["delta"]:
-                    choice["delta"]["reasoning_content"] = choice["delta"].get(
-                        "reasoning"
-                    )
+                if "delta" in choice:
+                    delta = choice["delta"]
+                    # OVHCloud field migration (deadline: 2026-05-11):
+                    # `reasoning_content` is replaced by `reasoning`.
+                    # Normalise to `reasoning_content` so downstream consumers
+                    # see a consistent key during the transition window.
+                    reasoning_new = delta.get("reasoning")
+                    reasoning_legacy = delta.get("reasoning_content")
+                    if reasoning_new is not None and reasoning_legacy is None:
+                        delta["reasoning_content"] = reasoning_new
                 new_choices.append(choice)
 
             return ModelResponseStream(

@@ -8,9 +8,10 @@ that use the generic container handler.
 import asyncio
 import contextvars
 import json
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Type
+from typing import Any, Literal
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -27,21 +28,21 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 # Response type mapping
-RESPONSE_TYPES: Dict[str, Type] = {
+RESPONSE_TYPES: dict[str, type] = {
     "ContainerFileListResponse": ContainerFileListResponse,
     "ContainerFileObject": ContainerFileObject,
     "DeleteContainerFileResponse": DeleteContainerFileResponse,
 }
 
 
-def _load_endpoints_config() -> Dict:
+def _load_endpoints_config() -> dict:
     """Load the endpoints configuration from JSON file."""
     config_path = Path(__file__).parent / "endpoints.json"
     with open(config_path) as f:
         return json.load(f)
 
 
-def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
+def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
     """
     Create a sync SDK function from endpoint config.
 
@@ -55,16 +56,16 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
     def endpoint_func(
         timeout: int = 600,
         custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_query: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
         **kwargs,
     ):
         local_vars = locals()
         try:
             resolved_custom_llm_provider: str = custom_llm_provider
             litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")
-            litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+            litellm_call_id: str | None = kwargs.get("litellm_call_id")
             _is_async = kwargs.pop("async_call", False) is True
 
             # Check for mock response
@@ -90,16 +91,12 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
                     custom_llm_provider=resolved_custom_llm_provider,
                     litellm_params=litellm_params,
                 )
-            container_provider_config: Optional[BaseContainerConfig] = (
-                ProviderConfigManager.get_provider_container_config(
-                    provider=litellm.LlmProviders(resolved_custom_llm_provider),
-                )
+            container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
+                provider=litellm.LlmProviders(resolved_custom_llm_provider),
             )
 
             if container_provider_config is None:
-                raise ValueError(
-                    f"Container provider config not found for: {resolved_custom_llm_provider}"
-                )
+                raise ValueError(f"Container provider config not found for: {resolved_custom_llm_provider}")
 
             # Build optional params for logging
             optional_params = {k: kwargs.get(k) for k in path_params if k in kwargs}
@@ -140,7 +137,7 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
 
 def create_async_endpoint_function(
     sync_func: Callable,
-    endpoint_config: Dict,
+    endpoint_config: dict,
 ) -> Callable:
     """Create an async SDK function that wraps the sync function."""
 
@@ -148,9 +145,9 @@ def create_async_endpoint_function(
     async def async_endpoint_func(
         timeout: int = 600,
         custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_query: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
         **kwargs,
     ):
         local_vars = locals()
@@ -190,7 +187,7 @@ def create_async_endpoint_function(
     return async_endpoint_func
 
 
-def generate_container_endpoints() -> Dict[str, Callable]:
+def generate_container_endpoints() -> dict[str, Callable]:
     """
     Generate all container endpoint functions from the JSON config.
 
@@ -211,7 +208,7 @@ def generate_container_endpoints() -> Dict[str, Callable]:
     return endpoints
 
 
-def get_all_endpoint_names() -> List[str]:
+def get_all_endpoint_names() -> list[str]:
     """Get all endpoint names (sync and async) from config."""
     config = _load_endpoints_config()
     names = []
@@ -221,7 +218,7 @@ def get_all_endpoint_names() -> List[str]:
     return names
 
 
-def get_async_endpoint_names() -> List[str]:
+def get_async_endpoint_names() -> list[str]:
     """Get all async endpoint names for router registration."""
     config = _load_endpoints_config()
     return [endpoint["async_name"] for endpoint in config["endpoints"]]
@@ -239,9 +236,5 @@ retrieve_container_file = _generated_endpoints.get("retrieve_container_file")
 aretrieve_container_file = _generated_endpoints.get("aretrieve_container_file")
 delete_container_file = _generated_endpoints.get("delete_container_file")
 adelete_container_file = _generated_endpoints.get("adelete_container_file")
-retrieve_container_file_content = _generated_endpoints.get(
-    "retrieve_container_file_content"
-)
-aretrieve_container_file_content = _generated_endpoints.get(
-    "aretrieve_container_file_content"
-)
+retrieve_container_file_content = _generated_endpoints.get("retrieve_container_file_content")
+aretrieve_container_file_content = _generated_endpoints.get("aretrieve_container_file_content")

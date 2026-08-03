@@ -4,10 +4,9 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 
 import os
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, Union, cast
 
 from packaging.version import Version
-from typing_extensions import TypeAlias
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -79,9 +78,7 @@ def langfuse_client_init(
         allow_env_credentials=allow_env_credentials,
     )
 
-    if not (
-        langfuse_host.startswith("http://") or langfuse_host.startswith("https://")
-    ):
+    if not (langfuse_host.startswith("http://") or langfuse_host.startswith("https://")):
         # add http:// if unset, assume communicating over private network - e.g. render
         langfuse_host = "http://" + langfuse_host
 
@@ -94,13 +91,23 @@ def langfuse_client_init(
         "host": langfuse_host,
         "release": langfuse_release,
         "debug": langfuse_debug,
-        "flush_interval": LangFuseLogger._get_langfuse_flush_interval(
-            flush_interval
-        ),  # flush interval in seconds
+        "flush_interval": LangFuseLogger._get_langfuse_flush_interval(flush_interval),  # flush interval in seconds
     }
 
     if Version(langfuse.version.__version__) >= Version("2.6.0"):
         parameters["sdk_integration"] = "litellm"
+
+    if Version(langfuse.version.__version__) >= Version("2.7.3"):
+        import httpx
+
+        import litellm
+
+        from ...llms.custom_httpx.http_handler import get_ssl_configuration
+
+        parameters["httpx_client"] = httpx.Client(
+            verify=get_ssl_configuration(),
+            cert=os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate),
+        )
 
     client = Langfuse(**parameters)
 
@@ -133,22 +140,20 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         self,
         langfuse_prompt_id: str,
         langfuse_client: LangfuseClass,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> PROMPT_CLIENT:
-        prompt_client = langfuse_client.get_prompt(
-            langfuse_prompt_id, label=prompt_label, version=prompt_version
-        )
+        prompt_client = langfuse_client.get_prompt(langfuse_prompt_id, label=prompt_label, version=prompt_version)
 
         return prompt_client
 
     def _compile_prompt(
         self,
         langfuse_prompt_client: PROMPT_CLIENT,
-        langfuse_prompt_variables: Optional[dict],
-        call_type: Union[Literal["completion"], Literal["text_completion"]],
-    ) -> List[AllMessageValues]:
-        compiled_prompt: Optional[Union[str, list]] = None
+        langfuse_prompt_variables: dict | None,
+        call_type: Literal["completion", "text_completion"],
+    ) -> list[AllMessageValues]:
+        compiled_prompt: str | list | None = None
 
         if langfuse_prompt_variables is None:
             langfuse_prompt_variables = {}
@@ -156,17 +161,13 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         compiled_prompt = langfuse_prompt_client.compile(**langfuse_prompt_variables)
 
         if isinstance(compiled_prompt, str):
-            compiled_prompt = [
-                ChatCompletionSystemMessage(role="system", content=compiled_prompt)
-            ]
+            compiled_prompt = [ChatCompletionSystemMessage(role="system", content=compiled_prompt)]
         else:
-            compiled_prompt = cast(List[AllMessageValues], compiled_prompt)
+            compiled_prompt = cast(list[AllMessageValues], compiled_prompt)
 
         return compiled_prompt
 
-    def _get_optional_params_from_langfuse(
-        self, langfuse_prompt_client: PROMPT_CLIENT
-    ) -> dict:
+    def _get_optional_params_from_langfuse(self, langfuse_prompt_client: PROMPT_CLIENT) -> dict:
         config = langfuse_prompt_client.config
         optional_params = {}
         for k, v in config.items():
@@ -177,21 +178,21 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
     async def async_get_chat_completion_prompt(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         non_default_params: dict,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
-        prompt_spec: Optional[PromptSpec] = None,
-        tools: Optional[List[Dict]] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
-        ignore_prompt_manager_model: Optional[bool] = False,
-        ignore_prompt_manager_optional_params: Optional[bool] = False,
-    ) -> Tuple[
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[
         str,
-        List[AllMessageValues],
+        list[AllMessageValues],
         dict,
     ]:
         return self.get_chat_completion_prompt(
@@ -210,8 +211,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
     def should_run_prompt_management(
         self,
-        prompt_id: Optional[str],
-        prompt_spec: Optional[PromptSpec],
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         if prompt_id is None:
@@ -231,12 +232,12 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
     def _compile_prompt_helper(
         self,
-        prompt_id: Optional[str],
-        prompt_spec: Optional[PromptSpec],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> PromptManagementClient:
         if prompt_id is None:
             raise ValueError("prompt_id is required for Langfuse prompt management")
@@ -264,9 +265,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
         template_model = langfuse_prompt_client.config.get("model")
 
-        template_optional_params = self._get_optional_params_from_langfuse(
-            langfuse_prompt_client
-        )
+        template_optional_params = self._get_optional_params_from_langfuse(langfuse_prompt_client)
 
         return PromptManagementClient(
             prompt_id=prompt_id,
@@ -278,12 +277,12 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
     async def async_compile_prompt_helper(
         self,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: Optional[PromptSpec] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> PromptManagementClient:
         return self._compile_prompt_helper(
             prompt_id=prompt_id,
@@ -295,20 +294,14 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         )
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        return run_async_function(
-            self.async_log_success_event, kwargs, response_obj, start_time, end_time
-        )
+        return run_async_function(self.async_log_success_event, kwargs, response_obj, start_time, end_time)
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        return run_async_function(
-            self.async_log_failure_event, kwargs, response_obj, start_time, end_time
-        )
+        return run_async_function(self.async_log_failure_event, kwargs, response_obj, start_time, end_time)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_callback_dynamic_params = kwargs.get(
-                "standard_callback_dynamic_params"
-            )
+            standard_callback_dynamic_params = kwargs.get("standard_callback_dynamic_params")
             langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
                 globalLangfuseLogger=self,
                 standard_callback_dynamic_params=standard_callback_dynamic_params,
@@ -324,30 +317,24 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.exception(
-                f"Langfuse Layer Error - Exception occurred while logging success event: {str(e)}"
-            )
+            verbose_logger.exception(f"Langfuse Layer Error - Exception occurred while logging success event: {e}")
             self.handle_callback_failure(callback_name="langfuse")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_callback_dynamic_params = kwargs.get(
-                "standard_callback_dynamic_params"
-            )
+            standard_callback_dynamic_params = kwargs.get("standard_callback_dynamic_params")
             langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
                 globalLangfuseLogger=self,
                 standard_callback_dynamic_params=standard_callback_dynamic_params,
                 in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
             )
             standard_logging_object = cast(
-                Optional[StandardLoggingPayload],
+                StandardLoggingPayload | None,
                 kwargs.get("standard_logging_object", None),
             )
             status_message = str(kwargs.get("exception", "Unknown error"))
             if standard_logging_object is not None:
-                status_message = (
-                    standard_logging_object.get("error_str", None) or status_message
-                )
+                status_message = standard_logging_object.get("error_str", None) or status_message
             langfuse_logger_to_use.log_event_on_langfuse(
                 start_time=start_time,
                 end_time=end_time,
@@ -360,7 +347,5 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.exception(
-                f"Langfuse Layer Error - Exception occurred while logging failure event: {str(e)}"
-            )
+            verbose_logger.exception(f"Langfuse Layer Error - Exception occurred while logging failure event: {e}")
             self.handle_callback_failure(callback_name="langfuse")

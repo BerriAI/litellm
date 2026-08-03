@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 import polars as pl
 
@@ -24,9 +24,9 @@ class FocusLiteLLMDatabase:
     async def get_usage_data(
         self,
         *,
-        limit: Optional[int] = None,
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
+        limit: int | None = None,
+        start_time_utc: datetime | None = None,
+        end_time_utc: datetime | None = None,
     ) -> pl.DataFrame:
         """Return usage data for the requested window."""
         client = self._ensure_prisma_client()
@@ -80,11 +80,15 @@ class FocusLiteLLMDatabase:
             vt.team_id,
             vt.key_alias as api_key_alias,
             tt.team_alias,
-            ut.user_email as user_email
+            ut.user_email as user_email,
+            COALESCE(vt.organization_id, tt.organization_id) as organization_id,
+            ot.organization_alias as organization_alias
         FROM "LiteLLM_DailyUserSpend" dus
         LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
         LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
         LEFT JOIN "LiteLLM_UserTable" ut ON dus.user_id = ut.user_id
+        LEFT JOIN "LiteLLM_OrganizationTable" ot
+            ON ot.organization_id = COALESCE(vt.organization_id, tt.organization_id)
         {where_clause}
         ORDER BY dus.date DESC, dus.created_at DESC
         {limit_clause}
@@ -96,7 +100,7 @@ class FocusLiteLLMDatabase:
         except Exception as exc:
             raise RuntimeError(f"Error retrieving usage data: {exc}") from exc
 
-    async def get_table_info(self) -> Dict[str, Any]:
+    async def get_table_info(self) -> dict[str, Any]:
         """Return metadata about the spend table for diagnostics."""
         client = self._ensure_prisma_client()
 

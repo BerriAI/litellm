@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -47,11 +47,11 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         default_headers = {
             "content-type": "application/json",
@@ -63,14 +63,10 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
 
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
-        return HuggingFaceError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+        return HuggingFaceError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_base_url(self, model: str, base_url: Optional[str]) -> Optional[str]:
+    def get_base_url(self, model: str, base_url: str | None) -> str | None:
         """
         Get the API base for the Huggingface API.
 
@@ -84,12 +80,12 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the API call.
@@ -100,9 +96,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             complete_url = api_base
             complete_url = _build_chat_completion_url(complete_url)
         elif os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE"):
-            complete_url = str(os.getenv("HF_API_BASE")) or str(
-                os.getenv("HUGGINGFACE_API_BASE")
-            )
+            complete_url = str(os.getenv("HF_API_BASE")) or str(os.getenv("HUGGINGFACE_API_BASE"))
         elif model.startswith(("http://", "https://")):
             complete_url = model
             complete_url = _build_chat_completion_url(complete_url)
@@ -129,15 +123,13 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
         if litellm_params.get("api_base"):
-            return dict(
-                ChatCompletionRequest(model=model, messages=messages, **optional_params)
-            )
+            return dict(ChatCompletionRequest(model=model, messages=messages, **optional_params))
         if "max_retries" in optional_params:
             logger.warning("`max_retries` is not supported. It will be ignored.")
             optional_params.pop("max_retries", None)
@@ -161,8 +153,4 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             mapped_model = provider_mapping["providerId"]
 
         messages = self._transform_messages(messages=messages, model=mapped_model)
-        return dict(
-            ChatCompletionRequest(
-                model=mapped_model, messages=messages, **optional_params
-            )
-        )
+        return dict(ChatCompletionRequest(model=mapped_model, messages=messages, **optional_params))

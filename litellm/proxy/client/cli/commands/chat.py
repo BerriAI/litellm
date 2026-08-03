@@ -1,6 +1,6 @@
 import json
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import click
 import requests
@@ -13,7 +13,7 @@ from ... import Client
 from ...chat import ChatClient
 
 
-def _get_available_models(ctx: click.Context) -> List[Dict[str, Any]]:
+def _get_available_models(ctx: click.Context) -> list[dict[str, Any]]:
     """Get list of available models from the proxy server"""
     try:
         client = Client(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
@@ -28,14 +28,10 @@ def _get_available_models(ctx: click.Context) -> List[Dict[str, Any]]:
         return []
 
 
-def _select_model(
-    console: Console, available_models: List[Dict[str, Any]]
-) -> Optional[str]:
+def _select_model(console: Console, available_models: list[dict[str, Any]]) -> str | None:
     """Interactive model selection"""
     if not available_models:
-        console.print(
-            "[yellow]No models available or could not fetch models list.[/yellow]"
-        )
+        console.print("[yellow]No models available or could not fetch models list.[/yellow]")
         model_name = Prompt.ask("Please enter a model name")
         return model_name if model_name.strip() else None
 
@@ -46,16 +42,12 @@ def _select_model(
     table.add_column("Owned By", style="yellow")
     MAX_MODELS_TO_DISPLAY = 200
 
-    models_to_display: List[Dict[str, Any]] = available_models[:MAX_MODELS_TO_DISPLAY]
+    models_to_display: list[dict[str, Any]] = available_models[:MAX_MODELS_TO_DISPLAY]
     for i, model in enumerate(models_to_display):  # Limit to first 200 models
-        table.add_row(
-            str(i + 1), str(model.get("id", "")), str(model.get("owned_by", ""))
-        )
+        table.add_row(str(i + 1), str(model.get("id", "")), str(model.get("owned_by", "")))
 
     if len(available_models) > MAX_MODELS_TO_DISPLAY:
-        console.print(
-            f"\n[dim]... and {len(available_models) - MAX_MODELS_TO_DISPLAY} more models[/dim]"
-        )
+        console.print(f"\n[dim]... and {len(available_models) - MAX_MODELS_TO_DISPLAY} more models[/dim]")
 
     console.print(table)
 
@@ -112,23 +104,23 @@ def _select_model(
 @click.pass_context
 def chat(
     ctx: click.Context,
-    model: Optional[str],
+    model: str | None,
     temperature: float,
-    max_tokens: Optional[int] = None,
-    system: Optional[str] = None,
+    max_tokens: int | None = None,
+    system: str | None = None,
 ):
     """Interactive chat with streaming responses
 
     Examples:
 
         # Chat with a specific model
-        litellm-proxy chat gpt-4
+        lite chat gpt-4
 
         # Chat without specifying model (will show model selection)
-        litellm-proxy chat
+        lite chat
 
         # Chat with custom settings
-        litellm-proxy chat gpt-4 --temperature 0.9 --system "You are a helpful coding assistant"
+        lite chat gpt-4 --temperature 0.9 --system "You are a helpful coding assistant"
     """
     console = Console()
 
@@ -143,7 +135,7 @@ def chat(
     client = ChatClient(ctx.obj["base_url"], ctx.obj["api_key"])
 
     # Initialize conversation history
-    messages: List[Dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
 
     # Add system message if provided
     if system:
@@ -158,7 +150,7 @@ def chat(
             f"Max Tokens: [yellow]{max_tokens or 'unlimited'}[/yellow]\n\n"
             f"Type your messages and press Enter. Type '/quit' or '/exit' to end the session.\n"
             f"Type '/help' for more commands.",
-            title="🤖 Chat Session",
+            title="Chat Session",
         )
     )
 
@@ -172,9 +164,7 @@ def chat(
                 break
 
             # Handle special commands
-            should_exit, messages, new_model = _handle_special_commands(
-                console, user_input, messages, system, ctx
-            )
+            should_exit, messages, new_model = _handle_special_commands(console, user_input, messages, system, ctx)
 
             if should_exit:
                 break
@@ -248,7 +238,7 @@ def _show_help(console: Console):
     console.print(Panel(help_text, title="Help"))
 
 
-def _show_history(console: Console, messages: List[Dict[str, Any]]):
+def _show_history(console: Console, messages: list[dict[str, Any]]):
     """Show conversation history"""
     if not messages:
         console.print("[yellow]No conversation history.[/yellow]")
@@ -261,9 +251,7 @@ def _show_history(console: Console, messages: List[Dict[str, Any]]):
         content = message["content"]
 
         if role == "system":
-            console.print(
-                f"[dim]{i}. [bold magenta]System:[/bold magenta] {content}[/dim]"
-            )
+            console.print(f"[dim]{i}. [bold magenta]System:[/bold magenta] {content}[/dim]")
         elif role == "user":
             console.print(f"{i}. [bold cyan]You:[/bold cyan] {content}")
         elif role == "assistant":
@@ -272,7 +260,7 @@ def _show_history(console: Console, messages: List[Dict[str, Any]]):
             )
 
 
-def _save_conversation(console: Console, messages: List[Dict[str, Any]], command: str):
+def _save_conversation(console: Console, messages: list[dict[str, Any]], command: str):
     """Save conversation to a file"""
     parts = command.split()
     if len(parts) < 2:
@@ -291,9 +279,7 @@ def _save_conversation(console: Console, messages: List[Dict[str, Any]], command
         console.print(f"[red]Error saving conversation: {e}[/red]")
 
 
-def _load_conversation(
-    console: Console, command: str, system: Optional[str]
-) -> List[Dict[str, Any]]:
+def _load_conversation(console: Console, command: str, system: str | None) -> list[dict[str, Any]]:
     """Load conversation from a file"""
     parts = command.split()
     if len(parts) < 2:
@@ -323,10 +309,10 @@ def _load_conversation(
 def _handle_special_commands(
     console: Console,
     user_input: str,
-    messages: List[Dict[str, Any]],
-    system: Optional[str],
+    messages: list[dict[str, Any]],
+    system: str | None,
     ctx: click.Context,
-) -> tuple[bool, List[Dict[str, Any]], Optional[str]]:
+) -> tuple[bool, list[dict[str, Any]], str | None]:
     """Handle special chat commands. Returns (should_exit, updated_messages, updated_model)"""
     if user_input.lower() in ["/quit", "/exit", "/q"]:
         console.print("[yellow]Chat session ended.[/yellow]")
@@ -367,10 +353,10 @@ def _stream_response(
     console: Console,
     client: ChatClient,
     model: str,
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, Any]],
     temperature: float,
-    max_tokens: Optional[int],
-) -> Optional[str]:
+    max_tokens: int | None,
+) -> str | None:
     """Stream the model response and return the complete content"""
     try:
         assistant_content = ""
@@ -395,12 +381,10 @@ def _stream_response(
         console.print(f"\n[red]Error: HTTP {e.response.status_code}[/red]")
         try:
             error_body = e.response.json()
-            console.print(
-                f"[red]{error_body.get('error', {}).get('message', 'Unknown error')}[/red]"
-            )
+            console.print(f"[red]{error_body.get('error', {}).get('message', 'Unknown error')}[/red]")
         except json.JSONDecodeError:
             console.print(f"[red]{e.response.text}[/red]")
         return None
     except Exception as e:
-        console.print(f"\n[red]Error: {str(e)}[/red]")
+        console.print(f"\n[red]Error: {e}[/red]")
         return None

@@ -10,9 +10,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(
-    litellm_params: "LitellmParams", guardrail: "Guardrail"
-) -> MCPJWTSigner:
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> MCPJWTSigner:
     import litellm
 
     guardrail_name = guardrail.get("guardrail_name")
@@ -79,6 +77,6 @@ guardrail_class_registry = {
 
 __all__ = [
     "MCPJWTSigner",
-    "initialize_guardrail",
     "get_mcp_jwt_signer",
+    "initialize_guardrail",
 ]

@@ -1,0 +1,35 @@
+# Render blueprint for the LiteLLM Rust AI Gateway (realtime WebSocket proxy).
+#
+# Single instance for now (no autoscaling). The public endpoint is a
+# WebSocket served over TLS: wss://<service>.onrender.com/v1/realtime
+#
+# Paths are relative to the **repo root** (Render's convention). The build
+# context is the repo root so the image can install litellm from source — the
+# gateway loads its model_list via litellm.proxy.read_model_list at boot.
+#
+# Secrets (LITELLM_MASTER_KEY, OPENAI_API_KEY) are marked sync: false — set
+# them in the Render dashboard or via the API, never inline here.
+services:
+  - type: web
+    name: litellm-rust-ai-gateway
+    runtime: docker
+    plan: standard
+    dockerfilePath: ./litellm-rust/crates/ai-gateway/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/readiness
+    numInstances: 1
+    envVars:
+      # The gateway loads its model_list from this config.yaml via the embedded
+      # python config reader. The image bakes a default config at /app/config.yaml;
+      # a real deploy can override it by mounting a Render secret file at this
+      # same path (Dashboard → Environment → Secret Files) — never inline secrets.
+      - key: LITELLM_CONFIG_PATH
+        value: /app/config.yaml
+      - key: HOST
+        value: 0.0.0.0
+      # Bearer token clients must send on /v1/realtime (fail closed if unset).
+      - key: LITELLM_MASTER_KEY
+        sync: false
+      # Referenced by config.yaml as os.environ/OPENAI_API_KEY for the upstream dial.
+      - key: OPENAI_API_KEY
+        sync: false

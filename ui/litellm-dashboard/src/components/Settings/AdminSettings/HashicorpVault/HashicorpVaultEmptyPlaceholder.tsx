@@ -15,8 +15,7 @@ export default function HashicorpVaultEmptyPlaceholder({ onAdd }: HashicorpVault
           <div className="space-y-2">
             <Title level={4}>No Vault Configuration Found</Title>
             <Paragraph type="secondary" className="max-w-md mx-auto">
-              Configure Hashicorp Vault to securely manage provider API keys and secrets
-              for your LiteLLM deployment.
+              Configure Hashicorp Vault to securely manage provider API keys and secrets for your LiteLLM deployment.
             </Paragraph>
           </div>
         }

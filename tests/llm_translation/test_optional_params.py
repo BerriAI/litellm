@@ -1834,12 +1834,17 @@ def test_azure_response_format_param():
     ],
 )
 def test_anthropic_unified_reasoning_content(model, provider):
+    from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
     optional_params = get_optional_params(
         model=model,
         custom_llm_provider=provider,
         reasoning_effort="high",
     )
-    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    assert optional_params["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
 
 
 def test_azure_response_format(monkeypatch):
@@ -2037,7 +2042,7 @@ def test_drop_store_param_for_anthropic():
     Ref: https://github.com/BerriAI/litellm/issues/19700
     """
     optional_params = get_optional_params(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5-20250929",
         custom_llm_provider="anthropic",
         drop_params=True,
         store=True,
@@ -2053,7 +2058,7 @@ def test_additional_drop_params_store_for_anthropic():
     Ref: https://github.com/BerriAI/litellm/issues/19700
     """
     optional_params = get_optional_params(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5-20250929",
         custom_llm_provider="anthropic",
         additional_drop_params=["store"],
         store=True,

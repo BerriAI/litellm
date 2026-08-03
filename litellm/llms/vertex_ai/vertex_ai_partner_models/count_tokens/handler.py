@@ -6,7 +6,7 @@ Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
@@ -48,7 +48,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         model: str,
         project_id: str,
         vertex_location: str,
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
     ) -> str:
         """
         Build the count-tokens endpoint URL for a partner model.
@@ -95,9 +95,9 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
     async def handle_count_tokens_request(
         self,
         model: str,
-        request_data: Dict[str, Any],
-        litellm_params: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        request_data: dict[str, Any],
+        litellm_params: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Handle token counting request for a Vertex AI partner model.
 
@@ -130,9 +130,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         vertex_project = self.get_vertex_ai_project(litellm_params)
 
         # Check for count_tokens specific location override
-        vertex_count_tokens_location = litellm_params.get(
-            "vertex_count_tokens_location"
-        )
+        vertex_count_tokens_location = litellm_params.get("vertex_count_tokens_location")
         vertex_location_raw = self.get_vertex_ai_location(litellm_params)
 
         # Determine final location with precedence:
@@ -185,9 +183,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Check for errors
         if response.status_code != 200:
             error_text = response.text
-            raise ValueError(
-                f"Token counting request failed with status {response.status_code}: {error_text}"
-            )
+            raise ValueError(f"Token counting request failed with status {response.status_code}: {error_text}")
 
         # Parse response
         result = response.json()

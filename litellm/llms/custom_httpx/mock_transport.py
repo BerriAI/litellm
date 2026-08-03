@@ -9,10 +9,8 @@ so the full proxy -> router -> OpenAI SDK -> httpx path is exercised.
 import json
 import time
 import uuid
-from typing import Tuple
 
 import httpx
-
 
 # ---------------------------------------------------------------------------
 # Pre-built response templates
@@ -65,7 +63,7 @@ class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
     """
 
     @staticmethod
-    def _parse_request(request: httpx.Request) -> Tuple[str, bool]:
+    def _parse_request(request: httpx.Request) -> tuple[str, bool]:
         """Extract model from the request body."""
         try:
             body = json.loads(request.content)

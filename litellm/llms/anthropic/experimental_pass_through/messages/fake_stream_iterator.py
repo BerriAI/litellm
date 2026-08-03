@@ -9,7 +9,7 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 """
 
 import json
-from typing import Any, Dict, List, cast
+from typing import Any, cast
 
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -38,9 +38,7 @@ class FakeAnthropicMessagesStreamIterator:
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
-    def _create_content_block_chunks(
-        self, block_dict: Dict[str, Any], index: int
-    ) -> List[bytes]:
+    def _create_content_block_chunks(self, block_dict: dict[str, Any], index: int) -> list[bytes]:
         """Build SSE chunks for a single content block."""
         chunks = []
         block_type = block_dict.get("type")
@@ -51,18 +49,14 @@ class FakeAnthropicMessagesStreamIterator:
                 "index": index,
                 "content_block": {"type": "text", "text": ""},
             }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
             text = block_dict.get("text", "")
             content_block_delta = {
                 "type": "content_block_delta",
                 "index": index,
                 "delta": {"type": "text_delta", "text": text},
             }
-            chunks.append(
-                f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
 
         elif block_type == "thinking":
             content_block_start = {
@@ -70,9 +64,7 @@ class FakeAnthropicMessagesStreamIterator:
                 "index": index,
                 "content_block": {"type": "thinking", "thinking": "", "signature": ""},
             }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
             thinking_text = block_dict.get("thinking", "")
             if thinking_text:
                 content_block_delta = {
@@ -80,9 +72,7 @@ class FakeAnthropicMessagesStreamIterator:
                     "index": index,
                     "delta": {"type": "thinking_delta", "thinking": thinking_text},
                 }
-                chunks.append(
-                    f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-                )
+                chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
             signature = block_dict.get("signature", "")
             if signature:
                 signature_delta = {
@@ -90,9 +80,7 @@ class FakeAnthropicMessagesStreamIterator:
                     "index": index,
                     "delta": {"type": "signature_delta", "signature": signature},
                 }
-                chunks.append(
-                    f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode()
-                )
+                chunks.append(f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode())
 
         elif block_type == "redacted_thinking":
             content_block_start = {
@@ -100,9 +88,7 @@ class FakeAnthropicMessagesStreamIterator:
                 "index": index,
                 "content_block": {"type": "redacted_thinking"},
             }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
 
         elif block_type == "tool_use":
             content_block_start = {
@@ -115,9 +101,7 @@ class FakeAnthropicMessagesStreamIterator:
                     "input": {},
                 },
             }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
             input_data = block_dict.get("input", {})
             content_block_delta = {
                 "type": "content_block_delta",
@@ -127,22 +111,18 @@ class FakeAnthropicMessagesStreamIterator:
                     "partial_json": json.dumps(input_data),
                 },
             }
-            chunks.append(
-                f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
 
         content_block_stop = {"type": "content_block_stop", "index": index}
-        chunks.append(
-            f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
-        )
+        chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
         return chunks
 
-    def _create_streaming_chunks(self) -> List[bytes]:
+    def _create_streaming_chunks(self) -> list[bytes]:
         """Convert the non-streaming response to streaming chunks"""
         chunks = []
 
         # Cast response to dict for easier access
-        response_dict = cast(Dict[str, Any], self.response)
+        response_dict = cast(dict[str, Any], self.response)
 
         # 1. message_start event
         usage = response_dict.get("usage", {})
@@ -162,33 +142,27 @@ class FakeAnthropicMessagesStreamIterator:
                 },
             },
         }
-        chunks.append(
-            f"event: message_start\ndata: {json.dumps(message_start)}\n\n".encode()
-        )
+        chunks.append(f"event: message_start\ndata: {json.dumps(message_start)}\n\n".encode())
 
         # 2-4. For each content block, send start/delta/stop events
         content_blocks = response_dict.get("content", [])
         for index, block in enumerate(content_blocks):
-            block_dict = cast(Dict[str, Any], block)
+            block_dict = cast(dict[str, Any], block)
             chunks.extend(self._create_content_block_chunks(block_dict, index))
 
         # 5. message_delta event (with final usage and stop_reason)
         # Include cache usage fields so clients that only read message_delta
         # (like Claude Code's SDK) see the full input token breakdown.
-        delta_usage: Dict[str, Any] = {
+        delta_usage: dict[str, Any] = {
             "output_tokens": usage.get("output_tokens", 0) if usage else 0,
         }
         if usage:
             if usage.get("input_tokens") is not None:
                 delta_usage["input_tokens"] = usage["input_tokens"]
             if usage.get("cache_creation_input_tokens") is not None:
-                delta_usage["cache_creation_input_tokens"] = usage[
-                    "cache_creation_input_tokens"
-                ]
+                delta_usage["cache_creation_input_tokens"] = usage["cache_creation_input_tokens"]
             if usage.get("cache_read_input_tokens") is not None:
-                delta_usage["cache_read_input_tokens"] = usage[
-                    "cache_read_input_tokens"
-                ]
+                delta_usage["cache_read_input_tokens"] = usage["cache_read_input_tokens"]
         message_delta = {
             "type": "message_delta",
             "delta": {
@@ -197,15 +171,11 @@ class FakeAnthropicMessagesStreamIterator:
             },
             "usage": delta_usage,
         }
-        chunks.append(
-            f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode()
-        )
+        chunks.append(f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode())
 
         # 6. message_stop event
         message_stop = {"type": "message_stop", "usage": usage if usage else {}}
-        chunks.append(
-            f"event: message_stop\ndata: {json.dumps(message_stop)}\n\n".encode()
-        )
+        chunks.append(f"event: message_stop\ndata: {json.dumps(message_stop)}\n\n".encode())
 
         return chunks
 

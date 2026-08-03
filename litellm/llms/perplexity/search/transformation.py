@@ -2,7 +2,7 @@
 Calls Perplexity's /search endpoint to search the web.
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import TypedDict
 
 import httpx
 
@@ -18,7 +18,7 @@ from litellm.secret_managers.main import get_secret_str
 class _PerplexitySearchRequestRequired(TypedDict):
     """Required fields for Perplexity Search API request."""
 
-    query: Union[str, List[str]]  # Required - search query or queries
+    query: str | list[str]  # Required - search query or queries
 
 
 class PerplexitySearchRequest(_PerplexitySearchRequestRequired, total=False):
@@ -28,7 +28,7 @@ class PerplexitySearchRequest(_PerplexitySearchRequestRequired, total=False):
     """
 
     max_results: int  # Optional - maximum number of results (1-20), default 10
-    search_domain_filter: List[str]  # Optional - list of domains to filter (max 20)
+    search_domain_filter: list[str]  # Optional - list of domains to filter (max 20)
     max_tokens_per_page: int  # Optional - max tokens per page, default 1024
     country: str  # Optional - country code filter (e.g., 'US', 'GB', 'DE')
 
@@ -42,38 +42,38 @@ class PerplexitySearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("PERPLEXITYAI_API_KEY",),
+            base_env_var="PERPLEXITY_API_BASE",
+            default_api_base=self.PERPLEXITY_API_BASE,
+        )
         if not api_key:
-            raise ValueError(
-                "PERPLEXITYAI_API_KEY is not set. Set `PERPLEXITYAI_API_KEY` environment variable."
-            )
+            raise ValueError("PERPLEXITYAI_API_KEY is not set. Set `PERPLEXITYAI_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
         Get complete URL for Search endpoint.
         """
-        api_base = (
-            api_base
-            or get_secret_str("PERPLEXITY_API_BASE")
-            or self.PERPLEXITY_API_BASE
-        )
+        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or self.PERPLEXITY_API_BASE
 
         # append "/search" to the api base if it's not already there
         if not api_base.endswith("/search"):
@@ -83,10 +83,10 @@ class PerplexitySearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Perplexity API format.
 

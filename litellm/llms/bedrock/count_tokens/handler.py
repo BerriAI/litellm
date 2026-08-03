@@ -4,7 +4,7 @@ AWS Bedrock CountTokens API handler.
 Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 import httpx
 
@@ -24,10 +24,10 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
 
     async def handle_count_tokens_request(
         self,
-        request_data: Dict[str, Any],
-        litellm_params: Dict[str, Any],
+        request_data: dict[str, Any],
+        litellm_params: dict[str, Any],
         resolved_model: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Handle a CountTokens request using existing LiteLLM patterns.
 
@@ -43,9 +43,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             # Validate the request
             self.validate_count_tokens_request(request_data)
 
-            verbose_logger.debug(
-                f"Processing CountTokens request for resolved model: {resolved_model}"
-            )
+            verbose_logger.debug(f"Processing CountTokens request for resolved model: {resolved_model}")
 
             # Get AWS region using existing LiteLLM function
             aws_region_name = self._get_aws_region_name(
@@ -57,17 +55,13 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug(f"Retrieved AWS region: {aws_region_name}")
 
             # Transform request to Bedrock format (supports both Converse and InvokeModel)
-            bedrock_request = self.transform_anthropic_to_bedrock_count_tokens(
-                request_data=request_data
-            )
+            bedrock_request = self.transform_anthropic_to_bedrock_count_tokens(request_data=request_data)
 
             verbose_logger.debug(f"Transformed request: {bedrock_request}")
 
             # Get endpoint URL using simplified function
             api_base = litellm_params.get("api_base", None)
-            aws_bedrock_runtime_endpoint = litellm_params.get(
-                "aws_bedrock_runtime_endpoint", None
-            )
+            aws_bedrock_runtime_endpoint = litellm_params.get("aws_bedrock_runtime_endpoint", None)
             endpoint_url = self.get_bedrock_count_tokens_endpoint(
                 model=resolved_model,
                 aws_region_name=aws_region_name,
@@ -91,9 +85,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 api_key=api_key,
             )
 
-            async_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.BEDROCK
-            )
+            async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
 
             response = await async_client.post(
                 endpoint_url,
@@ -117,9 +109,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug(f"Bedrock response: {bedrock_response}")
 
             # Transform response back to expected format
-            final_response = self.transform_bedrock_response_to_anthropic(
-                bedrock_response
-            )
+            final_response = self.transform_bedrock_response_to_anthropic(bedrock_response)
 
             verbose_logger.debug(f"Final response: {final_response}")
 
@@ -130,14 +120,14 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error(f"HTTP error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"HTTP error in CountTokens handler: {e}")
             raise BedrockError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except Exception as e:
-            verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"Error in CountTokens handler: {e}")
             raise BedrockError(
                 status_code=500,
-                message=f"CountTokens processing error: {str(e)}",
+                message=f"CountTokens processing error: {e}",
             )

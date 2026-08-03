@@ -5,7 +5,6 @@ Helper functions to query prometheus API
 import json
 import time
 from datetime import datetime, timedelta
-from typing import Optional
 
 from litellm import get_secret
 from litellm._logging import verbose_logger
@@ -14,11 +13,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 
-PROMETHEUS_URL: Optional[str] = get_secret("PROMETHEUS_URL")  # type: ignore
-PROMETHEUS_SELECTED_INSTANCE: Optional[str] = get_secret("PROMETHEUS_SELECTED_INSTANCE")  # type: ignore
-async_http_handler = get_async_httpx_client(
-    llm_provider=httpxSpecialProvider.LoggingCallback
-)
+PROMETHEUS_URL: str | None = get_secret("PROMETHEUS_URL")  # type: ignore
+PROMETHEUS_SELECTED_INSTANCE: str | None = get_secret("PROMETHEUS_SELECTED_INSTANCE")  # type: ignore
+async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
 
 async def get_metric_from_prometheus(
@@ -26,9 +23,7 @@ async def get_metric_from_prometheus(
 ):
     # Get the start of the current day in Unix timestamp
     if PROMETHEUS_URL is None:
-        raise ValueError(
-            "PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env"
-        )
+        raise ValueError("PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env")
 
     query = f"{metric_name}[24h]"
     now = int(time.time())
@@ -100,7 +95,7 @@ def _quote_promql_string_literal(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-async def get_daily_spend_from_prometheus(api_key: Optional[str]):
+async def get_daily_spend_from_prometheus(api_key: str | None):
     """
     Expected Response Format:
     [
@@ -111,9 +106,7 @@ async def get_daily_spend_from_prometheus(api_key: Optional[str]):
     ...]
     """
     if PROMETHEUS_URL is None:
-        raise ValueError(
-            "PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env"
-        )
+        raise ValueError("PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env")
 
     # Calculate the start and end dates for the last 30 days
     end_date = datetime.utcnow()
@@ -129,11 +122,7 @@ async def get_daily_spend_from_prometheus(api_key: Optional[str]):
         query = "sum(delta(litellm_spend_metric_total[1d]))"
     else:
         quoted_api_key = _quote_promql_string_literal(api_key)
-        query = (
-            "sum(delta(litellm_spend_metric_total{"
-            f"hashed_api_key={quoted_api_key}"
-            "}[1d]))"
-        )
+        query = f"sum(delta(litellm_spend_metric_total{{hashed_api_key={quoted_api_key}}}[1d]))"
 
     params = {
         "query": query,

@@ -2,17 +2,15 @@
 Cost calculation for search providers.
 """
 
-from typing import Optional, Tuple
-
 from litellm.utils import get_model_info
 
 
 def search_provider_cost_per_query(
     model: str,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     number_of_queries: int = 1,
-    optional_params: Optional[dict] = None,
-) -> Tuple[float, float]:
+    optional_params: dict | None = None,
+) -> tuple[float, float]:
     """
     Calculate cost for search-only providers.
 
@@ -33,9 +31,7 @@ def search_provider_cost_per_query(
     # Check for tiered pricing (e.g., Exa AI based on max_results)
     tiered_pricing = model_info.get("tiered_pricing")
     if tiered_pricing and isinstance(tiered_pricing, list):
-        max_results = (optional_params or {}).get(
-            "max_results", 10
-        )  # default 10 results
+        max_results = (optional_params or {}).get("max_results", 10)  # default 10 results
         cost_per_query = 0.0
 
         for tier in tiered_pricing:

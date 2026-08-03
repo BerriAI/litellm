@@ -5,8 +5,6 @@ Our unified API follows the OpenAI standard.
 More information on our website: https://endpoints.ai.cloud.ovh.net
 """
 
-from typing import List, Optional, Union
-
 import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
@@ -26,9 +24,7 @@ from ..utils import OVHCloudException
 
 
 class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         # OVHCloud implements the OpenAI-compatible Whisper interface.
         # We pass through the same optional params as the OpenAI Whisper API.
         return [
@@ -54,24 +50,18 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
-        api_base = (
-            "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
-            if api_base is None
-            else api_base.rstrip("/")
-        )
+        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
         complete_url = f"{api_base}/audio/transcriptions"
         return complete_url
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OVHCloudException(
             message=error_message,
             status_code=status_code,
@@ -82,11 +72,11 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("OVHCLOUD_API_KEY")
@@ -155,6 +145,18 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         text = response_json.get("text") or response_json.get("transcript") or ""
         response = TranscriptionResponse(text=text)
+
+        # OVHCloud field migration (deadline: 2026-05-11):
+        # `duration` is replaced by `seconds` in STT responses.
+        # Prefer `seconds`, fall back to `duration`, normalize to `duration`
+        # so downstream consumers see a consistent key.
+        duration = (
+            response_json["seconds"]
+            if "seconds" in response_json and response_json["seconds"] is not None
+            else response_json.get("duration")
+        )
+        if duration is not None:
+            response_json["duration"] = duration
 
         response._hidden_params = response_json
         return response

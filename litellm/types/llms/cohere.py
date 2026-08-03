@@ -41,9 +41,7 @@ class ChatHistoryChatBot(TypedDict, total=False):
     tool_calls: List[ToolCallObject]
 
 
-ChatHistory = List[
-    Union[ChatHistorySystem, ChatHistoryChatBot, ChatHistoryUser, ChatHistoryToolResult]
-]
+ChatHistory = List[Union[ChatHistorySystem, ChatHistoryChatBot, ChatHistoryUser, ChatHistoryToolResult]]
 
 
 class CohereV2ChatResponseMessageToolCallFunction(TypedDict, total=False):

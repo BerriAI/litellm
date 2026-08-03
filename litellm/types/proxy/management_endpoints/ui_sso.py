@@ -1,6 +1,6 @@
 from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import TypedDict
 
 from litellm.proxy._types import KeyManagementRoutes, LitellmUserRoles
@@ -70,9 +70,7 @@ class RoleMappings(LiteLLMPydanticObjectBase):
     which role to assign the user based on the roles mapping.
     """
 
-    provider: str = Field(
-        description="SSO Provider name (e.g., 'google', 'microsoft', 'generic')"
-    )
+    provider: str = Field(description="SSO Provider name (e.g., 'google', 'microsoft', 'generic')")
     group_claim: str = Field(
         description="The field name in the SSO token that contains the groups array (e.g., 'groups', 'roles')"
     )
@@ -150,6 +148,28 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="User info endpoint URL for generic OAuth provider",
     )
+    generic_scope: Optional[str] = Field(
+        default=None,
+        description="Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'",
+    )
+
+    # SAML SSO
+    saml_idp_metadata_url: Optional[str] = Field(
+        default=None,
+        description="URL of the SAML IdP metadata to fetch and parse for SSO authentication",
+    )
+    saml_idp_metadata_xml: Optional[str] = Field(
+        default=None,
+        description="Inline SAML IdP metadata XML, used when a metadata URL is not available",
+    )
+    saml_sp_entity_id: Optional[str] = Field(
+        default=None,
+        description="SAML Service Provider entityID; defaults to the proxy's /sso/saml/metadata URL",
+    )
+    saml_allow_unsolicited: Optional[str] = Field(
+        default=None,
+        description="'true' to accept IdP-initiated (unsolicited) SAML responses, which cannot be browser-bound against login CSRF",
+    )
 
     # Common settings
     proxy_base_url: Optional[str] = Field(
@@ -209,10 +229,7 @@ class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
         default=None,
         description="Default permissions granted to members of newly created teams (e.g. /key/generate, /key/update, /key/delete). /key/info and /key/health are always included.",
     )
-
-
-class InProductNudgeResponse(BaseModel):
-    is_claude_code_enabled: bool = Field(
-        default=False,
-        description="Whether the Claude Code nudge should be shown.",
+    organization_id: str | None = Field(
+        default=None,
+        description="Default organization for new teams created without an explicit organization",
     )

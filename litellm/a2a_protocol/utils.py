@@ -2,7 +2,7 @@
 Utility functions for A2A protocol.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm._logging import verbose_logger
@@ -34,7 +34,7 @@ class A2ARequestUtils:
         else:
             parts = getattr(message, "parts", []) or []
 
-        text_parts: List[str] = []
+        text_parts: list[str] = []
         for part in parts:
             if isinstance(part, dict):
                 if part.get("kind") == "text":
@@ -46,7 +46,7 @@ class A2ARequestUtils:
         return " ".join(text_parts)
 
     @staticmethod
-    def extract_text_from_response(response_dict: Dict[str, Any]) -> str:
+    def extract_text_from_response(response_dict: dict[str, Any]) -> str:
         """
         Extract text content from A2A response result.
 
@@ -60,12 +60,18 @@ class A2ARequestUtils:
         if not isinstance(result, dict):
             return ""
 
+        # Direct message format (A2A spec): detect by explicit kind tag only.
+        # The "parts" heuristic is too broad and would match any future result
+        # type that happens to include a "parts" field.
+        if result.get("kind") == "message":
+            return A2ARequestUtils.extract_text_from_message(result)
+
         message = result.get("message", {})
         return A2ARequestUtils.extract_text_from_message(message)
 
     @staticmethod
     def get_input_message_from_request(
-        request: "Union[SendMessageRequest, SendStreamingMessageRequest]",
+        request: "SendMessageRequest | SendStreamingMessageRequest",
     ) -> Any:
         """
         Extract the input message from an A2A request.
@@ -102,9 +108,9 @@ class A2ARequestUtils:
 
     @staticmethod
     def calculate_usage_from_request_response(
-        request: "Union[SendMessageRequest, SendStreamingMessageRequest]",
-        response_dict: Dict[str, Any],
-    ) -> Tuple[int, int, int]:
+        request: "SendMessageRequest | SendStreamingMessageRequest",
+        response_dict: dict[str, Any],
+    ) -> tuple[int, int, int]:
         """
         Calculate token usage from A2A request and response.
 
@@ -115,8 +121,13 @@ class A2ARequestUtils:
         Returns:
             Tuple of (prompt_tokens, completion_tokens, total_tokens)
         """
-        # Count input tokens
+        # Count input tokens. Dump the message to a dict first so extraction hits
+        # the dict branch — request-side parts are a2a-sdk Part RootModels whose
+        # kind/text live on part.root, which the object branch cannot read. This
+        # mirrors how the response side already works (it operates on model_dump).
         input_message = A2ARequestUtils.get_input_message_from_request(request)
+        if input_message is not None and hasattr(input_message, "model_dump"):
+            input_message = input_message.model_dump(mode="json")
         input_text = A2ARequestUtils.extract_text_from_message(input_message)
         prompt_tokens = A2ARequestUtils.count_tokens(input_text)
 
@@ -134,5 +145,5 @@ def extract_text_from_a2a_message(message: Any) -> str:
     return A2ARequestUtils.extract_text_from_message(message)
 
 
-def extract_text_from_a2a_response(response_dict: Dict[str, Any]) -> str:
+def extract_text_from_a2a_response(response_dict: dict[str, Any]) -> str:
     return A2ARequestUtils.extract_text_from_response(response_dict)

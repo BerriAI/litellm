@@ -21,7 +21,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 
 import socket
 from ipaddress import ip_address, ip_network
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
@@ -42,8 +42,6 @@ _ALLOWED_SCHEMES = ("http", "https")
 
 class SSRFError(ValueError):
     """Raised when a URL targets a blocked network."""
-
-    pass
 
 
 def encode_url_path_segment(value: Any, *, field_name: str = "path parameter") -> str:
@@ -116,7 +114,7 @@ def _default_port_for_scheme(scheme: str) -> int:
 
 def _parse_url_destination_allowlist_entry(
     entry: str,
-) -> Optional[Tuple[str, Optional[str], Optional[int]]]:
+) -> tuple[str, str | None, int | None] | None:
     """Parse an admin allowlist entry into host, optional scheme, optional port.
 
     Entries may be bare hosts (``api.example.com``), host+port
@@ -141,14 +139,23 @@ def _parse_url_destination_allowlist_entry(
     except ValueError:
         return None
 
-    scheme: Optional[str] = parsed.scheme if has_scheme else None
+    scheme: str | None = parsed.scheme if has_scheme else None
     if scheme is not None and port is None:
         port = _default_port_for_scheme(scheme)
 
     return _normalize_host(parsed.hostname), scheme, port
 
 
-def is_url_destination_allowed_by_host(url: str, allowed_hosts: List[str]) -> bool:
+def provider_url_destination_candidates(value: str) -> tuple[str, ...]:
+    return tuple(
+        candidate
+        for part in value.split(",")
+        for candidate in (part.strip(), part.strip().split("/", 1)[1] if "/" in part.strip() else "")
+        if candidate
+    )
+
+
+def is_url_destination_allowed_by_host(url: str, allowed_hosts: list[str]) -> bool:
     """Return True when a credential-bearing provider URL is admin-allowlisted.
 
     This does not fetch, resolve, or rewrite URLs. It only answers whether the
@@ -169,9 +176,7 @@ def is_url_destination_allowed_by_host(url: str, allowed_hosts: List[str]) -> bo
         return False
 
     normalized_host = _normalize_host(parsed.hostname)
-    configured_entries = (
-        [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
-    )
+    configured_entries = [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
     for entry in configured_entries or []:
         if not isinstance(entry, str):
             continue
@@ -220,17 +225,17 @@ def _is_host_allowlisted(hostname: str, effective_port: int) -> bool:
     literals are written bracketed (``[::1]`` / ``[::1]:8080``). Matching
     is case-insensitive on the hostname.
     """
-    configured: List[str] = getattr(litellm, "user_url_allowed_hosts", []) or []
+    configured: list[str] = getattr(litellm, "user_url_allowed_hosts", []) or []
     if not configured:
         return False
     normalized_host = _normalize_host(hostname)
     host_repr = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
-    candidates: Set[str] = {host_repr, f"{host_repr}:{effective_port}"}
-    allowlist: Set[str] = {_normalize_host(entry) for entry in configured if entry}
+    candidates: set[str] = {host_repr, f"{host_repr}:{effective_port}"}
+    allowlist: set[str] = {_normalize_host(entry) for entry in configured if entry}
     return bool(candidates & allowlist)
 
 
-def validate_url(url: str) -> Tuple[str, str]:
+def validate_url(url: str) -> tuple[str, str]:
     """
     Validate a user-supplied URL and rewrite it to connect to a validated IP.
 
@@ -272,9 +277,7 @@ def validate_url(url: str) -> Tuple[str, str]:
 
     # Resolve hostname and validate ALL addresses
     try:
-        addrinfo = socket.getaddrinfo(
-            hostname, effective_port, proto=socket.IPPROTO_TCP
-        )
+        addrinfo = socket.getaddrinfo(hostname, effective_port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as e:
         raise SSRFError(f"DNS resolution failed for '{hostname}': {e}")
 
@@ -311,9 +314,7 @@ def validate_url(url: str) -> Tuple[str, str]:
     else:
         new_netloc = ip_host
 
-    rewritten = urlunparse(
-        (parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, "")
-    )
+    rewritten = urlunparse((parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, ""))
 
     return rewritten, host_header
 

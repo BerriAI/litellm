@@ -2,7 +2,7 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING
 
 from typing_extensions import TypedDict
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 class SpeechToCompletionBridgeHandlerInputKwargs(TypedDict):
     model: str
     input: str
-    voice: Optional[Union[str, dict]]
+    voice: str | dict | None
     optional_params: dict
     litellm_params: dict
     logging_obj: "LiteLLMLoggingObj"
@@ -29,9 +29,7 @@ class SpeechToCompletionBridgeHandler:
         super().__init__()
         self.transformation_handler = SpeechToCompletionBridgeTransformationHandler()
 
-    def validate_input_kwargs(
-        self, kwargs: dict
-    ) -> SpeechToCompletionBridgeHandlerInputKwargs:
+    def validate_input_kwargs(self, kwargs: dict) -> SpeechToCompletionBridgeHandlerInputKwargs:
         from litellm import LiteLLMLoggingObj
 
         model = kwargs.get("model")
@@ -81,7 +79,7 @@ class SpeechToCompletionBridgeHandler:
         self,
         model: str,
         input: str,
-        voice: Optional[Union[str, dict]],
+        voice: str | dict | None,
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -122,7 +120,7 @@ class SpeechToCompletionBridgeHandler:
                 model_response=result,
             )
         else:
-            raise Exception("Unmapped response type. Got type: {}".format(type(result)))
+            raise Exception(f"Unmapped response type. Got type: {type(result)}")
 
 
 speech_to_completion_bridge_handler = SpeechToCompletionBridgeHandler()

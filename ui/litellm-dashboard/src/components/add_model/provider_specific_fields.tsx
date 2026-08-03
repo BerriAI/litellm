@@ -28,6 +28,18 @@ export interface CredentialValues {
   value: string;
 }
 
+const getApiVersionFromApiBase = (apiBase: string): string | null => {
+  const queryStartIndex = apiBase.indexOf("?");
+  if (queryStartIndex === -1) {
+    return null;
+  }
+
+  const queryString = apiBase.slice(queryStartIndex + 1).split("#")[0];
+  const searchParams = new URLSearchParams(queryString);
+
+  return searchParams.get("api_version") || searchParams.get("api-version");
+};
+
 const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): ProviderCredentialField => {
   const type: ProviderCredentialField["type"] =
     field.field_type === "password"
@@ -58,8 +70,6 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
 const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
 
 export const createCredentialFromModel = (provider: string, modelData: any): CredentialItem => {
-  console.log("provider", provider);
-  console.log("modelData", modelData);
   const enumKey = Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === provider.toLowerCase());
   if (!enumKey) {
     throw new Error(`Provider ${provider} not found in provider_map`);
@@ -68,13 +78,9 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   const providerFields = providerFieldsByDisplayName[providerDisplayName] || [];
   const credentialValues: object = {};
 
-  console.log("providerFields", providerFields);
-
   // Go through each field defined for this provider
   providerFields.forEach((field) => {
     const value = modelData.litellm_params[field.key];
-    console.log("field", field);
-    console.log("value", value);
     if (value !== undefined) {
       (credentialValues as Record<string, string>)[field.key] = value.toString();
     }
@@ -167,6 +173,30 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     return mapped;
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
+  const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
+  const lastInferredApiVersionRef = React.useRef<string | null>(null);
+
+  const handleApiBaseChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      if (!hasApiVersionField) {
+        return;
+      }
+
+      const apiVersion = getApiVersionFromApiBase(event.target.value);
+      if (apiVersion) {
+        lastInferredApiVersionRef.current = apiVersion;
+        form.setFieldsValue({ api_version: apiVersion });
+        return;
+      }
+
+      if (form.getFieldValue("api_version") === lastInferredApiVersionRef.current) {
+        form.setFieldsValue({ api_version: "" });
+      }
+      lastInferredApiVersionRef.current = null;
+    },
+    [form, hasApiVersionField],
+  );
+
   const handleUpload = {
     name: "file",
     accept: ".json",
@@ -176,23 +206,13 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
         reader.onload = (e) => {
           if (e.target) {
             const jsonStr = e.target.result as string;
-            console.log(`Setting field value from JSON, length: ${jsonStr.length}`);
             form.setFieldsValue({ vertex_credentials: jsonStr });
-            console.log("Form values after setting:", form.getFieldsValue());
           }
         };
         reader.readAsText(file);
       }
       // Prevent upload
       return false;
-    },
-    onChange(info: any) {
-      console.log("Upload onChange triggered in ProviderSpecificFields");
-      console.log("Current form values:", form.getFieldsValue());
-
-      if (info.file.status !== "uploading") {
-        console.log(info.file, info.fileList);
-      }
     },
   };
 
@@ -235,16 +255,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
               <Upload
                 {...handleUpload}
                 onChange={(info) => {
-                  // First call the original onChange
                   if (uploadProps?.onChange) {
                     uploadProps.onChange(info);
                   }
-
-                  // Check the field value after a short delay
-                  setTimeout(() => {
-                    const value = form.getFieldValue(field.key);
-                    console.log(`${field.key} value after upload:`, JSON.stringify(value));
-                  }, 500);
                 }}
               >
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
@@ -261,6 +274,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
                 placeholder={field.placeholder}
                 type={field.type === "password" ? "password" : "text"}
                 defaultValue={field.defaultValue}
+                onChange={field.key === "api_base" ? handleApiBaseChange : undefined}
               />
             )}
           </Form.Item>

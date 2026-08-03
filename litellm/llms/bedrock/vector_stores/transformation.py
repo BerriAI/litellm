@@ -1,5 +1,5 @@
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -10,15 +10,15 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBContent,
-    BedrockKBRetrievalConfiguration,
     BedrockKBResponse,
+    BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    VECTOR_STORE_OPENAI_PARAMS,
     BaseVectorStoreAuthCredentials,
     VectorStoreIndexEndpoints,
-    VECTOR_STORE_OPENAI_PARAMS,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
@@ -38,9 +38,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         BaseVectorStoreConfig.__init__(self)
         BaseAWSLLM.__init__(self)
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         return {}
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
@@ -49,9 +47,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             "write": [],
         }
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+    def get_supported_openai_params(self, model: str) -> list[VECTOR_STORE_OPENAI_PARAMS]:
         return ["filters", "max_num_results", "ranking_options"]
 
     def _map_operator_to_aws(self, operator: str) -> str:
@@ -161,7 +157,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 # 1. check if filter is in openai format
                 # 2. if it is, map it to the aws kb filters format
                 # 3. if it is not, assume it is in aws kb filters format and add it to the optional_params
-                aws_filters: Optional[Dict] = None
+                aws_filters: dict | None = None
 
                 if isinstance(value, dict):
                     if "operator" in value.keys():
@@ -176,23 +172,17 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
 
         return optional_params
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
         return headers
 
-    def get_complete_url(self, api_base: Optional[str], litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
         aws_region_name = litellm_params.get("aws_region_name")
         endpoint_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
-            aws_bedrock_runtime_endpoint=litellm_params.get(
-                "aws_bedrock_runtime_endpoint"
-            ),
-            aws_region_name=self.get_aws_region_name_for_non_llm_api_calls(
-                aws_region_name=aws_region_name
-            ),
+            aws_bedrock_runtime_endpoint=litellm_params.get("aws_bedrock_runtime_endpoint"),
+            aws_region_name=self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=aws_region_name),
             endpoint_type="agent",
         )
         return f"{endpoint_url}/knowledgebases"
@@ -200,66 +190,49 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         if isinstance(query, list):
             query = " ".join(query)
 
-        encoded_vector_store_id = encode_url_path_segment(
-            vector_store_id, field_name="vector_store_id"
-        )
+        encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url = f"{api_base}/{encoded_vector_store_id}/retrieve"
 
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "retrievalQuery": BedrockKBRetrievalQuery(text=query),
         }
 
-        retrieval_config: Dict[str, Any] = {}
+        retrieval_config: dict[str, Any] = {}
 
         if isinstance(extra_body, dict):
             retrieval_config = deepcopy(
-                extra_body.get("retrievalConfiguration")
-                or extra_body.get("retrieval_configuration")
-                or {}
+                extra_body.get("retrievalConfiguration") or extra_body.get("retrieval_configuration") or {}
             )
         max_results = vector_store_search_optional_params.get("max_num_results")
         if max_results is not None:
-            existing_number_of_results = retrieval_config.get(
-                "vectorSearchConfiguration", {}
-            ).get("numberOfResults")
-            if (
-                existing_number_of_results is not None
-                and existing_number_of_results != max_results
-            ):
+            existing_number_of_results = retrieval_config.get("vectorSearchConfiguration", {}).get("numberOfResults")
+            if existing_number_of_results is not None and existing_number_of_results != max_results:
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.numberOfResults (%s) with max_num_results=%s",
                     existing_number_of_results,
                     max_results,
                 )
-            retrieval_config.setdefault("vectorSearchConfiguration", {})[
-                "numberOfResults"
-            ] = max_results
+            retrieval_config.setdefault("vectorSearchConfiguration", {})["numberOfResults"] = max_results
         filters = vector_store_search_optional_params.get("filters")
         if filters is not None:
-            existing_filter = retrieval_config.get("vectorSearchConfiguration", {}).get(
-                "filter"
-            )
+            existing_filter = retrieval_config.get("vectorSearchConfiguration", {}).get("filter")
             if existing_filter is not None and existing_filter != filters:
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.filter with filters from vector_store_search_optional_params"
                 )
-            retrieval_config.setdefault("vectorSearchConfiguration", {})[
-                "filter"
-            ] = filters
+            retrieval_config.setdefault("vectorSearchConfiguration", {})["filter"] = filters
         if retrieval_config:
-            request_body["retrievalConfiguration"] = cast(
-                BedrockKBRetrievalConfiguration, retrieval_config
-            )
+            request_body["retrievalConfiguration"] = cast(BedrockKBRetrievalConfiguration, retrieval_config)
 
         litellm_logging_obj.model_call_details["query"] = query
         return url, request_body
@@ -267,11 +240,11 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     def sign_request(
         self,
         headers: dict,
-        optional_params: Dict,
-        request_data: Dict,
+        optional_params: dict,
+        request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+    ) -> tuple[dict, bytes | None]:
         return self._sign_request(
             service_name="bedrock",
             headers=headers,
@@ -281,7 +254,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             api_key=api_key,
         )
 
-    def _get_file_id_from_metadata(self, metadata: Dict[str, Any]) -> str:
+    def _get_file_id_from_metadata(self, metadata: dict[str, Any]) -> str:
         """
         Extract file_id from Bedrock KB metadata.
         Uses source URI if available, otherwise generates a fallback ID.
@@ -290,14 +263,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         if source_uri:
             return source_uri
 
-        chunk_id = (
-            metadata.get("x-amz-bedrock-kb-chunk-id", "unknown")
-            if metadata
-            else "unknown"
-        )
+        chunk_id = metadata.get("x-amz-bedrock-kb-chunk-id", "unknown") if metadata else "unknown"
         return f"bedrock-kb-{chunk_id}"
 
-    def _get_filename_from_metadata(self, metadata: Dict[str, Any]) -> str:
+    def _get_filename_from_metadata(self, metadata: dict[str, Any]) -> str:
         """
         Extract filename from Bedrock KB metadata.
         Tries to extract filename from source URI, falls back to domain name or data source ID.
@@ -308,9 +277,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             try:
                 parsed_uri = urlparse(source_uri)
                 filename = (
-                    parsed_uri.path.split("/")[-1]
-                    if parsed_uri.path and parsed_uri.path != "/"
-                    else parsed_uri.netloc
+                    parsed_uri.path.split("/")[-1] if parsed_uri.path and parsed_uri.path != "/" else parsed_uri.netloc
                 )
                 if not filename or filename == "/":
                     filename = parsed_uri.netloc
@@ -318,14 +285,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             except Exception:
                 return source_uri
 
-        data_source_id = (
-            metadata.get("x-amz-bedrock-kb-data-source-id", "unknown")
-            if metadata
-            else "unknown"
-        )
+        data_source_id = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown") if metadata else "unknown"
         return f"bedrock-kb-document-{data_source_id}"
 
-    def _get_attributes_from_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_attributes_from_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
         """
         Extract all attributes from Bedrock KB metadata.
         Returns a copy of the metadata dictionary.
@@ -339,9 +302,9 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     ) -> VectorStoreSearchResponse:
         try:
             response_data = BedrockKBResponse(**response.json())
-            results: List[VectorStoreSearchResult] = []
+            results: list[VectorStoreSearchResult] = []
             for item in response_data.get("retrievalResults", []) or []:
-                content: Optional[BedrockKBContent] = item.get("content")
+                content: BedrockKBContent | None = item.get("content")
                 text = content.get("text") if content else None
                 if text is None:
                     continue
@@ -378,7 +341,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self,
         vector_store_create_optional_params,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         raise NotImplementedError
 
     def transform_create_vector_store_response(self, response: httpx.Response):

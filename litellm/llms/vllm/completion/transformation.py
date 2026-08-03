@@ -1,5 +1,5 @@
 """
-Translates from OpenAI's `/v1/chat/completions` to the VLLM sdk `llm.generate`. 
+Translates from OpenAI's `/v1/chat/completions` to the VLLM sdk `llm.generate`.
 
 NOT RECOMMENDED FOR PRODUCTION USE. Use `hosted_vllm/` instead.
 """
@@ -11,5 +11,3 @@ class VLLMConfig(HostedVLLMChatConfig):
     """
     VLLM SDK supports the same OpenAI params as hosted_vllm.
     """
-
-    pass

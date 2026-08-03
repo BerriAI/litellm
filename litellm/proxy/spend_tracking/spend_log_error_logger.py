@@ -25,7 +25,7 @@ troubleshoot. The UI suppression follows the same gate.
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
@@ -59,7 +59,7 @@ def should_suppress_spend_log_tracebacks() -> bool:
 def spend_log_error(
     message: str,
     *args: Any,
-    exc: Optional[BaseException] = None,
+    exc: BaseException | None = None,
 ) -> None:
     """Log a spend-tracking error, with the traceback gated on the env var.
 
@@ -78,8 +78,6 @@ def spend_log_error(
         return
 
     if exc is not None:
-        verbose_proxy_logger.error(
-            message, *args, exc_info=(type(exc), exc, exc.__traceback__)
-        )
+        verbose_proxy_logger.error(message, *args, exc_info=(type(exc), exc, exc.__traceback__))
     else:
         verbose_proxy_logger.error(message, *args, exc_info=True)

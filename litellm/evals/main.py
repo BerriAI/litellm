@@ -5,8 +5,9 @@ Provides create, list, get, update, delete, and cancel operations for evals
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -40,15 +41,15 @@ DEFAULT_OPENAI_API_BASE = "https://api.openai.com"
 
 @client
 async def acreate_eval(
-    data_source_config: Dict[str, Any],
-    testing_criteria: List[Dict[str, Any]],
-    name: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    data_source_config: dict[str, Any],
+    testing_criteria: list[dict[str, Any]],
+    name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Eval:
     """
@@ -109,17 +110,17 @@ async def acreate_eval(
 
 @client
 def create_eval(
-    data_source_config: Dict[str, Any],
-    testing_criteria: List[Dict[str, Any]],
-    name: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    data_source_config: dict[str, Any],
+    testing_criteria: list[dict[str, Any]],
+    name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[Eval, Coroutine[Any, Any, Eval]]:
+) -> Eval | Coroutine[Any, Any, Eval]:
     """
     Create a new evaluation
 
@@ -141,7 +142,7 @@ def create_eval(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("acreate_eval", False) is True
 
         # Get LiteLLM parameters
@@ -152,10 +153,8 @@ def create_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -175,9 +174,7 @@ def create_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         request_body = evals_api_provider_config.transform_create_eval_request(
@@ -188,9 +185,7 @@ def create_eval(
 
         # Get API base and URL
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
-        url = evals_api_provider_config.get_complete_url(
-            api_base=api_base, endpoint="evals"
-        )
+        url = evals_api_provider_config.get_complete_url(api_base=api_base, endpoint="evals")
 
         # Pre-call logging
         litellm_logging_obj.update_from_kwargs(
@@ -231,15 +226,15 @@ def create_eval(
 
 @client
 async def alist_evals(
-    limit: Optional[int] = None,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    order: Optional[str] = None,
-    order_by: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    limit: int | None = None,
+    after: str | None = None,
+    before: str | None = None,
+    order: str | None = None,
+    order_by: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ListEvalsResponse:
     """
@@ -300,17 +295,17 @@ async def alist_evals(
 
 @client
 def list_evals(
-    limit: Optional[int] = None,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    order: Optional[str] = None,
-    order_by: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    limit: int | None = None,
+    after: str | None = None,
+    before: str | None = None,
+    order: str | None = None,
+    order_by: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ListEvalsResponse, Coroutine[Any, Any, ListEvalsResponse]]:
+) -> ListEvalsResponse | Coroutine[Any, Any, ListEvalsResponse]:
     """
     List all evaluations
 
@@ -332,7 +327,7 @@ def list_evals(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("alist_evals", False) is True
 
         # Get LiteLLM parameters
@@ -343,10 +338,8 @@ def list_evals(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -371,9 +364,7 @@ def list_evals(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         url, query_params = evals_api_provider_config.transform_list_evals_request(
@@ -422,10 +413,10 @@ def list_evals(
 @client
 async def aget_eval(
     eval_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Eval:
     """
@@ -479,12 +470,12 @@ async def aget_eval(
 @client
 def get_eval(
     eval_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[Eval, Coroutine[Any, Any, Eval]]:
+) -> Eval | Coroutine[Any, Any, Eval]:
     """
     Get an evaluation by ID
 
@@ -502,7 +493,7 @@ def get_eval(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aget_eval", False) is True
 
         # Get LiteLLM parameters
@@ -513,10 +504,8 @@ def get_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -524,9 +513,7 @@ def get_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -576,13 +563,13 @@ def get_eval(
 @client
 async def aupdate_eval(
     eval_id: str,
-    name: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Eval:
     """
@@ -642,15 +629,15 @@ async def aupdate_eval(
 @client
 def update_eval(
     eval_id: str,
-    name: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[Eval, Coroutine[Any, Any, Eval]]:
+) -> Eval | Coroutine[Any, Any, Eval]:
     """
     Update an evaluation
 
@@ -671,7 +658,7 @@ def update_eval(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aupdate_eval", False) is True
 
         # Get LiteLLM parameters
@@ -682,10 +669,8 @@ def update_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -732,9 +717,7 @@ def update_eval(
                 "user_agent",
             }
             # Only include user-provided metadata keys
-            filtered_metadata = {
-                k: v for k, v in metadata.items() if k not in internal_keys
-            }
+            filtered_metadata = {k: v for k, v in metadata.items() if k not in internal_keys}
             if filtered_metadata:  # Only add if there's user metadata
                 update_request["metadata"] = filtered_metadata
 
@@ -744,9 +727,7 @@ def update_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -802,10 +783,10 @@ def update_eval(
 @client
 async def adelete_eval(
     eval_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> DeleteEvalResponse:
     """
@@ -859,12 +840,12 @@ async def adelete_eval(
 @client
 def delete_eval(
     eval_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[DeleteEvalResponse, Coroutine[Any, Any, DeleteEvalResponse]]:
+) -> DeleteEvalResponse | Coroutine[Any, Any, DeleteEvalResponse]:
     """
     Delete an evaluation
 
@@ -882,7 +863,7 @@ def delete_eval(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("adelete_eval", False) is True
 
         # Get LiteLLM parameters
@@ -893,10 +874,8 @@ def delete_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -904,9 +883,7 @@ def delete_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -956,10 +933,10 @@ def delete_eval(
 @client
 async def acancel_eval(
     eval_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> CancelEvalResponse:
     """
@@ -1013,12 +990,12 @@ async def acancel_eval(
 @client
 def cancel_eval(
     eval_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[CancelEvalResponse, Coroutine[Any, Any, CancelEvalResponse]]:
+) -> CancelEvalResponse | Coroutine[Any, Any, CancelEvalResponse]:
     """
     Cancel a running evaluation
 
@@ -1036,7 +1013,7 @@ def cancel_eval(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("acancel_eval", False) is True
 
         # Get LiteLLM parameters
@@ -1047,10 +1024,8 @@ def cancel_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1058,9 +1033,7 @@ def cancel_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -1119,14 +1092,14 @@ def cancel_eval(
 @client
 async def acreate_run(
     eval_id: str,
-    data_source: Dict[str, Any],
-    name: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    data_source: dict[str, Any],
+    name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Run:
     """
@@ -1188,16 +1161,16 @@ async def acreate_run(
 @client
 def create_run(
     eval_id: str,
-    data_source: Dict[str, Any],
-    name: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    data_source: dict[str, Any],
+    name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[Run, Coroutine[Any, Any, Run]]:
+) -> Run | Coroutine[Any, Any, Run]:
     """
     Create a new run for an evaluation
 
@@ -1219,7 +1192,7 @@ def create_run(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("acreate_run", False) is True
 
         # Get LiteLLM parameters
@@ -1230,10 +1203,8 @@ def create_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1254,9 +1225,7 @@ def create_run(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -1307,14 +1276,14 @@ def create_run(
 @client
 async def alist_runs(
     eval_id: str,
-    limit: Optional[int] = None,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    order: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    limit: int | None = None,
+    after: str | None = None,
+    before: str | None = None,
+    order: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ListRunsResponse:
     """
@@ -1376,16 +1345,16 @@ async def alist_runs(
 @client
 def list_runs(
     eval_id: str,
-    limit: Optional[int] = None,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    order: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    limit: int | None = None,
+    after: str | None = None,
+    before: str | None = None,
+    order: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ListRunsResponse, Coroutine[Any, Any, ListRunsResponse]]:
+) -> ListRunsResponse | Coroutine[Any, Any, ListRunsResponse]:
     """
     List all runs for an evaluation
 
@@ -1407,7 +1376,7 @@ def list_runs(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("alist_runs", False) is True
 
         # Get LiteLLM parameters
@@ -1418,10 +1387,8 @@ def list_runs(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1444,9 +1411,7 @@ def list_runs(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         url, query_params = evals_api_provider_config.transform_list_runs_request(
@@ -1497,10 +1462,10 @@ def list_runs(
 async def aget_run(
     eval_id: str,
     run_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Run:
     """
@@ -1557,12 +1522,12 @@ async def aget_run(
 def get_run(
     eval_id: str,
     run_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[Run, Coroutine[Any, Any, Run]]:
+) -> Run | Coroutine[Any, Any, Run]:
     """
     Get a specific run
 
@@ -1581,7 +1546,7 @@ def get_run(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aget_run", False) is True
 
         # Get LiteLLM parameters
@@ -1592,10 +1557,8 @@ def get_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1603,9 +1566,7 @@ def get_run(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -1657,10 +1618,10 @@ def get_run(
 async def acancel_run(
     eval_id: str,
     run_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> CancelRunResponse:
     """
@@ -1717,12 +1678,12 @@ async def acancel_run(
 def cancel_run(
     eval_id: str,
     run_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[CancelRunResponse, Coroutine[Any, Any, CancelRunResponse]]:
+) -> CancelRunResponse | Coroutine[Any, Any, CancelRunResponse]:
     """
     Cancel a running run
 
@@ -1741,7 +1702,7 @@ def cancel_run(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("acancel_run", False) is True
 
         # Get LiteLLM parameters
@@ -1752,10 +1713,8 @@ def cancel_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1763,9 +1722,7 @@ def cancel_run(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -1826,10 +1783,10 @@ def cancel_run(
 async def adelete_run(
     eval_id: str,
     run_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> RunDeleteResponse:
     """
@@ -1886,12 +1843,12 @@ async def adelete_run(
 def delete_run(
     eval_id: str,
     run_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[RunDeleteResponse, Coroutine[Any, Any, RunDeleteResponse]]:
+) -> RunDeleteResponse | Coroutine[Any, Any, RunDeleteResponse]:
     """
     Delete a run
 
@@ -1910,7 +1867,7 @@ def delete_run(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("adelete_run", False) is True
 
         # Get LiteLLM parameters
@@ -1921,10 +1878,8 @@ def delete_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1932,9 +1887,7 @@ def delete_run(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE

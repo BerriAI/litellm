@@ -1,16 +1,13 @@
 import asyncio
 import contextvars
 import importlib
+from collections.abc import Coroutine
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Coroutine,
-    Dict,
-    List,
     Literal,
     Optional,
-    Union,
     cast,
     overload,
 )
@@ -111,14 +108,12 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
-        )
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
 
-        response: Optional[ImageResponse] = None
+        response: ImageResponse | None = None
         if isinstance(init_response, dict):
             response = ImageResponse(**init_response)
         elif isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
@@ -127,9 +122,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
             response = await init_response  # type: ignore
 
         if response is None:
-            raise ValueError(
-                "Unable to get Image Response. Please pass a valid llm_provider."
-            )
+            raise ValueError("Unable to get Image Response. Please pass a valid llm_provider.")
 
         return response
     except Exception as e:
@@ -149,17 +142,17 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
 @overload
 def image_generation(
     prompt: str,
-    model: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    style: Optional[str] = None,
-    user: Optional[str] = None,
+    model: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    style: str | None = None,
+    user: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider=None,
     *,
     aimg_generation: Literal[True],
@@ -173,17 +166,17 @@ def image_generation(
 @overload
 def image_generation(
     prompt: str,
-    model: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    style: Optional[str] = None,
-    user: Optional[str] = None,
+    model: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    style: str | None = None,
+    user: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider=None,
     *,
     aimg_generation: Literal[False] = False,
@@ -195,25 +188,22 @@ def image_generation(
 
 
 @client
-def image_generation(  # noqa: PLR0915
+def image_generation(
     prompt: str,
-    model: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    style: Optional[str] = None,
-    user: Optional[str] = None,
+    model: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    style: str | None = None,
+    user: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider=None,
     **kwargs,
-) -> Union[
-    ImageResponse,
-    Coroutine[Any, Any, ImageResponse],
-]:
+) -> ImageResponse | Coroutine[Any, Any, ImageResponse]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -224,7 +214,7 @@ def image_generation(  # noqa: PLR0915
         aimg_generation = kwargs.get("aimg_generation", False)
         litellm_call_id = kwargs.get("litellm_call_id", None)
         logger_fn = kwargs.get("logger_fn", None)
-        mock_response: Optional[str] = kwargs.get("mock_response", None)  # type: ignore
+        mock_response: str | None = kwargs.get("mock_response", None)  # type: ignore
         proxy_server_request = kwargs.get("proxy_server_request", None)
         azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
         model_info = kwargs.get("model_info", None)
@@ -237,7 +227,7 @@ def image_generation(  # noqa: PLR0915
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
-        dynamic_api_key: Optional[str] = None
+        dynamic_api_key: str | None = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
                 model=model,  # type: ignore
@@ -271,16 +261,11 @@ def image_generation(  # noqa: PLR0915
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
 
-        image_generation_config: Optional[BaseImageGenerationConfig] = None
-        if (
-            custom_llm_provider is not None
-            and custom_llm_provider in LlmProviders._member_map_.values()
-        ):
-            image_generation_config = (
-                ProviderConfigManager.get_provider_image_generation_config(
-                    model=base_model or model,
-                    provider=LlmProviders(custom_llm_provider),
-                )
+        image_generation_config: BaseImageGenerationConfig | None = None
+        if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
+            image_generation_config = ProviderConfigManager.get_provider_image_generation_config(
+                model=base_model or model,
+                provider=LlmProviders(custom_llm_provider),
             )
 
         optional_params = get_optional_params_image_gen(
@@ -327,11 +312,7 @@ def image_generation(  # noqa: PLR0915
 
             api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-            api_version = (
-                api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )
+            api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
 
             api_key = (
                 api_key
@@ -341,9 +322,7 @@ def image_generation(  # noqa: PLR0915
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            azure_ad_token = optional_params.pop(
-                "azure_ad_token", None
-            ) or get_secret_str("AZURE_AD_TOKEN")
+            azure_ad_token = optional_params.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
 
             # Create azure_ad_token_provider from tenant_id, client_id, client_secret if not already provided
             if azure_ad_token_provider is None:
@@ -355,10 +334,7 @@ def image_generation(  # noqa: PLR0915
                 tenant_id = litellm_params_dict.get("tenant_id")
                 client_id = litellm_params_dict.get("client_id")
                 client_secret = litellm_params_dict.get("client_secret")
-                azure_scope = (
-                    litellm_params_dict.get("azure_scope")
-                    or "https://cognitiveservices.azure.com/.default"
-                )
+                azure_scope = litellm_params_dict.get("azure_scope") or "https://cognitiveservices.azure.com/.default"
 
                 # Create token provider if credentials are available
                 if tenant_id and client_id and client_secret:
@@ -413,9 +389,7 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.DASHSCOPE,
         ):
             if image_generation_config is None:
-                raise ValueError(
-                    f"image generation config is not supported for {custom_llm_provider}"
-                )
+                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
             # Resolve api_base from litellm.api_base if not explicitly provided
             _api_base = api_base or litellm.api_base
@@ -494,7 +468,7 @@ def image_generation(  # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
-            organization: Optional[str] = kwargs.get("organization", None)
+            organization: str | None = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -524,23 +498,19 @@ def image_generation(  # noqa: PLR0915
                 api_base=api_base,
                 api_key=api_key,
             )
-        elif (
-            custom_llm_provider in litellm._custom_providers
-        ):  # Assume custom LLM provider
+        elif custom_llm_provider in litellm._custom_providers:  # Assume custom LLM provider
             # Get the Custom Handler
-            custom_handler: Optional[CustomLLM] = None
+            custom_handler: CustomLLM | None = None
             for item in litellm.custom_provider_map:
                 if item["provider"] == custom_llm_provider:
                     custom_handler = item["custom_handler"]
 
             if custom_handler is None:
-                raise LiteLLMUnknownProvider(
-                    model=model, custom_llm_provider=custom_llm_provider
-                )
+                raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
             ## ROUTE LLM CALL ##
             if aimg_generation is True:
-                async_custom_client: Optional[AsyncHTTPHandler] = None
+                async_custom_client: AsyncHTTPHandler | None = None
                 if client is not None and isinstance(client, AsyncHTTPHandler):
                     async_custom_client = client
 
@@ -557,7 +527,7 @@ def image_generation(  # noqa: PLR0915
                     client=async_custom_client,
                 )
             else:
-                custom_client: Optional[HTTPHandler] = None
+                custom_client: HTTPHandler | None = None
                 if client is not None and isinstance(client, HTTPHandler):
                     custom_client = client
 
@@ -612,15 +582,11 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
         func_with_context = partial(ctx.run, func)
 
         if custom_llm_provider is None and model is not None:
-            _, custom_llm_provider, _, _ = get_llm_provider(
-                model=model, api_base=kwargs.get("api_base", None)
-            )
+            _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
-        if isinstance(init_response, dict) or isinstance(
-            init_response, ImageResponse
-        ):  ## CACHING SCENARIO
+        if isinstance(init_response, dict) or isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
                 init_response = ImageResponse(**init_response)
             response = init_response
@@ -647,8 +613,8 @@ def image_variation(
     model: str = "dall-e-2",  # set to dall-e-2 by default - like OpenAI.
     n: int = 1,
     response_format: Literal["url", "b64_json"] = "url",
-    size: Optional[str] = None,
-    user: Optional[str] = None,
+    size: str | None = None,
+    user: str | None = None,
     **kwargs,
 ) -> ImageResponse:
     # get non-default params
@@ -676,7 +642,7 @@ def image_variation(
         )
     model_response = ImageResponse()
 
-    response: Optional[ImageResponse] = None
+    response: ImageResponse | None = None
 
     provider_config = ProviderConfigManager.get_provider_model_info(
         model=model or "",  # openai defaults to dall-e-2
@@ -738,26 +704,26 @@ def image_variation(
 
 
 @client
-def image_edit(  # noqa: PLR0915
-    image: Optional[Union[FileTypes, List[FileTypes]]] = None,
-    prompt: Optional[str] = None,
-    model: Optional[str] = None,
-    mask: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    user: Optional[str] = None,
+def image_edit(
+    image: FileTypes | list[FileTypes] | None = None,
+    prompt: str | None = None,
+    model: str | None = None,
+    mask: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse]]:
+) -> ImageResponse | Coroutine[Any, Any, ImageResponse]:
     """
     Maps the image edit functionality, similar to OpenAI's images/edits endpoint.
     """
@@ -787,18 +753,16 @@ def image_edit(  # noqa: PLR0915
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         model_info = kwargs.get("model_info", None)
         metadata = kwargs.get("metadata", {})
         _is_async = kwargs.pop("async_call", False) is True
 
         # add images / or return a single image
-        images = (
-            image if isinstance(image, list) else ([image] if image is not None else [])
-        )
+        images = image if isinstance(image, list) else ([image] if image is not None else [])
 
         headers_from_kwargs = kwargs.get("headers")
-        merged_extra_headers: Dict[str, Any] = {}
+        merged_extra_headers: dict[str, Any] = {}
         if isinstance(headers_from_kwargs, dict):
             merged_extra_headers.update(headers_from_kwargs)
         if isinstance(extra_headers, dict):
@@ -816,23 +780,19 @@ def image_edit(  # noqa: PLR0915
 
         # Check for custom provider
         if custom_llm_provider in litellm._custom_providers:
-            custom_handler: Optional[CustomLLM] = None
+            custom_handler: CustomLLM | None = None
             for item in litellm.custom_provider_map:
                 if item["provider"] == custom_llm_provider:
                     custom_handler = item["custom_handler"]
 
             if custom_handler is None:
-                raise LiteLLMUnknownProvider(
-                    model=model, custom_llm_provider=custom_llm_provider
-                )
+                raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
             model_response = ImageResponse()
 
             if _is_async:
-                async_custom_client: Optional[AsyncHTTPHandler] = None
-                if kwargs.get("client") is not None and isinstance(
-                    kwargs.get("client"), AsyncHTTPHandler
-                ):
+                async_custom_client: AsyncHTTPHandler | None = None
+                if kwargs.get("client") is not None and isinstance(kwargs.get("client"), AsyncHTTPHandler):
                     async_custom_client = kwargs.get("client")
 
                 return custom_handler.aimage_edit(
@@ -848,10 +808,8 @@ def image_edit(  # noqa: PLR0915
                     client=async_custom_client,
                 )
             else:
-                custom_client: Optional[HTTPHandler] = None
-                if kwargs.get("client") is not None and isinstance(
-                    kwargs.get("client"), HTTPHandler
-                ):
+                custom_client: HTTPHandler | None = None
+                if kwargs.get("client") is not None and isinstance(kwargs.get("client"), HTTPHandler):
                     custom_client = kwargs.get("client")
 
                 return custom_handler.image_edit(
@@ -868,11 +826,9 @@ def image_edit(  # noqa: PLR0915
                 )
 
         # get provider config
-        image_edit_provider_config: Optional[BaseImageEditConfig] = (
-            ProviderConfigManager.get_provider_image_edit_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        image_edit_provider_config: BaseImageEditConfig | None = ProviderConfigManager.get_provider_image_edit_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if image_edit_provider_config is None:
@@ -880,15 +836,11 @@ def image_edit(  # noqa: PLR0915
 
         local_vars.update(kwargs)
         # Get ImageEditOptionalRequestParams with only valid parameters
-        image_edit_optional_params: (
-            ImageEditOptionalRequestParams
-        ) = _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
-            local_vars
+        image_edit_optional_params: ImageEditOptionalRequestParams = (
+            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(local_vars)
         )
         # Get optional parameters for the responses API
-        image_edit_request_params: (
-            Dict
-        ) = _get_ImageEditRequestUtils().get_optional_params_image_edit(
+        image_edit_request_params: dict = _get_ImageEditRequestUtils().get_optional_params_image_edit(
             model=model,
             image_edit_provider_config=image_edit_provider_config,
             image_edit_optional_params=image_edit_optional_params,
@@ -992,23 +944,23 @@ def image_edit(  # noqa: PLR0915
 
 @client
 async def aimage_edit(
-    image: Union[FileTypes, List[FileTypes]],
+    image: FileTypes | list[FileTypes],
     model: str,
     prompt: str,
-    mask: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    user: Optional[str] = None,
+    mask: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ImageResponse:
     """

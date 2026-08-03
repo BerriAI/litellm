@@ -1,6 +1,6 @@
 import importlib
 import os
-from typing import TYPE_CHECKING, Dict, Optional, Type
+from typing import TYPE_CHECKING
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import CallTypes
@@ -14,9 +14,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 
 
-def get_cost_for_web_search_request(
-    custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo"
-) -> Optional[float]:
+def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo") -> float | None:
     """
     Get the cost for a web search request for a given model.
 
@@ -41,9 +39,7 @@ def get_cost_for_web_search_request(
         if "claude" in model_key.lower():
             from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
 
-            verbose_logger.debug(
-                "vertex_ai/claude model detected — routing web search cost to Anthropic calculator"
-            )
+            verbose_logger.debug("vertex_ai/claude model detected — routing web search cost to Anthropic calculator")
             return get_cost_for_anthropic_web_search(model_info=model_info, usage=usage)
 
         from .vertex_ai.gemini.cost_calculator import (
@@ -63,9 +59,7 @@ def get_cost_for_web_search_request(
         return None
 
 
-def discover_guardrail_translation_mappings() -> (
-    Dict[CallTypes, Type["BaseTranslation"]]
-):
+def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTranslation"]]:
     """
     Discover guardrail translation mappings by scanning the llms directory structure.
 
@@ -74,7 +68,7 @@ def discover_guardrail_translation_mappings() -> (
     Returns:
         Dict[CallTypes, Type[BaseTranslation]]: A dictionary mapping call types to their translation handler classes
     """
-    discovered_mappings: Dict[CallTypes, Type["BaseTranslation"]] = {}
+    discovered_mappings: dict[CallTypes, type[BaseTranslation]] = {}
 
     try:
         # Get the path to the llms directory
@@ -91,19 +85,14 @@ def discover_guardrail_translation_mappings() -> (
             dirs[:] = [d for d in dirs if not d.startswith("__") and d != "base_llm"]
 
             # Check if this is a guardrail_translation directory with __init__.py
-            if (
-                os.path.basename(root) == "guardrail_translation"
-                and "__init__.py" in files
-            ):
+            if os.path.basename(root) == "guardrail_translation" and "__init__.py" in files:
                 # Build the module path relative to litellm
                 rel_path = os.path.relpath(root, os.path.dirname(llms_dir))
                 module_path = "litellm." + rel_path.replace(os.sep, ".")
 
                 try:
                     # Import the module
-                    verbose_logger.debug(
-                        f"Discovering guardrail translations in: {module_path}"
-                    )
+                    verbose_logger.debug(f"Discovering guardrail translations in: {module_path}")
 
                     module = importlib.import_module(module_path)
 
@@ -134,9 +123,7 @@ def discover_guardrail_translation_mappings() -> (
                 list(mcp_guardrail_translation_mappings.keys()),
             )
         except ImportError:
-            verbose_logger.debug(
-                "MCP guardrail translation mappings not available; skipping"
-            )
+            verbose_logger.debug("MCP guardrail translation mappings not available; skipping")
 
         verbose_logger.debug(
             f"Discovered {len(discovered_mappings)} guardrail translation mappings: {list(discovered_mappings.keys())}"
@@ -149,21 +136,17 @@ def discover_guardrail_translation_mappings() -> (
 
 
 # Cache the discovered mappings
-endpoint_guardrail_translation_mappings: Optional[
-    Dict[CallTypes, Type["BaseTranslation"]]
-] = None
+endpoint_guardrail_translation_mappings: dict[CallTypes, type["BaseTranslation"]] | None = None
 
 
 def load_guardrail_translation_mappings():
     global endpoint_guardrail_translation_mappings
     if endpoint_guardrail_translation_mappings is None:
-        endpoint_guardrail_translation_mappings = (
-            discover_guardrail_translation_mappings()
-        )
+        endpoint_guardrail_translation_mappings = discover_guardrail_translation_mappings()
     return endpoint_guardrail_translation_mappings
 
 
-def get_guardrail_translation_mapping(call_type: CallTypes) -> Type["BaseTranslation"]:
+def get_guardrail_translation_mapping(call_type: CallTypes) -> type["BaseTranslation"]:
     """
     Get the guardrail translation handler for a given call type.
 
@@ -180,9 +163,7 @@ def get_guardrail_translation_mapping(call_type: CallTypes) -> Type["BaseTransla
 
     # Lazy load the mappings on first access
     if endpoint_guardrail_translation_mappings is None:
-        endpoint_guardrail_translation_mappings = (
-            discover_guardrail_translation_mappings()
-        )
+        endpoint_guardrail_translation_mappings = discover_guardrail_translation_mappings()
 
     # Get the translation handler class for the call type
     if call_type not in endpoint_guardrail_translation_mappings:

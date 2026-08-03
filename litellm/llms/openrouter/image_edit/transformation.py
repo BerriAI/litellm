@@ -42,7 +42,7 @@ Response format:
 
 import base64
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -88,18 +88,16 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        mapped_params: Dict[str, Any] = {}
+        mapped_params: dict[str, Any] = {}
 
         for key, value in image_edit_optional_params.items():
             if key in supported_params:
                 if key == "size":
                     if "image_config" not in mapped_params:
                         mapped_params["image_config"] = {}
-                    mapped_params["image_config"]["aspect_ratio"] = (
-                        self._map_size_to_aspect_ratio(cast(str, value))
-                    )
+                    mapped_params["image_config"]["aspect_ratio"] = self._map_size_to_aspect_ratio(cast(str, value))
                 elif key == "quality":
                     image_size = self._map_quality_to_image_size(cast(str, value))
                     if image_size:
@@ -115,9 +113,9 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = api_key or litellm.api_key or get_secret_str("OPENROUTER_API_KEY")
         if not api_key:
@@ -136,14 +134,10 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        base_url = (
-            api_base
-            or get_secret_str("OPENROUTER_API_BASE")
-            or "https://openrouter.ai/api/v1"
-        )
+        base_url = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
         base_url = base_url.rstrip("/")
         if not base_url.endswith("/chat/completions"):
             return f"{base_url}/chat/completions"
@@ -152,13 +146,13 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
-        content_parts: List[Dict[str, Any]] = []
+    ) -> tuple[dict, RequestFiles]:
+        content_parts: list[dict[str, Any]] = []
 
         # Add source image(s) as base64 data URLs
         if image is not None:
@@ -180,7 +174,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         if prompt:
             content_parts.append({"type": "text", "text": prompt})
 
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "model": model,
             "messages": [
                 {
@@ -209,7 +203,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             response_json = raw_response.json()
         except Exception as e:
             raise OpenRouterException(
-                message=f"Error parsing OpenRouter response: {str(e)}",
+                message=f"Error parsing OpenRouter response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -252,7 +246,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
 
         except Exception as e:
             raise OpenRouterException(
-                message=f"Error transforming OpenRouter image edit response: {str(e)}",
+                message=f"Error transforming OpenRouter image edit response: {e}",
                 status_code=500,
                 headers={},
             )
@@ -260,9 +254,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         self._set_usage_and_cost(model_response, response_json, model)
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OpenRouterException(
             message=error_message,
             status_code=status_code,
@@ -290,7 +282,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         }
         return size_to_aspect_ratio.get(size, "1:1")
 
-    def _map_quality_to_image_size(self, quality: str) -> Optional[str]:
+    def _map_quality_to_image_size(self, quality: str) -> str | None:
         """
         Map OpenAI quality to OpenRouter image_size format.
 
@@ -344,17 +336,15 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                     model_response._hidden_params = {}
                 if "additional_headers" not in model_response._hidden_params:
                     model_response._hidden_params["additional_headers"] = {}
-                model_response._hidden_params["additional_headers"][
-                    "llm_provider-x-litellm-response-cost"
-                ] = float(cost)
+                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+                    cost
+                )
 
             cost_details = usage_data.get("cost_details", {})
             if cost_details:
                 if "response_cost_details" not in model_response._hidden_params:
                     model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(
-                    cost_details
-                )
+                model_response._hidden_params["response_cost_details"].update(cost_details)
 
         model_response._hidden_params["model"] = response_json.get("model", model)
 

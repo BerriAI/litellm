@@ -29,6 +29,4 @@ _config = MockClientConfig(
     patch_sync_client=False,
 )
 
-create_mock_langsmith_client, should_use_langsmith_mock = create_mock_client_factory(
-    _config
-)
+create_mock_langsmith_client, should_use_langsmith_mock = create_mock_client_factory(_config)

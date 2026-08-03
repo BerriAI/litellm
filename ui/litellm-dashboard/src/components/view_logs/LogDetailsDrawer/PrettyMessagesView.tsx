@@ -4,10 +4,10 @@
  * Detects realtime API responses and renders a specialized view.
  */
 
-import { parseMessages } from './prettyMessagesUtils';
-import { InputCard } from './InputCard';
-import { OutputCard } from './OutputCard';
-import { isRealtimeResponse, RealtimePrettyView } from './RealtimePrettyView';
+import { parseMessages } from "./prettyMessagesUtils";
+import { InputCard } from "./InputCard";
+import { OutputCard } from "./OutputCard";
+import { isRealtimeResponse, RealtimePrettyView } from "./RealtimePrettyView";
 
 interface PrettyMessagesViewProps {
   request: any;
@@ -30,11 +30,7 @@ export function PrettyMessagesView({ request, response, metrics }: PrettyMessage
   return (
     <div>
       {/* Input Card */}
-      <InputCard
-        messages={requestMessages}
-        promptTokens={metrics?.prompt_tokens}
-        inputCost={metrics?.input_cost}
-      />
+      <InputCard messages={requestMessages} promptTokens={metrics?.prompt_tokens} inputCost={metrics?.input_cost} />
 
       {/* Output Card */}
       <OutputCard

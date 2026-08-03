@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
@@ -10,6 +10,8 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     Member,
 )
+
+TeamIdSearchMatch = Literal["exact", "prefix"]
 
 
 class GetTeamMemberPermissionsRequest(BaseModel):
@@ -69,6 +71,7 @@ class TeamListItem(LiteLLM_TeamTable):
     """A team item in the paginated list response, enriched with computed fields."""
 
     members_count: int = 0
+    keys_count: int = 0
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: Optional[List[str]] = None
     access_group_mcp_server_ids: Optional[List[str]] = None

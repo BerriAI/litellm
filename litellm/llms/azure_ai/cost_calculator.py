@@ -3,8 +3,6 @@ Azure AI cost calculation helper.
 Handles Azure AI Foundry Model Router flat cost and other Azure AI specific pricing.
 """
 
-from typing import Optional, Tuple
-
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
@@ -28,11 +26,7 @@ def _is_azure_model_router(model: str) -> bool:
         bool: True if this is a model router model
     """
     model_lower = model.lower()
-    return (
-        "model-router" in model_lower
-        or "model_router" in model_lower
-        or model_lower == "azure-model-router"
-    )
+    return "model-router" in model_lower or "model_router" in model_lower or model_lower == "azure-model-router"
 
 
 def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> float:
@@ -63,10 +57,10 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
 def cost_per_token(
     model: str,
     usage: Usage,
-    response_time_ms: Optional[float] = 0.0,
-    request_model: Optional[str] = None,
-    service_tier: Optional[str] = None,
-) -> Tuple[float, float]:
+    response_time_ms: float | None = 0.0,
+    request_model: str | None = None,
+    service_tier: str | None = None,
+) -> tuple[float, float]:
     """
     Calculate the cost per token for Azure AI models.
 
@@ -121,9 +115,7 @@ def cost_per_token(
     if is_router_request:
         # Use the request model for flat cost calculation if available, otherwise use response model
         router_model_for_calc = request_model if request_model else model
-        router_flat_cost = calculate_azure_model_router_flat_cost(
-            router_model_for_calc, usage.prompt_tokens
-        )
+        router_flat_cost = calculate_azure_model_router_flat_cost(router_model_for_calc, usage.prompt_tokens)
 
         if router_flat_cost > 0:
             verbose_logger.debug(

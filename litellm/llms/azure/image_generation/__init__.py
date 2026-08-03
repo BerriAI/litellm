@@ -1,4 +1,5 @@
 from litellm._logging import verbose_logger
+from litellm.llms.azure_ai.image_generation import AzureFoundryMAIImageGenerationConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -24,6 +25,8 @@ def get_azure_image_generation_config(model: str) -> BaseImageGenerationConfig:
         return AzureDallE2ImageGenerationConfig()
     elif "dalle3" in model:
         return AzureDallE3ImageGenerationConfig()
+    elif AzureFoundryMAIImageGenerationConfig.is_mai_model(model):
+        return AzureFoundryMAIImageGenerationConfig()
     else:
         verbose_logger.debug(
             f"Using AzureGPTImageGenerationConfig for model: {model}. This follows the gpt-image model format."

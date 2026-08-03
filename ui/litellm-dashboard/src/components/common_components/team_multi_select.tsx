@@ -3,6 +3,7 @@ import { Select, Typography } from "antd";
 import { LoadingOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { Team } from "../key_team_helpers/key_list";
 
 const { Text } = Typography;
@@ -17,7 +18,6 @@ interface TeamMultiSelectProps {
 }
 
 const SCROLL_THRESHOLD = 0.8;
-const DEBOUNCE_MS = 300;
 
 const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
   value = [],
@@ -29,16 +29,10 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
 }) => {
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
-    wait: DEBOUNCE_MS,
+    wait: DEBOUNCE_WAIT_MS,
   });
 
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-  } = useInfiniteTeams(
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
     pageSize,
     debouncedSearch || undefined,
     organizationId,
@@ -60,8 +54,7 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
 
   const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
-    const scrollRatio =
-      (target.scrollTop + target.clientHeight) / target.scrollHeight;
+    const scrollRatio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
     if (scrollRatio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
       fetchNextPage();
     }
@@ -101,8 +94,7 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
     >
       {teams.map((team) => (
         <Select.Option key={team.team_id} value={team.team_id}>
-          <span className="font-medium">{team.team_alias}</span>{" "}
-          <Text type="secondary">({team.team_id})</Text>
+          <span className="font-medium">{team.team_alias}</span> <Text type="secondary">({team.team_id})</Text>
         </Select.Option>
       ))}
     </Select>

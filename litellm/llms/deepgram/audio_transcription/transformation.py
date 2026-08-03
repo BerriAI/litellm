@@ -2,7 +2,6 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 """
 
-from typing import List, Optional, Union
 from urllib.parse import urlencode
 
 from httpx import Headers, Response
@@ -24,9 +23,7 @@ from ..common_utils import DeepgramException
 
 
 class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         return ["language"]
 
     def map_openai_params(
@@ -42,12 +39,8 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 optional_params[k] = v
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return DeepgramException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+        return DeepgramException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_audio_transcription_request(
         self,
@@ -72,9 +65,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         # Return structured data with binary content and no files
         # For Deepgram, we send binary data directly as request body
-        return AudioTranscriptionRequestData(
-            data=processed_audio.file_content, files=None
-        )
+        return AudioTranscriptionRequestData(data=processed_audio.file_content, files=None)
 
     def transform_audio_transcription_response(
         self,
@@ -131,9 +122,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return response
 
         except Exception as e:
-            raise ValueError(
-                f"Error transforming Deepgram response: {str(e)}\nResponse: {raw_response.text}"
-            )
+            raise ValueError(f"Error transforming Deepgram response: {e}\nResponse: {raw_response.text}")
 
     def _reconstruct_diarized_transcript(self, words: list) -> str:
         """
@@ -160,9 +149,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             if speaker != current_speaker:
                 # New speaker: save previous segment and start new one
                 if current_words:
-                    segments.append(
-                        f"Speaker {current_speaker}: {' '.join(current_words)}"
-                    )
+                    segments.append(f"Speaker {current_speaker}: {' '.join(current_words)}")
                 current_speaker = speaker
                 current_words = [word_text]
             else:
@@ -177,17 +164,15 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base is None:
-            api_base = (
-                get_secret_str("DEEPGRAM_API_BASE") or "https://api.deepgram.com/v1"
-            )
+            api_base = get_secret_str("DEEPGRAM_API_BASE") or "https://api.deepgram.com/v1"
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
         # Build query parameters including the model
@@ -247,11 +232,11 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = api_key or get_secret_str("DEEPGRAM_API_KEY")
         return {

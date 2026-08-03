@@ -14,7 +14,7 @@ Key differences from OpenAI:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from litellm import get_secret_str
 from litellm._logging import verbose_logger
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from litellm.types.rag import RAGIngestOptions
 
 
-def _get_str_or_none(value: Any) -> Optional[str]:
+def _get_str_or_none(value: Any) -> str | None:
     """Cast config value to Optional[str]."""
     return str(value) if value is not None else None
 
@@ -65,8 +65,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         super().__init__(ingest_options=ingest_options, router=router)
 
@@ -79,20 +79,14 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             )
 
         # GCP config
-        self.vertex_project = self.vector_store_config.get(
-            "vertex_project"
-        ) or get_secret_str("VERTEXAI_PROJECT")
+        self.vertex_project = self.vector_store_config.get("vertex_project") or get_secret_str("VERTEXAI_PROJECT")
         self.vertex_location = (
-            self.vector_store_config.get("vertex_location")
-            or get_secret_str("VERTEXAI_LOCATION")
-            or "us-central1"
+            self.vector_store_config.get("vertex_location") or get_secret_str("VERTEXAI_LOCATION") or "us-central1"
         )
         self.vertex_credentials = self.vector_store_config.get("vertex_credentials")
 
         # GCS bucket for file uploads
-        self.gcs_bucket = self.vector_store_config.get("gcs_bucket") or os.environ.get(
-            "GCS_BUCKET_NAME"
-        )
+        self.gcs_bucket = self.vector_store_config.get("gcs_bucket") or os.environ.get("GCS_BUCKET_NAME")
         if not self.gcs_bucket:
             raise ValueError(
                 "gcs_bucket is required for Vertex AI RAG ingestion. "
@@ -101,9 +95,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
         # Import settings
         self.wait_for_import = self.vector_store_config.get("wait_for_import", True)
-        self.import_timeout = _get_int(
-            self.vector_store_config.get("import_timeout"), 600
-        )
+        self.import_timeout = _get_int(self.vector_store_config.get("import_timeout"), 600)
 
         # Validate required config
         if not self.vertex_project:
@@ -141,8 +133,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             file_tuple = (filename, file_content, content_type)
 
             verbose_logger.debug(
-                f"Uploading file to GCS via litellm.files.acreate_file: {filename} "
-                f"(bucket: {self.gcs_bucket})"
+                f"Uploading file to GCS via litellm.files.acreate_file: {filename} (bucket: {self.gcs_bucket})"
             )
 
             # Upload to GCS using LiteLLM's file upload
@@ -204,9 +195,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
                 transformation_config=transformation_config,
                 timeout=self.import_timeout,
             )
-            verbose_logger.info(
-                f"Import complete: {response.imported_rag_files_count} files imported"
-            )
+            verbose_logger.info(f"Import complete: {response.imported_rag_files_count} files imported")
         else:
             # Async import - don't wait
             _ = rag.import_files_async(
@@ -238,7 +227,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
         transformation = VertexAIRAGTransformation()
         chunking_config = transformation.transform_chunking_strategy_to_vertex_format(
-            cast(Optional[RAGChunkingStrategy], self.chunking_strategy)
+            cast(RAGChunkingStrategy | None, self.chunking_strategy)
         )
 
         chunk_size = chunking_config["chunking_config"]["chunk_size"]
@@ -253,8 +242,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         Vertex AI handles embedding internally - skip this step.
 
@@ -265,12 +254,12 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
+    ) -> tuple[str | None, str | None]:
         """
         Store content in Vertex AI RAG corpus.
 
@@ -290,9 +279,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             Tuple of (corpus_id, gcs_uri)
         """
         if not file_content or not filename:
-            verbose_logger.warning(
-                "No file content or filename provided for Vertex AI ingestion"
-            )
+            verbose_logger.warning("No file content or filename provided for Vertex AI ingestion")
             return _get_str_or_none(self.corpus_id), None
 
         # Step 1: Upload file to GCS

@@ -4,7 +4,7 @@ Azure AI Anthropic CountTokens API handler.
 Uses httpx for HTTP requests with Azure authentication.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -27,14 +27,14 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
     async def handle_count_tokens_request(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         api_key: str,
         api_base: str,
-        litellm_params: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+        litellm_params: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        system: Any | None = None,
+    ) -> dict[str, Any]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
 
@@ -56,9 +56,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             # Validate the request
             self.validate_request(model, messages)
 
-            verbose_logger.debug(
-                f"Processing Azure AI Anthropic CountTokens request for model: {model}"
-            )
+            verbose_logger.debug(f"Processing Azure AI Anthropic CountTokens request for model: {model}")
 
             # Transform request to Anthropic format
             request_body = self.transform_request_to_count_tokens(
@@ -82,14 +80,10 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             )
 
             # Use LiteLLM's async httpx client
-            async_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.AZURE_AI
-            )
+            async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE_AI)
 
             # Use provided timeout or fall back to litellm.request_timeout
-            request_timeout = (
-                timeout if timeout is not None else litellm.request_timeout
-            )
+            request_timeout = timeout if timeout is not None else litellm.request_timeout
 
             response = await async_client.post(
                 endpoint_url,
@@ -120,14 +114,14 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error(f"HTTP error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"HTTP error in CountTokens handler: {e}")
             raise AnthropicError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except Exception as e:
-            verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"Error in CountTokens handler: {e}")
             raise AnthropicError(
                 status_code=500,
-                message=f"CountTokens processing error: {str(e)}",
+                message=f"CountTokens processing error: {e}",
             )
