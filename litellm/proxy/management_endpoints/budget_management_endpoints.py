@@ -239,12 +239,7 @@ async def budget_settings(
     if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "{}, your role={}".format(
-                    CommonProxyErrors.not_allowed_access.value,
-                    user_api_key_dict.user_role,
-                )
-            },
+            detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
     ## get budget item from db
@@ -304,12 +299,7 @@ async def list_budget(
     if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "{}, your role={}".format(
-                    CommonProxyErrors.not_allowed_access.value,
-                    user_api_key_dict.user_role,
-                )
-            },
+            detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
     response = await BudgetRepository(prisma_client).table.find_many()
@@ -343,12 +333,7 @@ async def delete_budget(
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "{}, your role={}".format(
-                    CommonProxyErrors.not_allowed_access.value,
-                    user_api_key_dict.user_role,
-                )
-            },
+            detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
     response = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})

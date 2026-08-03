@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 from litellm.proxy._types import (
     KeyManagementRoutes,
     LiteLLM_TeamTableCachedObj,
@@ -11,9 +9,9 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.auth.auth_checks import get_team_object
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
 
 BASELINE_TEAM_MEMBER_PERMISSIONS = [
@@ -29,7 +27,7 @@ class TeamMemberPermissionChecks:
     def get_permissions_for_team_member(
         team_member_object: Member,
         team_table: LiteLLM_TeamTableCachedObj,
-    ) -> List[KeyManagementRoutes]:
+    ) -> list[KeyManagementRoutes]:
         """
         Returns the permissions for a team member.
 
@@ -48,8 +46,8 @@ class TeamMemberPermissionChecks:
 
     @staticmethod
     def _get_list_of_route_enum_as_str(
-        route_enum: List[KeyManagementRoutes],
-    ) -> List[str]:
+        route_enum: list[KeyManagementRoutes],
+    ) -> list[str]:
         """
         Returns a list of the route enum as a list of strings
         """
@@ -106,10 +104,10 @@ class TeamMemberPermissionChecks:
 
     @staticmethod
     def does_team_member_have_permissions_for_endpoint(
-        team_member_object: Optional[Member],
+        team_member_object: Member | None,
         team_table: LiteLLM_TeamTableCachedObj,
         route: str,
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """
         Raises an exception if the team member does not have permissions for calling the endpoint for a team
         """
@@ -140,8 +138,8 @@ class TeamMemberPermissionChecks:
     @staticmethod
     def enforce_member_can_assign_access_groups(
         user_api_key_dict: UserAPIKeyAuth,
-        team_table: Optional[LiteLLM_TeamTableCachedObj],
-        access_group_ids: Optional[List[str]],
+        team_table: LiteLLM_TeamTableCachedObj | None,
+        access_group_ids: list[str] | None,
     ) -> None:
         """
         Field-level opt-in gate: a non-admin team member may only set
@@ -233,7 +231,7 @@ class TeamMemberPermissionChecks:
         return team_member_object is not None
 
     @staticmethod
-    def get_all_available_team_member_permissions() -> List[str]:
+    def get_all_available_team_member_permissions() -> list[str]:
         """
         Returns all available team member permissions
         """
@@ -243,5 +241,5 @@ class TeamMemberPermissionChecks:
         return all_available_permissions
 
     @staticmethod
-    def default_team_member_permissions() -> List[str]:
+    def default_team_member_permissions() -> list[str]:
         return [route.value for route in DEFAULT_TEAM_MEMBER_PERMISSIONS]

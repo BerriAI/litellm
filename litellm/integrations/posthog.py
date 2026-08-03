@@ -12,16 +12,16 @@ For batching specific details see CustomBatchLogger class
 import asyncio
 import atexit
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.integrations.posthog_mock_client import (
-    should_use_posthog_mock,
     create_mock_posthog_client,
+    should_use_posthog_mock,
 )
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -72,7 +72,7 @@ class PostHogLogger(CustomBatchLogger):
             super().__init__(**kwargs, flush_lock=None, batch_size=POSTHOG_MAX_BATCH_SIZE)
 
         except Exception as e:
-            verbose_logger.exception(f"PostHog: Got exception on init PostHog client {str(e)}")
+            verbose_logger.exception(f"PostHog: Got exception on init PostHog client {e!s}")
             raise e
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -107,7 +107,7 @@ class PostHogLogger(CustomBatchLogger):
                 verbose_logger.debug("PostHog: Sync event successfully sent")
 
         except Exception as e:
-            verbose_logger.exception(f"PostHog Sync Layer Error - {str(e)}")
+            verbose_logger.exception(f"PostHog Sync Layer Error - {e!s}")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -115,8 +115,7 @@ class PostHogLogger(CustomBatchLogger):
             self._ensure_async_setup()  # Lazy initialization
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
         except Exception as e:
-            verbose_logger.exception(f"PostHog Layer Error - {str(e)}")
-            pass
+            verbose_logger.exception(f"PostHog Layer Error - {e!s}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -124,8 +123,7 @@ class PostHogLogger(CustomBatchLogger):
             self._ensure_async_setup()  # Lazy initialization
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
         except Exception as e:
-            verbose_logger.exception(f"PostHog Layer Error - {str(e)}")
-            pass
+            verbose_logger.exception(f"PostHog Layer Error - {e!s}")
 
     async def _log_async_event(self, kwargs, response_obj=None, start_time=0.0, end_time=0.0):
         # Note: response_obj, start_time, end_time not used - all data comes from kwargs
@@ -139,7 +137,7 @@ class PostHogLogger(CustomBatchLogger):
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
 
-    def create_posthog_event_payload(self, kwargs: Dict[str, Any]) -> PostHogEventPayload:
+    def create_posthog_event_payload(self, kwargs: dict[str, Any]) -> PostHogEventPayload:
         """
         Helper function to create a PostHog event payload for logging
 
@@ -149,7 +147,7 @@ class PostHogLogger(CustomBatchLogger):
         Returns:
             PostHogEventPayload: defined in types.py
         """
-        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+        standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
         if standard_logging_object is None:
             raise ValueError("standard_logging_object not found in kwargs")
 
@@ -173,9 +171,9 @@ class PostHogLogger(CustomBatchLogger):
     def _create_posthog_properties(
         self,
         standard_logging_object: StandardLoggingPayload,
-        kwargs: Dict[str, Any],
+        kwargs: dict[str, Any],
         event_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create PostHog properties following LLM Analytics spec"""
         properties = {}
 
@@ -220,7 +218,7 @@ class PostHogLogger(CustomBatchLogger):
 
         return properties
 
-    def _add_trace_properties(self, properties: Dict[str, Any], kwargs: Dict[str, Any]):
+    def _add_trace_properties(self, properties: dict[str, Any], kwargs: dict[str, Any]):
         standard_logging_object = self._safe_get(kwargs, "standard_logging_object", {})
 
         trace_id = self._safe_get(standard_logging_object, "trace_id", self._safe_uuid())
@@ -234,7 +232,7 @@ class PostHogLogger(CustomBatchLogger):
         if parent_id:
             properties["$ai_parent_id"] = parent_id
 
-    def _add_custom_metadata_properties(self, properties: Dict[str, Any], kwargs: Dict[str, Any]):
+    def _add_custom_metadata_properties(self, properties: dict[str, Any], kwargs: dict[str, Any]):
         """Add custom metadata fields to PostHog properties"""
         metadata = self._extract_metadata(kwargs)
         if not isinstance(metadata, dict):
@@ -269,7 +267,6 @@ class PostHogLogger(CustomBatchLogger):
             "deployment",
             "model_info",
             "api_base",
-            "caching_groups",
             "hidden_params",
             "parent_run_id",
             "parent_id",
@@ -280,7 +277,7 @@ class PostHogLogger(CustomBatchLogger):
             if key not in litellm_internal_fields:
                 properties[key] = value
 
-    def _get_distinct_id(self, standard_logging_object: StandardLoggingPayload, kwargs: Dict[str, Any]) -> str:
+    def _get_distinct_id(self, standard_logging_object: StandardLoggingPayload, kwargs: dict[str, Any]) -> str:
         metadata = self._extract_metadata(kwargs)
         user_id = self._safe_get(metadata, "user_id")
         if user_id:
@@ -294,7 +291,7 @@ class PostHogLogger(CustomBatchLogger):
 
         return self._safe_uuid()
 
-    def _get_credentials_for_request(self, kwargs: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    def _get_credentials_for_request(self, kwargs: dict[str, Any]) -> tuple[str | None, str | None]:
         """
         Get PostHog credentials for this request.
 
@@ -307,7 +304,7 @@ class PostHogLogger(CustomBatchLogger):
         Returns:
             tuple[str, str]: (api_key, api_url)
         """
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = kwargs.get(
+        standard_callback_dynamic_params: StandardCallbackDynamicParams | None = kwargs.get(
             "standard_callback_dynamic_params", None
         )
 
@@ -337,7 +334,7 @@ class PostHogLogger(CustomBatchLogger):
                 verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
 
             # Group events by credentials for batch sending
-            batches_by_credentials: Dict[tuple[str, str], list] = {}
+            batches_by_credentials: dict[tuple[str, str], list] = {}
             for item in self.log_queue:
                 key = (item["api_key"], item["api_url"])
                 if key not in batches_by_credentials:
@@ -370,7 +367,7 @@ class PostHogLogger(CustomBatchLogger):
             else:
                 verbose_logger.debug(f"PostHog: Batch of {len(self.log_queue)} events successfully sent")
         except Exception as e:
-            verbose_logger.exception(f"PostHog Error sending batch API - {str(e)}")
+            verbose_logger.exception(f"PostHog Error sending batch API - {e!s}")
 
     def _ensure_async_setup(self):
         if not self._async_initialized:
@@ -380,17 +377,17 @@ class PostHogLogger(CustomBatchLogger):
                 self._async_initialized = True
                 verbose_logger.debug("PostHog: Async components initialized")
             except Exception as e:
-                verbose_logger.error(f"PostHog: Failed to initialize async components: {str(e)}")
+                verbose_logger.error(f"PostHog: Failed to initialize async components: {e!s}")
                 raise
 
-    def _extract_metadata(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_metadata(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         litellm_params = kwargs.get("litellm_params", {}) or {}
         return litellm_params.get("metadata", {}) or {}
 
     def _safe_uuid(self) -> str:
         return str(uuid.uuid4())
 
-    def _create_posthog_payload(self, events: list, api_key: str) -> Dict[str, Any]:
+    def _create_posthog_payload(self, events: list, api_key: str) -> dict[str, Any]:
         return {"api_key": api_key, "batch": events}
 
     def _safe_get(self, obj: Any, key: str, default: Any = None) -> Any:
@@ -415,7 +412,7 @@ class PostHogLogger(CustomBatchLogger):
 
         try:
             # Group events by credentials (same logic as async_send_batch)
-            batches_by_credentials: Dict[Tuple[str, str], list] = {}
+            batches_by_credentials: dict[tuple[str, str], list] = {}
             for item in self.log_queue:
                 key = (item["api_key"], item["api_url"])
                 if key not in batches_by_credentials:
@@ -448,4 +445,4 @@ class PostHogLogger(CustomBatchLogger):
             self.log_queue.clear()
 
         except Exception as e:
-            verbose_logger.error(f"PostHog: Error flushing events on exit: {str(e)}")
+            verbose_logger.error(f"PostHog: Error flushing events on exit: {e!s}")

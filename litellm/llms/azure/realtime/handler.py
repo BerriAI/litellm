@@ -4,7 +4,7 @@ This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -34,9 +34,9 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         self,
         api_base: str,
         model: str,
-        api_version: Optional[str],
-        realtime_protocol: Optional[str] = None,
-        query_params: Optional[RealtimeQueryParams] = None,
+        api_version: str | None,
+        realtime_protocol: str | None = None,
+        query_params: RealtimeQueryParams | None = None,
     ) -> str:
         """
         Construct Azure realtime WebSocket URL.
@@ -89,16 +89,16 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         model: str,
         websocket: Any,
         logging_obj: LiteLLMLogging,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_version: Optional[str] = None,
-        azure_ad_token: Optional[str] = None,
-        client: Optional[Any] = None,
-        timeout: Optional[float] = None,
-        realtime_protocol: Optional[str] = None,
-        query_params: Optional[RealtimeQueryParams] = None,
-        user_api_key_dict: Optional[Any] = None,
-        litellm_metadata: Optional[dict] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        api_version: str | None = None,
+        azure_ad_token: str | None = None,
+        client: Any | None = None,
+        timeout: float | None = None,
+        realtime_protocol: str | None = None,
+        query_params: RealtimeQueryParams | None = None,
+        user_api_key_dict: Any | None = None,
+        litellm_metadata: dict | None = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -145,4 +145,3 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception:
             verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
-            pass

@@ -1,5 +1,5 @@
 import json
-from typing import Any, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -23,16 +23,16 @@ from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_ca
 
 
 def make_sync_call(
-    client: Optional[HTTPHandler],
+    client: HTTPHandler | None,
     api_base: str,
     headers: dict,
     data: str,
     model: str,
     messages: list,
     logging_obj: LiteLLMLoggingObject,
-    json_mode: Optional[bool] = False,
+    json_mode: bool | None = False,
     fake_stream: bool = False,
-    stream_chunk_size: Optional[int] = None,
+    stream_chunk_size: int | None = None,
 ):
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
@@ -87,7 +87,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         messages: list,
         api_base: str,
         model_response: ModelResponse,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
         encoding,
         logging_obj,
         stream,
@@ -96,11 +96,11 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Credentials,
         logger_fn=None,
         headers={},
-        client: Optional[AsyncHTTPHandler] = None,
+        client: AsyncHTTPHandler | None = None,
         fake_stream: bool = False,
-        json_mode: Optional[bool] = False,
-        api_key: Optional[str] = None,
-        stream_chunk_size: Optional[int] = None,
+        json_mode: bool | None = False,
+        api_key: str | None = None,
+        stream_chunk_size: int | None = None,
     ) -> CustomStreamWrapper:
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
@@ -158,7 +158,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         messages: list,
         api_base: str,
         model_response: ModelResponse,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
         encoding,
         logging_obj: LiteLLMLoggingObject,
         stream,
@@ -167,9 +167,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Credentials,
         logger_fn=None,
         headers: dict = {},
-        client: Optional[AsyncHTTPHandler] = None,
-        api_key: Optional[str] = None,
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
+        client: AsyncHTTPHandler | None = None,
+        api_key: str | None = None,
+    ) -> ModelResponse | CustomStreamWrapper:
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
             messages=messages,
@@ -242,19 +242,19 @@ class BedrockConverseLLM(BaseAWSLLM):
         self,
         model: str,
         messages: list,
-        api_base: Optional[str],
+        api_base: str | None,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         encoding,
         logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
         acompletion: bool,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
         litellm_params: dict,
         logger_fn=None,
-        extra_headers: Optional[dict] = None,
-        client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
-        api_key: Optional[str] = None,
+        extra_headers: dict | None = None,
+        client: AsyncHTTPHandler | HTTPHandler | None = None,
+        api_key: str | None = None,
     ):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
@@ -274,7 +274,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     break
             # Strip embedded region prefix (e.g. "bedrock/us-east-1/model" -> "model")
             # and capture it so it can be used as aws_region_name below.
-            _region_from_model: Optional[str] = None
+            _region_from_model: str | None = None
             _potential_region = _stripped.split("/", 1)[0]
             if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
                 _region_from_model = _potential_region

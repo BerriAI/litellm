@@ -3,8 +3,6 @@ Translates from OpenAI's `/v1/chat/completions` to Tencent TokenHub's
 OpenAI-compatible endpoint.
 """
 
-from typing import Optional
-
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import supports_reasoning
 
@@ -39,20 +37,20 @@ class TencentChatConfig(OpenAIGPTConfig):
         return optional_params
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("TENCENT_API_BASE") or "https://tokenhub-intl.tencentcloudmaas.com/v1"
         dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if not api_base:
             api_base = "https://tokenhub-intl.tencentcloudmaas.com/v1"

@@ -6,7 +6,7 @@ Inherits from `AmazonConverseConfig`
 Nova + Invoke API Tutorial: https://docs.aws.amazon.com/nova/latest/userguide/using-invoke-api.html
 """
 
-from typing import Any, List, Optional
+from typing import Any
 
 import httpx
 
@@ -42,7 +42,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -67,12 +67,12 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         model_response: ModelResponse,
         logging_obj: Logging,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         return AmazonConverseConfig.transform_response(
             self,
@@ -105,4 +105,3 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         _system_message = bedrock_invoke_nova_request.get("system", None)
         if isinstance(_system_message, list) and len(_system_message) == 0:
             bedrock_invoke_nova_request.pop("system", None)
-        return

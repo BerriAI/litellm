@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -37,7 +37,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         """
         return model.startswith(OPENAI_STYLE_IMAGE_MODEL_PREFIXES)
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         https://api.aimlapi.com/v1/images/generations
         """
@@ -64,8 +64,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         supported_params = self.get_supported_openai_params(model)
         is_openai_style = self._is_openai_style_model(model)
 
-        for k in non_default_params.keys():
-            if k in optional_params.keys():
+        for k in non_default_params:
+            if k in optional_params:
                 continue
             if k not in supported_params:
                 if drop_params:
@@ -99,12 +99,12 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -113,8 +113,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
 
         complete_url = complete_url.rstrip("/")
         # Strip /v1 suffix if present since IMAGE_GENERATION_ENDPOINT already includes v1
-        if complete_url.endswith("/v1"):
-            complete_url = complete_url[:-3]
+        complete_url = complete_url.removesuffix("/v1")
         complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
         return complete_url
 
@@ -122,13 +121,13 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
+        final_api_key: str | None = (
             api_key or get_secret_str("AIML_API_KEY") or get_secret_str("AIMLAPI_KEY")  # Alternative name
         )
         if not final_api_key:
@@ -171,8 +170,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the image generation response to the litellm image response

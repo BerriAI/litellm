@@ -7,7 +7,8 @@ tool through a ``tool_use`` content block, and results are fed back as
 ``tool_result`` blocks in a user message.
 """
 
-from typing import Any, AsyncIterator, Mapping, Sequence, Union
+from collections.abc import AsyncIterator, Mapping, Sequence
+from typing import Any
 
 from litellm._logging import verbose_logger
 from litellm.responses.mcp.request_context import MCPRequestContext
@@ -35,7 +36,7 @@ def _extract_tool_use_blocks(response: AnthropicMessagesResponse) -> Sequence[Ma
     return tuple(block for block in _get_response_content(response) if block.get("type") == "tool_use")
 
 
-def _get_stop_reason(response: AnthropicMessagesResponse) -> Union[str, None]:
+def _get_stop_reason(response: AnthropicMessagesResponse) -> str | None:
     stop_reason = response.get("stop_reason")
     return stop_reason if isinstance(stop_reason, str) else None
 
@@ -59,9 +60,9 @@ async def anthropic_messages_with_mcp(
     max_tokens: int,
     messages: Sequence[Mapping[str, Any]],
     model: str,
-    tools: Union[Sequence[Mapping[str, Any]], None] = None,
+    tools: Sequence[Mapping[str, Any]] | None = None,
     **kwargs: Any,  # kwargs-ok: forwarded verbatim to litellm.anthropic_messages, which owns the param contract
-) -> Union[AnthropicMessagesResponse, AsyncIterator[Any]]:
+) -> AnthropicMessagesResponse | AsyncIterator[Any]:
     """
     Expand litellm_proxy MCP references for `/v1/messages` and run the tool loop.
 

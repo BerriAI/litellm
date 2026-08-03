@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -18,7 +18,7 @@ from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "vertex_ai"
 
     def should_strip_billing_metadata(self) -> bool:
@@ -28,12 +28,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         """
         OPTIONAL
 
@@ -115,12 +115,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required. Unable to determine the correct api_base for the request.")
@@ -129,11 +129,11 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         anthropic_messages_request = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,

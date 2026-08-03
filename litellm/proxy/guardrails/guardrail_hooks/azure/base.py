@@ -1,5 +1,5 @@
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -41,7 +41,7 @@ class AzureGuardrailBase:
         self.api_base = api_base
         self.api_version: str = kwargs.get("api_version") or "2024-09-01"
 
-    async def _post_to_content_safety(self, endpoint_path: str, request_body: Dict[str, Any]) -> Dict[str, Any]:
+    async def _post_to_content_safety(self, endpoint_path: str, request_body: dict[str, Any]) -> dict[str, Any]:
         """POST to an Azure Content Safety endpoint with standard auth headers.
 
         Args:
@@ -64,12 +64,12 @@ class AzureGuardrailBase:
             headers=headers,
             json=request_body,
         )
-        response_json: Dict[str, Any] = response.json()
+        response_json: dict[str, Any] = response.json()
         verbose_proxy_logger.debug("Azure Content Safety response [%s]: %s", endpoint_path, response_json)
         return response_json
 
     @staticmethod
-    def split_text_by_words(text: str, max_length: int) -> List[str]:
+    def split_text_by_words(text: str, max_length: int) -> list[str]:
         """
         Split text into chunks at word boundaries without breaking words.
 
@@ -92,7 +92,7 @@ class AzureGuardrailBase:
         # within each chunk.
         tokens = re.findall(r"\S+|\s+", text)
 
-        chunks: List[str] = []
+        chunks: list[str] = []
         current_chunk = ""
 
         for token in tokens:
@@ -117,7 +117,7 @@ class AzureGuardrailBase:
 
         return chunks
 
-    def get_user_prompt(self, messages: List["AllMessageValues"]) -> Optional[str]:
+    def get_user_prompt(self, messages: list["AllMessageValues"]) -> str | None:
         """
         Get the last consecutive block of messages from the user.
 

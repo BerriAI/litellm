@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Type, TypeVar, Union, cast, overload
+from typing import Any, TypeVar, cast, overload
 
 from pydantic import BaseModel
 
@@ -44,9 +44,9 @@ class UserApiKeyCache(DualCache):
         parent_otel_span: Any = None,
         local_only: bool = False,
         *,
-        model_type: Type[T],
+        model_type: type[T],
         **kwargs: Any,
-    ) -> Optional[T]: ...
+    ) -> T | None: ...
 
     @overload
     def get_cache(
@@ -62,11 +62,11 @@ class UserApiKeyCache(DualCache):
         key,
         parent_otel_span=None,
         local_only: bool = False,
-        model_type: Optional[Type[BaseModel]] = None,
+        model_type: type[BaseModel] | None = None,
         **kwargs,
-    ) -> Union[Any, Optional[BaseModel]]:
+    ) -> Any | BaseModel | None:
         if model_type is None and "model_type" in kwargs:
-            model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
+            model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         cached = super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
         if model_type is None:
             return cached
@@ -89,9 +89,9 @@ class UserApiKeyCache(DualCache):
         parent_otel_span: Any = None,
         local_only: bool = False,
         *,
-        model_type: Type[T],
+        model_type: type[T],
         **kwargs: Any,
-    ) -> Optional[T]: ...
+    ) -> T | None: ...
 
     @overload
     async def async_get_cache(
@@ -107,11 +107,11 @@ class UserApiKeyCache(DualCache):
         key,
         parent_otel_span=None,
         local_only: bool = False,
-        model_type: Optional[Type[BaseModel]] = None,
+        model_type: type[BaseModel] | None = None,
         **kwargs,
-    ) -> Union[Any, Optional[BaseModel]]:
+    ) -> Any | BaseModel | None:
         if model_type is None and "model_type" in kwargs:
-            model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
+            model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         cached = await super().async_get_cache(
             key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
         )
@@ -130,12 +130,12 @@ class UserApiKeyCache(DualCache):
         return decoded
 
     def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
-        model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
+        model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
-        model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
+        model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
@@ -180,7 +180,7 @@ def get_management_object_ttl(cache: DualCache) -> float:
     propagates onto ``default_in_memory_ttl`` at startup, and falls back to
     ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` when no default is configured.
     """
-    configured: Optional[float] = getattr(cache, "default_in_memory_ttl", None)
+    configured: float | None = getattr(cache, "default_in_memory_ttl", None)
     if configured is not None:
         return configured
     return DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL

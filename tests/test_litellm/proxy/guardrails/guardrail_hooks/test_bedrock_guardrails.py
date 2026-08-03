@@ -21,7 +21,7 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import CallTypes, ModelResponse
 
 
 @pytest.mark.asyncio
@@ -3614,3 +3614,59 @@ class TestBedrockIncrementalFlagInteractions:
             )
             scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
             assert scanned == ["q1"], "latest-role selection must exclude the system prompt"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode, call_type, should_scan",
+    [
+        ("during_mcp_call", "call_mcp_tool", True),
+        ("during_call", "completion", True),
+        ("during_mcp_call", "completion", False),
+        ("during_call", "call_mcp_tool", False),
+    ],
+)
+async def test_moderation_hook_honors_the_mcp_event_type(mode, call_type, should_scan):
+    """A guardrail configured mode: during_mcp_call must actually scan MCP tool calls.
+
+    ProxyLogging.during_call_hook remaps call_mcp_tool to during_mcp_call before
+    dispatching, so re-checking during_call here would reject the very requests the
+    guardrail was configured for and let the tool call through unscanned.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-mcp",
+        guardrailIdentifier="gid",
+        guardrailVersion="1",
+        event_hook=mode,
+        default_on=True,
+    )
+    data = {
+        "messages": [{"role": "user", "content": "scan me"}],
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"query": "scan me"},
+    }
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = MagicMock(
+            action="NONE", output=[], outputs=[], assessments=[]
+        )
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u"),
+            call_type=call_type,
+        )
+
+    assert (mock_api.call_count == 1) is should_scan, (
+        f"mode={mode} call_type={call_type}: expected scan={should_scan}, "
+        f"bedrock api called {mock_api.call_count} times"
+    )
+    if should_scan:
+        expected_event = (
+            GuardrailEventHooks.during_mcp_call
+            if call_type == CallTypes.call_mcp_tool.value
+            else GuardrailEventHooks.during_call
+        )
+        assert mock_api.call_args.kwargs["logging_event_type"] == expected_event, (
+            "the scan must be logged under the event it actually ran for, so guardrail logs, "
+            "OTel spans, and Langfuse metadata do not misclassify MCP enforcement as an LLM call"
+        )

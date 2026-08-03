@@ -31,9 +31,9 @@ from collections.abc import Mapping
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import PluginConfig, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router = APIRouter()

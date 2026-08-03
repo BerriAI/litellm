@@ -9,7 +9,6 @@ import base64
 import hashlib
 import re
 import uuid
-from typing import Dict, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -24,7 +23,7 @@ from .authenticator import get_access_token, get_access_token_async
 GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
 
 # Simple in-memory cache for file IDs
-_file_cache: Dict[str, str] = {}
+_file_cache: dict[str, str] = {}
 
 
 def _get_url_hash(url: str) -> str:
@@ -32,7 +31,7 @@ def _get_url_hash(url: str) -> str:
     return hashlib.sha256(url.encode()).hexdigest()
 
 
-def _parse_data_url(data_url: str) -> Optional[Tuple[bytes, str, str]]:
+def _parse_data_url(data_url: str) -> tuple[bytes, str, str] | None:
     """
     Parse data URL (base64 image).
 
@@ -51,7 +50,7 @@ def _parse_data_url(data_url: str) -> Optional[Tuple[bytes, str, str]]:
     return content_bytes, content_type, ext
 
 
-def _download_image_sync(url: str) -> Tuple[bytes, str, str]:
+def _download_image_sync(url: str) -> tuple[bytes, str, str]:
     """Download image from URL synchronously."""
     client = _get_httpx_client(params={"ssl_verify": False})
     response = client.get(url)
@@ -63,7 +62,7 @@ def _download_image_sync(url: str) -> Tuple[bytes, str, str]:
     return response.content, content_type, ext
 
 
-async def _download_image_async(url: str) -> Tuple[bytes, str, str]:
+async def _download_image_async(url: str) -> tuple[bytes, str, str]:
     """Download image from URL asynchronously."""
     client = get_async_httpx_client(
         llm_provider=LlmProviders.GIGACHAT,
@@ -80,9 +79,9 @@ async def _download_image_async(url: str) -> Tuple[bytes, str, str]:
 
 def upload_file_sync(
     image_url: str,
-    credentials: Optional[str] = None,
-    api_base: Optional[str] = None,
-) -> Optional[str]:
+    credentials: str | None = None,
+    api_base: str | None = None,
+) -> str | None:
     """
     Upload file to GigaChat and return file_id (sync).
 
@@ -145,9 +144,9 @@ def upload_file_sync(
 
 async def upload_file_async(
     image_url: str,
-    credentials: Optional[str] = None,
-    api_base: Optional[str] = None,
-) -> Optional[str]:
+    credentials: str | None = None,
+    api_base: str | None = None,
+) -> str | None:
     """
     Upload file to GigaChat and return file_id (async).
 

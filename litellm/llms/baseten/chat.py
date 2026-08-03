@@ -1,4 +1,3 @@
-from typing import Optional
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
@@ -9,33 +8,33 @@ class BasetenConfig(OpenAIGPTConfig):
     Below are the parameters:
     """
 
-    max_tokens: Optional[int] = None
-    response_format: Optional[dict] = None
-    seed: Optional[int] = None
-    stream: Optional[bool] = None
-    top_p: Optional[int] = None
-    tool_choice: Optional[str] = None
-    tools: Optional[list] = None
-    user: Optional[str] = None
-    presence_penalty: Optional[int] = None
-    frequency_penalty: Optional[int] = None
-    stream_options: Optional[dict] = None
+    max_tokens: int | None = None
+    response_format: dict | None = None
+    seed: int | None = None
+    stream: bool | None = None
+    top_p: int | None = None
+    tool_choice: str | None = None
+    tools: list | None = None
+    user: str | None = None
+    presence_penalty: int | None = None
+    frequency_penalty: int | None = None
+    stream_options: dict | None = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        seed: Optional[int] = None,
-        stop: Optional[list] = None,
-        stream: Optional[bool] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[int] = None,
-        tool_choice: Optional[str] = None,
-        tools: Optional[list] = None,
-        user: Optional[str] = None,
-        presence_penalty: Optional[int] = None,
-        frequency_penalty: Optional[int] = None,
-        stream_options: Optional[dict] = None,
+        max_tokens: int | None = None,
+        response_format: dict | None = None,
+        seed: int | None = None,
+        stop: list | None = None,
+        stream: bool | None = None,
+        temperature: float | None = None,
+        top_p: int | None = None,
+        tool_choice: str | None = None,
+        tools: list | None = None,
+        user: str | None = None,
+        presence_penalty: int | None = None,
+        frequency_penalty: int | None = None,
+        stream_options: dict | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():

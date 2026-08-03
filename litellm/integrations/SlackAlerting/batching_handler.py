@@ -70,6 +70,6 @@ async def send_to_webhook(slackAlertingInstance: SlackAlertingType, item, count)
         if response.status_code != 200:
             verbose_proxy_logger.debug(f"Error sending slack alert to url={item['url']}. Error={response.text}")
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error sending slack alert: {str(e)}")
+        verbose_proxy_logger.debug(f"Error sending slack alert: {e!s}")
     finally:
         _print_alerting_payload_warning(payload, slackAlertingInstance=slackAlertingInstance)

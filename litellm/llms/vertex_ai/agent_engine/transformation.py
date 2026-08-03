@@ -10,7 +10,7 @@ API Reference:
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import httpx
 
@@ -62,7 +62,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         BaseConfig.__init__(self, **kwargs)
         VertexBase.__init__(self)
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Vertex Agent Engine has limited OpenAI compatible params."""
         return ["user"]
 
@@ -79,7 +79,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             optional_params["user_id"] = non_default_params["user"]
         return optional_params
 
-    def _parse_model_string(self, model: str) -> Tuple[str, str]:
+    def _parse_model_string(self, model: str) -> tuple[str, str]:
         """
         Parse model string to extract resource ID.
 
@@ -89,8 +89,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         Returns: (resource_path, engine_id)
         """
         # Remove 'agent_engine/' prefix if present
-        if model.startswith("agent_engine/"):
-            model = model[len("agent_engine/") :]
+        model = model.removeprefix("agent_engine/")
 
         # Check if it's a full resource path
         if model.startswith("projects/"):
@@ -102,12 +101,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the request.
@@ -145,7 +144,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         self,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Get authentication headers using Google Cloud credentials."""
         vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params)
         vertex_project = self.safe_get_vertex_ai_project(litellm_params)
@@ -171,14 +170,14 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         # Generate a user ID
         return f"litellm-user-{str(uuid.uuid4())[:8]}"
 
-    def _get_session_id(self, optional_params: dict) -> Optional[str]:
+    def _get_session_id(self, optional_params: dict) -> str | None:
         """Get session ID if provided."""
         return optional_params.get("session_id")
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -204,7 +203,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         session_id = self._get_session_id(optional_params)
 
         # Build the input
-        input_data: Dict[str, Any] = {
+        input_data: dict[str, Any] = {
             "message": prompt,
             "user_id": user_id,
         }
@@ -227,11 +226,11 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """Validate environment and set up authentication headers."""
         auth_headers = self._get_auth_headers(optional_params, litellm_params)
@@ -256,7 +255,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
         return ""
 
-    def _calculate_usage(self, model: str, messages: List[AllMessageValues], content: str) -> Optional[Usage]:
+    def _calculate_usage(self, model: str, messages: list[AllMessageValues], content: str) -> Usage | None:
         """Calculate token usage using LiteLLM's token counter."""
         try:
             from litellm.utils import token_counter
@@ -271,7 +270,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                 total_tokens=total_tokens,
             )
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {str(e)}")
+            verbose_logger.warning(f"Failed to calculate token usage: {e!s}")
             return None
 
     def transform_response(
@@ -281,12 +280,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform Vertex Agent Engine response to LiteLLM ModelResponse format.
@@ -336,9 +335,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Vertex Agent Engine response: {str(e)}")
+            verbose_logger.error(f"Error processing Vertex Agent Engine response: {e!s}")
             raise VertexAgentEngineError(
-                message=f"Error processing response: {str(e)}",
+                message=f"Error processing response: {e!s}",
                 status_code=raw_response.status_code,
             )
 
@@ -362,9 +361,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, "AsyncHTTPHandler"]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for synchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
@@ -421,8 +420,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         data: dict,
         messages: list,
         client: Optional["AsyncHTTPHandler"] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for asynchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
@@ -482,16 +481,14 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """Agent Engine does not allow passing `stream` in the request body."""
         return False
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VertexAgentEngineError(status_code=status_code, message=error_message)
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """Agent Engine always returns SSE streams, so we use real streaming."""
         return False

@@ -1,5 +1,4 @@
 import json
-from typing import Optional
 
 import litellm
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
@@ -11,23 +10,23 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
     Reference: https://docs.mistral.ai/api/#operation/createFIMCompletion
     """
 
-    suffix: Optional[str] = None
-    temperature: Optional[int] = None
-    max_tokens: Optional[int] = None
-    min_tokens: Optional[int] = None
-    stream: Optional[bool] = None
-    random_seed: Optional[int] = None
+    suffix: str | None = None
+    temperature: int | None = None
+    max_tokens: int | None = None
+    min_tokens: int | None = None
+    stream: bool | None = None
+    random_seed: int | None = None
 
     def __init__(
         self,
-        suffix: Optional[str] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        min_tokens: Optional[int] = None,
-        stream: Optional[bool] = None,
-        random_seed: Optional[int] = None,
-        stop: Optional[str] = None,
+        suffix: str | None = None,
+        temperature: int | None = None,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
+        min_tokens: int | None = None,
+        stream: bool | None = None,
+        random_seed: int | None = None,
+        stop: str | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():

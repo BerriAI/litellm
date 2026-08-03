@@ -14,7 +14,7 @@ Generated files are returned directly in the response - no separate storage need
 import base64
 import json
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_logger
 
@@ -30,7 +30,7 @@ class LiteLLMInternalTools(str, Enum):
     CODE_EXECUTION = "litellm_code_execution"
 
 
-def get_litellm_code_execution_tool() -> Dict[str, Any]:
+def get_litellm_code_execution_tool() -> dict[str, Any]:
     """
     Returns the litellm_code_execution tool definition in OpenAI format.
 
@@ -51,7 +51,7 @@ def get_litellm_code_execution_tool() -> Dict[str, Any]:
     }
 
 
-def get_litellm_code_execution_tool_anthropic() -> Dict[str, Any]:
+def get_litellm_code_execution_tool_anthropic() -> dict[str, Any]:
     """
     Returns the litellm_code_execution tool definition in Anthropic/messages API format.
 
@@ -84,8 +84,8 @@ class CodeExecutionHandler:
 
     def __init__(
         self,
-        max_iterations: Optional[int] = None,
-        sandbox_timeout: Optional[int] = None,
+        max_iterations: int | None = None,
+        sandbox_timeout: int | None = None,
     ):
         from litellm.llms.litellm_proxy.skills.constants import (
             DEFAULT_MAX_ITERATIONS,
@@ -98,12 +98,12 @@ class CodeExecutionHandler:
     async def execute_with_code_execution(
         self,
         model: str,
-        messages: List[Dict],
-        tools: List[Dict],
-        skill_files: Dict[str, bytes],
-        skill_id: Optional[str] = None,
+        messages: list[dict],
+        tools: list[dict],
+        skill_files: dict[str, bytes],
+        skill_id: str | None = None,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute an LLM call with automatic code execution handling.
 
@@ -134,8 +134,8 @@ class CodeExecutionHandler:
         )
 
         current_messages = list(messages)
-        generated_files: List[Dict[str, Any]] = []  # Files returned directly
-        execution_results: List[Dict] = []
+        generated_files: list[dict[str, Any]] = []  # Files returned directly
+        execution_results: list[dict] = []
 
         executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
         response: Any = None  # Initialize to avoid possibly unbound error
@@ -155,7 +155,7 @@ class CodeExecutionHandler:
             stop_reason = response.choices[0].finish_reason  # type: ignore
 
             # Build assistant message for conversation history
-            assistant_msg_dict: Dict[str, Any] = {
+            assistant_msg_dict: dict[str, Any] = {
                 "role": "assistant",
                 "content": assistant_message.content,
             }
@@ -239,7 +239,7 @@ class CodeExecutionHandler:
                             tool_result += f"\n\nError:\n{exec_result['error']}"
 
                     except Exception as e:
-                        tool_result = f"Code execution failed: {str(e)}"
+                        tool_result = f"Code execution failed: {e!s}"
                         execution_results.append(
                             {
                                 "iteration": iteration,
@@ -278,7 +278,7 @@ class CodeExecutionHandler:
         }
 
 
-def has_code_execution_tool(tools: Optional[List[Dict]]) -> bool:
+def has_code_execution_tool(tools: list[dict] | None) -> bool:
     """Check if litellm_code_execution tool is in the tools list."""
     if not tools:
         return False
@@ -289,7 +289,7 @@ def has_code_execution_tool(tools: Optional[List[Dict]]) -> bool:
     return False
 
 
-def add_code_execution_tool(tools: Optional[List[Dict]]) -> List[Dict]:
+def add_code_execution_tool(tools: list[dict] | None) -> list[dict]:
     """Add litellm_code_execution tool if not already present."""
     tools = tools or []
     if not has_code_execution_tool(tools):

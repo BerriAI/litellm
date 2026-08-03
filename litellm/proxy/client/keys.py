@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Optional, Union
+import builtins
+from typing import Any
 
 import requests
 
@@ -8,7 +9,7 @@ from .exceptions import UnauthorizedError
 
 
 class KeysManagementClient:
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
+    def __init__(self, base_url: str, api_key: str | None = None):
         """
         Initialize the KeysManagementClient.
 
@@ -19,7 +20,7 @@ class KeysManagementClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
@@ -33,17 +34,17 @@ class KeysManagementClient:
 
     def list(
         self,
-        page: Optional[int] = None,
-        size: Optional[int] = None,
-        user_id: Optional[str] = None,
-        team_id: Optional[str] = None,
-        organization_id: Optional[str] = None,
-        key_hash: Optional[str] = None,
-        key_alias: Optional[str] = None,
-        return_full_object: Optional[bool] = None,
-        include_team_keys: Optional[bool] = None,
+        page: int | None = None,
+        size: int | None = None,
+        user_id: str | None = None,
+        team_id: str | None = None,
+        organization_id: str | None = None,
+        key_hash: str | None = None,
+        key_alias: str | None = None,
+        return_full_object: bool | None = None,
+        include_team_keys: bool | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         List all API keys with optional filtering and pagination.
 
@@ -69,7 +70,7 @@ class KeysManagementClient:
             requests.exceptions.RequestException: If the request fails with any other error
         """
         url = f"{self._base_url}/key/list"
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
 
         # Add optional query parameters
         if page is not None:
@@ -108,17 +109,17 @@ class KeysManagementClient:
 
     def generate(
         self,
-        models: Optional[List[str]] = None,
-        aliases: Optional[Dict[str, str]] = None,
-        spend: Optional[float] = None,
-        duration: Optional[str] = None,
-        key_alias: Optional[str] = None,
-        team_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        budget_id: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None,
+        models: builtins.list[str] | None = None,
+        aliases: dict[str, str] | None = None,
+        spend: float | None = None,
+        duration: str | None = None,
+        key_alias: str | None = None,
+        team_id: str | None = None,
+        user_id: str | None = None,
+        budget_id: str | None = None,
+        config: dict[str, Any] | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Generate an API key based on the provided data.
 
@@ -146,7 +147,7 @@ class KeysManagementClient:
         """
         url = f"{self._base_url}/key/generate"
 
-        data: Dict[str, Any] = {}
+        data: dict[str, Any] = {}
         if models is not None:
             data["models"] = models
         if aliases is not None:
@@ -183,10 +184,10 @@ class KeysManagementClient:
 
     def delete(
         self,
-        keys: Optional[List[str]] = None,
-        key_aliases: Optional[List[str]] = None,
+        keys: builtins.list[str] | None = None,
+        key_aliases: builtins.list[str] | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Delete existing keys
 
@@ -228,14 +229,14 @@ class KeysManagementClient:
     def update(
         self,
         key: str,
-        models: Optional[List[str]] = None,
-        aliases: Optional[Dict[str, str]] = None,
-        spend: Optional[float] = None,
-        duration: Optional[str] = None,
-        key_alias: Optional[str] = None,
-        team_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-    ) -> Union[Dict[str, Any], requests.Request]:
+        models: builtins.list[str] | None = None,
+        aliases: dict[str, str] | None = None,
+        spend: float | None = None,
+        duration: str | None = None,
+        key_alias: str | None = None,
+        team_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, Any] | requests.Request:
         """
         Update an existing API key's parameters.
 
@@ -258,7 +259,7 @@ class KeysManagementClient:
         """
         url = f"{self._base_url}/key/update"
 
-        data: Dict[str, Any] = {"key": key}
+        data: dict[str, Any] = {"key": key}
 
         if key_alias is not None:
             data["key_alias"] = key_alias
@@ -276,7 +277,7 @@ class KeysManagementClient:
             data["aliases"] = aliases
         request = requests.Request("POST", url, headers=self._get_headers(), json=data)
         session = requests.Session()
-        response_text: Optional[str] = None
+        response_text: str | None = None
         try:
             response = session.send(request.prepare())
             response_text = response.text
@@ -285,7 +286,7 @@ class KeysManagementClient:
         except Exception:
             raise Exception(f"Error updating key: {response_text}")
 
-    def info(self, key: str, return_request: bool = False) -> Union[Dict[str, Any], requests.Request]:
+    def info(self, key: str, return_request: bool = False) -> dict[str, Any] | requests.Request:
         """
         Get information about API keys.
 

@@ -4,7 +4,7 @@ Fetches prompts from any API that implements the /beta/litellm_prompt_management
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -54,10 +54,10 @@ class GenericPromptManager(CustomPromptManagement):
     def __init__(
         self,
         api_base: str,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         timeout: int = 30,
-        prompt_id: Optional[str] = None,
-        additional_provider_specific_query_params: Optional[Dict[str, Any]] = None,
+        prompt_id: str | None = None,
+        additional_provider_specific_query_params: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -75,14 +75,14 @@ class GenericPromptManager(CustomPromptManagement):
         self.timeout = timeout
         self.prompt_id = prompt_id
         self.additional_provider_specific_query_params = additional_provider_specific_query_params
-        self._prompt_cache: Dict[str, PromptManagementClient] = {}
+        self._prompt_cache: dict[str, PromptManagementClient] = {}
 
     @property
     def integration_name(self) -> str:
         """Integration name used in model names like 'generic_prompt/gpt-4'."""
         return "generic_prompt"
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Get HTTP headers for API requests."""
         headers = {
             "Content-Type": "application/json",
@@ -92,7 +92,7 @@ class GenericPromptManager(CustomPromptManagement):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _fetch_prompt_from_api(self, prompt_id: Optional[str], prompt_spec: Optional[PromptSpec]) -> Dict[str, Any]:
+    def _fetch_prompt_from_api(self, prompt_id: str | None, prompt_spec: PromptSpec | None) -> dict[str, Any]:
         """
         Fetch a prompt from the API.
 
@@ -130,8 +130,8 @@ class GenericPromptManager(CustomPromptManagement):
             raise Exception(f"Failed to parse prompt response for '{prompt_id}': {e}")
 
     async def async_fetch_prompt_from_api(
-        self, prompt_id: Optional[str], prompt_spec: Optional[PromptSpec]
-    ) -> Dict[str, Any]:
+        self, prompt_id: str | None, prompt_spec: PromptSpec | None
+    ) -> dict[str, Any]:
         """
         Fetch a prompt from the API asynchronously.
         """
@@ -167,9 +167,9 @@ class GenericPromptManager(CustomPromptManagement):
 
     def _parse_api_response(
         self,
-        prompt_id: Optional[str],
-        prompt_spec: Optional[PromptSpec],
-        api_response: Dict[str, Any],
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
+        api_response: dict[str, Any],
     ) -> PromptManagementClient:
         """
         Parse the API response into a PromptManagementClient structure.
@@ -205,8 +205,8 @@ class GenericPromptManager(CustomPromptManagement):
 
     def should_run_prompt_management(
         self,
-        prompt_id: Optional[str],
-        prompt_spec: Optional[PromptSpec],
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         """
@@ -223,19 +223,19 @@ class GenericPromptManager(CustomPromptManagement):
 
     def _get_cache_key(
         self,
-        prompt_id: Optional[str],
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_id: str | None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> str:
         return f"{prompt_id}:{prompt_label}:{prompt_version}"
 
     def _common_caching_logic(
         self,
-        prompt_id: Optional[str],
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
-        prompt_variables: Optional[dict] = None,
-    ) -> Optional[PromptManagementClient]:
+        prompt_id: str | None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        prompt_variables: dict | None = None,
+    ) -> PromptManagementClient | None:
         """
         Common caching logic for the prompt manager.
         """
@@ -251,12 +251,12 @@ class GenericPromptManager(CustomPromptManagement):
 
     def _compile_prompt_helper(
         self,
-        prompt_id: Optional[str],
-        prompt_spec: Optional[PromptSpec],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> PromptManagementClient:
         """
         Compile a prompt template into a PromptManagementClient structure.
@@ -307,12 +307,12 @@ class GenericPromptManager(CustomPromptManagement):
 
     async def async_compile_prompt_helper(
         self,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: Optional[PromptSpec] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> PromptManagementClient:
         # Check cache first
         cached_prompt = self._common_caching_logic(
@@ -349,7 +349,7 @@ class GenericPromptManager(CustomPromptManagement):
     def _apply_variables(
         self,
         prompt_client: PromptManagementClient,
-        variables: Dict[str, Any],
+        variables: dict[str, Any],
     ) -> PromptManagementClient:
         """
         Apply variables to the prompt template.
@@ -364,7 +364,7 @@ class GenericPromptManager(CustomPromptManagement):
             Updated PromptManagementClient with variables applied
         """
         # Create a copy of the prompt template with variables applied
-        updated_messages: List[AllMessageValues] = []
+        updated_messages: list[AllMessageValues] = []
         for message in prompt_client["prompt_template"]:
             updated_message = dict(message)  # type: ignore
             if "content" in updated_message and isinstance(updated_message["content"], str):
@@ -386,19 +386,19 @@ class GenericPromptManager(CustomPromptManagement):
     async def async_get_chat_completion_prompt(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         non_default_params: dict,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: "LiteLLMLoggingObj",
-        prompt_spec: Optional[PromptSpec] = None,
-        tools: Optional[List[Dict]] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
-        ignore_prompt_manager_model: Optional[bool] = False,
-        ignore_prompt_manager_optional_params: Optional[bool] = False,
-    ) -> Tuple[str, List[AllMessageValues], dict]:
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
         """
         Get chat completion prompt and return processed model, messages, and parameters.
         """
@@ -432,17 +432,17 @@ class GenericPromptManager(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         non_default_params: dict,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: Optional[PromptSpec] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
-        ignore_prompt_manager_model: Optional[bool] = False,
-        ignore_prompt_manager_optional_params: Optional[bool] = False,
-    ) -> Tuple[str, List[AllMessageValues], dict]:
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
         """
         Get chat completion prompt and return processed model, messages, and parameters.
         """

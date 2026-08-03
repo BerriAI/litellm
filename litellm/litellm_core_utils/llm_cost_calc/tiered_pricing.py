@@ -5,10 +5,8 @@ Shared by provider cost calculators (e.g. Dashscope) and the proxy budget
 reservation logic so neither has to depend on the other.
 """
 
-from typing import List, Optional, Union
 
-
-def _coerce_cost_per_token(value: Union[float, int, str, None]) -> float:
+def _coerce_cost_per_token(value: float | str | None) -> float:
     """
     Coerce a per-token cost into a float.
 
@@ -27,9 +25,9 @@ def _coerce_cost_per_token(value: Union[float, int, str, None]) -> float:
 
 def calculate_tiered_cost(
     tokens: int,
-    tiered_pricing: List[dict],
+    tiered_pricing: list[dict],
     cost_key: str,
-    fallback_cost_key: Optional[str] = None,
+    fallback_cost_key: str | None = None,
 ) -> float:
     """
     Calculate cost for a given number of tokens based on a true tiered pricing structure.
@@ -100,9 +98,9 @@ def calculate_tiered_cost(
 
 
 def select_tier_for_input(
-    tiered_pricing: List[dict],
+    tiered_pricing: list[dict],
     input_tokens: int,
-) -> Optional[dict]:
+) -> dict | None:
     """
     Select the pricing tier for a request based on its total input token count.
 
@@ -132,7 +130,7 @@ def select_tier_for_input(
 def tier_rate(
     tier: dict,
     cost_key: str,
-    fallback_cost_key: Optional[str] = None,
+    fallback_cost_key: str | None = None,
 ) -> float:
     """Read a per-token rate from a tier, coercing YAML string costs to float."""
     raw = tier.get(cost_key) or tier.get(fallback_cost_key, 0)

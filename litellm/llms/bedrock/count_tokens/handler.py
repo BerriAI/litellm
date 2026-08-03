@@ -4,7 +4,7 @@ AWS Bedrock CountTokens API handler.
 Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 import httpx
 
@@ -24,10 +24,10 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
 
     async def handle_count_tokens_request(
         self,
-        request_data: Dict[str, Any],
-        litellm_params: Dict[str, Any],
+        request_data: dict[str, Any],
+        litellm_params: dict[str, Any],
         resolved_model: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Handle a CountTokens request using existing LiteLLM patterns.
 
@@ -120,14 +120,14 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error(f"HTTP error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"HTTP error in CountTokens handler: {e!s}")
             raise BedrockError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except Exception as e:
-            verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
+            verbose_logger.error(f"Error in CountTokens handler: {e!s}")
             raise BedrockError(
                 status_code=500,
-                message=f"CountTokens processing error: {str(e)}",
+                message=f"CountTokens processing error: {e!s}",
             )

@@ -63,6 +63,8 @@ RUN mkdir -p /home/nonroot && \
     HOME=/home/nonroot prisma generate --schema=./schema.prisma && \
     chown -R nonroot:nonroot /home/nonroot/.cache
 
+RUN sed -i 's/\r$//' docker/component_entrypoint.sh && chmod +x docker/component_entrypoint.sh
+
 # ---------- Runtime ----------
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
@@ -93,5 +95,5 @@ USER nonroot
 
 EXPOSE 4001/tcp
 
-ENTRYPOINT ["uvicorn", "backend.main:app"]
+ENTRYPOINT ["/app/docker/component_entrypoint.sh", "uvicorn", "backend.main:app"]
 CMD ["--host", "0.0.0.0", "--port", "4001"]

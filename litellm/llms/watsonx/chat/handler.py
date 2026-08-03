@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 import httpx
 
@@ -21,23 +21,23 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         *,
         model: str,
         messages: list,
-        api_base: Optional[str],
+        api_base: str | None,
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        api_key: Optional[str],
+        api_key: str | None,
         logging_obj,
         optional_params: dict,
         acompletion=None,
         litellm_params: dict = {},
-        headers: Optional[dict] = None,
+        headers: dict | None = None,
         logger_fn=None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        custom_endpoint: Optional[bool] = None,
-        streaming_decoder: Optional[CustomStreamingDecoder] = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        custom_endpoint: bool | None = None,
+        streaming_decoder: CustomStreamingDecoder | None = None,
         fake_stream: bool = False,
     ):
         api_params = _get_api_params(params=optional_params, model=model)

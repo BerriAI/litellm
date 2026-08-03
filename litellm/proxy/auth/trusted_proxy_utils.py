@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import Request
 
@@ -12,7 +12,7 @@ from litellm.proxy.auth.network import (
 TRUSTED_PROXY_RANGES_KEY = "trusted_proxy_ranges"
 
 
-def _get_proxy_general_settings() -> Dict[str, Any]:
+def _get_proxy_general_settings() -> dict[str, Any]:
     try:
         from litellm.proxy.proxy_server import general_settings
 
@@ -37,7 +37,7 @@ def get_trusted_proxy_cidrs(
     )
 
 
-def _get_direct_client_ip(request: Request) -> Optional[str]:
+def _get_direct_client_ip(request: Request) -> str | None:
     client = getattr(request, "client", None)
     client_host = getattr(client, "host", None)
     if isinstance(client_host, str):
@@ -48,7 +48,7 @@ def _get_direct_client_ip(request: Request) -> Optional[str]:
 def require_trusted_proxy_request(
     *,
     request: Request,
-    general_settings: Optional[Dict[str, Any]] = None,
+    general_settings: dict[str, Any] | None = None,
     feature_name: str,
     setting_name: str = TRUSTED_PROXY_RANGES_KEY,
 ) -> None:

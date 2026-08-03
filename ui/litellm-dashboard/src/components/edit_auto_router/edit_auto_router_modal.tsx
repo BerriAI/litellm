@@ -33,6 +33,9 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
   "classifier_type",
   "classifier_llm_config",
+  "classifier_context_window_size",
+  "classifier_context_per_turn_chars",
+  "classifier_context_include_assistant_turns",
   "adaptive",
   "adaptive_weights",
   "tier_distance_penalty",
@@ -86,6 +89,18 @@ export const buildUpdatedComplexityRouterConfig = (
     tiers: value.tiers,
     classifier_type: value.classifier_type,
     ...(value.classifier_type === "llm" ? { classifier_llm_config: value.classifier_llm_config } : {}),
+    ...(value.classifier_type === "llm" &&
+      value.classifier_context_window_size !== undefined && {
+        classifier_context_window_size: value.classifier_context_window_size,
+      }),
+    ...(value.classifier_type === "llm" &&
+      value.classifier_context_per_turn_chars !== undefined && {
+        classifier_context_per_turn_chars: value.classifier_context_per_turn_chars,
+      }),
+    ...(value.classifier_type === "llm" &&
+      value.classifier_context_include_assistant_turns !== undefined && {
+        classifier_context_include_assistant_turns: value.classifier_context_include_assistant_turns,
+      }),
     ...(customTechnicalKeywords &&
       customTechnicalKeywords.length > 0 && {
         custom_technical_keywords: customTechnicalKeywords,
@@ -182,7 +197,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           parsedConfig = JSON.parse(parsedConfig);
         }
 
-        setComplexityRouterConfig({
+        const hydratedComplexityRouterConfig: ComplexityRouterConfigValue = {
           tiers: {
             SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
             MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
@@ -191,12 +206,25 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           },
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,
+          classifier_context_window_size:
+            typeof parsedConfig.classifier_context_window_size === "number"
+              ? parsedConfig.classifier_context_window_size
+              : undefined,
+          classifier_context_per_turn_chars:
+            typeof parsedConfig.classifier_context_per_turn_chars === "number"
+              ? parsedConfig.classifier_context_per_turn_chars
+              : undefined,
+          classifier_context_include_assistant_turns:
+            typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
+              ? parsedConfig.classifier_context_include_assistant_turns
+              : undefined,
           adaptive: parsedConfig.adaptive || false,
           adaptive_weights: parsedConfig.adaptive_weights,
           tier_distance_penalty: parsedConfig.tier_distance_penalty,
           adaptive_eligible: parsedConfig.adaptive_eligible || "all",
           return_raw_model_name: parsedConfig.return_raw_model_name || false,
-        });
+        };
+        setComplexityRouterConfig(hydratedComplexityRouterConfig);
         setCustomTechnicalKeywords(
           Array.isArray(parsedConfig.custom_technical_keywords) ? parsedConfig.custom_technical_keywords : [],
         );

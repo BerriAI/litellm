@@ -7,7 +7,7 @@ Each span kind declares its schema as a flat ``attribute key -> extractor``
 table: one lambda per mapping operation, applied against the typed span data.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (

@@ -5,7 +5,6 @@ Handles tiered pricing and prompt caching scenarios.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import calculate_tiered_cost
 from litellm.types.utils import ModelInfo, Usage
@@ -46,7 +45,7 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
 def _calculate_prompt_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tiered_pricing: Optional[List[dict]],
+    tiered_pricing: list[dict] | None,
 ) -> float:
     """Calculate total prompt cost including cached tokens."""
     if tiered_pricing:
@@ -78,7 +77,7 @@ def _calculate_prompt_cost(
 def _calculate_completion_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tiered_pricing: Optional[List[dict]],
+    tiered_pricing: list[dict] | None,
 ) -> float:
     """Calculate total completion cost including reasoning tokens."""
     if tiered_pricing:
@@ -107,7 +106,7 @@ def _calculate_completion_cost(
     return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculate cost per token for Dashscope models.
 

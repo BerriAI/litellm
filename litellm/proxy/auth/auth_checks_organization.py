@@ -2,7 +2,7 @@
 Auth Checks for Organizations
 """
 
-from typing import Awaitable, Callable, Dict, List, Optional, Tuple
+from collections.abc import Awaitable, Callable
 
 from fastapi import status
 
@@ -11,7 +11,7 @@ from litellm.proxy._types import *
 
 def organization_role_based_access_check(
     request_body: dict,
-    user_object: Optional[LiteLLM_UserTable],
+    user_object: LiteLLM_UserTable | None,
     route: str,
 ):
     """
@@ -28,7 +28,7 @@ def organization_role_based_access_check(
     if user_object is None:
         return
 
-    passed_organization_id: Optional[str] = request_body.get("organization_id", None)
+    passed_organization_id: str | None = request_body.get("organization_id", None)
 
     if route == "/organization/new":
         if user_object.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -65,7 +65,7 @@ def organization_role_based_access_check(
                 code=status.HTTP_401_UNAUTHORIZED,
             )
 
-        user_role: Optional[LitellmUserRoles] = _user_organization_role_mapping.get(passed_organization_id)
+        user_role: LitellmUserRoles | None = _user_organization_role_mapping.get(passed_organization_id)
         if user_role is None:
             raise ProxyException(
                 message=f"You do not have a role within the selected organization. Passed organization_id: {passed_organization_id}. Please contact the organization admin to request access.",
@@ -108,7 +108,7 @@ def organization_role_based_access_check(
 
 def get_user_organization_info(
     user_object: LiteLLM_UserTable,
-) -> Tuple[List[str], Dict[str, Optional[LitellmUserRoles]]]:
+) -> tuple[list[str], dict[str, LitellmUserRoles | None]]:
     """
     Helper function to extract user organization information.
 
@@ -120,8 +120,8 @@ def get_user_organization_info(
             - List of organization IDs the user is a member of
             - Dictionary mapping organization IDs to user roles
     """
-    _user_organizations: List[str] = []
-    _user_organization_role_mapping: Dict[str, Optional[LitellmUserRoles]] = {}
+    _user_organizations: list[str] = []
+    _user_organization_role_mapping: dict[str, LitellmUserRoles | None] = {}
 
     if user_object.organization_memberships is not None:
         for _membership in user_object.organization_memberships:
@@ -134,7 +134,7 @@ def get_user_organization_info(
 
 def _user_is_org_admin(
     request_data: dict,
-    user_object: Optional[LiteLLM_UserTable] = None,
+    user_object: LiteLLM_UserTable | None = None,
 ) -> bool:
     """
     Helper function to check if user is an org admin for all of the passed organizations.
@@ -150,7 +150,7 @@ def _user_is_org_admin(
         return False
 
     # Collect candidate org IDs from both fields
-    candidate_org_ids: List[str] = []
+    candidate_org_ids: list[str] = []
     singular = request_data.get("organization_id", None)
     if singular is not None:
         candidate_org_ids.append(singular)
@@ -182,8 +182,8 @@ PATCH_TEAM_ROUTE_TEMPLATE = "/team/{team_id}"
 async def add_team_org_context_to_request_body(
     route: str,
     request_body: dict,
-    fetch_team_org_id: Callable[[str], Awaitable[Optional[str]]],
-    route_template: Optional[str] = None,
+    fetch_team_org_id: Callable[[str], Awaitable[str | None]],
+    route_template: str | None = None,
 ) -> dict:
     """
     Return a copy of request_body with organization_id resolved from the target
@@ -201,7 +201,7 @@ async def add_team_org_context_to_request_body(
         return request_body
 
     if route in TEAM_ORG_CONTEXT_ROUTES:
-        team_id: Optional[str] = request_body.get("team_id")
+        team_id: str | None = request_body.get("team_id")
     elif route_template == PATCH_TEAM_ROUTE_TEMPLATE:
         team_id = route.rsplit("/", 1)[-1]
     else:

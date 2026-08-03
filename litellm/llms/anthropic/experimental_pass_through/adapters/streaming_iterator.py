@@ -4,15 +4,11 @@ import copy
 import json
 import traceback
 from collections import deque
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
-    List,
     Literal,
-    Optional,
     get_args,
 )
 
@@ -73,8 +69,8 @@ class _CombinedChunkSplitter:
 
     def __init__(self, completion_stream: Any):
         self._stream = completion_stream
-        self._sync_iter: Optional[Iterator[Any]] = None
-        self._async_iter: Optional[AsyncIterator[Any]] = None
+        self._sync_iter: Iterator[Any] | None = None
+        self._async_iter: AsyncIterator[Any] | None = None
         self._buffer: deque = deque()
 
     @staticmethod
@@ -181,7 +177,7 @@ class _CombinedChunkSplitter:
         return {"reasoning_content": thinking_text}
 
     @staticmethod
-    def _split(chunk: Any) -> List[Any]:
+    def _split(chunk: Any) -> list[Any]:
         """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
         if not _CombinedChunkSplitter._is_combined(chunk):
             return [chunk]
@@ -255,8 +251,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_content_block_finish: bool = False
     current_content_block_type: Literal["text", "tool_use", "thinking"] = "text"
     sent_last_message: bool = False
-    holding_chunk: Optional[Any] = None
-    holding_stop_reason_chunk: Optional[Any] = None
+    holding_chunk: Any | None = None
+    holding_stop_reason_chunk: Any | None = None
     queued_usage_chunk: bool = False
     current_content_block_index: int = 0
 
@@ -264,10 +260,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self,
         completion_stream: Any,
         model: str,
-        tool_name_mapping: Optional[Dict[str, str]] = None,
-        applied_edits: Optional[List[AppliedEdit]] = None,
-        compaction_block: Optional[CompactionBlock] = None,
-        iterations_usage: Optional[List[UsageIteration]] = None,
+        tool_name_mapping: dict[str, str] | None = None,
+        applied_edits: list[AppliedEdit] | None = None,
+        compaction_block: CompactionBlock | None = None,
+        iterations_usage: list[UsageIteration] | None = None,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -277,7 +273,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
         # Polyfill applied_edits on final message_delta.
-        self.applied_edits: List[AppliedEdit] = list(applied_edits or [])
+        self.applied_edits: list[AppliedEdit] = list(applied_edits or [])
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
@@ -298,12 +294,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # class level) so concurrent streams don't share the same mutable dict
         # — `_should_start_new_content_block` mutates `tool_block["name"]` in
         # place, which would otherwise leak across streams.
-        self.current_content_block_start: "AnthropicStreamWrapper.ContentBlockContentBlockDict" = self.TextBlock(
+        self.current_content_block_start: AnthropicStreamWrapper.ContentBlockContentBlockDict = self.TextBlock(
             type="text",
             text="",
         )
 
-    def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> Dict[str, Any]:
+    def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> dict[str, Any]:
         """Merge usage data from ``chunk`` into the held ``message_delta`` chunk.
 
         Shared by both the sync ``__next__`` and async ``__anext__`` paths so
@@ -329,7 +325,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             merged_chunk["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
         return self._augment_message_delta_usage(merged_chunk)
 
-    def _ensure_context_management_attached(self, message_delta_chunk: Dict[str, Any]) -> Dict[str, Any]:
+    def _ensure_context_management_attached(self, message_delta_chunk: dict[str, Any]) -> dict[str, Any]:
         """Attach ``context_management`` to a ``message_delta`` chunk if
         ``self.applied_edits`` is non-empty and the chunk does not already
         carry it. Returns the (possibly new) chunk dict.
@@ -344,7 +340,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         augmented["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
         return augmented
 
-    def _augment_message_delta_usage(self, message_delta_chunk: Dict[str, Any]) -> Dict[str, Any]:
+    def _augment_message_delta_usage(self, message_delta_chunk: dict[str, Any]) -> dict[str, Any]:
         """Attach polyfill compaction iteration usage to the final message_delta.
 
         Also defensively re-attaches ``context_management`` so the direct
@@ -362,7 +358,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         output_tokens = usage.get("output_tokens", 0) or 0
         augmented = message_delta_chunk.copy()
         augmented_usage = dict(usage)
-        iterations: List[UsageIteration] = list(self.iterations_usage)
+        iterations: list[UsageIteration] = list(self.iterations_usage)
         # Only emit a ``message`` iteration when we have real token data.
         # Without a separate usage chunk (e.g. provider sent finish_reason
         # alone), the held ``message_delta`` carries placeholder zeros from
@@ -379,7 +375,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         augmented["usage"] = augmented_usage
         return augmented
 
-    def _next_compaction_event(self) -> Optional[Dict[str, Any]]:
+    def _next_compaction_event(self) -> dict[str, Any] | None:
         """Return the next compaction content-block SSE event, or ``None``.
 
         Anthropic delivers compaction as a single delta (no token-by-token
@@ -468,7 +464,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": "msg_{}".format(uuid.uuid4()),
+                            "id": f"msg_{uuid.uuid4()}",
                             "type": "message",
                             "role": "assistant",
                             "content": [],
@@ -673,7 +669,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {"type": "message_stop"}
             raise StopIteration
         except Exception as e:
-            verbose_logger.error("Anthropic Adapter - {}\n{}".format(e, traceback.format_exc()))
+            verbose_logger.error(f"Anthropic Adapter - {e}\n{traceback.format_exc()}")
             raise StopIteration
 
     async def __anext__(self):
@@ -691,7 +687,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": "msg_{}".format(uuid.uuid4()),
+                            "id": f"msg_{uuid.uuid4()}",
                             "type": "message",
                             "role": "assistant",
                             "content": [],
@@ -931,7 +927,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self.current_content_block_index += 1
 
     @staticmethod
-    def _delta_has_content(processed_chunk: Dict[str, Any]) -> bool:
+    def _delta_has_content(processed_chunk: dict[str, Any]) -> bool:
         """Return True if a translated chunk carries a non-empty
         ``content_block_delta`` payload.
 

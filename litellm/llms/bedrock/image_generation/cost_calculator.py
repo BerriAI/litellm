@@ -1,5 +1,3 @@
-from typing import Optional
-
 from litellm.llms.bedrock.image_generation.image_handler import BedrockImageGeneration
 from litellm.types.utils import ImageResponse
 
@@ -7,8 +5,8 @@ from litellm.types.utils import ImageResponse
 def cost_calculator(
     model: str,
     image_response: ImageResponse,
-    size: Optional[str] = None,
-    optional_params: Optional[dict] = None,
+    size: str | None = None,
+    optional_params: dict | None = None,
 ) -> float:
     """
     Bedrock image generation cost calculator

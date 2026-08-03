@@ -1,11 +1,10 @@
 import sys
-from typing import Optional
 
 DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS = 600.0
 
 
 def resolve_pass_through_request_timeout(
-    endpoint_timeout: Optional[float] = None,
+    endpoint_timeout: float | None = None,
 ) -> float:
     """
     Resolve the upstream httpx timeout for pass_through_request.
@@ -31,9 +30,9 @@ def resolve_pass_through_request_timeout(
 
 
 def resolve_llm_passthrough_timeout(
-    kwargs: Optional[dict] = None,
-    litellm_params: Optional[dict] = None,
-    router_timeout: Optional[float] = None,
+    kwargs: dict | None = None,
+    litellm_params: dict | None = None,
+    router_timeout: float | None = None,
 ) -> float:
     """
     Resolve upstream httpx timeout for SDK native passthrough (e.g. Bedrock /converse).

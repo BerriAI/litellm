@@ -2459,13 +2459,11 @@ async def test_delete_deployment_type_mismatch():
         patch("litellm.proxy.proxy_server.user_config_file_path", "test_config.yaml"),
     ):
         # Call the function under test
-        deleted_count = await pc._delete_deployment(db_models=[])
+        still_desired = await pc._delete_deployment(db_models=[])
 
     # The two SHA-hash models have no corresponding entry in combined_id_list
     # and must be evicted.
-    assert (
-        deleted_count == 2
-    ), f"Expected 2 deletions (SHA-hash models), got {deleted_count}"
+    assert len(deleted_ids) == 2, f"Expected 2 deletions (SHA-hash models), got {deleted_ids}"
     assert (
         "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695"
         in deleted_ids
@@ -2484,6 +2482,12 @@ async def test_delete_deployment_type_mismatch():
     assert (
         "12345679" not in deleted_ids
     ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
+
+    assert still_desired is not None
+    assert {"12345678", "12345679"} <= still_desired, (
+        "the int-keyed config models must come back as strings in the desired set, so a "
+        f"caller judging its own reload reads them as wanted rather than evicted; got {still_desired}"
+    )
 
 
 @pytest.mark.asyncio
@@ -9119,10 +9123,13 @@ class TestDeleteDeploymentSync:
             with patch.object(
                 proxy_config, "get_config", AsyncMock(return_value={"model_list": []})
             ):
-                count = await proxy_config._delete_deployment(db_models=[])
+                still_desired = await proxy_config._delete_deployment(db_models=[])
 
         mock_router.delete_deployment.assert_called_once_with(id="model-id-to-evict")
-        assert count == 1
+        assert still_desired == frozenset(), (
+            "an empty db and an empty config want nothing, which must stay distinct from "
+            f"the None returned when no reconcile ran at all; got {still_desired}"
+        )
 
     @pytest.mark.asyncio
     async def test_update_llm_router_skips_update_on_db_fetch_failure(self):
@@ -10678,3 +10685,83 @@ async def test_async_data_generator_forwards_usage_chunk_without_strip_marker():
     assert len(data_frames) == 4
     assert any('"usage"' in frame and '"completion_tokens":188' in frame.replace(" ", "") for frame in data_frames)
     assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_config_field_update_rejects_mock_testing_flag():
+    """The mock-testing opt-in is deliberately absent from
+    ``ConfigGeneralSettings`` so that ``/config/field/update`` refuses it. If
+    someone later adds the field for tidiness, this test fails and tells them
+    they have just opened an API write path into a config-file-only setting."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-test",
+    )
+
+    with patch.object(proxy_server_module, "prisma_client", MagicMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await update_config_general_settings(
+                data=ConfigFieldUpdate(
+                    field_name=MOCK_TESTING_CONFIG_KEY,
+                    field_value=True,
+                    config_type="general_settings",
+                ),
+                user_api_key_dict=admin,
+            )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_config_update_body_drops_mock_testing_flag():
+    """``/config/update`` parses its body as ``ConfigYAML``, whose
+    ``general_settings`` is a ``ConfigGeneralSettings``. Undeclared keys are
+    dropped on parse, so the flag never reaches the DB by that route either."""
+    from litellm.proxy._types import ConfigYAML
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    parsed = ConfigYAML.model_validate({"general_settings": {MOCK_TESTING_CONFIG_KEY: True}})
+
+    assert parsed.general_settings is not None
+    assert MOCK_TESTING_CONFIG_KEY not in parsed.general_settings.model_dump(exclude_none=True)
+
+
+def test_startup_warns_when_mock_testing_params_enabled(caplog):
+    """Enabling the opt-in must announce itself, naming every param it
+    unlocks — the config key says ``mock_testing`` but the gate also covers
+    ``mock_timeout`` and ``mock_delay``, so coverage cannot be inferred from
+    the name alone."""
+    import logging
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.route_llm_request import (
+        GATED_MOCK_PARAM_NAMES,
+        MOCK_TESTING_CONFIG_KEY,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_if_mock_testing_params_enabled(
+            general_settings={MOCK_TESTING_CONFIG_KEY: True}
+        )
+
+    assert MOCK_TESTING_CONFIG_KEY in caplog.text
+    for param_name in GATED_MOCK_PARAM_NAMES:
+        assert param_name in caplog.text
+
+
+def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
+    """A proxy that never set the opt-in must not emit the warning."""
+    import logging
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
+
+    assert MOCK_TESTING_CONFIG_KEY not in caplog.text

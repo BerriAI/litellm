@@ -12,6 +12,9 @@ export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierContextWindowSize: number | undefined;
+  classifierContextPerTurnChars: number | undefined;
+  classifierContextIncludeAssistantTurns: boolean | undefined;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
   semanticMatchingEnabled: boolean;
@@ -29,6 +32,9 @@ export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  classifier_context_window_size?: number;
+  classifier_context_per_turn_chars?: number;
+  classifier_context_include_assistant_turns?: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -69,6 +75,9 @@ export const buildComplexityRouterConfig = ({
   tiers,
   classifierType,
   classifierLlmConfig,
+  classifierContextWindowSize,
+  classifierContextPerTurnChars,
+  classifierContextIncludeAssistantTurns,
   customTechnicalKeywords,
   keywordTierRules,
   semanticMatchingEnabled,
@@ -89,6 +98,18 @@ export const buildComplexityRouterConfig = ({
     tiers,
     classifier_type: classifierType,
     ...(classifierType === "llm" && classifierLlmConfig && { classifier_llm_config: classifierLlmConfig }),
+    ...(classifierType === "llm" &&
+      classifierContextWindowSize !== undefined && {
+        classifier_context_window_size: classifierContextWindowSize,
+      }),
+    ...(classifierType === "llm" &&
+      classifierContextPerTurnChars !== undefined && {
+        classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      }),
+    ...(classifierType === "llm" &&
+      classifierContextIncludeAssistantTurns !== undefined && {
+        classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
+      }),
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,

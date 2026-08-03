@@ -19,19 +19,13 @@ request is sent with the ``X-Cisco-AI-Defense-API-Key`` header.
 
 import json
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Dict,
-    List,
     Literal,
-    Optional,
-    Tuple,
-    Type,
-    Union,
 )
 
 import httpx
@@ -75,13 +69,13 @@ CISCO_MCP_INSPECT_PATH = "/api/v1/inspect/mcp"
 CISCO_API_KEY_HEADER = "X-Cisco-AI-Defense-API-Key"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
-SUPPORTED_INSPECTION_TYPES: Tuple[str, ...] = ("chat", "mcp")
+SUPPORTED_INSPECTION_TYPES: tuple[str, ...] = ("chat", "mcp")
 DEFAULT_INSPECTION_TYPE = "chat"
 
 # LiteLLM marks MCP guardrail calls with these call_type values; the proxy
 # routes pre_mcp_call / during_mcp_call events through async_pre_call_hook /
 # async_moderation_hook with the call_type set accordingly.
-_MCP_CALL_TYPES: Tuple[str, ...] = ("mcp_call", "call_mcp_tool")
+_MCP_CALL_TYPES: tuple[str, ...] = ("mcp_call", "call_mcp_tool")
 
 # Action vocabulary Cisco AI Defense can return.
 _ACTION_BLOCK = "block"
@@ -101,16 +95,16 @@ class _ScanContext:
 class _CiscoVerdict:
     """Parsed Cisco AI Defense decision plus any sanitized rewrites it carries."""
 
-    is_safe: Optional[bool]
-    classifications: List[str]
-    severity: Optional[str]
-    rules: List[Dict[str, Any]]
-    explanation: Optional[str]
-    event_id: Optional[str]
-    action: Optional[str] = None
-    sanitized_text: Optional[str] = None
-    sanitized_messages: Optional[List[Dict[str, Any]]] = None
-    sanitized_mcp_arguments: Optional[Dict[str, Any]] = None
+    is_safe: bool | None
+    classifications: list[str]
+    severity: str | None
+    rules: list[dict[str, Any]]
+    explanation: str | None
+    event_id: str | None
+    action: str | None = None
+    sanitized_text: str | None = None
+    sanitized_messages: list[dict[str, Any]] | None = None
+    sanitized_mcp_arguments: dict[str, Any] | None = None
 
 
 class CiscoAIDefenseGuardrailMissingSecrets(Exception):
@@ -132,28 +126,28 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     ``cisco_ai_defense_mcp.py``.
     """
 
-    SUPPORTED_ON_FLAGGED_ACTIONS: Tuple[str, ...] = ("block", "monitor")
+    SUPPORTED_ON_FLAGGED_ACTIONS: tuple[str, ...] = ("block", "monitor")
     DEFAULT_ON_FLAGGED_ACTION: str = "block"
-    SUPPORTED_FALLBACK_ACTIONS: Tuple[str, ...] = ("allow", "block")
+    SUPPORTED_FALLBACK_ACTIONS: tuple[str, ...] = ("allow", "block")
     DEFAULT_FALLBACK_ON_ERROR: str = "block"
 
     _PROVIDER_NAME = "cisco_ai_defense"
 
     def __init__(
         self,
-        guardrail_name: Optional[str] = "cisco-ai-defense",
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        inspection_type: Optional[str] = None,
-        inspect_path: Optional[str] = None,
-        enabled_rules: Optional[List[Dict[str, Any]]] = None,
-        integration_profile_id: Optional[str] = None,
-        integration_profile_version: Optional[str] = None,
-        integration_tenant_id: Optional[str] = None,
-        integration_type: Optional[str] = None,
-        on_flagged_action: Optional[str] = None,
-        fallback_on_error: Optional[str] = None,
-        timeout: Optional[float] = None,
+        guardrail_name: str | None = "cisco-ai-defense",
+        api_key: str | None = None,
+        api_base: str | None = None,
+        inspection_type: str | None = None,
+        inspect_path: str | None = None,
+        enabled_rules: list[dict[str, Any]] | None = None,
+        integration_profile_id: str | None = None,
+        integration_profile_version: str | None = None,
+        integration_tenant_id: str | None = None,
+        integration_type: str | None = None,
+        on_flagged_action: str | None = None,
+        fallback_on_error: str | None = None,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> None:
         resolved_api_key = api_key or os.environ.get("CISCO_AI_DEFENSE_API_KEY")
@@ -213,7 +207,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             setting_name="fallback_on_error",
         )
 
-        resolved_timeout: Optional[float]
+        resolved_timeout: float | None
         if timeout is not None:
             resolved_timeout = self._coerce_timeout(timeout)
         else:
@@ -251,9 +245,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _resolve_choice(
-        value: Optional[str],
+        value: str | None,
         env_var: str,
-        allowed: Tuple[str, ...],
+        allowed: tuple[str, ...],
         default: str,
         setting_name: str,
     ) -> str:
@@ -272,7 +266,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return default
 
     @staticmethod
-    def _coerce_timeout(value: Union[str, float]) -> Optional[float]:
+    def _coerce_timeout(value: str | float) -> float | None:
         try:
             parsed = float(value)
         except (TypeError, ValueError):
@@ -289,7 +283,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return parsed
 
     @staticmethod
-    def _is_mcp_call_type(call_type: Optional[str]) -> bool:
+    def _is_mcp_call_type(call_type: str | None) -> bool:
         return bool(call_type) and call_type in _MCP_CALL_TYPES
 
     # ------------------------------------------------------------------
@@ -314,7 +308,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         # Trust proxy call_type, not caller-controlled request shape.
         is_mcp = self._is_mcp_call_type(call_type)
 
@@ -363,7 +357,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         is_mcp = self._is_mcp_call_type(call_type)
 
         if not self._surface_matches(is_mcp):
@@ -447,7 +441,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             self.guardrail_name,
         )
 
-        all_chunks: List[Any] = []
+        all_chunks: list[Any] = []
         try:
             async for chunk in response:
                 all_chunks.append(chunk)
@@ -507,7 +501,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 response_obj=assembled,
             )
         except HTTPException as exc:
-            error_obj: Dict[str, Any] = self._http_exception_to_error_obj(exc)
+            error_obj: dict[str, Any] = self._http_exception_to_error_obj(exc)
             verbose_proxy_logger.warning(
                 "Cisco AI Defense guardrail (%s): streaming response "
                 "blocked — emitting SSE error event instead of "
@@ -541,7 +535,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             for chunk in all_chunks:
                 yield chunk
 
-    def _build_block_payload(self, context: _ScanContext, verdict: _CiscoVerdict) -> Dict[str, Any]:
+    def _build_block_payload(self, context: _ScanContext, verdict: _CiscoVerdict) -> dict[str, Any]:
         """Canonical block payload used across all four block paths.
 
         Same dict is the ``HTTPException.detail`` for chat / MCP request
@@ -565,28 +559,28 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             "event_id": verdict.event_id,
         }
 
-    def _http_exception_to_error_obj(self, exc: HTTPException) -> Dict[str, Any]:
+    def _http_exception_to_error_obj(self, exc: HTTPException) -> dict[str, Any]:
         """Wrap an ``HTTPException`` detail into the SSE ``error`` payload.
 
         For Cisco's own blocks the detail is already the canonical block
         payload, so this is a near-passthrough that just adds ``code``
         / ``guardrail`` defaults for non-Cisco / unstructured details.
         """
-        error_obj: Dict[str, Any] = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+        error_obj: dict[str, Any] = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         error_obj.setdefault("message", error_obj.get("error", "Guardrail block"))
         error_obj.setdefault("code", exc.status_code)
         error_obj.setdefault("guardrail", self.guardrail_name)
         return error_obj
 
     @classmethod
-    def _streaming_content_was_modified(cls, original_chunks: List[Any], assembled: ModelResponse) -> bool:
+    def _streaming_content_was_modified(cls, original_chunks: list[Any], assembled: ModelResponse) -> bool:
         """Decide whether redact changed content or tool/function arguments."""
         original_text = cls._extract_streaming_chunk_scan_text(original_chunks)
         assembled_text = " ".join(m.get("content", "") for m in cls._extract_response_messages(assembled))
         return original_text != assembled_text
 
     @classmethod
-    def _extract_streaming_chunk_scan_text(cls, chunks: List[Any]) -> str:
+    def _extract_streaming_chunk_scan_text(cls, chunks: list[Any]) -> str:
         original_text = ""
         argument_text = ""
         for chunk in chunks:
@@ -629,7 +623,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _normalize_event_hooks(event_hook: object) -> set:
         """Coerce a ``mode`` arg (str, enum, or list of either) to a set of values."""
 
-        def _norm(hook: object) -> Optional[str]:
+        def _norm(hook: object) -> str | None:
             value = getattr(hook, "value", None)
             if isinstance(value, str):
                 return value
@@ -683,7 +677,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         allow, WARNING for intervened/redacted, ERROR is left for
         upstream API failures.
         """
-        fields: Dict[str, Any] = {
+        fields: dict[str, Any] = {
             "guardrail": self.guardrail_name,
             "surface": context.surface,
             "direction": context.direction,
@@ -757,12 +751,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     async def _inspect_chat(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         direction: str = "input",
         response_obj: object = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         url = f"{self.api_base}{self.inspect_path}"
         payload = self._build_chat_payload(messages, request_data, user_api_key_dict)
         start_time = datetime.now()
@@ -791,10 +785,10 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _build_chat_payload(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {
             "messages": messages,
             "metadata": self._build_metadata(request_data, user_api_key_dict),
@@ -808,9 +802,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     async def _post_inspection(
         self,
         url: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         surface: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         headers = self._build_headers()
         verbose_proxy_logger.debug(
             "Cisco AI Defense guardrail: posting %s inspection to %s",
@@ -854,7 +848,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 f"Cisco AI Defense {surface} API returned a non-JSON response"
             ) from exc
 
-    def _build_headers(self) -> Dict[str, str]:
+    def _build_headers(self) -> dict[str, str]:
         return {
             CISCO_API_KEY_HEADER: self.api_key,
             "Content-Type": "application/json",
@@ -866,8 +860,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         self,
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> Dict[str, Any]:
-        metadata: Dict[str, Any] = {}
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
 
         user = request_data.get("user") or getattr(user_api_key_dict, "user_id", None)
         if user:
@@ -894,8 +888,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
         return metadata
 
-    def _build_config(self) -> Dict[str, Any]:
-        config: Dict[str, Any] = {}
+    def _build_config(self) -> dict[str, Any]:
+        config: dict[str, Any] = {}
         if self.enabled_rules:
             config["enabled_rules"] = self.enabled_rules
         if self.integration_profile_id:
@@ -909,7 +903,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return config
 
     @staticmethod
-    def _normalize_rule(rule: object) -> Dict[str, Any]:
+    def _normalize_rule(rule: object) -> dict[str, Any]:
         """Coerce a user-supplied rule into the wire-shape dict Cisco expects.
 
         Accepts ``str``, ``dict``, and Pydantic model inputs.
@@ -932,7 +926,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     rule = dumped
 
         if isinstance(rule, dict):
-            normalized: Dict[str, Any] = {}
+            normalized: dict[str, Any] = {}
             rule_name = rule.get("rule_name")
             if rule_name:
                 normalized["rule_name"] = rule_name
@@ -955,12 +949,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _finalize_inspection(
         self,
-        inspect_response: Dict[str, Any],
+        inspect_response: dict[str, Any],
         request_data: dict,
         context: _ScanContext,
         start_time: datetime,
         response_obj: object = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Parse, log, and (optionally) raise/redact on the Cisco verdict.
 
         ``context.direction`` is ``"input"`` for request scans and ``"output"``
@@ -1129,10 +1123,10 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     @classmethod
     def _sanitize_response_for_logging(
         cls,
-        inspect_response: Dict[str, Any],
+        inspect_response: dict[str, Any],
         surface: str,
-        action: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        action: str | None = None,
+    ) -> dict[str, Any]:
         """Drop bulky / privacy-sensitive fields, recursing into nested dicts.
 
         MCP verdicts are commonly nested under ``result``, so a
@@ -1148,9 +1142,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return sanitized
 
     @classmethod
-    def _strip_sensitive_keys(cls, d: Dict[str, Any]) -> Dict[str, Any]:
+    def _strip_sensitive_keys(cls, d: dict[str, Any]) -> dict[str, Any]:
         """Recursively strip privacy-sensitive keys from a verdict dict."""
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for key, value in d.items():
             if key.startswith("_") or key in cls._REDACTED_LOG_KEYS:
                 continue
@@ -1164,7 +1158,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     # Verdict extraction helpers (sanitized content + JSON-RPC errors)
     # ------------------------------------------------------------------
 
-    _DECISION_FIELDS: Tuple[str, ...] = (
+    _DECISION_FIELDS: tuple[str, ...] = (
         "action",
         "allowed",
         "blocked",
@@ -1195,7 +1189,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return any(key in payload for key in cls._DECISION_FIELDS)
 
     @classmethod
-    def _unwrap_verdict_envelope(cls, inspect_response: Dict[str, Any]) -> Dict[str, Any]:
+    def _unwrap_verdict_envelope(cls, inspect_response: dict[str, Any]) -> dict[str, Any]:
         """Return the dict that actually holds is_safe / action / rules.
 
         Cisco AI Defense returns the verdict at different nesting depths
@@ -1232,8 +1226,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _extract_jsonrpc_error(
-        inspect_response: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
+        inspect_response: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Detect a JSON-RPC error envelope inside an HTTP 200 response.
 
         The Cisco Inspect API can return ``{"error": {...}}`` (or nest one
@@ -1280,8 +1274,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _extract_sanitized_text(
-        inspect_response: Dict[str, Any],
-    ) -> Optional[str]:
+        inspect_response: dict[str, Any],
+    ) -> str | None:
         """Pull ``sanitized_text`` (or camelCase variant) off the verdict."""
         for key in ("sanitized_text", "sanitizedText"):
             value = inspect_response.get(key)
@@ -1297,8 +1291,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _extract_sanitized_messages(
-        inspect_response: Dict[str, Any],
-    ) -> Optional[List[Dict[str, Any]]]:
+        inspect_response: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
         """Pull a sanitized OpenAI-format messages array off the verdict.
 
         Cisco can return the rewrite under several keys; we accept any of
@@ -1363,8 +1357,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     @staticmethod
     def _redact_mcp_input(
         request_data: dict,
-        sanitized_text: Optional[str],
-        sanitized_mcp_arguments: Optional[Dict[str, Any]],
+        sanitized_text: str | None,
+        sanitized_mcp_arguments: dict[str, Any] | None,
     ) -> bool:
         """Rewrite MCP request arguments in all locations the proxy reads."""
         if sanitized_mcp_arguments is not None:
@@ -1397,8 +1391,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _redact_chat_input(
         self,
         request_data: dict,
-        sanitized_text: Optional[str],
-        sanitized_messages: Optional[List[Dict[str, Any]]],
+        sanitized_text: str | None,
+        sanitized_messages: list[dict[str, Any]] | None,
     ) -> bool:
         """Rewrite chat request input (``messages`` or ``input``)."""
         if sanitized_messages and self._extract_tool_definition_text(request_data):
@@ -1453,8 +1447,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _redact_responses_instructions(
         cls,
         request_data: dict,
-        sanitized_text: Optional[str],
-        sanitized_messages: Optional[List[Dict[str, Any]]],
+        sanitized_text: str | None,
+        sanitized_messages: list[dict[str, Any]] | None,
     ) -> bool:
         if sanitized_messages:
             instruction_text = cls._instruction_text_from_messages(sanitized_messages)
@@ -1467,7 +1461,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return False
 
     @classmethod
-    def _instruction_text_from_messages(cls, messages: List[Dict[str, Any]]) -> Optional[str]:
+    def _instruction_text_from_messages(cls, messages: list[dict[str, Any]]) -> str | None:
         for message in messages:
             if not isinstance(message, dict):
                 continue
@@ -1478,7 +1472,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return None
 
     @classmethod
-    def _non_instruction_messages(cls, messages: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+    def _non_instruction_messages(cls, messages: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
         if messages is None:
             return None
         return [
@@ -1508,8 +1502,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _redact_chat_output(
         self,
         response_obj: object,
-        sanitized_text: Optional[str],
-        sanitized_messages: Optional[List[Dict[str, Any]]],
+        sanitized_text: str | None,
+        sanitized_messages: list[dict[str, Any]] | None,
     ) -> bool:
         """Rewrite chat response (``ModelResponse`` or ``ResponsesAPIResponse``)."""
         if response_obj is None:
@@ -1535,8 +1529,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     @staticmethod
     def _redact_model_response_choices(
         choices: list,
-        sanitized_text: Optional[str],
-        sanitized_messages: Optional[List[Dict[str, Any]]],
+        sanitized_text: str | None,
+        sanitized_messages: list[dict[str, Any]] | None,
     ) -> bool:
         """Redact every returned choice, including tool-call/reasoning fields."""
         if sanitized_messages:
@@ -1579,8 +1573,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     @staticmethod
     def _redact_text_completion_choices(
         choices: list,
-        sanitized_text: Optional[str],
-        sanitized_messages: Optional[List[Dict[str, Any]]],
+        sanitized_text: str | None,
+        sanitized_messages: list[dict[str, Any]] | None,
     ) -> bool:
         """Rewrite ``/v1/completions`` text choices after Cisco redaction."""
         replacement = sanitized_text
@@ -1647,10 +1641,10 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _redact_responses_api_output(
         self,
         output_items: list,
-        sanitized_text: Optional[str],
-        sanitized_messages: Optional[List[Dict[str, Any]]],
+        sanitized_text: str | None,
+        sanitized_messages: list[dict[str, Any]] | None,
     ) -> bool:
-        replacement_text: Optional[str] = sanitized_text
+        replacement_text: str | None = sanitized_text
         if not replacement_text and sanitized_messages:
             replacement_text = " ".join(
                 self._normalize_message_content(m.get("content")) for m in sanitized_messages if isinstance(m, dict)
@@ -1682,14 +1676,14 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _sanitized_messages_to_responses_input(
-        sanitized_messages: List[Dict[str, Any]],
-    ) -> Optional[List[Dict[str, Any]]]:
+        sanitized_messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]] | None:
         """Convert chat-shape sanitized_messages to Responses API ``input``.
 
         Returns ``None`` if nothing usable could be converted, so the
         caller falls back to ``on_flagged_action``.
         """
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for m in sanitized_messages:
             if not isinstance(m, dict):
                 continue
@@ -1703,7 +1697,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return out or None
 
     @staticmethod
-    def _rewrite_responses_input_text(original_input: object, sanitized_text: str) -> Optional[object]:
+    def _rewrite_responses_input_text(original_input: object, sanitized_text: str) -> object | None:
         """Apply ``sanitized_text`` to a Responses API ``input`` value.
 
         Handles plain string, list of message items (rewrites the last
@@ -1746,12 +1740,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _extract_masked_entity_count(
-        rules: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, int]]:
+        rules: list[dict[str, Any]],
+    ) -> dict[str, int] | None:
         """Count entity-type detections per Cisco rule for the logging payload."""
         if not rules:
             return None
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         for rule in rules:
             if not isinstance(rule, dict):
                 continue
@@ -1770,11 +1764,11 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         self,
         error: Exception,
         *,
-        request_data: Optional[dict] = None,
-        start_time: Optional[datetime] = None,
+        request_data: dict | None = None,
+        start_time: datetime | None = None,
         surface: str = "chat",
         direction: str = "input",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         verbose_proxy_logger.error(
             "Cisco AI Defense guardrail (%s): API communication failed: %s",
             surface,
@@ -1839,9 +1833,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     @staticmethod
     def _extract_inspect_messages_from_request(
         data: dict,
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         """Build {role, content} messages for the Cisco AI Defense chat API."""
-        messages: List[Dict[str, str]] = []
+        messages: list[dict[str, str]] = []
 
         instructions_text = CiscoAIDefenseGuardrail._normalize_message_content(data.get("instructions"))
         if instructions_text:
@@ -1854,7 +1848,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             role = message.get("role")
             if not role:
                 continue
-            parts: List[str] = []
+            parts: list[str] = []
             text = CiscoAIDefenseGuardrail._normalize_message_content(message.get("content"))
             if text:
                 parts.append(text)
@@ -1889,13 +1883,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         be inspected too; otherwise it bypasses the guardrail by hiding in
         ``tools[].function.description`` and similar metadata.
         """
-        parts: List[str] = []
+        parts: list[str] = []
         for key in ("tools", "functions"):
             CiscoAIDefenseGuardrail._collect_strings(data.get(key), parts)
         return " ".join(parts)
 
     @staticmethod
-    def _collect_strings(value: object, out: List[str]) -> None:
+    def _collect_strings(value: object, out: list[str]) -> None:
         if isinstance(value, str):
             if value:
                 out.append(value)
@@ -1907,7 +1901,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 CiscoAIDefenseGuardrail._collect_strings(item, out)
 
     @staticmethod
-    def _flatten_responses_input(input_value: object) -> List[Dict[str, str]]:
+    def _flatten_responses_input(input_value: object) -> list[dict[str, str]]:
         """Flatten the OpenAI Responses API ``input`` into chat-message form.
 
         Recognized shapes:
@@ -1930,7 +1924,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             return [{"role": "user", "content": text}] if text else []
 
         if any(isinstance(item, dict) and "role" in item for item in input_value):
-            result: List[Dict[str, str]] = []
+            result: list[dict[str, str]] = []
             for item in input_value:
                 if not isinstance(item, dict):
                     continue
@@ -1963,7 +1957,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         if isinstance(content, str):
             return content
         if isinstance(content, list):
-            parts: List[str] = []
+            parts: list[str] = []
             for part in content:
                 if not isinstance(part, dict):
                     continue
@@ -1984,7 +1978,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return str(content)
 
     @staticmethod
-    def _extract_response_messages(response: object) -> List[Dict[str, str]]:
+    def _extract_response_messages(response: object) -> list[dict[str, str]]:
         """Extract scannable assistant text from a chat response.
 
         Handles both ``ModelResponse`` (Chat Completions) and
@@ -1994,11 +1988,11 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         scan by placing content there.
         """
         if isinstance(response, ModelResponse):
-            result: List[Dict[str, str]] = []
+            result: list[dict[str, str]] = []
             for choice in getattr(response, "choices", None) or []:
                 if not isinstance(choice, Choices):
                     continue
-                parts: List[str] = []
+                parts: list[str] = []
                 content = CiscoAIDefenseGuardrail._normalize_message_content(getattr(choice.message, "content", None))
                 if content:
                     parts.append(content)
@@ -2009,7 +2003,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             return result
 
         if isinstance(response, TextCompletionResponse):
-            text_parts: List[str] = []
+            text_parts: list[str] = []
             for choice in getattr(response, "choices", None) or []:
                 text = getattr(choice, "text", None)
                 if isinstance(text, str) and text:
@@ -2020,7 +2014,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         output_items = getattr(response, "output", None)
         if not isinstance(output_items, list):
             return []
-        output_parts: List[str] = []
+        output_parts: list[str] = []
         for item in output_items:
             get = item.get if isinstance(item, dict) else (lambda k: getattr(item, k, None))
             for part in get("content") or []:
@@ -2039,9 +2033,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return [{"role": "assistant", "content": joined}] if joined else []
 
     @classmethod
-    def _extract_message_reasoning_parts(cls, message: object) -> List[str]:
+    def _extract_message_reasoning_parts(cls, message: object) -> list[str]:
         """Extract inspectable reasoning fields from a message/delta object."""
-        parts: List[str] = []
+        parts: list[str] = []
         reasoning_content = cls._field(message, "reasoning_content")
         if isinstance(reasoning_content, str) and reasoning_content:
             parts.append(reasoning_content)
@@ -2070,13 +2064,13 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return getattr(obj, key, None)
 
     @classmethod
-    def _field_list(cls, obj: object, key: str) -> List[Any]:
+    def _field_list(cls, obj: object, key: str) -> list[Any]:
         value = cls._field(obj, key)
         return value if isinstance(value, list) else []
 
     @classmethod
-    def _extract_message_tool_argument_parts(cls, message: object) -> List[str]:
-        parts: List[str] = []
+    def _extract_message_tool_argument_parts(cls, message: object) -> list[str]:
+        parts: list[str] = []
         tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
         for tool_call in tool_calls or []:
             args = cls._extract_tool_call_arguments(tool_call)
@@ -2092,7 +2086,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return parts
 
     @staticmethod
-    def _extract_tool_call_arguments(tool_call: object) -> Optional[str]:
+    def _extract_tool_call_arguments(tool_call: object) -> str | None:
         """Pull ``function.arguments`` off a tool_calls entry (dict or model)."""
         if tool_call is None:
             return None
@@ -2100,7 +2094,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return CiscoAIDefenseGuardrail._extract_function_call_arguments(function)
 
     @staticmethod
-    def _extract_function_call_arguments(function_call: object) -> Optional[str]:
+    def _extract_function_call_arguments(function_call: object) -> str | None:
         """Pull ``arguments`` off a function_call entry (dict or model)."""
         if function_call is None:
             return None
@@ -2118,7 +2112,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
             CiscoAIDefenseGuardrailConfigModel,
         )
@@ -2126,7 +2120,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return CiscoAIDefenseGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,

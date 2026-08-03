@@ -9,7 +9,8 @@ import contextlib
 import json
 import os
 import ssl
-from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Optional, Type, Union
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -51,14 +52,14 @@ class CatoNetworksGuardrailMissingSecrets(Exception):
 
 class CatoNetworksGuardrail(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
+    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         ssl_verify = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
@@ -79,7 +80,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def _build_ws_ssl_kwargs(ssl_verify: Optional[Union[bool, str]], ws_api_base: str) -> dict:
+    def _build_ws_ssl_kwargs(ssl_verify: bool | str | None, ws_api_base: str) -> dict:
         """Resolve the ``ssl`` argument for ``websockets.connect``. Mirrors the
         ``ssl_verify`` handling applied to the HTTP handler so a custom Cato instance
         behind TLS honours the same verification settings for streaming."""
@@ -93,7 +94,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return {"ssl": ssl_config}
 
     @staticmethod
-    def _resolve_cato_user_email(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+    def _resolve_cato_user_email(user_api_key_dict: UserAPIKeyAuth) -> str | None:
         """Only the key/JWT-bound user email is trusted. ``end_user_id`` is derived from
         caller-supplied request fields (OpenAI ``user``, headers, metadata) and is spoofable,
         so it must never be forwarded as the Cato user identity."""
@@ -111,7 +112,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Pre-Call Hook")
         return await self.call_cato_guardrail(
             data,
@@ -125,7 +126,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Moderation Hook")
         return await self.call_cato_guardrail(
             data,
@@ -234,8 +235,8 @@ class CatoNetworksGuardrail(CustomGuardrail):
         self,
         data: dict,
         hook: str,
-        key_alias: Optional[str],
-        user_email: Optional[str] = None,
+        key_alias: str | None,
+        user_email: str | None = None,
     ) -> dict:
         call_id = data.get("litellm_call_id")
         headers = self._build_cato_headers(
@@ -345,9 +346,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         request_data: dict,
         output: str,
         hook: str,
-        key_alias: Optional[str],
-        user_email: Optional[str] = None,
-    ) -> Optional[dict]:
+        key_alias: str | None,
+        user_email: str | None = None,
+    ) -> dict | None:
         call_id = request_data.get("litellm_call_id")
         inspection_messages = self._inspection_messages(request_data)
         assistant_index = len(inspection_messages)
@@ -391,9 +392,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         self,
         *,
         hook: str,
-        key_alias: Optional[str],
-        user_email: Optional[str],
-        litellm_call_id: Optional[str],
+        key_alias: str | None,
+        user_email: str | None,
+        litellm_call_id: str | None,
     ):
         """
         A helper function to build the http headers that are required by Cato guardrails.
@@ -484,8 +485,8 @@ class CatoNetworksGuardrail(CustomGuardrail):
         data: dict,
         text: str,
         user_api_key_dict: UserAPIKeyAuth,
-        user_email: Optional[str],
-    ) -> Optional[str]:
+        user_email: str | None,
+    ) -> str | None:
         """Run the Cato output guardrail on a single assistant text fragment.
         Raises on a block action and returns the redacted replacement, or
         ``None`` when the fragment must be left unchanged."""
@@ -504,7 +505,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+        response: Any | ModelResponse | EmbeddingResponse | ImageResponse,
     ) -> Any:
         user_email = self._resolve_cato_user_email(user_api_key_dict)
         if isinstance(response, ModelResponse) and response.choices:
@@ -588,7 +589,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         await websocket.send(json.dumps({"done": True}))
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.cato_networks import (
             CatoNetworksGuardrailConfigModel,
         )

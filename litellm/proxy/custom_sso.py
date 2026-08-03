@@ -14,8 +14,8 @@ Flow:
 
 from fastapi_sso.sso.base import OpenID
 
-from litellm.proxy._types import LitellmUserRoles, SSOUserDefinedValues
 from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, SSOUserDefinedValues
 
 
 async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:

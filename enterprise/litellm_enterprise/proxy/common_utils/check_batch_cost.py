@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import LiteLLM_ManagedObjectTable
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
+    from litellm.types.router import Deployment
     from litellm.types.utils import LiteLLMBatch
 
 
@@ -281,6 +282,32 @@ class CheckBatchCost:
                 return deployment_id
         return None
 
+    @classmethod
+    def _get_managed_file_model_name(
+        cls,
+        job: "LiteLLM_ManagedObjectTable",
+        deployment_info: "Deployment",
+    ) -> Optional[str]:
+        """
+        Public model group name to encode as ``target_model_names`` on unified output file ids.
+
+        Key model-access checks resolve a managed file id back to a model via its
+        ``target_model_names``, so this must be the model group the caller requested, never the
+        underlying provider model (e.g. ``gpt-5.5``), which no key is allowed to call.
+        """
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            convert_b64_uid_to_unified_uid,
+            get_models_from_unified_file_id,
+        )
+
+        input_file_id = cls._get_input_file_id(job)
+        target_model_names = (
+            get_models_from_unified_file_id(convert_b64_uid_to_unified_uid(input_file_id)) if input_file_id else []
+        )
+        if target_model_names:
+            return ",".join(target_model_names)
+        return deployment_info.model_name or None
+
     @staticmethod
     def _get_input_file_id(job: "LiteLLM_ManagedObjectTable") -> Optional[str]:
         import json
@@ -406,6 +433,10 @@ class CheckBatchCost:
         managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_hook is not None:
             from litellm.proxy._types import UserAPIKeyAuth
+
+            managed_file_model_name = self._get_managed_file_model_name(
+                job=job, deployment_info=deployment_info
+            )
             _minimal_auth = UserAPIKeyAuth(
                 user_id=job.created_by or "default-user-id",
                 team_id=getattr(job, "team_id", None),
@@ -417,7 +448,7 @@ class CheckBatchCost:
                         _unified_file_id = managed_files_hook.get_unified_output_file_id(
                             output_file_id=_raw_file_id,
                             model_id=model_id,
-                            model_name=str(model_name) if model_name else deployment_info.model_name or None,
+                            model_name=managed_file_model_name,
                         )
                         await managed_files_hook.store_unified_file_id(
                             file_id=_unified_file_id,

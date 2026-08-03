@@ -6,7 +6,7 @@ then builds a SemanticRouter for prompt matching.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -27,7 +27,7 @@ class SemanticGuardRouteLoader:
     """Loads route definitions from YAML templates and custom configs, builds SemanticRouter."""
 
     @staticmethod
-    def load_builtin_template(template_name: str) -> Dict[str, Any]:
+    def load_builtin_template(template_name: str) -> dict[str, Any]:
         """Load a built-in route template YAML by name."""
         file_path = os.path.join(ROUTE_TEMPLATES_DIR, f"{template_name}.yaml")
         if not os.path.exists(file_path):
@@ -39,7 +39,7 @@ class SemanticGuardRouteLoader:
             return yaml.safe_load(f)
 
     @staticmethod
-    def list_builtin_templates() -> List[str]:
+    def list_builtin_templates() -> list[str]:
         """List available built-in template names."""
         templates = []
         if os.path.isdir(ROUTE_TEMPLATES_DIR):
@@ -49,7 +49,7 @@ class SemanticGuardRouteLoader:
         return sorted(templates)
 
     @staticmethod
-    def load_custom_routes_file(file_path: str) -> List[Dict[str, Any]]:
+    def load_custom_routes_file(file_path: str) -> list[dict[str, Any]]:
         """Load custom routes from a YAML file."""
         if not os.path.exists(file_path):
             raise ValueError(f"SemanticGuard: custom routes file not found: {file_path}")
@@ -64,15 +64,15 @@ class SemanticGuardRouteLoader:
     @classmethod
     def build_routes(
         cls,
-        route_templates: Optional[List[str]],
-        custom_routes_file: Optional[str],
-        custom_routes: Optional[List[Dict[str, Any]]],
+        route_templates: list[str] | None,
+        custom_routes_file: str | None,
+        custom_routes: list[dict[str, Any]] | None,
         global_threshold: float = DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD,
-    ) -> List["Route"]:
+    ) -> list["Route"]:
         """Build semantic-router Route objects from templates + custom config."""
         from semantic_router.routers.base import Route
 
-        routes: List[Route] = []
+        routes: list[Route] = []
 
         if route_templates:
             for template_name in route_templates:
@@ -118,7 +118,7 @@ class SemanticGuardRouteLoader:
     @classmethod
     def build_semantic_router(
         cls,
-        routes: List["Route"],
+        routes: list["Route"],
         litellm_router: "Router",
         embedding_model: str,
         global_threshold: float,

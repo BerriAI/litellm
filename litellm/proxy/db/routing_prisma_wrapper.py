@@ -5,7 +5,8 @@ otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 """
 
 import os
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
@@ -38,7 +39,7 @@ class _RoutedActions:
     fails a recreate) is observed without re-fetching the actions accessor.
     """
 
-    __slots__ = ("_writer_actions", "_reader_actions", "_should_use_reader")
+    __slots__ = ("_reader_actions", "_should_use_reader", "_writer_actions")
 
     def __init__(
         self,

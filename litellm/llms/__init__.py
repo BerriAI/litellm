@@ -1,6 +1,6 @@
 import importlib
 import os
-from typing import TYPE_CHECKING, Dict, Optional, Type
+from typing import TYPE_CHECKING
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import CallTypes
@@ -14,9 +14,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 
 
-def get_cost_for_web_search_request(
-    custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo"
-) -> Optional[float]:
+def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo") -> float | None:
     """
     Get the cost for a web search request for a given model.
 
@@ -61,7 +59,7 @@ def get_cost_for_web_search_request(
         return None
 
 
-def discover_guardrail_translation_mappings() -> Dict[CallTypes, Type["BaseTranslation"]]:
+def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTranslation"]]:
     """
     Discover guardrail translation mappings by scanning the llms directory structure.
 
@@ -70,7 +68,7 @@ def discover_guardrail_translation_mappings() -> Dict[CallTypes, Type["BaseTrans
     Returns:
         Dict[CallTypes, Type[BaseTranslation]]: A dictionary mapping call types to their translation handler classes
     """
-    discovered_mappings: Dict[CallTypes, Type["BaseTranslation"]] = {}
+    discovered_mappings: dict[CallTypes, type[BaseTranslation]] = {}
 
     try:
         # Get the path to the llms directory
@@ -138,7 +136,7 @@ def discover_guardrail_translation_mappings() -> Dict[CallTypes, Type["BaseTrans
 
 
 # Cache the discovered mappings
-endpoint_guardrail_translation_mappings: Optional[Dict[CallTypes, Type["BaseTranslation"]]] = None
+endpoint_guardrail_translation_mappings: dict[CallTypes, type["BaseTranslation"]] | None = None
 
 
 def load_guardrail_translation_mappings():
@@ -148,7 +146,7 @@ def load_guardrail_translation_mappings():
     return endpoint_guardrail_translation_mappings
 
 
-def get_guardrail_translation_mapping(call_type: CallTypes) -> Type["BaseTranslation"]:
+def get_guardrail_translation_mapping(call_type: CallTypes) -> type["BaseTranslation"]:
     """
     Get the guardrail translation handler for a given call type.
 

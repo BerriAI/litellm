@@ -4,16 +4,12 @@ This module is used to pass through requests to the LLM APIs.
 
 import asyncio
 import contextvars
+from collections.abc import AsyncGenerator, Coroutine, Generator
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Coroutine,
-    Generator,
-    List,
     Optional,
-    Union,
     cast,
 )
 
@@ -41,20 +37,20 @@ async def allm_passthrough_route(
     method: str,
     endpoint: str,
     model: str,
-    custom_llm_provider: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    request_query_params: Optional[dict] = None,
-    request_headers: Optional[dict] = None,
-    content: Optional[Any] = None,
-    data: Optional[dict] = None,
-    files: Optional[RequestFiles] = None,
-    json: Optional[Any] = None,
-    params: Optional[QueryParamTypes] = None,
-    cookies: Optional[CookieTypes] = None,
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    request_query_params: dict | None = None,
+    request_headers: dict | None = None,
+    content: Any | None = None,
+    data: dict | None = None,
+    files: RequestFiles | None = None,
+    json: Any | None = None,
+    params: QueryParamTypes | None = None,
+    cookies: CookieTypes | None = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
     **kwargs,
-) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
+) -> httpx.Response | AsyncGenerator[Any, Any]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
@@ -166,26 +162,26 @@ def llm_passthrough_route(
     method: str,
     endpoint: str,
     model: str,
-    custom_llm_provider: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    request_query_params: Optional[dict] = None,
-    request_headers: Optional[dict] = None,
-    content: Optional[Any] = None,
-    data: Optional[dict] = None,
-    files: Optional[RequestFiles] = None,
-    json: Optional[Any] = None,
-    params: Optional[QueryParamTypes] = None,
-    cookies: Optional[CookieTypes] = None,
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    request_query_params: dict | None = None,
+    request_headers: dict | None = None,
+    content: Any | None = None,
+    data: dict | None = None,
+    files: RequestFiles | None = None,
+    json: Any | None = None,
+    params: QueryParamTypes | None = None,
+    cookies: CookieTypes | None = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
     **kwargs,
-) -> Union[
-    httpx.Response,
-    Coroutine[Any, Any, httpx.Response],
-    Coroutine[Any, Any, Union[httpx.Response, AsyncGenerator[Any, Any]]],
-    Generator[Any, Any, Any],
-    AsyncGenerator[Any, Any],
-]:
+) -> (
+    httpx.Response
+    | Coroutine[Any, Any, httpx.Response]
+    | Coroutine[Any, Any, httpx.Response | AsyncGenerator[Any, Any]]
+    | Generator[Any, Any, Any]
+    | AsyncGenerator[Any, Any]
+):
     """
     Pass through requests to the LLM APIs.
 
@@ -362,12 +358,12 @@ def llm_passthrough_route(
 
 
 async def _async_passthrough_request(
-    client: Union[HTTPHandler, AsyncHTTPHandler],
+    client: HTTPHandler | AsyncHTTPHandler,
     request: httpx.Request,
     is_streaming_request: bool,
     litellm_logging_obj: "LiteLLMLoggingObj",
     provider_config: "BasePassthroughConfig",
-) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
+) -> httpx.Response | AsyncGenerator[Any, Any]:
     """
     Handle async passthrough requests.
     Uses async client to send request and properly handles streaming.
@@ -401,7 +397,7 @@ def _sync_streaming(
 ):
     from litellm.utils import executor
 
-    raw_bytes: List[bytes] = []
+    raw_bytes: list[bytes] = []
     flush_scheduled = False
     try:
         for chunk in response.iter_bytes():  # type: ignore
@@ -441,7 +437,7 @@ async def _async_streaming(
             pass
         raise
 
-    raw_bytes: List[bytes] = []
+    raw_bytes: list[bytes] = []
     flush_scheduled = False
     try:
         async for chunk in iter_response.aiter_bytes():  # type: ignore

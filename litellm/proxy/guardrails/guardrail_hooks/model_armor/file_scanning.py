@@ -15,8 +15,9 @@ is false) rather than letting an unscanned document reach the model.
 import base64
 import binascii
 import mimetypes
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Literal, Sequence
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 

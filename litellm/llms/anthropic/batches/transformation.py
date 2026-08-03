@@ -1,6 +1,6 @@
 import json
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import httpx
 from httpx import Headers, Response
@@ -36,11 +36,11 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """Validate and prepare environment-specific headers and parameters."""
         if api_base is None and isinstance(litellm_params, dict):
@@ -64,11 +64,11 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
 
     def get_complete_batch_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
-        optional_params: Dict,
-        litellm_params: Dict,
+        optional_params: dict,
+        litellm_params: dict,
         data: CreateBatchRequest,
     ) -> str:
         """Get the complete URL for batch creation request."""
@@ -83,7 +83,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         create_batch_data: CreateBatchRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[bytes, str, Dict[str, Any]]:
+    ) -> bytes | str | dict[str, Any]:
         """
         Transform the batch creation request to Anthropic format.
 
@@ -93,7 +93,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
 
     def transform_create_batch_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LoggingClass,
         litellm_params: dict,
@@ -107,10 +107,10 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
 
     def get_retrieve_batch_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         batch_id: str,
-        optional_params: Dict,
-        litellm_params: Dict,
+        optional_params: dict,
+        litellm_params: dict,
     ) -> str:
         """
         Get the complete URL for batch retrieval request.
@@ -133,7 +133,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         batch_id: str,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[bytes, str, Dict[str, Any]]:
+    ) -> bytes | str | dict[str, Any]:
         """
         Transform batch retrieval request for Anthropic.
 
@@ -145,7 +145,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
 
     def transform_retrieve_batch_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LoggingClass,
         litellm_params: dict,
@@ -161,7 +161,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         processing_status = response_data.get("processing_status", "in_progress")
 
         # Map Anthropic processing_status to OpenAI status
-        status_mapping: Dict[
+        status_mapping: dict[
             str,
             Literal[
                 "validating",
@@ -181,7 +181,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         openai_status = status_mapping.get(processing_status, "in_progress")
 
         # Parse timestamps
-        def parse_timestamp(ts_str: Optional[str]) -> Optional[int]:
+        def parse_timestamp(ts_str: str | None) -> int | None:
             if not ts_str:
                 return None
             try:
@@ -239,15 +239,13 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             metadata={},
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[Dict, Headers]
-    ) -> "BaseLLMException":
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> "BaseLLMException":
         """Get the appropriate error class for Anthropic."""
         from ..common_utils import AnthropicError
 
         # Convert Dict to Headers if needed
         if isinstance(headers, dict):
-            headers_obj: Optional[Headers] = Headers(headers)
+            headers_obj: Headers | None = Headers(headers)
         else:
             headers_obj = headers if isinstance(headers, Headers) else None
 
@@ -259,19 +257,19 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: Dict,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         from litellm.cost_calculator import BaseTokenUsageProcessor
         from litellm.types.utils import Usage
 
         response_text = raw_response.text.strip()
-        all_usage: List[Usage] = []
+        all_usage: list[Usage] = []
 
         try:
             # Split by newlines and try to parse each line as JSON

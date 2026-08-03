@@ -1,17 +1,12 @@
 import asyncio
 import contextvars
+from collections.abc import Coroutine, Iterable
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Coroutine,
-    Dict,
-    Iterable,
-    List,
     Literal,
     Optional,
-    Type,
-    Union,
     cast,
 )
 
@@ -77,7 +72,7 @@ litellm_completion_transformation_handler = LiteLLMCompletionTransformationHandl
 #################################################
 
 
-def _has_file_search_tool(tools: Optional[Any]) -> bool:
+def _has_file_search_tool(tools: Any | None) -> bool:
     """Return True if any tool in the list has type 'file_search'."""
     if not tools:
         return False
@@ -137,36 +132,36 @@ def mock_responses_api_response(
 
 
 async def aresponses_api_with_mcp(
-    input: Union[str, ResponseInputParam],
+    input: str | ResponseInputParam,
     model: str,
-    include: Optional[List[ResponseIncludable]] = None,
-    instructions: Optional[str] = None,
-    max_output_tokens: Optional[int] = None,
-    prompt: Optional[PromptObject] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    previous_response_id: Optional[str] = None,
-    reasoning: Optional[Reasoning] = None,
-    store: Optional[bool] = None,
-    background: Optional[bool] = None,
-    stream: Optional[bool] = None,
-    temperature: Optional[float] = None,
+    include: list[ResponseIncludable] | None = None,
+    instructions: str | None = None,
+    max_output_tokens: int | None = None,
+    prompt: PromptObject | None = None,
+    metadata: dict[str, Any] | None = None,
+    parallel_tool_calls: bool | None = None,
+    previous_response_id: str | None = None,
+    reasoning: Reasoning | None = None,
+    store: bool | None = None,
+    background: bool | None = None,
+    stream: bool | None = None,
+    temperature: float | None = None,
     text: Optional["ResponseText"] = None,
-    tool_choice: Optional[ToolChoice] = None,
-    tools: Optional[Iterable[ToolParam]] = None,
-    top_p: Optional[float] = None,
-    truncation: Optional[Literal["auto", "disabled"]] = None,
-    user: Optional[str] = None,
+    tool_choice: ToolChoice | None = None,
+    tools: Iterable[ToolParam] | None = None,
+    top_p: float | None = None,
+    truncation: Literal["auto", "disabled"] | None = None,
+    user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """
     Async version of responses API with MCP integration.
 
@@ -191,8 +186,8 @@ async def aresponses_api_with_mcp(
     user_api_key_auth = kwargs.get("user_api_key_auth") or kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
 
     # Extract MCP auth headers from request (for dynamic auth when fetching tools)
-    mcp_auth_header: Optional[str] = None
-    mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
+    mcp_auth_header: str | None = None
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None
     secret_fields = kwargs.get("secret_fields")
     if secret_fields and isinstance(secret_fields, dict):
         (
@@ -402,39 +397,39 @@ async def aresponses_api_with_mcp(
 
 @client
 async def aresponses(
-    input: Union[str, ResponseInputParam],
+    input: str | ResponseInputParam,
     model: str,
-    include: Optional[List[ResponseIncludable]] = None,
-    instructions: Optional[str] = None,
-    max_output_tokens: Optional[int] = None,
-    prompt: Optional[PromptObject] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    previous_response_id: Optional[str] = None,
-    reasoning: Optional[Reasoning] = None,
-    store: Optional[bool] = None,
-    background: Optional[bool] = None,
-    stream: Optional[bool] = None,
-    temperature: Optional[float] = None,
+    include: list[ResponseIncludable] | None = None,
+    instructions: str | None = None,
+    max_output_tokens: int | None = None,
+    prompt: PromptObject | None = None,
+    metadata: dict[str, Any] | None = None,
+    parallel_tool_calls: bool | None = None,
+    previous_response_id: str | None = None,
+    reasoning: Reasoning | None = None,
+    store: bool | None = None,
+    background: bool | None = None,
+    stream: bool | None = None,
+    temperature: float | None = None,
     text: Optional["ResponseText"] = None,
-    text_format: Optional[Union[Type["BaseModel"], dict]] = None,
-    tool_choice: Optional[ToolChoice] = None,
-    tools: Optional[Iterable[ToolParam]] = None,
-    top_p: Optional[float] = None,
-    truncation: Optional[Literal["auto", "disabled"]] = None,
-    user: Optional[str] = None,
-    service_tier: Optional[str] = None,
-    safety_identifier: Optional[str] = None,
+    text_format: type["BaseModel"] | dict | None = None,
+    tool_choice: ToolChoice | None = None,
+    tools: Iterable[ToolParam] | None = None,
+    top_p: float | None = None,
+    truncation: Literal["auto", "disabled"] | None = None,
+    user: str | None = None,
+    service_tier: str | None = None,
+    safety_identifier: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """
     Async: Handles responses API requests by reusing the synchronous function
     """
@@ -466,15 +461,15 @@ async def aresponses(
         # can apply them to local_vars without re-invoking the hook.
         #########################################################
         litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
-        prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
-        prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+        prompt_id = cast(str | None, kwargs.get("prompt_id", None))
+        prompt_variables = cast(dict | None, kwargs.get("prompt_variables", None))
         original_model = model
 
         if isinstance(
             litellm_logging_obj, LiteLLMLoggingObj
         ) and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs):
             if isinstance(input, str):
-                client_input: List[AllMessageValues] = [{"role": "user", "content": input}]
+                client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
             else:
                 client_input = [
                     item  # type: ignore[misc]
@@ -495,7 +490,7 @@ async def aresponses(
                 prompt_version=kwargs.get("prompt_version", None),
             )
             input = cast(
-                Union[str, ResponseInputParam],
+                str | ResponseInputParam,
                 ResponsesAPIRequestUtils.merge_prompt_management_input(
                     original_input=input,
                     client_input=client_input,
@@ -574,25 +569,25 @@ async def aresponses(
 
 
 def _apply_prompt_management_to_responses_call(
-    input: Union[str, ResponseInputParam],
+    input: str | ResponseInputParam,
     model: str,
-    custom_llm_provider: Optional[str],
-    litellm_logging_obj: Optional[LiteLLMLoggingObj],
-    kwargs: Dict[str, Any],
-    local_vars: Dict[str, Any],
-) -> tuple[Union[str, ResponseInputParam], str, Optional[str]]:
+    custom_llm_provider: str | None,
+    litellm_logging_obj: LiteLLMLoggingObj | None,
+    kwargs: dict[str, Any],
+    local_vars: dict[str, Any],
+) -> tuple[str | ResponseInputParam, str, str | None]:
     async_merged = kwargs.pop("_async_prompt_merged_params", None)
     if async_merged is not None:
         for key, value in async_merged.items():
             local_vars[key] = value
         return input, model, custom_llm_provider
 
-    prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
-    prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+    prompt_id = cast(str | None, kwargs.get("prompt_id", None))
+    prompt_variables = cast(dict | None, kwargs.get("prompt_variables", None))
     original_model = model
 
     if isinstance(input, str):
-        client_input: List[AllMessageValues] = [{"role": "user", "content": input}]
+        client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
     else:
         client_input = [
             item  # type: ignore[misc]
@@ -617,7 +612,7 @@ def _apply_prompt_management_to_responses_call(
             prompt_version=kwargs.get("prompt_version", None),
         )
         input = cast(
-            Union[str, ResponseInputParam],
+            str | ResponseInputParam,
             ResponsesAPIRequestUtils.merge_prompt_management_input(
                 original_input=input,
                 client_input=client_input,
@@ -652,7 +647,7 @@ def _normalize_openai_chat_completions_responses_model(model: str) -> tuple[str,
     return f"openai/{remainder}", True
 
 
-def _pop_use_chat_completions_api_kw(kwargs: Dict[str, Any]) -> bool:
+def _pop_use_chat_completions_api_kw(kwargs: dict[str, Any]) -> bool:
     """Pop use_chat_completions_api; True when the chat-completions bridge is requested."""
     use_cc = kwargs.pop("use_chat_completions_api", None)
     return bool(use_cc)
@@ -660,10 +655,10 @@ def _pop_use_chat_completions_api_kw(kwargs: Dict[str, Any]) -> bool:
 
 def _resolve_model_provider_for_responses(
     model: str,
-    custom_llm_provider: Optional[str],
+    custom_llm_provider: str | None,
     litellm_params: GenericLiteLLMParams,
-    local_vars: Dict[str, Any],
-) -> tuple[str, Optional[str]]:
+    local_vars: dict[str, Any],
+) -> tuple[str, str | None]:
     if custom_llm_provider is not None and not litellm_params.custom_llm_provider:
         litellm_params.custom_llm_provider = custom_llm_provider
     (
@@ -684,16 +679,16 @@ def _resolve_model_provider_for_responses(
 
 
 def _apply_managed_file_id_mapping(
-    input: Union[str, ResponseInputParam],
-    tools: Optional[Iterable[ToolParam]],
-    kwargs: Dict[str, Any],
-    local_vars: Dict[str, Any],
-) -> tuple[Union[str, ResponseInputParam], Optional[Iterable[ToolParam]]]:
+    input: str | ResponseInputParam,
+    tools: Iterable[ToolParam] | None,
+    kwargs: dict[str, Any],
+    local_vars: dict[str, Any],
+) -> tuple[str | ResponseInputParam, Iterable[ToolParam] | None]:
     model_file_id_mapping = kwargs.get("model_file_id_mapping")
     model_info_id = kwargs.get("model_info", {}).get("id") if isinstance(kwargs.get("model_info"), dict) else None
 
     input = cast(
-        Union[str, ResponseInputParam],
+        str | ResponseInputParam,
         update_responses_input_with_model_file_ids(
             input=input,
             model_id=model_info_id,
@@ -704,9 +699,9 @@ def _apply_managed_file_id_mapping(
 
     if tools:
         tools = cast(
-            Optional[Iterable[ToolParam]],
+            Iterable[ToolParam] | None,
             update_responses_tools_with_model_file_ids(
-                tools=cast(Optional[List[Dict[str, Any]]], tools),
+                tools=cast(list[dict[str, Any]] | None, tools),
                 model_id=model_info_id,
                 model_file_id_mapping=model_file_id_mapping,
             ),
@@ -718,34 +713,34 @@ def _apply_managed_file_id_mapping(
 
 def _responses_try_dispatch_mcp_gateway(
     *,
-    tools: Optional[Iterable[ToolParam]],
-    input: Union[str, ResponseInputParam],
+    tools: Iterable[ToolParam] | None,
+    input: str | ResponseInputParam,
     model: str,
-    include: Optional[List[ResponseIncludable]],
-    instructions: Optional[str],
-    max_output_tokens: Optional[int],
-    prompt: Optional[PromptObject],
-    metadata: Optional[Dict[str, Any]],
-    parallel_tool_calls: Optional[bool],
-    previous_response_id: Optional[str],
-    reasoning: Optional[Reasoning],
-    store: Optional[bool],
-    background: Optional[bool],
-    stream: Optional[bool],
-    temperature: Optional[float],
+    include: list[ResponseIncludable] | None,
+    instructions: str | None,
+    max_output_tokens: int | None,
+    prompt: PromptObject | None,
+    metadata: dict[str, Any] | None,
+    parallel_tool_calls: bool | None,
+    previous_response_id: str | None,
+    reasoning: Reasoning | None,
+    store: bool | None,
+    background: bool | None,
+    stream: bool | None,
+    temperature: float | None,
     text: Any,
-    tool_choice: Optional[ToolChoice],
-    top_p: Optional[float],
-    truncation: Optional[Literal["auto", "disabled"]],
-    user: Optional[str],
-    extra_headers: Optional[Dict[str, Any]],
-    extra_query: Optional[Dict[str, Any]],
-    extra_body: Optional[Dict[str, Any]],
-    timeout: Optional[Union[float, httpx.Timeout]],
-    custom_llm_provider: Optional[str],
-    kwargs: Dict[str, Any],
+    tool_choice: ToolChoice | None,
+    top_p: float | None,
+    truncation: Literal["auto", "disabled"] | None,
+    user: str | None,
+    extra_headers: dict[str, Any] | None,
+    extra_query: dict[str, Any] | None,
+    extra_body: dict[str, Any] | None,
+    timeout: float | httpx.Timeout | None,
+    custom_llm_provider: str | None,
+    kwargs: dict[str, Any],
     _is_async: bool,
-) -> Optional[Any]:
+) -> Any | None:
     """Return a response when MCP gateway handles the call; otherwise None."""
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
@@ -788,40 +783,40 @@ def _responses_try_dispatch_mcp_gateway(
 
 def _responses_try_dispatch_emulated_file_search(
     *,
-    tools: Optional[Iterable[ToolParam]],
-    input: Union[str, ResponseInputParam],
+    tools: Iterable[ToolParam] | None,
+    input: str | ResponseInputParam,
     model: str,
-    responses_api_provider_config: Optional[BaseResponsesAPIConfig],
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
     use_chat_completions_api: bool,
-    include: Optional[List[ResponseIncludable]],
-    instructions: Optional[str],
-    max_output_tokens: Optional[int],
-    prompt: Optional[PromptObject],
-    metadata: Optional[Dict[str, Any]],
-    parallel_tool_calls: Optional[bool],
-    previous_response_id: Optional[str],
-    reasoning: Optional[Reasoning],
-    store: Optional[bool],
-    background: Optional[bool],
-    stream: Optional[bool],
-    temperature: Optional[float],
+    include: list[ResponseIncludable] | None,
+    instructions: str | None,
+    max_output_tokens: int | None,
+    prompt: PromptObject | None,
+    metadata: dict[str, Any] | None,
+    parallel_tool_calls: bool | None,
+    previous_response_id: str | None,
+    reasoning: Reasoning | None,
+    store: bool | None,
+    background: bool | None,
+    stream: bool | None,
+    temperature: float | None,
     text: Any,
-    tool_choice: Optional[ToolChoice],
-    top_p: Optional[float],
-    truncation: Optional[Literal["auto", "disabled"]],
-    user: Optional[str],
-    service_tier: Optional[str],
-    safety_identifier: Optional[str],
-    text_format: Optional[Union[Type[BaseModel], dict]],
-    allowed_openai_params: Optional[List[str]],
-    extra_headers: Optional[Dict[str, Any]],
-    extra_query: Optional[Dict[str, Any]],
-    extra_body: Optional[Dict[str, Any]],
-    timeout: Optional[Union[float, httpx.Timeout]],
-    custom_llm_provider: Optional[str],
-    kwargs: Dict[str, Any],
+    tool_choice: ToolChoice | None,
+    top_p: float | None,
+    truncation: Literal["auto", "disabled"] | None,
+    user: str | None,
+    service_tier: str | None,
+    safety_identifier: str | None,
+    text_format: type[BaseModel] | dict | None,
+    allowed_openai_params: list[str] | None,
+    extra_headers: dict[str, Any] | None,
+    extra_query: dict[str, Any] | None,
+    extra_body: dict[str, Any] | None,
+    timeout: float | httpx.Timeout | None,
+    custom_llm_provider: str | None,
+    kwargs: dict[str, Any],
     _is_async: bool,
-) -> Optional[Any]:
+) -> Any | None:
     """Return a response when emulated file_search handles the call; otherwise None."""
     if not _has_file_search_tool(tools) or not (
         responses_api_provider_config is None
@@ -861,12 +856,8 @@ def _responses_try_dispatch_emulated_file_search(
         "extra_body": extra_body,
         "timeout": timeout,
         "custom_llm_provider": custom_llm_provider,
-        **(
-            {
-                **({"use_chat_completions_api": True} if use_chat_completions_api else {}),
-                **{k: v for k, v in kwargs.items() if k not in _internal_skip},
-            }
-        ),
+        **({"use_chat_completions_api": True} if use_chat_completions_api else {}),
+        **{k: v for k, v in kwargs.items() if k not in _internal_skip},
     }
     if _is_async:
         return aresponses_with_emulated_file_search(input=input, model=model, tools=tools, **emulated_kwargs)
@@ -881,38 +872,38 @@ def _responses_try_dispatch_emulated_file_search(
 
 @client
 def responses(
-    input: Union[str, ResponseInputParam],
+    input: str | ResponseInputParam,
     model: str,
-    include: Optional[List[ResponseIncludable]] = None,
-    instructions: Optional[str] = None,
-    max_output_tokens: Optional[int] = None,
-    prompt: Optional[PromptObject] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    previous_response_id: Optional[str] = None,
-    reasoning: Optional[Reasoning] = None,
-    store: Optional[bool] = None,
-    background: Optional[bool] = None,
-    stream: Optional[bool] = None,
-    temperature: Optional[float] = None,
+    include: list[ResponseIncludable] | None = None,
+    instructions: str | None = None,
+    max_output_tokens: int | None = None,
+    prompt: PromptObject | None = None,
+    metadata: dict[str, Any] | None = None,
+    parallel_tool_calls: bool | None = None,
+    previous_response_id: str | None = None,
+    reasoning: Reasoning | None = None,
+    store: bool | None = None,
+    background: bool | None = None,
+    stream: bool | None = None,
+    temperature: float | None = None,
     text: Optional["ResponseText"] = None,
-    text_format: Optional[Union[Type["BaseModel"], dict]] = None,
-    tool_choice: Optional[ToolChoice] = None,
-    tools: Optional[Iterable[ToolParam]] = None,
-    top_p: Optional[float] = None,
-    truncation: Optional[Literal["auto", "disabled"]] = None,
-    user: Optional[str] = None,
-    service_tier: Optional[str] = None,
-    safety_identifier: Optional[str] = None,
+    text_format: type["BaseModel"] | dict | None = None,
+    tool_choice: ToolChoice | None = None,
+    tools: Iterable[ToolParam] | None = None,
+    top_p: float | None = None,
+    truncation: Literal["auto", "disabled"] | None = None,
+    user: str | None = None,
+    service_tier: str | None = None,
+    safety_identifier: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    allowed_openai_params: Optional[List[str]] = None,
-    custom_llm_provider: Optional[str] = None,
+    allowed_openai_params: list[str] | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ):
     """
@@ -923,7 +914,7 @@ def responses(
 
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
@@ -1010,7 +1001,7 @@ def responses(
             return _mcp_dispatch
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig]
+        responses_api_provider_config: BaseResponsesAPIConfig | None
         if custom_llm_provider is None:
             responses_api_provider_config = None
         else:
@@ -1085,7 +1076,7 @@ def responses(
 
         # Get optional parameters for the responses API
         request_drop_params = kwargs.get("drop_params")
-        responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+        responses_api_request_params: dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
@@ -1163,12 +1154,12 @@ async def adelete_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> DeleteResponseResult:
     """
@@ -1224,14 +1215,14 @@ def delete_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[DeleteResponseResult, Coroutine[Any, Any, DeleteResponseResult]]:
+) -> DeleteResponseResult | Coroutine[Any, Any, DeleteResponseResult]:
     """
     Synchronous version of the DELETE Responses API
 
@@ -1241,7 +1232,7 @@ def delete_responses(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("adelete_responses", False) is True
 
         # get llm provider logic
@@ -1258,7 +1249,7 @@ def delete_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+        responses_api_provider_config: BaseResponsesAPIConfig | None = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
@@ -1314,12 +1305,12 @@ async def aget_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ResponsesAPIResponse:
     """
@@ -1389,14 +1380,14 @@ def get_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+) -> ResponsesAPIResponse | Coroutine[Any, Any, ResponsesAPIResponse]:
     """
     Fetch a response by its ID.
 
@@ -1412,7 +1403,7 @@ def get_responses(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aget_responses", False) is True
 
         # get llm provider logic
@@ -1429,7 +1420,7 @@ def get_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+        responses_api_provider_config: BaseResponsesAPIConfig | None = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
@@ -1491,16 +1482,16 @@ def get_responses(
 @client
 async def alist_input_items(
     response_id: str,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    include: Optional[List[str]] = None,
+    after: str | None = None,
+    before: str | None = None,
+    include: list[str] | None = None,
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Dict:
+) -> dict:
     """Async: List input items for a response"""
     local_vars = locals()
     try:
@@ -1547,21 +1538,21 @@ async def alist_input_items(
 @client
 def list_input_items(
     response_id: str,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    include: Optional[List[str]] = None,
+    after: str | None = None,
+    before: str | None = None,
+    include: list[str] | None = None,
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+) -> dict | Coroutine[Any, Any, dict]:
     """List input items for a response"""
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("alist_input_items", False) is True
 
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -1573,7 +1564,7 @@ def list_input_items(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+        responses_api_provider_config: BaseResponsesAPIConfig | None = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
@@ -1627,12 +1618,12 @@ async def acancel_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ResponsesAPIResponse:
     """
@@ -1688,14 +1679,14 @@ def cancel_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+) -> ResponsesAPIResponse | Coroutine[Any, Any, ResponsesAPIResponse]:
     """
     Synchronous version of the POST Responses API
 
@@ -1705,7 +1696,7 @@ def cancel_responses(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("acancel_responses", False) is True
 
         # get llm provider logic
@@ -1722,7 +1713,7 @@ def cancel_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+        responses_api_provider_config: BaseResponsesAPIConfig | None = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
@@ -1775,18 +1766,18 @@ def cancel_responses(
 
 @client
 async def acompact_responses(
-    input: Union[str, ResponseInputParam],
+    input: str | ResponseInputParam,
     model: str,
-    instructions: Optional[str] = None,
-    previous_response_id: Optional[str] = None,
+    instructions: str | None = None,
+    previous_response_id: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ResponsesAPIResponse:
     """
@@ -1853,20 +1844,20 @@ async def acompact_responses(
 
 @client
 def compact_responses(
-    input: Union[str, ResponseInputParam],
+    input: str | ResponseInputParam,
     model: str,
-    instructions: Optional[str] = None,
-    previous_response_id: Optional[str] = None,
+    instructions: str | None = None,
+    previous_response_id: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+) -> ResponsesAPIResponse | Coroutine[Any, Any, ResponsesAPIResponse]:
     """
     Synchronous version of the POST Compact Responses API
 
@@ -1877,7 +1868,7 @@ def compact_responses(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("acompact_responses", False) is True
 
         # get llm provider logic
@@ -1894,7 +1885,7 @@ def compact_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+        responses_api_provider_config: BaseResponsesAPIConfig | None = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=model,
                 provider=custom_llm_provider,
@@ -1913,7 +1904,7 @@ def compact_responses(
 
         # Get optional parameters for the responses API
         request_drop_params = kwargs.get("drop_params")
-        responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+        responses_api_request_params: dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
@@ -1991,9 +1982,9 @@ def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
 async def _aresponses_websocket(
     model: str,
     websocket: Any,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    timeout: Optional[float] = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    timeout: float | None = None,
     **kwargs,
 ):
     """
@@ -2035,7 +2026,7 @@ async def _aresponses_websocket(
         custom_llm_provider=_custom_llm_provider,
     )
 
-    responses_api_provider_config: Optional[BaseResponsesAPIConfig] = None
+    responses_api_provider_config: BaseResponsesAPIConfig | None = None
     if _custom_llm_provider is not None:
         responses_api_provider_config = ProviderConfigManager.get_provider_responses_api_config(
             model=model,

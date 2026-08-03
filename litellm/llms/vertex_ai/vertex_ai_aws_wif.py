@@ -9,8 +9,6 @@ uses BaseAWSLLM to obtain AWS credentials and wraps them in a custom
 AwsSecurityCredentialsSupplier for google-auth.
 """
 
-from typing import Dict
-
 GOOGLE_IMPORT_ERROR_MESSAGE = (
     "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform"
 )
@@ -40,7 +38,7 @@ class VertexAIAwsWifAuth:
     """
 
     @staticmethod
-    def extract_aws_params(json_obj: dict) -> Dict[str, str]:
+    def extract_aws_params(json_obj: dict) -> dict[str, str]:
         """
         Extract LiteLLM-specific aws_* keys from a WIF credential JSON dict.
 

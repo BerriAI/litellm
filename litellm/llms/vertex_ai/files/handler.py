@@ -2,8 +2,9 @@ import asyncio
 import json
 import os
 import time
+from collections.abc import Coroutine, Mapping
+from typing import Any
 from urllib.parse import unquote
-from typing import Any, Coroutine, Mapping, Optional, Tuple, Union
 
 import httpx
 
@@ -12,19 +13,19 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import (
     GCSBucketBase,
     GCSLoggingConfig,
 )
-from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.litellm_core_utils.cloud_storage_security import (
     VERTEX_AI_MANAGED_GCS_PREFIX,
     should_allow_legacy_cloud_file_ids,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import (
     FileContentRequest,
     HttpxBinaryResponseContent,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.utils import StandardCallbackDynamicParams
 
 from .transformation import VertexAIFilesConfig
 
@@ -75,8 +76,8 @@ class VertexAIFilesHandler(GCSBucketBase):
         self,
         file_id: str,
         configured_bucket_name: str,
-        litellm_params: Optional[dict] = None,
-    ) -> Tuple[str, str]:
+        litellm_params: dict | None = None,
+    ) -> tuple[str, str]:
         """
         Validate and extract bucket name and object path from file_id.
 
@@ -98,12 +99,12 @@ class VertexAIFilesHandler(GCSBucketBase):
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        litellm_params: Optional[dict] = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        litellm_params: dict | None = None,
     ) -> HttpxBinaryResponseContent:
         """
         Download file content from GCS bucket for VertexAI files.
@@ -185,14 +186,14 @@ class VertexAIFilesHandler(GCSBucketBase):
         self,
         _is_async: bool,
         file_content_request: FileContentRequest,
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        litellm_params: Optional[dict] = None,
-    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+        api_base: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        litellm_params: dict | None = None,
+    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
         """
         Download file content from GCS bucket for VertexAI files.
         Supports both sync and async operations.

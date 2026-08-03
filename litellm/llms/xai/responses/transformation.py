@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm._logging import verbose_logger
@@ -51,7 +51,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return supported_params
 
-    def _transform_web_search_tool(self, tool: Dict[str, Any]) -> Union[XAIWebSearchTool, Dict[str, Any]]:
+    def _transform_web_search_tool(self, tool: dict[str, Any]) -> XAIWebSearchTool | dict[str, Any]:
         """
         Transform web_search tool to XAI format.
 
@@ -62,7 +62,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         XAI does NOT support search_context_size (OpenAI-specific).
         """
-        xai_tool: Dict[str, Any] = {"type": "web_search"}
+        xai_tool: dict[str, Any] = {"type": "web_search"}
 
         # Remove search_context_size if present (not supported by XAI)
         if "search_context_size" in tool:
@@ -90,7 +90,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return xai_tool
 
-    def _transform_x_search_tool(self, tool: Dict[str, Any]) -> Union[XAIXSearchTool, Dict[str, Any]]:
+    def _transform_x_search_tool(self, tool: dict[str, Any]) -> XAIXSearchTool | dict[str, Any]:
         """
         Transform x_search tool to XAI format.
 
@@ -102,7 +102,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - enable_image_understanding
         - enable_video_understanding
         """
-        xai_tool: Dict[str, Any] = {"type": "x_search"}
+        xai_tool: dict[str, Any] = {"type": "x_search"}
 
         # Handle allowed_x_handles
         if "allowed_x_handles" in tool:
@@ -135,7 +135,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """
         Map parameters for XAI Responses API.
 
@@ -164,7 +164,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if not isinstance(tools_list, list):
                 tools_list = [tools_list]
 
-            transformed_tools: List[Any] = []
+            transformed_tools: list[Any] = []
             for tool in tools_list:
                 if isinstance(tool, dict):
                     tool_type = tool.get("type")
@@ -194,7 +194,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return params
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         """
         Validate environment and set up headers for XAI API.
 
@@ -235,7 +235,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """

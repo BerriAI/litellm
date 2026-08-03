@@ -1,7 +1,7 @@
 import base64
 import binascii
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Dict, List, NoReturn, Optional, Tuple
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from litellm.constants import request_timeout
 
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.ocr.transformation import OCRPage
 
 
-def _normalize_api_base(api_base: Optional[str]) -> str:
+def _normalize_api_base(api_base: str | None) -> str:
     return (api_base or REDUCTO_API_BASE).rstrip("/")
 
 
@@ -29,7 +29,7 @@ def _raise_bad_request(message: str, model: str) -> NoReturn:
 def extract_file_id_or_bytes(
     source_url: str,
     model: str,
-) -> Tuple[Optional[str], Optional[bytes], Optional[str]]:
+) -> tuple[str | None, bytes | None, str | None]:
     if source_url.startswith(REDUCTO_ID_PREFIX):
         return source_url, None, None
 
@@ -66,18 +66,18 @@ def _extract_file_id_from_upload_response(response: Any) -> str:
     try:
         payload = response.json()
     except ValueError as exc:
-        raise ValueError("Reducto /upload returned a non-JSON 200 response: {}".format(response.text)) from exc
+        raise ValueError(f"Reducto /upload returned a non-JSON 200 response: {response.text}") from exc
     file_id = (payload or {}).get("file_id") if isinstance(payload, dict) else None
     if not isinstance(file_id, str) or not file_id:
-        raise ValueError("Reducto /upload returned 200 without a file_id; got payload={}".format(payload))
+        raise ValueError(f"Reducto /upload returned 200 without a file_id; got payload={payload}")
     return file_id
 
 
 def upload_bytes_sync(
     raw_bytes: bytes,
-    mime: Optional[str],
+    mime: str | None,
     api_key: str,
-    api_base: Optional[str],
+    api_base: str | None,
 ) -> str:
     import litellm
 
@@ -93,9 +93,9 @@ def upload_bytes_sync(
 
 async def upload_bytes_async(
     raw_bytes: bytes,
-    mime: Optional[str],
+    mime: str | None,
     api_key: str,
-    api_base: Optional[str],
+    api_base: str | None,
 ) -> str:
     import litellm
 
@@ -109,11 +109,11 @@ async def upload_bytes_async(
     return _extract_file_id_from_upload_response(response)
 
 
-def build_pages_from_reducto(result: Dict[str, Any]) -> List["OCRPage"]:
+def build_pages_from_reducto(result: dict[str, Any]) -> list["OCRPage"]:
     from litellm.llms.base_llm.ocr.transformation import OCRPage
 
     chunks = result.get("chunks", []) or []
-    blocks_by_page: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    blocks_by_page: dict[int, list[dict[str, Any]]] = defaultdict(list)
 
     for chunk in chunks:
         for block in chunk.get("blocks", []) or []:
@@ -132,7 +132,7 @@ def build_pages_from_reducto(result: Dict[str, Any]) -> List["OCRPage"]:
             return []
         return [OCRPage(index=0, markdown=fallback_markdown)]
 
-    pages: List["OCRPage"] = []
+    pages: list[OCRPage] = []
     for page_no, blocks in sorted(blocks_by_page.items()):
         markdown = "\n\n".join(block.get("content", "") for block in blocks if block.get("content"))
         page_index = max(page_no - 1, 0)

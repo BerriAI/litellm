@@ -2,8 +2,6 @@
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
 
-from typing import List, Optional, Tuple
-
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
@@ -24,7 +22,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     """
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         """
         Get MiniMax API key from environment or parameters.
         """
@@ -32,7 +30,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def get_api_base(
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
     ) -> str:
         """
         Get MiniMax API base URL.
@@ -43,12 +41,12 @@ class MinimaxChatConfig(OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for MiniMax OpenAI API.
@@ -70,9 +68,9 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
-        messages: List[AllMessageValues],
-        tools: Optional[List[ChatCompletionToolParam]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List[ChatCompletionToolParam]]]:
+        messages: list[AllMessageValues],
+        tools: list[ChatCompletionToolParam] | None = None,
+    ) -> tuple[list[AllMessageValues], list[ChatCompletionToolParam] | None]:
         """
         Override to preserve cache_control for MiniMax.
         MiniMax supports cache_control - don't strip it.

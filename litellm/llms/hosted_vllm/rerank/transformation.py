@@ -2,7 +2,7 @@
 Transformation logic for Hosted VLLM rerank
 """
 
-from typing import Any, Dict, List, Union
+from typing import Any
 
 import httpx
 
@@ -28,7 +28,7 @@ class HostedVLLMRerankError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Union[dict, httpx.Headers] | None = None,
+        headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -70,15 +70,15 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Map parameters for Hosted VLLM rerank
         """
@@ -127,7 +127,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -168,9 +168,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
 
         return self._transform_response(raw_response_json)
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
 
     def _transform_response(self, response: dict) -> RerankResponse:
@@ -181,12 +179,12 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         # Extract results
-        _results: List[dict] | None = response.get("results")
+        _results: list[dict] | None = response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={response}")
 
-        rerank_results: List[RerankResponseResult] = []
+        rerank_results: list[RerankResponseResult] = []
 
         for result in _results:
             # Validate required fields exist

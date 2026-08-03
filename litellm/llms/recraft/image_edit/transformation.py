@@ -1,5 +1,5 @@
 from io import BufferedReader
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -26,7 +26,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     IMAGE_EDIT_ENDPOINT: str = "v1/images/imageToImage"
     DEFAULT_STRENGTH: float = 0.2
 
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         """
         Supported OpenAI parameters that can be mapped to Recraft image edit API.
 
@@ -43,7 +43,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """
         Map OpenAI image edit parameters to Recraft parameters.
         Reuses OpenAI logic but filters to supported params only.
@@ -60,7 +60,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -78,11 +78,11 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        final_api_key: Optional[str] = api_key or get_secret_str("RECRAFT_API_KEY")
+        final_api_key: str | None = api_key or get_secret_str("RECRAFT_API_KEY")
         if not final_api_key:
             raise ValueError("RECRAFT_API_KEY is not set")
 
@@ -92,12 +92,12 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> tuple[dict, RequestFiles]:
         """
         Transform the image edit request to Recraft's multipart form format.
         Reuses OpenAI file handling logic but adapts for Recraft API structure.
@@ -114,7 +114,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
             request_params["prompt"] = prompt
 
         request_body = RecraftImageEditRequestParams(**request_params)
-        request_dict = cast(Dict, request_body)
+        request_dict = cast(dict, request_body)
         #########################################################
         # Reuse OpenAI logic: Separate images as `files` and send other parameters as `data`
         #########################################################
@@ -125,9 +125,9 @@ class RecraftImageEditConfig(BaseImageEditConfig):
 
     def _get_image_files_for_request(
         self,
-        image: Optional[FileTypes],
-    ) -> List[Tuple[str, Any]]:
-        files_list: List[Tuple[str, Any]] = []
+        image: FileTypes | None,
+    ) -> list[tuple[str, Any]]:
+        files_list: list[tuple[str, Any]] = []
 
         # Handle single image (Recraft expects single image, not array)
         if image:

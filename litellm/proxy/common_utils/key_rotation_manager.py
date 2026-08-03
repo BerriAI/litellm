@@ -5,7 +5,6 @@ Handles finding keys that need rotation based on their individual schedules.
 """
 
 from datetime import datetime, timezone
-from typing import List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -106,7 +105,7 @@ class KeyRotationManager:
                     cronjob_id=KEY_ROTATION_JOB_NAME,
                 )
 
-    async def _find_keys_needing_rotation(self) -> List[LiteLLM_VerificationToken]:
+    async def _find_keys_needing_rotation(self) -> list[LiteLLM_VerificationToken]:
         """
         Find keys that are due for rotation based on their key_rotation_at timestamp.
 

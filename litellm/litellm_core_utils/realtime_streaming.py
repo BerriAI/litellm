@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -46,22 +46,22 @@ class RealTimeStreaming:
         websocket: Any,
         backend_ws: CLIENT_CONNECTION_CLASS,
         logging_obj: LiteLLMLogging,
-        provider_config: Optional[BaseRealtimeConfig] = None,
+        provider_config: BaseRealtimeConfig | None = None,
         model: str = "",
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[Dict] = None,
-        backend_uses_beta_protocol: Optional[bool] = None,
-        force_transcription_model: Optional[str] = None,
-        event_normalizer: Optional[RealtimeEventNormalizer] = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
+        backend_uses_beta_protocol: bool | None = None,
+        force_transcription_model: str | None = None,
+        event_normalizer: RealtimeEventNormalizer | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
-        self.messages: List[OpenAIRealtimeEvents] = []
-        self.input_message: Dict = {}
-        self.input_messages: List[Dict[str, str]] = []
-        self.session_tools: List[Dict] = []
-        self.tool_calls: List[Dict] = []
+        self.messages: list[OpenAIRealtimeEvents] = []
+        self.input_message: dict = {}
+        self.input_messages: list[dict[str, str]] = []
+        self.session_tools: list[dict] = []
+        self.tool_calls: list[dict] = []
 
         # Detect whether the client is explicitly opting into the beta protocol.
         self._client_wants_beta = self._detect_beta_header(websocket)
@@ -76,20 +76,20 @@ class RealTimeStreaming:
         self.logged_real_time_event_types = _logged_real_time_event_types
         self.provider_config = provider_config
         self.model = model
-        self.current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]] = None
-        self.current_output_item_id: Optional[str] = None
-        self.current_response_id: Optional[str] = None
-        self.current_conversation_id: Optional[str] = None
-        self.current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]] = None
-        self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
-        self.session_configuration_request: Optional[str] = None
+        self.current_delta_chunks: list[OpenAIRealtimeResponseDelta] | None = None
+        self.current_output_item_id: str | None = None
+        self.current_response_id: str | None = None
+        self.current_conversation_id: str | None = None
+        self.current_item_chunks: list[OpenAIRealtimeOutputItemDone] | None = None
+        self.current_delta_type: ALL_DELTA_TYPES | None = None
+        self.session_configuration_request: str | None = None
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: Dict = request_data or {}
+        self.request_data: dict = request_data or {}
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
         # response.create can be rewritten to include the failure context.
-        self._pending_guardrail_message: Optional[str] = None
+        self._pending_guardrail_message: str | None = None
         # Track whether session.created has already been sent to the client
         # (e.g. synthetic event in deferred setup mode).
         self._session_created_sent_to_client: bool = False
@@ -100,7 +100,7 @@ class RealTimeStreaming:
         # Buffer client audio until the backend acknowledges setup (setupComplete).
         self._backend_setup_complete: bool = provider_config is None or provider_config.requires_session_configuration()
         self._flushing_pending_messages_until_setup: bool = False
-        self._pending_messages_until_setup: List[str] = []
+        self._pending_messages_until_setup: list[str] = []
         self._pending_messages_byte_total: int = 0
         # Gemini Live rejects a follow-up BidiGenerateContentSetup once any
         # content (realtimeInput / clientContent / toolResponse) has been sent.
@@ -127,13 +127,13 @@ class RealTimeStreaming:
         ]
     )
     _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(["input_audio_buffer.commit", "input_audio_buffer.end"])
-    _AUDIO_FORMAT_MAP: Dict[str, Dict[str, Any]] = {
+    _AUDIO_FORMAT_MAP: dict[str, dict[str, Any]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
         "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
         "g711_alaw": {"type": "audio/G711-alaw", "rate": 8000},
     }
     # GA name → beta name (when client WebSocket includes OpenAI-Beta: realtime=v1)
-    _GA_TO_BETA_EVENT_TYPES: Dict[str, str] = {
+    _GA_TO_BETA_EVENT_TYPES: dict[str, str] = {
         "conversation.item.added": "conversation.item.created",
         "response.output_text.delta": "response.text.delta",
         "response.output_audio.delta": "response.audio.delta",
@@ -142,14 +142,14 @@ class RealTimeStreaming:
         "response.output_audio.done": "response.audio.done",
         "response.output_audio_transcript.done": "response.audio_transcript.done",
     }
-    _GA_TO_BETA_CONTENT_TYPES: Dict[str, str] = {
+    _GA_TO_BETA_CONTENT_TYPES: dict[str, str] = {
         "output_text": "text",
         "output_audio": "audio",
     }
 
     def _should_store_message(
         self,
-        message_obj: Union[dict, OpenAIRealtimeEvents],
+        message_obj: dict | OpenAIRealtimeEvents,
     ) -> bool:
         _msg_type = message_obj["type"] if "type" in message_obj else None
         if self.logged_real_time_event_types == "*":
@@ -158,15 +158,15 @@ class RealTimeStreaming:
             return True
         return False
 
-    def store_message(self, message: Union[str, bytes, dict, OpenAIRealtimeEvents]):
+    def store_message(self, message: str | bytes | dict | OpenAIRealtimeEvents):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
         if isinstance(message, dict):
             # TypedDict union members do not narrow to plain dict for mypy.
-            message_obj: Dict[str, Any] = cast(Dict[str, Any], message)
+            message_obj: dict[str, Any] = cast(dict[str, Any], message)
         else:
-            message_obj = cast(Dict[str, Any], json.loads(cast(str, message)))
+            message_obj = cast(dict[str, Any], json.loads(cast(str, message)))
         self._collect_tool_calls_from_response_done(cast(dict, message_obj))
         if not self._should_store_message(message_obj):
             return
@@ -183,7 +183,7 @@ class RealTimeStreaming:
             return
         self.messages.append(typed_obj)
 
-    def _collect_user_input_from_client_event(self, message: Union[str, dict]) -> None:
+    def _collect_user_input_from_client_event(self, message: str | dict) -> None:
         """Extract user text content from client WebSocket events for spend logging."""
         try:
             if isinstance(message, str):
@@ -219,7 +219,7 @@ class RealTimeStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _collect_user_input_from_backend_event(self, event_obj: Union[dict, OpenAIRealtimeEvents]) -> None:
+    def _collect_user_input_from_backend_event(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
         """Extract user voice transcription from backend events for spend logging."""
         try:
             event_type = event_obj.get("type", "")
@@ -230,7 +230,7 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
-    def _detect_transcription_session_from_backend(self, event_obj: Union[dict, OpenAIRealtimeEvents]) -> None:
+    def _detect_transcription_session_from_backend(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
         """Flag transcription-only sessions from backend session events."""
         try:
             event_type = event_obj.get("type", "")
@@ -246,7 +246,7 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
-    def _capture_transcription_usage(self, event_obj: Union[dict, OpenAIRealtimeEvents]) -> None:
+    def _capture_transcription_usage(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
         """
         Append a usage-only transcription completed event to the logged results so
         the cost calculator can bill it by audio duration. The default logged event
@@ -275,12 +275,12 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
-    def _collect_tool_calls_from_response_done(self, event_obj: Union[dict, OpenAIRealtimeEvents]) -> None:
+    def _collect_tool_calls_from_response_done(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
             if event_obj.get("type") != "response.done":
                 return
-            response = cast(Dict[str, Any], event_obj.get("response", {}))
+            response = cast(dict[str, Any], event_obj.get("response", {}))
             for item in response.get("output", []):
                 if item.get("type") == "function_call":
                     self.tool_calls.append(
@@ -296,7 +296,7 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
-    def store_input(self, message: Union[str, dict]):
+    def store_input(self, message: str | dict):
         """Store input message"""
         self.input_message = message if isinstance(message, dict) else {}
         self._collect_user_input_from_client_event(message)
@@ -441,15 +441,15 @@ class RealTimeStreaming:
         return not self.provider_config.requires_session_configuration()
 
     @staticmethod
-    def _collapse_buffered_audio_messages(messages: List[str]) -> List[str]:
+    def _collapse_buffered_audio_messages(messages: list[str]) -> list[str]:
         """Apply ``input_audio_buffer.clear`` semantics before replaying buffered frames.
 
         During deferred Gemini Live setup, ``clear`` is buffered alongside appends.
         On flush each append becomes a provider ``realtimeInput``; ``clear`` must
         drop preceding uncommitted appends instead of being forwarded as a no-op.
         """
-        collapsed: List[str] = []
-        pending_appends: List[str] = []
+        collapsed: list[str] = []
+        pending_appends: list[str] = []
 
         for message in messages:
             try:
@@ -595,12 +595,12 @@ class RealTimeStreaming:
 
     def _make_disable_auto_response_message(self) -> str:
         """Return a session.update that disables VAD auto-response."""
-        turn_detection: Dict[str, Any] = {
+        turn_detection: dict[str, Any] = {
             "type": "server_vad",
             "create_response": False,
         }
         if self._backend_uses_beta_protocol:
-            session: Dict[str, Any] = {"turn_detection": turn_detection}
+            session: dict[str, Any] = {"turn_detection": turn_detection}
         else:
             session = {
                 "type": "realtime",
@@ -654,7 +654,7 @@ class RealTimeStreaming:
 
     def _has_realtime_guardrails_for_event_hooks(
         self,
-        event_hooks: List[Any],
+        event_hooks: list[Any],
     ) -> bool:
         """Return True if any callback would run for one of ``event_hooks``."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -697,9 +697,9 @@ class RealTimeStreaming:
     async def run_realtime_guardrails(
         self,
         transcript: str,
-        item_id: Optional[str] = None,
-        pre_block_backend_message: Optional[str] = None,
-        event_hooks: Optional[List[Any]] = None,
+        item_id: str | None = None,
+        pre_block_backend_message: str | None = None,
+        event_hooks: list[Any] | None = None,
     ) -> bool:
         """
         Run registered guardrails on realtime text (transcript, user message, tool output).
@@ -807,7 +807,7 @@ class RealTimeStreaming:
                 await self._send_to_backend(json.dumps({"type": "response.create"}))
 
                 self._violation_count += 1
-                end_session_after: Optional[int] = getattr(callback, "end_session_after_n_fails", None)
+                end_session_after: int | None = getattr(callback, "end_session_after_n_fails", None)
                 should_end = getattr(callback, "on_violation", None) == "end_session" or (
                     end_session_after is not None and self._violation_count >= end_session_after
                 )
@@ -900,7 +900,7 @@ class RealTimeStreaming:
                 await self._send_event_to_client(event, event_str)
                 blocked = await self.run_realtime_guardrails(
                     cast(str, transcript),
-                    item_id=cast(Optional[str], event.get("item_id")),
+                    item_id=cast(str | None, event.get("item_id")),
                 )
                 if not blocked:
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
@@ -910,7 +910,7 @@ class RealTimeStreaming:
             await self._send_event_to_client(event, event_str)
 
     @staticmethod
-    def _parse_backend_event(raw_response: str) -> Optional[dict]:
+    def _parse_backend_event(raw_response: str) -> dict | None:
         """Parse a backend frame once. Returns None for non-JSON or non-object frames."""
         try:
             event = json.loads(raw_response)
@@ -1073,9 +1073,9 @@ class RealTimeStreaming:
                     session["output_modalities"] = ["text"]
 
         # 3-7. Lift flat audio fields into the nested audio object
-        audio: Dict[str, Any] = {}
-        inp: Dict[str, Any] = {}
-        out: Dict[str, Any] = {}
+        audio: dict[str, Any] = {}
+        inp: dict[str, Any] = {}
+        out: dict[str, Any] = {}
 
         # voice → audio.output.voice
         if "voice" in session:
@@ -1118,7 +1118,7 @@ class RealTimeStreaming:
         return session
 
     @staticmethod
-    def _translate_event_to_beta(event: dict) -> Optional[dict]:
+    def _translate_event_to_beta(event: dict) -> dict | None:
         """Translate a single GA event dict to its beta equivalent.
 
         Returns None when the event must be dropped (the GA-only
@@ -1174,7 +1174,7 @@ class RealTimeStreaming:
 
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
                 guardrail_turn_detection_injected = False
-                msg_type: Optional[str] = None
+                msg_type: str | None = None
                 try:
                     from litellm.types.guardrails import GuardrailEventHooks
 

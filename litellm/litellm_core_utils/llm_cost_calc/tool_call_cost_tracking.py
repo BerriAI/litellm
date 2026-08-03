@@ -2,7 +2,7 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Literal
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
@@ -34,9 +34,9 @@ class StandardBuiltInToolCostTracking:
     def get_cost_for_built_in_tools(
         model: str,
         response_object: Any,
-        usage: Optional[Usage] = None,
-        custom_llm_provider: Optional[str] = None,
-        standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
+        usage: Usage | None = None,
+        custom_llm_provider: str | None = None,
+        standard_built_in_tools_params: StandardBuiltInToolsParams | None = None,
     ) -> float:
         """
         Get the cost of using built-in tools.
@@ -80,8 +80,8 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def _handle_web_search_cost(
         model: str,
-        custom_llm_provider: Optional[str],
-        usage: Optional[Usage],
+        custom_llm_provider: str | None,
+        usage: Usage | None,
         standard_built_in_tools_params: StandardBuiltInToolsParams,
         response_object: object = None,
     ) -> float:
@@ -125,7 +125,7 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def _handle_file_search_cost(
         model: str,
-        custom_llm_provider: Optional[str],
+        custom_llm_provider: str | None,
         standard_built_in_tools_params: StandardBuiltInToolsParams,
     ) -> float:
         """Handle file search cost calculation."""
@@ -133,7 +133,7 @@ class StandardBuiltInToolCostTracking:
             model=model, custom_llm_provider=custom_llm_provider
         )
         file_search_raw: Any = standard_built_in_tools_params.get("file_search", {})
-        file_search_usage: Optional[FileSearchTool] = FileSearchTool(**file_search_raw) if file_search_raw else None
+        file_search_usage: FileSearchTool | None = FileSearchTool(**file_search_raw) if file_search_raw else None
 
         # Convert model_info to dict and extract usage parameters
         model_info_dict = dict(model_info) if model_info is not None else None
@@ -150,7 +150,7 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def _handle_azure_assistant_costs(
         model: str,
-        custom_llm_provider: Optional[str],
+        custom_llm_provider: str | None,
         standard_built_in_tools_params: StandardBuiltInToolsParams,
     ) -> float:
         """Handle Azure assistant features cost calculation."""
@@ -177,7 +177,7 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def _extract_file_search_params(
         file_search_usage: Any,
-    ) -> Tuple[Optional[float], Optional[float]]:
+    ) -> tuple[float | None, float | None]:
         """Extract and convert file search parameters safely."""
         storage_gb = None
         days = None
@@ -202,8 +202,8 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def _get_vector_store_cost(
-        model_info: Optional[ModelInfo],
-        custom_llm_provider: Optional[str],
+        model_info: ModelInfo | None,
+        custom_llm_provider: str | None,
         standard_built_in_tools_params: StandardBuiltInToolsParams,
     ) -> float:
         """Calculate vector store cost."""
@@ -222,8 +222,8 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def _get_computer_use_cost(
-        model_info: Optional[ModelInfo],
-        custom_llm_provider: Optional[str],
+        model_info: ModelInfo | None,
+        custom_llm_provider: str | None,
         standard_built_in_tools_params: StandardBuiltInToolsParams,
     ) -> float:
         """Calculate computer use cost."""
@@ -246,8 +246,8 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def _get_code_interpreter_cost(
-        model_info: Optional[ModelInfo],
-        custom_llm_provider: Optional[str],
+        model_info: ModelInfo | None,
+        custom_llm_provider: str | None,
         standard_built_in_tools_params: StandardBuiltInToolsParams,
     ) -> float:
         """Calculate code interpreter cost."""
@@ -267,7 +267,7 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def _extract_token_counts(
         computer_use_usage: Any,
-    ) -> Tuple[Optional[int], Optional[int]]:
+    ) -> tuple[int | None, int | None]:
         """Extract and convert token counts safely."""
         input_tokens = None
         output_tokens = None
@@ -282,7 +282,7 @@ class StandardBuiltInToolCostTracking:
         return input_tokens, output_tokens
 
     @staticmethod
-    def _safe_convert_to_int(value: Any) -> Optional[int]:
+    def _safe_convert_to_int(value: Any) -> int | None:
         """Safely convert a value to int."""
         if value is not None:
             try:
@@ -312,7 +312,7 @@ class StandardBuiltInToolCostTracking:
         return usage.model_copy(update={"server_tool_use": server_tool_use})
 
     @staticmethod
-    def response_object_includes_web_search_call(response_object: Any, usage: Optional[Usage] = None) -> bool:
+    def response_object_includes_web_search_call(response_object: Any, usage: Usage | None = None) -> bool:
         """
         Check if the response object includes a web search call.
 
@@ -358,14 +358,16 @@ class StandardBuiltInToolCostTracking:
                 response_object=response_object, output_type="web_search_call"
             )
         elif usage is not None:
-            if hasattr(usage, "server_tool_use") and _get_web_search_requests(usage.server_tool_use) is not None:
-                return True
-            elif (
-                hasattr(usage, "prompt_tokens_details")
-                and usage.prompt_tokens_details is not None
-                and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
-                and hasattr(usage.prompt_tokens_details, "web_search_requests")
-                and usage.prompt_tokens_details.web_search_requests is not None
+            if (
+                hasattr(usage, "server_tool_use")
+                and _get_web_search_requests(usage.server_tool_use) is not None
+                or (
+                    hasattr(usage, "prompt_tokens_details")
+                    and usage.prompt_tokens_details is not None
+                    and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+                    and hasattr(usage.prompt_tokens_details, "web_search_requests")
+                    and usage.prompt_tokens_details.web_search_requests is not None
+                )
             ):
                 return True
 
@@ -401,7 +403,7 @@ class StandardBuiltInToolCostTracking:
     ) -> bool:
         if isinstance(response_object, ModelResponse):
             for choice in response_object.choices:
-                message: Optional[Message] = getattr(choice, "message", None)
+                message: Message | None = getattr(choice, "message", None)
                 if message is None:
                     continue
                 if annotations := getattr(message, "annotations", None):
@@ -430,13 +432,13 @@ class StandardBuiltInToolCostTracking:
         """
         output = response_object.output
         for output_item in output:
-            _output_type: Optional[str] = getattr(output_item, "type", None)
+            _output_type: str | None = getattr(output_item, "type", None)
             if _output_type == output_type:
                 return True
         return False
 
     @staticmethod
-    def _safe_get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Optional[ModelInfo]:
+    def _safe_get_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo | None:
         try:
             return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
@@ -444,8 +446,8 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def get_cost_for_web_search(
-        web_search_options: Optional[WebSearchOptions] = None,
-        model_info: Optional[ModelInfo] = None,
+        web_search_options: WebSearchOptions | None = None,
+        model_info: ModelInfo | None = None,
     ) -> float:
         """
         If request includes `web_search_options`, calculate the cost of the web search.
@@ -468,7 +470,7 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def get_default_cost_for_web_search(
-        model_info: Optional[ModelInfo] = None,
+        model_info: ModelInfo | None = None,
     ) -> float:
         """
         If no web search options are provided, use the `search_context_size_medium` pricing.
@@ -485,11 +487,11 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def get_cost_for_file_search(
-        file_search: Optional[FileSearchTool] = None,
-        provider: Optional[str] = None,
-        model_info: Optional[dict] = None,
-        storage_gb: Optional[float] = None,
-        days: Optional[float] = None,
+        file_search: FileSearchTool | None = None,
+        provider: str | None = None,
+        model_info: dict | None = None,
+        storage_gb: float | None = None,
+        days: float | None = None,
     ) -> float:
         """ "
         OpenAI: $2.50/1k calls
@@ -521,9 +523,9 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def get_cost_for_vector_store(
-        vector_store_usage: Optional[dict] = None,
-        provider: Optional[str] = None,
-        model_info: Optional[dict] = None,
+        vector_store_usage: dict | None = None,
+        provider: str | None = None,
+        model_info: dict | None = None,
     ) -> float:
         """
         Calculate cost for vector store usage.
@@ -551,10 +553,10 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def get_cost_for_computer_use(
-        input_tokens: Optional[int] = None,
-        output_tokens: Optional[int] = None,
-        provider: Optional[str] = None,
-        model_info: Optional[dict] = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        provider: str | None = None,
+        model_info: dict | None = None,
     ) -> float:
         """
         Calculate cost for computer use feature.
@@ -593,7 +595,7 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def _get_code_interpreter_cost_from_model_map(
         provider: str,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Get code interpreter cost per session from model cost map.
         """
@@ -614,9 +616,9 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def get_cost_for_code_interpreter(
-        sessions: Optional[int] = None,
-        provider: Optional[str] = None,
-        model_info: Optional[dict] = None,
+        sessions: int | None = None,
+        provider: str | None = None,
+        model_info: dict | None = None,
     ) -> float:
         """
         Calculate cost for code interpreter feature.
@@ -657,7 +659,7 @@ class StandardBuiltInToolCostTracking:
         return False
 
     @staticmethod
-    def _get_web_search_options(kwargs: Dict) -> Optional[WebSearchOptions]:
+    def _get_web_search_options(kwargs: dict) -> WebSearchOptions | None:
         if "web_search_options" in kwargs:
             return WebSearchOptions(**kwargs.get("web_search_options", {}))
 
@@ -673,13 +675,13 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
-    def _get_tools_from_kwargs(kwargs: Dict, tool_type: str) -> Optional[List[Dict]]:
+    def _get_tools_from_kwargs(kwargs: dict, tool_type: str) -> list[dict] | None:
         if "tools" in kwargs:
             return kwargs.get("tools", [])
         return None
 
     @staticmethod
-    def _get_file_search_tool_call(kwargs: Dict) -> Optional[FileSearchTool]:
+    def _get_file_search_tool_call(kwargs: dict) -> FileSearchTool | None:
         tools = StandardBuiltInToolCostTracking._get_tools_from_kwargs(kwargs, "file_search")
         if tools:
             for tool in tools:
@@ -689,7 +691,7 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
-    def _is_web_search_tool_call(tool: Dict) -> bool:
+    def _is_web_search_tool_call(tool: dict) -> bool:
         if tool.get("type", None) == "web_search_preview":
             return True
         if tool.get("type", None) == "web_search":
@@ -699,7 +701,7 @@ class StandardBuiltInToolCostTracking:
         return False
 
     @staticmethod
-    def _is_file_search_tool_call(tool: Dict) -> bool:
+    def _is_file_search_tool_call(tool: dict) -> bool:
         if tool.get("type", None) == "file_search":
             return True
         return False

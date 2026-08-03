@@ -2,8 +2,6 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import Optional
-
 import httpx
 
 from litellm.llms.base_llm.embedding.transformation import (
@@ -60,12 +58,12 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
         endpoint = WatsonXAIEndpoint.EMBEDDINGS.value
@@ -84,7 +82,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,

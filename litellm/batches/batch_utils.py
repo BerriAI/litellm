@@ -1,6 +1,7 @@
 import json
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple
+from typing import Any, Literal
 
 import litellm
 from litellm._logging import verbose_logger
@@ -11,11 +12,11 @@ from litellm.utils import token_counter
 
 
 async def calculate_batch_cost_and_usage(
-    file_content_dictionary: List[dict],
+    file_content_dictionary: list[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
-    model_name: Optional[str] = None,
-    model_info: Optional[ModelInfo] = None,
-) -> Tuple[float, Usage, List[str]]:
+    model_name: str | None = None,
+    model_info: ModelInfo | None = None,
+) -> tuple[float, Usage, list[str]]:
     """
     Calculate the cost and usage of a batch.
 
@@ -44,9 +45,9 @@ async def calculate_batch_cost_and_usage(
 async def _handle_completed_batch(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
-    model_name: Optional[str] = None,
-    litellm_params: Optional[dict] = None,
-) -> Tuple[float, Usage, List[str]]:
+    model_name: str | None = None,
+    litellm_params: dict | None = None,
+) -> tuple[float, Usage, list[str]]:
     """Fetch a completed batch's output file and aggregate its cost, usage, and
     models in a single pass over the JSONL lines, so the parsed file content is
     never materialized in memory.
@@ -84,14 +85,14 @@ class _BatchOutputLineStats:
     total_tokens: int
     cache_read_tokens: int
     cache_creation_tokens: int
-    model: Optional[str]
+    model: str | None
 
 
 def _iter_successful_output_line_stats(
     entries: Iterable[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
-    model_name: Optional[str],
-    model_info: Optional[ModelInfo],
+    model_name: str | None,
+    model_info: ModelInfo | None,
 ) -> Iterator[_BatchOutputLineStats]:
     from litellm.cost_calculator import batch_cost_calculator
 
@@ -135,9 +136,9 @@ def _iter_successful_output_line_stats(
 def _aggregate_batch_cost_usage_models(
     entries: Iterable[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
-    model_name: Optional[str] = None,
-    model_info: Optional[ModelInfo] = None,
-) -> Tuple[float, Usage, List[str]]:
+    model_name: str | None = None,
+    model_info: ModelInfo | None = None,
+) -> tuple[float, Usage, list[str]]:
     """Aggregate cost, usage, and models from batch output entries in a single
     pass, holding one small stats record per line instead of the parsed file."""
     line_stats = tuple(_iter_successful_output_line_stats(entries, custom_llm_provider, model_name, model_info))
@@ -163,9 +164,9 @@ def _aggregate_batch_cost_usage_models(
 
 
 def calculate_vertex_ai_batch_cost_and_usage(
-    vertex_ai_batch_responses: List[dict],
-    model_name: Optional[str] = None,
-) -> Tuple[float, Usage]:
+    vertex_ai_batch_responses: list[dict],
+    model_name: str | None = None,
+) -> tuple[float, Usage]:
     """
     Calculate both cost and usage from raw Vertex AI batch responses.
 
@@ -233,7 +234,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
 async def _fetch_batch_output_file_content(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
-    litellm_params: Optional[dict] = None,
+    litellm_params: dict | None = None,
 ) -> bytes:
     """
     Fetch the batch output file and return its raw JSONL bytes
@@ -277,7 +278,7 @@ async def _fetch_batch_output_file_content(
     return _file_content.content
 
 
-def _extract_file_access_credentials(litellm_params: Optional[dict]) -> dict:
+def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
     """
     Extract credentials from litellm_params for file access operations.
 
@@ -316,7 +317,7 @@ def _extract_file_access_credentials(litellm_params: Optional[dict]) -> dict:
     return credentials
 
 
-def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
+def _get_file_content_as_dictionary(file_content: bytes) -> list[dict]:
     """
     Get the file content as a list of dictionaries from JSON Lines format
     """
@@ -366,7 +367,7 @@ def _estimate_batch_entry_tokens(raw_line: bytes) -> int:
 
 def _count_entry_tokens(
     entry: dict,
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
 ) -> int:
     """Token-count a single batch input entry's body (chat / text / embedding)."""
     body = entry.get("body", {}) or {}

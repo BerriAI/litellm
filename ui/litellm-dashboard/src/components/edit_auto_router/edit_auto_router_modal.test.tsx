@@ -1,7 +1,7 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import EditAutoRouterModal from "./edit_auto_router_modal";
@@ -117,5 +117,129 @@ describe("EditAutoRouterModal keyword matching", () => {
 
     await waitFor(() => expect(NotificationsManager.fromBackend).toHaveBeenCalled());
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("EditAutoRouterModal classifier context window", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const STORED_LLM_CONFIG = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o-mini"], COMPLEX: ["gpt-4o-mini"], REASONING: ["gpt-4o-mini"] },
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifier_context_window_size: 5,
+    classifier_context_per_turn_chars: 300,
+  };
+
+  const renderLlmModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: STORED_LLM_CONFIG },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // Hydration bugs are invisible to the payload-builder unit tests, which only exercise
+  // buildUpdatedComplexityRouterConfig with a form value the caller already assembled by hand.
+  // Only driving the real component through open, then save with nothing touched, catches a
+  // missing initializeForm hydration line.
+  it("shows the stored classifier context values and preserves them through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderLlmModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await screen.findByText("Context Window Size");
+    expect(screen.getByDisplayValue("5")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("300")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    const config = savedConfig();
+    expect(config.classifier_context_window_size).toBe(5);
+    expect(config.classifier_context_per_turn_chars).toBe(300);
+  });
+
+  it("persists an edited classifier context window size", async () => {
+    const user = userEvent.setup();
+    renderLlmModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    const windowSizeSection = (await screen.findByText("Context Window Size")).closest("div") as HTMLElement;
+    const input = within(windowSizeSection).getByRole("spinbutton");
+    fireEvent.change(input, { target: { value: "8" } });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_context_window_size).toBe(8);
+  });
+});
+
+describe("EditAutoRouterModal assistant turns", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const STORED_CONFIG = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o-mini"], COMPLEX: ["gpt-4o-mini"], REASONING: ["gpt-4o-mini"] },
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifier_context_include_assistant_turns: true,
+  };
+
+  const renderModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: STORED_CONFIG },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // The create and edit stacks share the rendered control but duplicate the serializer, the
+  // hydrator and the managed-key set, so a field wired into only one of them fails here and
+  // nowhere else: the payload-builder unit tests are handed a form value assembled by hand.
+  it("shows the stored value and preserves it through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await screen.findByText("Include Assistant Turns");
+    expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_context_include_assistant_turns).toBe(true);
+  });
+
+  it("persists turning assistant turns off", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await screen.findByText("Include Assistant Turns");
+    await user.click(screen.getByRole("switch", { name: "Include Assistant Turns" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_context_include_assistant_turns).toBe(false);
   });
 });

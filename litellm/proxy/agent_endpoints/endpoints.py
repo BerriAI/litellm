@@ -148,9 +148,7 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         raise HTTPException(
             status_code=403,
             detail={
-                "error": "Only proxy admins can create, update, or delete agents. Your role={}".format(
-                    user_api_key_dict.user_role
-                )
+                "error": f"Only proxy admins can create, update, or delete agents. Your role={user_api_key_dict.user_role}"
             },
         )
 
@@ -318,10 +316,8 @@ async def get_agents(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.agent_endpoints.get_agents(): Exception occurred - {}".format(str(e))
-        )
-        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {str(e)}"})
+        verbose_proxy_logger.exception(f"litellm.proxy.agent_endpoints.get_agents(): Exception occurred - {e!s}")
+        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e!s}"})
 
 
 #### CRUD ENDPOINTS FOR AGENTS ####
@@ -851,9 +847,7 @@ async def make_agent_public(
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can update public model groups. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
 
@@ -964,9 +958,7 @@ async def make_agents_public(
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can update public model groups. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
 

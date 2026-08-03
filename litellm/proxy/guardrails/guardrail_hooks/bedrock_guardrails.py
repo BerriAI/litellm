@@ -9,26 +9,20 @@ import os
 import sys
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
+import copy
 import json
 import sys
+from collections.abc import AsyncGenerator, Mapping
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     ClassVar,
-    Dict,
-    List,
     Literal,
     NamedTuple,
     Optional,
-    Tuple,
-    Union,
     cast,
 )
-
-import copy
-from collections.abc import Mapping
-from datetime import datetime, timezone
 
 import httpx
 from fastapi import HTTPException
@@ -36,10 +30,10 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.caching import DualCache
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -104,7 +98,7 @@ _BEDROCK_CHECKS_PII_LOCATION_KEYS = (
 # The model response is qualified as ``guard_content`` directly by the OUTPUT builder;
 # the existing ``guarded_text`` marker is intentionally left unmapped here so its
 # guardrail-hook payload is unchanged by this feature.
-_CONTENT_TYPE_TO_QUALIFIER: Dict[str, BedrockGuardrailQualifier] = {
+_CONTENT_TYPE_TO_QUALIFIER: dict[str, BedrockGuardrailQualifier] = {
     "grounding_source": "grounding_source",
     "query": "query",
 }
@@ -120,22 +114,22 @@ class QualifiedTextBlock(NamedTuple):
     """A piece of message text paired with its Bedrock grounding qualifier (if any)."""
 
     text: str
-    qualifier: Optional[BedrockGuardrailQualifier]
+    qualifier: BedrockGuardrailQualifier | None
 
 
 class GuardrailMessageFilterResult(NamedTuple):
-    payload_messages: Optional[List[AllMessageValues]]
-    original_messages: Optional[List[AllMessageValues]]
-    target_indices: Optional[List[int]]
+    payload_messages: list[AllMessageValues] | None
+    original_messages: list[AllMessageValues] | None
+    target_indices: list[int] | None
 
 
 class ApplyGuardrailMessageSelection(NamedTuple):
     """Messages selected for an apply_guardrail scan + write-back metadata."""
 
-    filtered_messages: Optional[list[AllMessageValues]]
+    filtered_messages: list[AllMessageValues] | None
     # Slice of the flat `texts` list actually scanned (offset, length),
     # used to write masked content back to the right positions. None = whole list.
-    scanned_slice: Optional[tuple[int, int]]
+    scanned_slice: tuple[int, int] | None
     # True when messages were selected by their original role.
     scanned_role_subset: bool
     # True when there is nothing to scan (e.g. no user-role message).
@@ -153,7 +147,7 @@ def _redact_pii_matches(response_json: dict) -> dict:
     return redacted if isinstance(redacted, dict) else response_json
 
 
-def _redact_assessment_match_fields(assessments: List[dict]) -> List[dict]:
+def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
     """
     Redact sensitive match-like fields from blocked assessment summaries.
 
@@ -172,9 +166,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def __init__(
         self,
-        guardrailIdentifier: Optional[str] = None,
-        guardrailVersion: Optional[str] = None,
-        disable_exception_on_block: Optional[bool] = False,
+        guardrailIdentifier: str | None = None,
+        guardrailVersion: str | None = None,
+        disable_exception_on_block: bool | None = False,
         checks: BedrockChecksConfigModel | Mapping[str, object] | None = None,
         content_filter_threshold: float | None = 0.5,
         prompt_attack_threshold: float | None = 0.5,
@@ -236,7 +230,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -273,12 +267,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         return cleaned or None
 
-    def _create_bedrock_input_content_request(self, messages: Optional[List[AllMessageValues]]) -> BedrockRequest:
+    def _create_bedrock_input_content_request(self, messages: list[AllMessageValues] | None) -> BedrockRequest:
         """
         Create a bedrock request for the input content - the LLM request.
         """
         bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
-        bedrock_request_content: List[BedrockContentItem] = []
+        bedrock_request_content: list[BedrockContentItem] = []
         if messages is None:
             return bedrock_request
         for message in messages:
@@ -297,8 +291,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _create_bedrock_output_content_request(
         self,
-        response: Union[Any, ModelResponse],
-        messages: Optional[List[AllMessageValues]] = None,
+        response: Any | ModelResponse,
+        messages: list[AllMessageValues] | None = None,
     ) -> BedrockRequest:
         """
         Create a bedrock request for the output content - the LLM response.
@@ -311,7 +305,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         bedrock_request: BedrockRequest = BedrockRequest(source="OUTPUT")
         grounding_blocks = self._collect_grounding_blocks(messages)
-        bedrock_request_content: List[BedrockContentItem] = [
+        bedrock_request_content: list[BedrockContentItem] = [
             self._build_content_item(block) for block in grounding_blocks
         ]
         has_grounding = len(bedrock_request_content) > 0
@@ -322,12 +316,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return bedrock_request
 
     def _build_response_content_items(
-        self, response: Union[Any, ModelResponse], has_grounding: bool
-    ) -> List[BedrockContentItem]:
+        self, response: Any | ModelResponse, has_grounding: bool
+    ) -> list[BedrockContentItem]:
         """Build content item(s) from the model response. When the request supplied
         grounding, the response is qualified ``guard_content`` so Bedrock can score it.
         """
-        items: List[BedrockContentItem] = []
+        items: list[BedrockContentItem] = []
         if not isinstance(response, litellm.ModelResponse):
             return items
         for choice in response.choices:
@@ -346,8 +340,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def convert_to_bedrock_format(
         self,
         source: Literal["INPUT", "OUTPUT"],
-        messages: Optional[List[AllMessageValues]] = None,
-        response: Optional[Union[Any, ModelResponse]] = None,
+        messages: list[AllMessageValues] | None = None,
+        response: Any | ModelResponse | None = None,
     ) -> BedrockRequest:
         """
         Convert the litellm messages/response to the bedrock request format.
@@ -365,7 +359,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             bedrock_request = self._create_bedrock_output_content_request(response=response, messages=messages)
         return bedrock_request
 
-    def get_content_items_for_message(self, message: AllMessageValues) -> Optional[List[QualifiedTextBlock]]:
+    def get_content_items_for_message(self, message: AllMessageValues) -> list[QualifiedTextBlock] | None:
         """
         Flatten a message into text blocks, preserving any contextual-grounding
         qualifier carried by the content-block ``type`` (grounding_source / query).
@@ -375,7 +369,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         content = message.get("content")
         if content is None:
             return None
-        blocks: List[QualifiedTextBlock] = []
+        blocks: list[QualifiedTextBlock] = []
         if isinstance(content, str):
             blocks.append(QualifiedTextBlock(text=content, qualifier=None))
         elif isinstance(content, list):
@@ -394,7 +388,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             text_content["qualifiers"] = [block.qualifier]
         return BedrockContentItem(text=text_content)
 
-    def _collect_grounding_blocks(self, messages: Optional[List[AllMessageValues]]) -> List[QualifiedTextBlock]:
+    def _collect_grounding_blocks(self, messages: list[AllMessageValues] | None) -> list[QualifiedTextBlock]:
         """Harvest grounding_source/query blocks from the request for an OUTPUT scan.
 
         ``grounding_source`` is honored only from app-authored roles (system /
@@ -404,19 +398,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         contextual-grounding check to grade the response against. ``query`` is accepted
         from any role (it is the user's question).
         """
-        grounding: List[QualifiedTextBlock] = []
+        grounding: list[QualifiedTextBlock] = []
         for message in messages or []:
             role = message.get("role")
             for block in self.get_content_items_for_message(message=message) or []:
-                if block.qualifier == "query":
-                    grounding.append(block)
-                elif block.qualifier == "grounding_source" and role in _GROUNDING_SOURCE_TRUSTED_ROLES:
+                if (
+                    block.qualifier == "query"
+                    or block.qualifier == "grounding_source"
+                    and role in _GROUNDING_SOURCE_TRUSTED_ROLES
+                ):
                     grounding.append(block)
         return grounding
 
     def _prepare_guardrail_messages_for_role(
         self,
-        messages: Optional[List[AllMessageValues]],
+        messages: list[AllMessageValues] | None,
     ) -> GuardrailMessageFilterResult:
         """Return payload + merge metadata for the latest user message."""
         # NOTE: This logic probably belongs in CustomGuardrail once other guardrails adopt the feature.
@@ -439,7 +435,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             target_indices=[latest_index],
         )
 
-    def _find_latest_message_index(self, messages: List[AllMessageValues], target_role: str) -> Optional[int]:
+    def _find_latest_message_index(self, messages: list[AllMessageValues], target_role: str) -> int | None:
         for index in range(len(messages) - 1, -1, -1):
             if messages[index].get("role", None) == target_role:
                 return index
@@ -460,7 +456,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         structured_messages: list[AllMessageValues],
         target_index: int,
         texts: list[str],
-    ) -> Optional[tuple[int, int]]:
+    ) -> tuple[int, int] | None:
         """
         Map one message's text segments to their (offset, length) slice in the
         flat `texts` list built by the guardrail translation handler.
@@ -519,7 +515,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # None, and the write-back guard below safely skips masking rather than
         # corrupting positions.
         structured_messages = cast(
-            Optional[list[AllMessageValues]],
+            list[AllMessageValues] | None,
             inputs.get("structured_messages") or request_data.get("messages"),
         )
         if input_type != "request" or not structured_messages:
@@ -559,7 +555,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         masked_texts: list,
         texts: list,
-        scanned_slice: Optional[tuple[int, int]],
+        scanned_slice: tuple[int, int] | None,
         scanned_role_subset: bool,
     ) -> list:
         """
@@ -593,10 +589,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _merge_filtered_messages(
         self,
-        original_messages: Optional[List[AllMessageValues]],
-        updated_target_messages: List[AllMessageValues],
-        target_indices: Optional[List[int]],
-    ) -> List[AllMessageValues]:
+        original_messages: list[AllMessageValues] | None,
+        updated_target_messages: list[AllMessageValues],
+        target_indices: list[int] | None,
+    ) -> list[AllMessageValues]:
         if not target_indices:
             return updated_target_messages
 
@@ -658,8 +654,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         data: dict,
         optional_params: dict,
         aws_region_name: str,
-        api_key: Optional[str] = None,
-        extra_headers: Optional[dict] = None,
+        api_key: str | None = None,
+        extra_headers: dict | None = None,
         request_path: str | None = None,
     ):
         headers = {"Content-Type": "application/json"}
@@ -682,7 +678,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # first check api-key, if none, fall back to sigV4
         if api_key is not None:
-            aws_bearer_token: Optional[str] = api_key
+            aws_bearer_token: str | None = api_key
         else:
             aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 
@@ -766,7 +762,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.convert_to_bedrock_format(source=source, messages=messages, response=response)
         )
         bedrock_guardrail_response: BedrockGuardrailResponse = BedrockGuardrailResponse()
-        api_key: Optional[str] = None
+        api_key: str | None = None
         if request_data:
             dynamic_request_body_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
             bedrock_request_data.update(
@@ -1160,7 +1156,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _get_block_exception_for_checks(
         self, violations: list[BedrockChecksViolation], request_data: dict | None = None
-    ) -> Union[HTTPException, ModifyResponseException]:
+    ) -> HTTPException | ModifyResponseException:
         """Build the block exception for an over-threshold InvokeGuardrailChecks result.
 
         Mirrors ``_get_http_exception_for_blocked_guardrail``'s return-type branching.
@@ -1240,7 +1236,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return "success"
         return "guardrail_failed_to_respond"
 
-    def _parse_bedrock_guardrail_error_response(self, response: httpx.Response) -> Tuple[int, str]:
+    def _parse_bedrock_guardrail_error_response(self, response: httpx.Response) -> tuple[int, str]:
         """
         Parse AWS Bedrock guardrail error response body to extract status code and message.
 
@@ -1285,7 +1281,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             tracing_detail["guardrail_action"] = bedrock_action
         return tracing_detail
 
-    def _extract_violation_category_names(self, response: BedrockGuardrailResponse) -> List[str]:
+    def _extract_violation_category_names(self, response: BedrockGuardrailResponse) -> list[str]:
         """
         Flatten the BLOCKED assessments into a list of human-readable category
         names suitable for queryable OTEL / standard-logging attributes.
@@ -1301,7 +1297,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         can still see the count in ``_extract_blocked_assessments`` which
         feeds the HTTP error detail.
         """
-        names: List[str] = []
+        names: list[str] = []
         for block in self._extract_blocked_assessments(response):
             for match in block.get("matches", []) or []:
                 # Allow-list non-sensitive labels only. Never fall back to
@@ -1311,7 +1307,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     names.append(label)
         return names
 
-    def _extract_blocked_assessments(self, response: BedrockGuardrailResponse) -> List[dict]:
+    def _extract_blocked_assessments(self, response: BedrockGuardrailResponse) -> list[dict]:
         """
         Walk the Bedrock guardrail response and emit a structured list of
         BLOCKED assessment entries describing exactly which policies fired.
@@ -1322,7 +1318,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         matched term where available, so the client can render a precise
         explanation of the violation.
         """
-        blocked: List[dict] = []
+        blocked: list[dict] = []
         assessments = response.get("assessments", []) or []
 
         for assessment in assessments:
@@ -1362,7 +1358,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Word policy
             word_policy = assessment.get("wordPolicy")
             if word_policy:
-                word_matches: List[dict] = []
+                word_matches: list[dict] = []
                 for w in word_policy.get("customWords") or []:
                     if w.get("action") == "BLOCKED":
                         word_matches.append(
@@ -1388,7 +1384,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Sensitive information policy (PII)
             sensitive_info = assessment.get("sensitiveInformationPolicy")
             if sensitive_info:
-                pii_matches: List[dict] = []
+                pii_matches: list[dict] = []
                 for p in sensitive_info.get("piiEntities") or []:
                     if p.get("action") == "BLOCKED":
                         pii_matches.append(
@@ -1443,13 +1439,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return blocked
 
     def _get_http_exception_for_blocked_guardrail(
-        self, response: BedrockGuardrailResponse, request_data: Optional[dict] = None
-    ) -> Union[HTTPException, ModifyResponseException]:
+        self, response: BedrockGuardrailResponse, request_data: dict | None = None
+    ) -> HTTPException | ModifyResponseException:
         """
         Get the HTTP exception for a blocked guardrail.
         """
         bedrock_guardrail_output_text: str = ""
-        outputs: Optional[List[BedrockGuardrailOutput]] = response.get("outputs", []) or []
+        outputs: list[BedrockGuardrailOutput] | None = response.get("outputs", []) or []
         if outputs:
             for output in outputs:
                 if output.get("text"):
@@ -1464,7 +1460,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 guardrail_name=self.guardrail_name,
             )
 
-        detail: Dict[str, Any] = {
+        detail: dict[str, Any] = {
             "error": "Violated guardrail policy",
             "bedrock_guardrail_response": bedrock_guardrail_output_text,
         }
@@ -1562,7 +1558,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Bedrock Pre-Call Hook for call_type: %s", call_type)
 
         from litellm.proxy.common_utils.callback_utils import (
@@ -1634,6 +1630,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.during_mcp_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
@@ -1666,7 +1664,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             source="INPUT",
             messages=filtered_messages,
             request_data=data,
-            logging_event_type=GuardrailEventHooks.during_call,
+            logging_event_type=event_type,
         )
         #########################################################
 
@@ -1704,7 +1702,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        new_messages: list[AllMessageValues] | None = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning("Bedrock AI: not running guardrail. No messages in data")
             return
@@ -1768,9 +1766,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ##############################################################################
     def _update_messages_with_updated_bedrock_guardrail_response(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         bedrock_guardrail_response: BedrockGuardrailResponse,
-    ) -> List[AllMessageValues]:
+    ) -> list[AllMessageValues]:
         """
         Use the output from the bedrock guardrail to mask sensitive content in messages.
 
@@ -1817,11 +1815,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         from litellm.types.utils import TextCompletionResponse
 
         # Collect all chunks to process them together
-        all_chunks: List[ModelResponseStream] = []
+        all_chunks: list[ModelResponseStream] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
-        assembled_model_response: Optional[Union[ModelResponse, TextCompletionResponse]] = stream_chunk_builder(
+        assembled_model_response: ModelResponse | TextCompletionResponse | None = stream_chunk_builder(
             chunks=all_chunks,
         )
         if isinstance(assembled_model_response, ModelResponse):
@@ -1890,7 +1888,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             for chunk in all_chunks:
                 yield chunk
 
-    def _extract_masked_texts_from_response(self, bedrock_guardrail_response: BedrockGuardrailResponse) -> List[str]:
+    def _extract_masked_texts_from_response(self, bedrock_guardrail_response: BedrockGuardrailResponse) -> list[str]:
         """
         Extract all masked text outputs from the guardrail response.
 
@@ -1900,22 +1898,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             List of masked text strings
         """
-        masked_output_text: List[str] = []
-        masked_outputs: Optional[List[BedrockGuardrailOutput]] = bedrock_guardrail_response.get("outputs", []) or []
+        masked_output_text: list[str] = []
+        masked_outputs: list[BedrockGuardrailOutput] | None = bedrock_guardrail_response.get("outputs", []) or []
         if not masked_outputs:
             verbose_proxy_logger.debug("No masked outputs found in guardrail response")
             return []
 
         for output in masked_outputs:
-            text_content: Optional[str] = output.get("text")
+            text_content: str | None = output.get("text")
             if text_content is not None:
                 masked_output_text.append(text_content)
 
         return masked_output_text
 
     def _apply_masking_to_messages(
-        self, messages: List[AllMessageValues], masked_texts: List[str]
-    ) -> List[AllMessageValues]:
+        self, messages: list[AllMessageValues], masked_texts: list[str]
+    ) -> list[AllMessageValues]:
         """
         Apply masked texts to message content using index tracking.
 
@@ -1956,8 +1954,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return updated_messages
 
     def _mask_content_list(
-        self, content_list: List[Any], masked_texts: List[str], masking_index: int
-    ) -> Tuple[List[Any], int]:
+        self, content_list: list[Any], masked_texts: list[str], masking_index: int
+    ) -> tuple[list[Any], int]:
         """
         Apply masking to a list of content items.
 
@@ -1969,7 +1967,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             Updated content list with masked items
         """
-        new_content: List[Union[dict, str]] = []
+        new_content: list[dict | str] = []
         for item in content_list:
             if isinstance(item, dict) and "text" in item:
                 new_item = item.copy()
@@ -1988,7 +1986,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _apply_masking_to_response(
         self,
-        response: Union[ModelResponse, Any],
+        response: ModelResponse | Any,
         bedrock_guardrail_response: BedrockGuardrailResponse,
     ) -> None:
         """
@@ -2013,7 +2011,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         else:
             verbose_proxy_logger.warning("Unsupported response type for masking: %s", type(response))
 
-    def _apply_masking_to_model_response(self, response: litellm.ModelResponse, masked_texts: List[str]) -> None:
+    def _apply_masking_to_model_response(self, response: litellm.ModelResponse, masked_texts: list[str]) -> None:
         """
         Apply masked texts to a ModelResponse object.
 
@@ -2268,4 +2266,4 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             raise
         except Exception as e:
             verbose_proxy_logger.error("Bedrock Guardrail: Failed to apply guardrail: %s", str(e))
-            raise Exception(f"Bedrock guardrail failed: {str(e)}")
+            raise Exception(f"Bedrock guardrail failed: {e!s}")

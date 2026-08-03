@@ -20,7 +20,6 @@ from __future__ import annotations
 import base64
 import uuid as _uuid_mod
 from dataclasses import dataclass
-from typing import Optional
 
 from litellm.types.utils import SpecialEnums
 
@@ -45,7 +44,7 @@ def encode(provider: str, unified_uuid: str, raw_provider_id: str) -> str:
     return base64.urlsafe_b64encode(plaintext.encode()).decode().rstrip("=")
 
 
-def decode(managed_id: str) -> Optional[ManagedIdPayload]:
+def decode(managed_id: str) -> ManagedIdPayload | None:
     """
     Decode *managed_id*.
 

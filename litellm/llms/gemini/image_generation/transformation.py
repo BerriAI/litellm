@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -34,7 +34,7 @@ else:
 class GoogleImageGenConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Google AI Imagen API supported parameters
         https://ai.google.dev/gemini-api/docs/imagen
@@ -63,12 +63,12 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -93,13 +93,13 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        final_api_key: Optional[str] = api_key or get_secret_str("GEMINI_API_KEY")
+        final_api_key: str | None = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
 
@@ -172,8 +172,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Google AI Imagen response to litellm ImageResponse format

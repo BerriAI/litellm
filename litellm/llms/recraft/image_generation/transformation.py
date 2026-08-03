@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -25,7 +25,7 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://external.api.recraft.ai"
     IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         https://www.recraft.ai/docs#generate-image
         """
@@ -39,8 +39,8 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         drop_params: bool,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     optional_params[k] = non_default_params[k]
                 elif drop_params:
@@ -54,12 +54,12 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -76,13 +76,13 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        final_api_key: Optional[str] = api_key or get_secret_str("RECRAFT_API_KEY")
+        final_api_key: str | None = api_key or get_secret_str("RECRAFT_API_KEY")
         if not final_api_key:
             raise ValueError("RECRAFT_API_KEY is not set")
 
@@ -121,8 +121,8 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the image generation response to the litellm image response

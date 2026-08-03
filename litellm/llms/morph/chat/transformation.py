@@ -5,8 +5,6 @@ Transform request from OpenAI format to Morph format.
 https://docs.morphllm.com/quickstart
 """
 
-from typing import Optional, Tuple
-
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
@@ -18,12 +16,12 @@ class MorphChatConfig(OpenAILikeChatConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "morph"
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         api_base = (
             api_base or get_secret_str("MORPH_API_BASE") or "https://api.morphllm.com/v1"  # default api base
         )

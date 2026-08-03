@@ -7,13 +7,14 @@ V2 is not the active logger — so a call site can wrap a request phase or seed
 identity unconditionally.
 """
 
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import cache
-from typing import Any, Callable, Iterator, Optional
+from typing import Any
 
 
 @cache
-def _otel_runtime() -> "Optional[tuple[Callable[[str], Any], Callable[..., None]]]":
+def _otel_runtime() -> "tuple[Callable[[str], Any], Callable[..., None]] | None":
     """Resolve the SDK-backed hooks once and cache the outcome, absence included.
 
     CPython never caches a failed import, so without this memoization every call

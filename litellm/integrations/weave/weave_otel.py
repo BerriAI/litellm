@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry.trace import Status, StatusCode
 from typing_extensions import override
@@ -43,7 +43,7 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
 
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: dict[str, Any]):
+    def set_messages(span: Span, kwargs: dict[str, Any]):
         """Set input messages as span attributes using OpenInference conventions."""
 
         messages = kwargs.get("messages") or []
@@ -203,8 +203,8 @@ class WeaveOtelLogger(OpenTelemetry):
 
     def __init__(
         self,
-        config: Optional[OpenTelemetryConfig] = None,
-        callback_name: Optional[str] = "weave_otel",
+        config: OpenTelemetryConfig | None = None,
+        callback_name: str | None = "weave_otel",
         **kwargs,
     ):
         """
@@ -233,7 +233,6 @@ class WeaveOtelLogger(OpenTelemetry):
         already contains all the necessary attributes, so the child span
         is redundant.
         """
-        pass
 
     def _start_primary_span(
         self,

@@ -20,7 +20,7 @@ Configuration in proxy config YAML:
         mode: post_call
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -41,7 +41,7 @@ GUARDRAIL_NAME = "tool_policy"
 
 def _get_request_object_permission_ids(
     request_data: dict,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Extract object_permission_id and team_object_permission_id from request_data."""
     if not request_data:
         return None, None
@@ -68,7 +68,7 @@ def _get_request_object_permission_ids(
     return None, None
 
 
-def _get_request_route_from_data(request_data: dict) -> Optional[str]:
+def _get_request_route_from_data(request_data: dict) -> str | None:
     """Get request route from request_data (metadata or top-level)."""
     route = request_data.get("user_api_key_request_route")
     if route:
@@ -77,12 +77,12 @@ def _get_request_route_from_data(request_data: dict) -> Optional[str]:
     return meta.get("user_api_key_request_route")
 
 
-def _resolve_tool_names_from_messages(messages: List[dict]) -> Dict[str, str]:
+def _resolve_tool_names_from_messages(messages: list[dict]) -> dict[str, str]:
     """
     Build a map of tool_call_id -> tool_name from assistant messages' tool_calls.
     Used to resolve which tool produced each tool result in the conversation.
     """
-    mapping: Dict[str, str] = {}
+    mapping: dict[str, str] = {}
     for msg in messages:
         if msg.get("role") != "assistant":
             continue
@@ -192,7 +192,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
                 messages = request_data.get("messages") or []
                 tc_id_to_name = _resolve_tool_names_from_messages(messages)
 
-                untrusted_sources: List[str] = []
+                untrusted_sources: list[str] = []
                 for msg in messages:
                     if msg.get("role") != "tool":
                         continue

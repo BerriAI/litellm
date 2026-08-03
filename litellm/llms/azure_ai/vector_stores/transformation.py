@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -53,14 +53,14 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
             }
         }
 
-    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         basic_headers = self._base_validate_azure_environment(headers, litellm_params)
         basic_headers.update({"Content-Type": "application/json"})
         return basic_headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -86,13 +86,13 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
         """
         Transform search request for Azure AI Search API
 
@@ -132,7 +132,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
             )
             query_vector = embedding_response.data[0]["embedding"]
         except Exception as e:
-            raise Exception(f"Failed to generate embedding for query: {str(e)}")
+            raise Exception(f"Failed to generate embedding for query: {e!s}")
 
         # Azure AI Search endpoint for search
         index_name = vector_store_id  # vector_store_id is the index name
@@ -187,7 +187,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
             results = response_json.get("value", [])
 
             # Transform results to standard format
-            search_results: List[VectorStoreSearchResult] = []
+            search_results: list[VectorStoreSearchResult] = []
             for result in results:
                 # Extract document ID
                 document_id = result.get("id", "")
@@ -245,7 +245,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         raise NotImplementedError
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:

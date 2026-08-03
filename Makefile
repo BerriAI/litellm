@@ -75,7 +75,7 @@ install-dev:
 bootstrap:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
-	cd ui/litellm-dashboard && npm ci --no-audit --no-fund
+	cd ui/litellm-dashboard && npm install --no-audit --no-fund
 	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
 	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
 		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
@@ -239,7 +239,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
 # check-ui-api-types.yml (API-type drift), skipping any whose files you didn't stage.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
-pre-commit:
+pre-commit: bootstrap
 	./scripts/pre_commit_lint.sh
 
 # Testing targets

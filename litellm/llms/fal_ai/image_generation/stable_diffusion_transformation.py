@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -32,12 +32,12 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request.
@@ -63,7 +63,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         complete_url = f"{complete_url}/{endpoint}"
         return complete_url
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Stable Diffusion models.
         """
@@ -97,8 +97,8 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
             "size": "image_size",
         }
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     # Use mapped parameter name if exists
                     mapped_key = param_mapping.get(k, k)
@@ -207,8 +207,8 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the Stable Diffusion response to litellm ImageResponse format.

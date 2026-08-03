@@ -86,3 +86,116 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     expect(result.match_threshold).toBe(0.72);
   });
 });
+
+const STORED_LLM = {
+  tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+  classifier_type: "llm",
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_context_window_size: 5,
+  classifier_context_per_turn_chars: 300,
+};
+
+describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
+  it("round-trips an untouched edit without changing the classifier context values", () => {
+    const formValue = {
+      tiers: STORED_LLM.tiers,
+      classifier_type: "llm" as const,
+      classifier_llm_config: STORED_LLM.classifier_llm_config,
+      classifier_context_window_size: 5,
+      classifier_context_per_turn_chars: 300,
+    };
+    const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
+
+    expect(result.classifier_context_window_size).toBe(5);
+    expect(result.classifier_context_per_turn_chars).toBe(300);
+  });
+
+  it("persists an edited classifier context window size and per-turn char limit", () => {
+    const formValue = {
+      tiers: STORED_LLM.tiers,
+      classifier_type: "llm" as const,
+      classifier_llm_config: STORED_LLM.classifier_llm_config,
+      classifier_context_window_size: 10,
+      classifier_context_per_turn_chars: 500,
+    };
+    const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
+
+    expect(result.classifier_context_window_size).toBe(10);
+    expect(result.classifier_context_per_turn_chars).toBe(500);
+  });
+
+  it("omits classifier context fields when classifier_type is heuristic even if values linger in state", () => {
+    const formValue = {
+      tiers: STORED_LLM.tiers,
+      classifier_type: "heuristic" as const,
+      classifier_context_window_size: 5,
+      classifier_context_per_turn_chars: 300,
+    };
+    const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
+
+    expect(result.classifier_context_window_size).toBeUndefined();
+    expect(result.classifier_context_per_turn_chars).toBeUndefined();
+  });
+
+  it("does not resurrect a stale stored classifier_context_window_size once the form's own value is unset", () => {
+    // classifier_context_window_size is a MANAGED key: the form's value must win over whatever
+    // is still sitting in the stored config, never fall back to it through preservedConfig.
+    const formValue = {
+      tiers: STORED_LLM.tiers,
+      classifier_type: "llm" as const,
+      classifier_llm_config: STORED_LLM.classifier_llm_config,
+    };
+    const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
+
+    expect(result.classifier_context_window_size).toBeUndefined();
+    expect(result.classifier_context_per_turn_chars).toBeUndefined();
+  });
+});
+
+const STORED_ASSISTANT_CTX = {
+  tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+  classifier_type: "llm",
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_context_include_assistant_turns: true,
+};
+
+describe("buildUpdatedComplexityRouterConfig assistant turns", () => {
+  const formBase = {
+    tiers: STORED_ASSISTANT_CTX.tiers,
+    classifier_type: "llm" as const,
+    classifier_llm_config: STORED_ASSISTANT_CTX.classifier_llm_config,
+  };
+
+  it("round-trips an untouched edit without changing the value", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_ASSISTANT_CTX, {
+      ...formBase,
+      classifier_context_include_assistant_turns: true,
+    });
+    expect(result.classifier_context_include_assistant_turns).toBe(true);
+  });
+
+  it("persists turning assistant turns back off", () => {
+    // The off case is the one a preserved-config fallback would silently lose, since false and
+    // "absent" look alike to a truthiness check.
+    const result = buildUpdatedComplexityRouterConfig(STORED_ASSISTANT_CTX, {
+      ...formBase,
+      classifier_context_include_assistant_turns: false,
+    });
+    expect(result.classifier_context_include_assistant_turns).toBe(false);
+  });
+
+  it("omits it when classifier_type is heuristic even if a value lingers in state", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_ASSISTANT_CTX, {
+      tiers: STORED_ASSISTANT_CTX.tiers,
+      classifier_type: "heuristic" as const,
+      classifier_context_include_assistant_turns: true,
+    });
+    expect(result.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+
+  it("does not resurrect a stale stored value once the form's own value is unset", () => {
+    // A MANAGED key: the form wins over the stored config, never falls back to it.
+    const result = buildUpdatedComplexityRouterConfig(STORED_ASSISTANT_CTX, formBase);
+    expect(result.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+});

@@ -7,7 +7,7 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -41,10 +41,10 @@ else:
 
 
 def _build_vertex_video_usage_from_request_data(
-    request_data: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    request_data: dict[str, Any] | None,
+) -> dict[str, Any]:
     """Build usage metadata (duration, resolution) for video cost calculation."""
-    usage_data: Dict[str, Any] = {}
+    usage_data: dict[str, Any] = {}
     if not request_data:
         return usage_data
 
@@ -61,7 +61,7 @@ def _build_vertex_video_usage_from_request_data(
     return usage_data
 
 
-def _convert_image_to_vertex_format(image_file) -> Dict[str, str]:
+def _convert_image_to_vertex_format(image_file) -> dict[str, str]:
     """
     Convert image file to Vertex AI format with base64 encoding and MIME type.
 
@@ -96,7 +96,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         VertexBase.__init__(self)
 
     @staticmethod
-    def extract_model_from_operation_name(operation_name: str) -> Optional[str]:
+    def extract_model_from_operation_name(operation_name: str) -> str | None:
         """
         Extract the model name from a Vertex AI operation name.
 
@@ -125,7 +125,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Map OpenAI-style parameters to Veo format.
 
@@ -135,7 +135,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         - size → aspectRatio (e.g., "1280x720" → "16:9")
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
         """
-        mapped_params: Dict[str, Any] = {}
+        mapped_params: dict[str, Any] = {}
 
         # Map input_reference to image (will be processed in transform_video_create_request)
         if "input_reference" in video_create_optional_params:
@@ -168,7 +168,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
         return mapped_params
 
-    def _convert_size_to_aspect_ratio(self, size: str) -> Optional[str]:
+    def _convert_size_to_aspect_ratio(self, size: str) -> str | None:
         """
         Convert OpenAI size format to Veo aspectRatio format.
 
@@ -190,8 +190,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[Union[GenericLiteLLMParams, dict]] = None,
+        api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | dict | None = None,
     ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
@@ -201,7 +201,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
         # Ensure litellm_params is a dict for type checking
-        params_dict: Dict[str, Any] = cast(Dict[str, Any], litellm_params) if litellm_params is not None else {}
+        params_dict: dict[str, Any] = cast(dict[str, Any], litellm_params) if litellm_params is not None else {}
 
         vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=params_dict)
         vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=params_dict)
@@ -223,7 +223,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -264,10 +264,10 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: Dict,
+        video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles, str]:
+    ) -> tuple[dict, RequestFiles, str]:
         """
         Transform the video creation request for Veo API.
 
@@ -289,7 +289,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         }
         """
         # Build instance with prompt
-        instance_dict: Dict[str, Any] = {"prompt": prompt}
+        instance_dict: dict[str, Any] = {"prompt": prompt}
         params_copy = video_create_optional_request_params.copy()
 
         # Check if user wants to provide full instance dict
@@ -324,13 +324,13 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         #   {"parameters": {"parameters": {...}}}  ← wrong
         #   {"parameters": {...}}                  ← correct
         nested_params = params_copy.pop("parameters", None)
-        vertex_params: Dict[str, Any] = {}
+        vertex_params: dict[str, Any] = {}
         if isinstance(nested_params, dict):
             vertex_params.update(nested_params)
         vertex_params.update(params_copy)
 
         # Build request data directly (TypedDict doesn't have model_dump)
-        request_data: Dict[str, Any] = {"instances": [instance_dict]}
+        request_data: dict[str, Any] = {"instances": [instance_dict]}
 
         # Only add parameters if there are any
         if vertex_params:
@@ -347,8 +347,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict] = None,
+        custom_llm_provider: str | None = None,
+        request_data: dict | None = None,
     ) -> VideoObject:
         """
         Transform the Veo video creation response.
@@ -385,7 +385,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the video status retrieve request for Veo API.
 
@@ -414,7 +414,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> VideoObject:
         """
         Transform the Veo operation status response.
@@ -488,8 +488,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        variant: Optional[str] = None,
-    ) -> Tuple[str, Dict]:
+        variant: str | None = None,
+    ) -> tuple[str, dict]:
         """
         Transform the video content request for Veo API.
 
@@ -548,8 +548,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """
         Video remix is not supported by Veo API.
         """
@@ -561,7 +561,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> VideoObject:
         """Video remix is not supported."""
         raise NotImplementedError("Video remix is not supported by Vertex AI Veo.")
@@ -571,11 +571,11 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_query: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """
         Video list is not supported by Veo API.
         """
@@ -588,8 +588,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-    ) -> Dict[str, str]:
+        custom_llm_provider: str | None = None,
+    ) -> dict[str, str]:
         """Video list is not supported."""
         raise NotImplementedError("Video list is not supported by Vertex AI Veo.")
 
@@ -599,7 +599,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Video delete is not supported by Veo API.
         """
@@ -633,7 +633,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """Return the fetchPredictOperation URL and body needed to retrieve the source video."""
         return self.transform_video_status_retrieve_request(
             video_id=video_id,
@@ -649,9 +649,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-        prefetched_source_data: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+        prefetched_source_data: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """
         Build a predictLongRunning edit request from the pre-fetched source video.
 
@@ -672,7 +672,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             raise ValueError("No videos found in the completed operation. Cannot edit.")
 
         source_video = videos[0]
-        video_input: Dict[str, Any] = {}
+        video_input: dict[str, Any] = {}
         if "gcsUri" in source_video:
             video_input["gcsUri"] = source_video["gcsUri"]
         elif "bytesBase64Encoded" in source_video:
@@ -684,13 +684,13 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         operation_name = extract_original_video_id(video_id)
         model = self.extract_model_from_operation_name(operation_name) or ""
 
-        instance_dict: Dict[str, Any] = {"prompt": prompt, "video": video_input}
-        request_data: Dict[str, Any] = {"instances": [instance_dict]}
+        instance_dict: dict[str, Any] = {"prompt": prompt, "video": video_input}
+        request_data: dict[str, Any] = {"instances": [instance_dict]}
 
         if extra_body:
             extra_body_copy = dict(extra_body)
             nested_params = extra_body_copy.pop("parameters", None)
-            vertex_params: Dict[str, Any] = {}
+            vertex_params: dict[str, Any] = {}
             if isinstance(nested_params, dict):
                 vertex_params.update(nested_params)
             vertex_params.update(extra_body_copy)
@@ -704,8 +704,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict] = None,
+        custom_llm_provider: str | None = None,
+        request_data: dict | None = None,
     ) -> VideoObject:
         """
         Transform the Veo video edit response.
@@ -753,9 +753,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     def transform_video_extension_response(self, raw_response, logging_obj, custom_llm_provider=None):
         raise NotImplementedError("video extension is not supported for Vertex AI")
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
         return VertexAIError(

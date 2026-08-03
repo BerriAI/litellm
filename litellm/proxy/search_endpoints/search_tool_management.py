@@ -3,7 +3,7 @@ CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -29,7 +29,7 @@ router = APIRouter()
 SEARCH_TOOL_REGISTRY = SearchToolRegistry()
 
 
-def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, None]:
+def _convert_datetime_to_str(value: datetime | str | None) -> str | None:
     """
     Convert datetime object to ISO format string.
 
@@ -47,9 +47,9 @@ def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, No
 
 
 async def _filter_visible_search_tools(
-    search_tools: List[SearchToolInfoResponse],
+    search_tools: list[SearchToolInfoResponse],
     user_api_key_dict: UserAPIKeyAuth,
-) -> List[SearchToolInfoResponse]:
+) -> list[SearchToolInfoResponse]:
     """
     Drop search tools the caller is not authorized to invoke, applying the same
     key/team object_permission allowlists enforced on /search. Admins see all tools.
@@ -70,7 +70,7 @@ async def _filter_visible_search_tools(
         user_api_key_cache,
     )
 
-    team_object: Optional[LiteLLM_TeamTable] = None
+    team_object: LiteLLM_TeamTable | None = None
     if user_api_key_dict.team_id:
         team_object = await get_team_object(
             team_id=user_api_key_dict.team_id,
@@ -80,7 +80,7 @@ async def _filter_visible_search_tools(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    visible: List[SearchToolInfoResponse] = []
+    visible: list[SearchToolInfoResponse] = []
     for tool in search_tools:
         tool_name = tool.get("search_tool_name")
         if tool_name and await can_user_view_search_tool(
@@ -151,7 +151,7 @@ async def list_search_tools(
 
         db_tool_names = {tool.get("search_tool_name") for tool in search_tools_from_db}
 
-        search_tool_configs: List[SearchToolInfoResponse] = []
+        search_tool_configs: list[SearchToolInfoResponse] = []
 
         config_search_tools = []
 
@@ -503,7 +503,7 @@ async def get_search_tool_info(search_tool_id: str):
 
 
 class TestSearchToolConnectionRequest(BaseModel):
-    litellm_params: Dict[str, Any]
+    litellm_params: dict[str, Any]
 
 
 @router.post(

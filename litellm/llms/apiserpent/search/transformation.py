@@ -8,7 +8,7 @@ Two endpoints under one provider, selected via the ``deep`` boolean param:
 APISerpent API Reference: https://apiserpent.com/docs
 """
 
-from typing import Dict, List, Literal, Optional, Union, cast
+from typing import Literal, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -48,11 +48,11 @@ class APISerpentSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         api_key = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
@@ -68,9 +68,9 @@ class APISerpentSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -93,10 +93,10 @@ class APISerpentSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform a unified search request into APISerpent query params.
 
@@ -114,7 +114,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
 
         is_deep = self._is_deep_search(optional_params)
 
-        overrides: Dict = {}
+        overrides: dict = {}
         if "max_results" in optional_params:
             num_min = NUM_MIN_DEEP if is_deep else NUM_MIN
             overrides["num"] = max(num_min, min(optional_params["max_results"], NUM_MAX))
@@ -135,14 +135,14 @@ class APISerpentSearchConfig(BaseSearchConfig):
         return {APISERPENT_PARAMS_KEY: params}
 
     @staticmethod
-    def _append_domain_filters(query: str, domains: List[str]) -> str:
+    def _append_domain_filters(query: str, domains: list[str]) -> str:
         domain_clauses = " OR ".join(f"site:{domain}" for domain in domains)
         return f"({query}) ({domain_clauses})"
 
     def transform_search_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Optional[LiteLLMLoggingObj],
+        logging_obj: LiteLLMLoggingObj | None,
         **kwargs,
     ) -> SearchResponse:
         """
@@ -156,7 +156,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         raw_results = response_json.get("results") or {}
         organic = raw_results.get("organic", []) if isinstance(raw_results, dict) else raw_results
 
-        results: List[SearchResult] = []
+        results: list[SearchResult] = []
         for result in organic:
             results.append(
                 SearchResult(

@@ -8,7 +8,7 @@ and injection into the system prompt for non-Anthropic models.
 import posixpath
 import zipfile
 from io import BytesIO
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import LiteLLM_SkillsTable
@@ -25,7 +25,7 @@ class SkillPromptInjectionHandler:
     - Create execute_code tool definition
     """
 
-    def extract_skill_content(self, skill: LiteLLM_SkillsTable) -> Optional[str]:
+    def extract_skill_content(self, skill: LiteLLM_SkillsTable) -> str | None:
         """
         Extract skill content from the stored zip file.
 
@@ -71,7 +71,7 @@ class SkillPromptInjectionHandler:
 
         return skill.instructions
 
-    def extract_all_files(self, skill: LiteLLM_SkillsTable) -> Dict[str, bytes]:
+    def extract_all_files(self, skill: LiteLLM_SkillsTable) -> dict[str, bytes]:
         """
         Extract ALL files from skill ZIP for code execution.
 
@@ -84,7 +84,7 @@ class SkillPromptInjectionHandler:
         Returns:
             Dict mapping file paths to binary content
         """
-        files: Dict[str, bytes] = {}
+        files: dict[str, bytes] = {}
 
         if not skill.file_content:
             return files
@@ -124,7 +124,7 @@ class SkillPromptInjectionHandler:
         return files
 
     def inject_skill_content_to_messages(
-        self, data: dict, skill_contents: List[str], use_anthropic_format: bool = False
+        self, data: dict, skill_contents: list[str], use_anthropic_format: bool = False
     ) -> dict:
         """
         Inject skill content into the system prompt.
@@ -181,7 +181,7 @@ class SkillPromptInjectionHandler:
         data["messages"] = messages
         return data
 
-    def create_execute_code_tool(self, skill_modules: List[str]) -> Dict[str, Any]:
+    def create_execute_code_tool(self, skill_modules: list[str]) -> dict[str, Any]:
         """
         Create the execute_code tool definition.
 
@@ -224,7 +224,7 @@ class SkillPromptInjectionHandler:
             },
         }
 
-    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> Dict[str, Any]:
+    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
         """
         Convert a LiteLLM skill to an OpenAI-style tool.
 
@@ -248,7 +248,7 @@ class SkillPromptInjectionHandler:
         if len(description) > max_desc_length:
             description = description[: max_desc_length - 3] + "..."
 
-        tool: Dict[str, Any] = {
+        tool: dict[str, Any] = {
             "type": "function",
             "function": {
                 "name": func_name,
@@ -269,7 +269,7 @@ class SkillPromptInjectionHandler:
 
         return tool
 
-    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> Dict[str, Any]:
+    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
         """
         Convert a LiteLLM skill to an Anthropic-style tool (messages API format).
 
@@ -287,7 +287,7 @@ class SkillPromptInjectionHandler:
         if len(description) > max_desc_length:
             description = description[: max_desc_length - 3] + "..."
 
-        input_schema: Dict[str, Any] = {
+        input_schema: dict[str, Any] = {
             "type": "object",
             "properties": {},
             "required": [],

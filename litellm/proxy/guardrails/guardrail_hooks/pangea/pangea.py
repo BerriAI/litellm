@@ -1,6 +1,6 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import HTTPException
 
@@ -33,8 +33,6 @@ if TYPE_CHECKING:
 class PangeaGuardrailMissingSecrets(Exception):
     """Custom exception for missing Pangea secrets."""
 
-    pass
-
 
 class _TextCompletionRequest:
     def __init__(self, body):
@@ -61,10 +59,10 @@ class PangeaHandler(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str,
-        pangea_input_recipe: Optional[str] = None,
-        pangea_output_recipe: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        pangea_input_recipe: str | None = None,
+        pangea_output_recipe: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
     ):
         """
@@ -229,7 +227,7 @@ class PangeaHandler(CustomGuardrail):
             messages = data.get("messages")
             if messages is None:
                 return  # No messages to check
-            input_messages = cast(List[Dict[Any, Any]], messages)
+            input_messages = cast(list[dict[Any, Any]], messages)
         else:
             return
 
@@ -306,7 +304,7 @@ class PangeaHandler(CustomGuardrail):
             ) from e
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.pangea import (
             PangeaGuardrailConfigModel,
         )
@@ -314,7 +312,7 @@ class PangeaHandler(CustomGuardrail):
         return PangeaGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,

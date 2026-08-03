@@ -19,7 +19,7 @@
 """Transform LiteLLM data to CloudZero AnyCost CBF format."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import polars as pl
 
@@ -187,7 +187,7 @@ class CBFTransformer:
 
         return CBFRecord(cbf_record)
 
-    def _parse_date(self, date_str) -> Optional[datetime]:
+    def _parse_date(self, date_str) -> datetime | None:
         """Parse date string from daily spend tables (e.g., '2025-04-19')."""
         if date_str is None:
             return None

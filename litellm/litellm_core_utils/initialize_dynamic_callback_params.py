@@ -1,4 +1,5 @@
-from typing import Any, Dict, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any
 
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -85,7 +86,7 @@ _request_blocked_callback_params = {
 
 
 def initialize_standard_callback_dynamic_params(
-    kwargs: Optional[Dict] = None,
+    kwargs: dict | None = None,
 ) -> StandardCallbackDynamicParams:
     """
     Initialize the standard callback dynamic params from the kwargs

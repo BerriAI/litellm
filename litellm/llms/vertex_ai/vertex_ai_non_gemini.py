@@ -1,7 +1,8 @@
 import json
 import os
 import time
-from typing import Any, Callable, Optional, cast
+from collections.abc import Callable
+from typing import Any, cast
 
 import httpx
 
@@ -54,7 +55,7 @@ class TextStreamer:
             raise StopAsyncIteration  # once we run out of data to stream, we raise this error
 
 
-def _get_client_cache_key(model: str, vertex_project: Optional[str], vertex_location: Optional[str]):
+def _get_client_cache_key(model: str, vertex_project: str | None, vertex_location: str | None):
     _cache_key = f"{model}-{vertex_project}-{vertex_location}"
     return _cache_key
 

@@ -45,7 +45,7 @@ class OpenMeterLogger(CustomLogger):
             missing_keys.append("OPENMETER_API_KEY")
 
         if len(missing_keys) > 0:
-            raise Exception("Missing keys={} in environment.".format(missing_keys))
+            raise Exception(f"Missing keys={missing_keys} in environment.")
 
     def _common_logic(self, kwargs: dict, response_obj):
         call_id = response_obj.get("id", kwargs.get("litellm_call_id"))
@@ -107,7 +107,7 @@ class OpenMeterLogger(CustomLogger):
         _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
         _headers = {
             "Content-Type": "application/cloudevents+json",
-            "Authorization": "Bearer {}".format(api_key),
+            "Authorization": f"Bearer {api_key}",
         }
 
         try:
@@ -133,7 +133,7 @@ class OpenMeterLogger(CustomLogger):
         _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
         _headers = {
             "Content-Type": "application/cloudevents+json",
-            "Authorization": "Bearer {}".format(api_key),
+            "Authorization": f"Bearer {api_key}",
         }
 
         try:

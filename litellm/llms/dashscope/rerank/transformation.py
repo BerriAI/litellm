@@ -22,7 +22,7 @@ as supported only for gte-rerank-v2 / qwen3-vl-rerank.
 Docs - https://help.aliyun.com/zh/model-studio/text-rerank-api
 """
 
-from typing import Any, Dict, List, Union
+from typing import Any
 
 import httpx
 
@@ -109,15 +109,15 @@ class DashScopeRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         # qwen3-rerank accepts query/documents/top_n/return_documents. The
         # rest (rank_fields, max_*_per_doc) are silently dropped.
         params: OptionalRerankParams = OptionalRerankParams(
@@ -133,7 +133,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -142,7 +142,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for DashScope rerank")
 
-        request: Dict[str, Any] = {
+        request: dict[str, Any] = {
             "model": model,
             "query": optional_rerank_params["query"],
             "documents": optional_rerank_params["documents"],
@@ -201,9 +201,9 @@ class DashScopeRerankConfig(BaseRerankConfig):
         # plus, when return_documents=true was sent:
         #   "document": {"text": "..."}
         # which already matches LiteLLM's RerankResponseDocument shape.
-        transformed_results: List[dict] = []
+        transformed_results: list[dict] = []
         for r in results:
-            item: Dict[str, Any] = {
+            item: dict[str, Any] = {
                 "index": r["index"],
                 "relevance_score": r["relevance_score"],
             }
@@ -231,7 +231,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         if isinstance(headers, dict):
             headers = httpx.Headers(headers)

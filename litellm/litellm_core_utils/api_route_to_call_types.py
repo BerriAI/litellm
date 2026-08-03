@@ -8,8 +8,6 @@ Route patterns may contain placeholders like {agent_id}, {model}, {batch_id}; th
 match a single path segment when resolving call types for a concrete path.
 """
 
-from typing import List, Optional
-
 from litellm.types.utils import API_ROUTE_TO_CALL_TYPES, CallTypes
 
 
@@ -30,7 +28,7 @@ def _route_matches_pattern(route: str, pattern: str) -> bool:
     return True
 
 
-def get_call_types_for_route(route: str) -> Optional[List[CallTypes]]:
+def get_call_types_for_route(route: str) -> list[CallTypes] | None:
     """
     Get the list of CallTypes for a given API route.
 

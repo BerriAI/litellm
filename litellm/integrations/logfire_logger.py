@@ -3,19 +3,19 @@
 
 import os
 import traceback
-from litellm._uuid import uuid
 from enum import Enum
-from typing import Any, Dict, NamedTuple
+from typing import Any, NamedTuple
 
 from typing_extensions import LiteralString
 
 from litellm._logging import print_verbose, verbose_logger
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 
 class SpanConfig(NamedTuple):
     message_template: LiteralString
-    span_data: Dict[str, Any]
+    span_data: dict[str, Any]
 
 
 class LogfireLevel(str, Enum):
@@ -35,7 +35,7 @@ class LogfireLogger:
             if logfire.DEFAULT_LOGFIRE_INSTANCE.config.send_to_logfire:
                 logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
         except Exception as e:
-            print_verbose(f"Got exception on init logfire client {str(e)}")
+            print_verbose(f"Got exception on init logfire client {e!s}")
             raise e
 
     def _get_span_config(self, payload) -> SpanConfig:
@@ -159,5 +159,4 @@ class LogfireLogger:
 
             print_verbose(f"Logfire Layer Logging - final response object: {response_obj}")
         except Exception as e:
-            verbose_logger.debug(f"Logfire Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
+            verbose_logger.debug(f"Logfire Layer Error - {e!s}\n{traceback.format_exc()}")

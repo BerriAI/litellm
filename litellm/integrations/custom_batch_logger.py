@@ -6,7 +6,6 @@ Use this if you want your logs to be stored in memory and flushed periodically.
 
 import asyncio
 import time
-from typing import List, Optional
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,10 +24,10 @@ class CustomBatchLogger(CustomLogger):
 
     def __init__(
         self,
-        flush_lock: Optional[asyncio.Lock] = None,
-        batch_size: Optional[int] = None,
-        flush_interval: Optional[int] = None,
-        max_queue_size: Optional[int] = None,
+        flush_lock: asyncio.Lock | None = None,
+        batch_size: int | None = None,
+        flush_interval: int | None = None,
+        max_queue_size: int | None = None,
         **kwargs,
     ) -> None:
         """
@@ -36,7 +35,7 @@ class CustomBatchLogger(CustomLogger):
             flush_lock (Optional[asyncio.Lock], optional): Lock to use when flushing the queue. Defaults to None. Only used for custom loggers that do batching
             max_queue_size (Optional[int], optional): Maximum number of events to retain in ``log_queue``. When the limit is exceeded (e.g. because the send destination is unreachable and events are preserved for retry), the oldest events are dropped. Defaults to ``DEFAULT_MAX_QUEUE_SIZE``.
         """
-        self.log_queue: List = []
+        self.log_queue: list = []
         self.flush_interval = flush_interval or litellm.DEFAULT_FLUSH_INTERVAL_SECONDS
         self.batch_size: int = batch_size or litellm.DEFAULT_BATCH_SIZE
         self.last_flush_time = time.time()

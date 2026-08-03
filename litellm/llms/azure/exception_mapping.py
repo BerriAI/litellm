@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from litellm.exceptions import ContentPolicyViolationError
 
@@ -27,7 +27,7 @@ class AzureOpenAIExceptionMapping:
 
         # Keep the OpenAI-style body fields populated so downstream (proxy + SDK)
         # can surface `type` / `code` correctly.
-        openai_style_body: Dict[str, Any] = {
+        openai_style_body: dict[str, Any] = {
             "message": provider_message,
             "type": provider_type or "invalid_request_error",
             "code": provider_code or "content_policy_violation",
@@ -54,7 +54,7 @@ class AzureOpenAIExceptionMapping:
     @staticmethod
     def _extract_azure_error(
         original_exception: Exception,
-    ) -> Tuple[Dict[str, Any], Optional[dict]]:
+    ) -> tuple[dict[str, Any], dict | None]:
         """Extract Azure OpenAI error payload and inner error details.
 
         Azure error formats can vary by endpoint/version. Common shapes:
@@ -67,7 +67,7 @@ class AzureOpenAIExceptionMapping:
             return {}, None
 
         # Some SDKs place the payload under "error".
-        azure_error: Dict[str, Any]
+        azure_error: dict[str, Any]
         if isinstance(body_dict.get("error"), dict):
             azure_error = body_dict.get("error", {})  # type: ignore[assignment]
         else:

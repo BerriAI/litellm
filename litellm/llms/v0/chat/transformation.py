@@ -2,8 +2,6 @@
 Translate from OpenAI's `/v1/chat/completions` to v0's `/v1/chat/completions`
 """
 
-from typing import Optional, Tuple
-
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
@@ -15,12 +13,12 @@ class V0ChatConfig(OpenAILikeChatConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "v0"
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         # v0 is openai compatible, we just need to set the api_base
         api_base = (
             api_base or get_secret_str("V0_API_BASE") or "https://api.v0.dev/v1"  # Default v0 API base URL

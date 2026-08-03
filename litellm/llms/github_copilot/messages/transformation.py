@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -26,7 +26,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self.authenticator = Authenticator()
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "github_copilot"
 
     def handles_web_search_natively(self) -> bool:
@@ -54,9 +54,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         """
         Validate environment for GitHub Copilot and add Copilot-specific headers.
 
@@ -99,12 +99,12 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Return the complete URL for GitHub Copilot /v1/messages endpoint.

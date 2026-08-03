@@ -1,6 +1,7 @@
 import json
 import time
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -26,7 +27,7 @@ class CohereError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[httpx.Headers] = None,
+        headers: httpx.Headers | None = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -65,47 +66,47 @@ class CohereChatConfig(BaseConfig):
         seed (int, optional): A seed to assist reproducibility of the model's response.
     """
 
-    preamble: Optional[str] = None
-    chat_history: Optional[list] = None
-    generation_id: Optional[str] = None
-    response_id: Optional[str] = None
-    conversation_id: Optional[str] = None
-    prompt_truncation: Optional[str] = None
-    connectors: Optional[list] = None
-    search_queries_only: Optional[bool] = None
-    documents: Optional[list] = None
-    temperature: Optional[int] = None
-    max_tokens: Optional[int] = None
-    max_completion_tokens: Optional[int] = None
-    k: Optional[int] = None
-    p: Optional[int] = None
-    frequency_penalty: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    tools: Optional[list] = None
-    tool_results: Optional[list] = None
-    seed: Optional[int] = None
+    preamble: str | None = None
+    chat_history: list | None = None
+    generation_id: str | None = None
+    response_id: str | None = None
+    conversation_id: str | None = None
+    prompt_truncation: str | None = None
+    connectors: list | None = None
+    search_queries_only: bool | None = None
+    documents: list | None = None
+    temperature: int | None = None
+    max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    k: int | None = None
+    p: int | None = None
+    frequency_penalty: int | None = None
+    presence_penalty: int | None = None
+    tools: list | None = None
+    tool_results: list | None = None
+    seed: int | None = None
 
     def __init__(
         self,
-        preamble: Optional[str] = None,
-        chat_history: Optional[list] = None,
-        generation_id: Optional[str] = None,
-        response_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        prompt_truncation: Optional[str] = None,
-        connectors: Optional[list] = None,
-        search_queries_only: Optional[bool] = None,
-        documents: Optional[list] = None,
-        temperature: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        max_completion_tokens: Optional[int] = None,
-        k: Optional[int] = None,
-        p: Optional[int] = None,
-        frequency_penalty: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        tools: Optional[list] = None,
-        tool_results: Optional[list] = None,
-        seed: Optional[int] = None,
+        preamble: str | None = None,
+        chat_history: list | None = None,
+        generation_id: str | None = None,
+        response_id: str | None = None,
+        conversation_id: str | None = None,
+        prompt_truncation: str | None = None,
+        connectors: list | None = None,
+        search_queries_only: bool | None = None,
+        documents: list | None = None,
+        temperature: int | None = None,
+        max_tokens: int | None = None,
+        max_completion_tokens: int | None = None,
+        k: int | None = None,
+        p: int | None = None,
+        frequency_penalty: int | None = None,
+        presence_penalty: int | None = None,
+        tools: list | None = None,
+        tool_results: list | None = None,
+        seed: int | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -116,11 +117,11 @@ class CohereChatConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return cohere_validate_environment(
             headers=headers,
@@ -130,7 +131,7 @@ class CohereChatConfig(BaseConfig):
             api_key=api_key,
         )
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "temperature",
@@ -182,7 +183,7 @@ class CohereChatConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -221,12 +222,12 @@ class CohereChatConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
             raw_response_json = raw_response.json()
@@ -280,7 +281,7 @@ class CohereChatConfig(BaseConfig):
 
     def _construct_cohere_tool(
         self,
-        tools: Optional[list] = None,
+        tools: list | None = None,
     ):
         if tools is None:
             tools = []
@@ -349,9 +350,9 @@ class CohereChatConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         return CohereModelResponseIterator(
             streaming_response=streaming_response,
@@ -359,7 +360,5 @@ class CohereChatConfig(BaseConfig):
             json_mode=json_mode,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CohereError(status_code=status_code, message=error_message)

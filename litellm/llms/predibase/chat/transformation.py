@@ -1,6 +1,6 @@
 import os
 import time
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
 
 from httpx import Headers, Response
 
@@ -30,39 +30,39 @@ class PredibaseConfig(BaseConfig):
     Reference:  https://docs.predibase.com/user-guide/inference/rest_api
     """
 
-    adapter_id: Optional[str] = None
-    adapter_source: Optional[Literal["pbase", "hub", "s3"]] = None
-    best_of: Optional[int] = None
-    decoder_input_details: Optional[bool] = None
+    adapter_id: str | None = None
+    adapter_source: Literal["pbase", "hub", "s3"] | None = None
+    best_of: int | None = None
+    decoder_input_details: bool | None = None
     details: bool = True  # enables returning logprobs + best of
     max_new_tokens: int = DEFAULT_MAX_TOKENS  # openai default - requests hang if max_new_tokens not given
-    repetition_penalty: Optional[float] = None
-    return_full_text: Optional[bool] = False  # by default don't return the input as part of the output
-    seed: Optional[int] = None
-    stop: Optional[List[str]] = None
-    temperature: Optional[float] = None
-    top_k: Optional[int] = None
-    top_p: Optional[int] = None
-    truncate: Optional[int] = None
-    typical_p: Optional[float] = None
-    watermark: Optional[bool] = None
+    repetition_penalty: float | None = None
+    return_full_text: bool | None = False  # by default don't return the input as part of the output
+    seed: int | None = None
+    stop: list[str] | None = None
+    temperature: float | None = None
+    top_k: int | None = None
+    top_p: int | None = None
+    truncate: int | None = None
+    typical_p: float | None = None
+    watermark: bool | None = None
 
     def __init__(
         self,
-        best_of: Optional[int] = None,
-        decoder_input_details: Optional[bool] = None,
-        details: Optional[bool] = None,
-        max_new_tokens: Optional[int] = None,
-        repetition_penalty: Optional[float] = None,
-        return_full_text: Optional[bool] = None,
-        seed: Optional[int] = None,
-        stop: Optional[List[str]] = None,
-        temperature: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[int] = None,
-        truncate: Optional[int] = None,
-        typical_p: Optional[float] = None,
-        watermark: Optional[bool] = None,
+        best_of: int | None = None,
+        decoder_input_details: bool | None = None,
+        details: bool | None = None,
+        max_new_tokens: int | None = None,
+        repetition_penalty: float | None = None,
+        return_full_text: bool | None = None,
+        seed: int | None = None,
+        stop: list[str] | None = None,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_p: int | None = None,
+        truncate: int | None = None,
+        typical_p: float | None = None,
+        watermark: bool | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -130,12 +130,12 @@ class PredibaseConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         logging_obj.post_call(
             input=messages,
@@ -253,7 +253,7 @@ class PredibaseConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -305,12 +305,12 @@ class PredibaseConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         tenant_id = litellm_params.get("predibase_tenant_id") or litellm_params.get("tenant_id")
         if tenant_id is None:
@@ -332,18 +332,18 @@ class PredibaseConfig(BaseConfig):
             completion_url += "/generate"
         return completion_url
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return PredibaseError(status_code=status_code, message=error_message, headers=headers)
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             raise ValueError(
@@ -352,7 +352,7 @@ class PredibaseConfig(BaseConfig):
 
         default_headers = {
             "content-type": "application/json",
-            "Authorization": "Bearer {}".format(api_key),
+            "Authorization": f"Bearer {api_key}",
         }
         if headers is not None and isinstance(headers, dict):
             headers = {**default_headers, **headers}

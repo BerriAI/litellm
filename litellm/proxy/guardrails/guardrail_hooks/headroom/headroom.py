@@ -4,17 +4,14 @@ import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeGuard
 
 import httpx
-from collections.abc import Mapping, Sequence
 from fastapi import HTTPException
+from httpx import Response as HttpxResponse
 
 import litellm
-from httpx import Response as HttpxResponse
-from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
-from typing_extensions import TypeGuard
-
 from litellm._logging import verbose_proxy_logger
 from litellm.compression.compress import get_protected_indices
 from litellm.integrations.custom_guardrail import (
@@ -37,6 +34,7 @@ from litellm.proxy.guardrails.guardrail_hooks.content_text import (
     is_all_text_parts,
     merge_rewritten_text_parts,
 )
+from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
@@ -192,7 +190,7 @@ def _build_headroom_retrieve_tool() -> dict[str, object]:
     }
 
 
-def _resolve_call_id(logging_obj: object, request_state: dict[str, object]) -> Optional[str]:
+def _resolve_call_id(logging_obj: object, request_state: dict[str, object]) -> str | None:
     """Resolve the litellm_call_id shared by a request's pre-call hook and its
     agentic-loop hooks, so CCR hash validation can be scoped per call instead
     of trusting any hash-shaped string that shows up in message text."""
@@ -303,7 +301,7 @@ def _build_responses_followup_items(
     model wrote alongside the tool call is preserved.
     """
     text = assistant_text_from_response(response)
-    items: List[dict[str, object]] = [{"role": "assistant", "content": text}] if text else []
+    items: list[dict[str, object]] = [{"role": "assistant", "content": text}] if text else []
     for tool_call, content in retrieved:
         call_id = tool_call.get("id")
         items.append(
@@ -322,7 +320,7 @@ class HeadroomGuardrail(CustomGuardrail):
     records_own_guardrail_information: ClassVar[bool] = True
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -698,7 +696,7 @@ class HeadroomGuardrail(CustomGuardrail):
         response: Any,
         model: str,
         messages: list[dict],
-        tools: Optional[list[dict]],
+        tools: list[dict] | None,
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict,
@@ -765,7 +763,7 @@ class HeadroomGuardrail(CustomGuardrail):
             ]
             follow_up_messages = list(messages) + [assistant_message] + tool_results
 
-        max_tokens: Optional[int] = anthropic_messages_optional_request_params.get("max_tokens") or kwargs.get(
+        max_tokens: int | None = anthropic_messages_optional_request_params.get("max_tokens") or kwargs.get(
             "max_tokens"
         )
         optional_params_without_max_tokens = {

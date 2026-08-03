@@ -28,9 +28,10 @@ os.environ["TIKTOKEN_CACHE_DIR"] = (
     cache_dir  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 )
 
-import tiktoken
-import time
 import random
+import time
+
+import tiktoken
 
 # Retry logic to handle race conditions when multiple processes try to create
 # the tiktoken cache file simultaneously (common in parallel test execution on Windows)

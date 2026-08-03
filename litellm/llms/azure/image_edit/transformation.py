@@ -1,4 +1,4 @@
-from typing import Optional, cast
+from typing import cast
 
 import httpx
 
@@ -28,9 +28,9 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure environment and set up authentication headers.
@@ -70,7 +70,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -99,7 +99,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         # Mirrors the fallback chain used by the Azure chat path in common_utils.py,
         # so callers that set a global / env api_version don't get an unversioned URL.
         api_version = (
-            cast(Optional[str], litellm_params.get("api_version"))
+            cast(str | None, litellm_params.get("api_version"))
             or litellm.api_version
             or get_secret_str("AZURE_API_VERSION")
             or litellm.AZURE_DEFAULT_API_VERSION

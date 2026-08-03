@@ -5,8 +5,9 @@ import os
 import secrets
 import time
 import traceback
+from collections.abc import Iterable
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, Literal, Optional, TypedDict, Union, cast
+from typing import Any, Literal, TypedDict, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -236,7 +237,7 @@ async def health_services_endpoint(
             )
             return {
                 "status": "success",
-                "message": "Mock LLM request made - check {}.".format(service),
+                "message": f"Mock LLM request made - check {service}.",
             }
         elif service == "datadog":
             from litellm.integrations.datadog.datadog import DataDogLogger
@@ -397,9 +398,7 @@ async def health_services_endpoint(
             else:
                 raise HTTPException(
                     status_code=422,
-                    detail={
-                        "error": '"{}" not in proxy config: general_settings. Unable to test this.'.format(service)
-                    },
+                    detail={"error": f'"{service}" not in proxy config: general_settings. Unable to test this.'},
                 )
         if service == "email":
             webhook_event = WebhookEvent(
@@ -426,13 +425,11 @@ async def health_services_endpoint(
             }
 
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - {e!s}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                message=getattr(e, "detail", f"Authentication Error({e!s})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -483,8 +480,8 @@ async def _save_health_check_to_db(
     healthy_endpoints: list,
     unhealthy_endpoints: list,
     start_time: float,
-    user_id: Optional[str],
-    model_id: Optional[str] = None,
+    user_id: str | None,
+    model_id: str | None = None,
 ):
     """Helper function to save health check results to database"""
     try:
@@ -607,7 +604,7 @@ async def _save_health_check_results_if_changed(
     model_results: dict,
     latest_checks_map: dict,
     start_time: float,
-    checked_by: Optional[str] = None,
+    checked_by: str | None = None,
 ):
     """
     Save health check results to database, but only if status changed or >1 hour since last save.
@@ -668,7 +665,7 @@ async def _save_background_health_checks_to_db(
     healthy_endpoints: list,
     unhealthy_endpoints: list,
     start_time: float,
-    checked_by: Optional[str] = None,
+    checked_by: str | None = None,
 ):
     """
     Save background health check results to database for each model.
@@ -759,7 +756,7 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
-def _resolve_targeted_model_ids(model_list: list, model: Optional[str], model_id: Optional[str]) -> Optional[set]:
+def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
     """
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
     deployment IDs the response should be scoped to.
@@ -870,10 +867,10 @@ async def _perform_health_check_and_save(
 
 
 def _health_endpoint_resolve_target_model_name(
-    model: Optional[str],
-    model_id: Optional[str],
+    model: str | None,
+    model_id: str | None,
     llm_router,
-) -> Optional[str]:
+) -> str | None:
     """Map ``model_id`` (without ``model``) to ``model_name`` for live health checks."""
     if not model_id or model:
         return model
@@ -902,8 +899,8 @@ def _health_endpoint_resolve_target_model_name(
 async def health_endpoint(
     response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    model: Optional[str] = fastapi.Query(None, description="Specify the model name (optional)"),
-    model_id: Optional[str] = fastapi.Query(None, description="Specify the model ID (optional)"),
+    model: str | None = fastapi.Query(None, description="Specify the model name (optional)"),
+    model_id: str | None = fastapi.Query(None, description="Specify the model ID (optional)"),
 ):
     """
     🚨 USE `/health/liveliness` to health check the proxy 🚨
@@ -1072,9 +1069,7 @@ async def health_endpoint(
             )
             return _post_process(router_result)
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {e!s}")
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
@@ -1082,8 +1077,8 @@ async def health_endpoint(
 @router.get("/health/history", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def health_check_history_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    model: Optional[str] = fastapi.Query(None, description="Filter by specific model name"),
-    status_filter: Optional[str] = fastapi.Query(None, description="Filter by status (healthy/unhealthy)"),
+    model: str | None = fastapi.Query(None, description="Filter by specific model name"),
+    status_filter: str | None = fastapi.Query(None, description="Filter by status (healthy/unhealthy)"),
     limit: int = fastapi.Query(100, description="Number of records to return", ge=1, le=1000),
     offset: int = fastapi.Query(0, description="Number of records to skip", ge=0),
 ):
@@ -1115,7 +1110,7 @@ async def health_check_history_endpoint(
         verbose_proxy_logger.error(f"Error getting health check history: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve health check history: {str(e)}"},
+            detail={"error": f"Failed to retrieve health check history: {e!s}"},
         )
 
 
@@ -1147,7 +1142,7 @@ async def latest_health_checks_endpoint(
         verbose_proxy_logger.error(f"Error getting latest health checks: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve latest health checks: {str(e)}"},
+            detail={"error": f"Failed to retrieve latest health checks: {e!s}"},
         )
 
 
@@ -1190,14 +1185,14 @@ async def shared_health_check_status_endpoint(
         verbose_proxy_logger.error(f"Error getting shared health check status: {e}")
         raise HTTPException(
             status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve shared health check status: {str(e)}"},
+            detail={"error": f"Failed to retrieve shared health check status: {e!s}"},
         )
 
 
-def _read_license_data() -> Optional[Dict[str, Any]]:
+def _read_license_data() -> dict[str, Any] | None:
     from litellm.proxy.proxy_server import _license_check, premium_user_data
 
-    license_data: Optional[EnterpriseLicenseData] = premium_user_data or _license_check.airgapped_license_data
+    license_data: EnterpriseLicenseData | None = premium_user_data or _license_check.airgapped_license_data
 
     if (
         license_data is None
@@ -1216,10 +1211,10 @@ def _read_license_data() -> Optional[Dict[str, Any]]:
 
     if license_data is None:
         return None
-    return cast(Dict[str, Any], license_data)
+    return cast(dict[str, Any], license_data)
 
 
-def _read_allowed_features(license_data: Dict[str, Any]) -> list:
+def _read_allowed_features(license_data: dict[str, Any]) -> list:
     raw_allowed_features = license_data.get("allowed_features")
     if isinstance(raw_allowed_features, list):
         return list(raw_allowed_features)
@@ -1407,8 +1402,8 @@ def callback_name(callback):
 
 
 async def _get_health_readiness_details(
-    response: Optional[Response] = None,
-) -> Dict[str, Any]:
+    response: Response | None = None,
+) -> dict[str, Any]:
     """
     Detailed health payload for authenticated diagnostics.
     """
@@ -1478,7 +1473,7 @@ async def _get_health_readiness_details(
                 "is_detailed_debug": is_detailed_debug,
             }
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
+        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e!s})")
 
 
 def _allow_public_health_readiness_details() -> bool:
@@ -1493,7 +1488,7 @@ def _drain_endpoint_enabled() -> bool:
     return general_settings.get("enable_drain_endpoint") is True
 
 
-def _drain_endpoint_token() -> Optional[str]:
+def _drain_endpoint_token() -> str | None:
     """
     Shared secret required on the X-Drain-Token header to call /health/drain.
 
@@ -1712,30 +1707,29 @@ async def health_liveliness_options():
 )
 async def test_model_connection(
     request: Request,
-    mode: Optional[
-        Literal[
-            "chat",
-            "completion",
-            "embedding",
-            "audio_speech",
-            "audio_transcription",
-            "image_generation",
-            "video_generation",
-            "batch",
-            "rerank",
-            "realtime",
-            "responses",
-            "ocr",
-        ]
-    ] = fastapi.Body(
+    mode: Literal[
+        "chat",
+        "completion",
+        "embedding",
+        "audio_speech",
+        "audio_transcription",
+        "image_generation",
+        "video_generation",
+        "batch",
+        "rerank",
+        "realtime",
+        "responses",
+        "ocr",
+    ]
+    | None = fastapi.Body(
         None,
         description="The mode to test the model with. If not provided, auto-detected from model capabilities.",
     ),
-    litellm_params: Dict = fastapi.Body(
+    litellm_params: dict = fastapi.Body(
         None,
         description="Parameters for litellm.completion, litellm.embedding for the health check",
     ),
-    model_info: Dict = fastapi.Body(
+    model_info: dict = fastapi.Body(
         None,
         description="Model info for the health check",
     ),
@@ -1812,7 +1806,7 @@ async def test_model_connection(
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
-        loaded_model_info: Optional[dict] = None
+        loaded_model_info: dict | None = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -1904,9 +1898,9 @@ async def test_model_connection(
         raise e
     except Exception as e:
         verbose_proxy_logger.debug(
-            f"litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - {str(e)}"
+            f"litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - {e!s}"
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to test connection: {str(e)}"},
+            detail={"error": f"Failed to test connection: {e!s}"},
         )

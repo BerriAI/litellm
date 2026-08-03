@@ -6,7 +6,8 @@ Extends InteractionsHTTPHandler so that the shared HTTP infrastructure
 duplicated. BaseAgentsAPIConfig stays as pure transform code.
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+from collections.abc import Coroutine
+from typing import Any
 
 import httpx
 
@@ -37,12 +38,12 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[HTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[AgentCreateResponse, Coroutine[Any, Any, AgentCreateResponse]]:
+    ) -> AgentCreateResponse | Coroutine[Any, Any, AgentCreateResponse]:
         if _is_async:
             return self.async_create_agent(
                 agents_api_config=agents_api_config,
@@ -92,10 +93,10 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> AgentCreateResponse:
         async_httpx_client = self._async_client(litellm_params, client)
         headers = agents_api_config.validate_environment(
@@ -140,11 +141,11 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         agents_api_config: BaseAgentsAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[HTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[AgentListResponse, Coroutine[Any, Any, AgentListResponse]]:
+    ) -> AgentListResponse | Coroutine[Any, Any, AgentListResponse]:
         if _is_async:
             return self.async_list_agents(
                 agents_api_config=agents_api_config,
@@ -180,9 +181,9 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         agents_api_config: BaseAgentsAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> AgentListResponse:
         async_httpx_client = self._async_client(litellm_params, client)
         headers = agents_api_config.validate_environment(
@@ -215,11 +216,11 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[HTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[AgentCreateResponse, Coroutine[Any, Any, AgentCreateResponse]]:
+    ) -> AgentCreateResponse | Coroutine[Any, Any, AgentCreateResponse]:
         if _is_async:
             return self.async_get_agent(
                 agents_api_config=agents_api_config,
@@ -258,9 +259,9 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> AgentCreateResponse:
         async_httpx_client = self._async_client(litellm_params, client)
         headers = agents_api_config.validate_environment(
@@ -294,11 +295,11 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[HTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[AgentDeleteResult, Coroutine[Any, Any, AgentDeleteResult]]:
+    ) -> AgentDeleteResult | Coroutine[Any, Any, AgentDeleteResult]:
         if _is_async:
             return self.async_delete_agent(
                 agents_api_config=agents_api_config,
@@ -337,9 +338,9 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> AgentDeleteResult:
         async_httpx_client = self._async_client(litellm_params, client)
         headers = agents_api_config.validate_environment(
@@ -373,11 +374,11 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[HTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[AgentVersionsResponse, Coroutine[Any, Any, AgentVersionsResponse]]:
+    ) -> AgentVersionsResponse | Coroutine[Any, Any, AgentVersionsResponse]:
         if _is_async:
             return self.async_list_agent_versions(
                 agents_api_config=agents_api_config,
@@ -416,9 +417,9 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> AgentVersionsResponse:
         async_httpx_client = self._async_client(litellm_params, client)
         headers = agents_api_config.validate_environment(

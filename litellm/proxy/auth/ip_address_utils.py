@@ -7,7 +7,7 @@ External callers (public IPs) only see servers with available_on_public_internet
 
 import ipaddress
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Union
 
 from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
@@ -62,12 +62,12 @@ class IPAddressUtils:
 
     @staticmethod
     def parse_internal_networks(
-        configured_ranges: Optional[List[str]],
-    ) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+        configured_ranges: list[str] | None,
+    ) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
         """Parse configured CIDR ranges into network objects, falling back to defaults."""
         if not configured_ranges:
             return IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
-        networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []
+        networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
         for cidr in configured_ranges:
             try:
                 networks.append(ipaddress.ip_network(cidr, strict=False))
@@ -77,15 +77,15 @@ class IPAddressUtils:
 
     @staticmethod
     def parse_trusted_proxy_networks(
-        configured_ranges: Optional[List[str]],
-    ) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+        configured_ranges: list[str] | None,
+    ) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
         """
         Parse trusted proxy CIDR ranges for XFF validation.
         Returns empty list if not configured (XFF will not be trusted).
         """
         if not configured_ranges:
             return []
-        networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []
+        networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
         for cidr in configured_ranges:
             try:
                 networks.append(ipaddress.ip_network(cidr, strict=False))
@@ -95,8 +95,8 @@ class IPAddressUtils:
 
     @staticmethod
     def is_trusted_proxy(
-        proxy_ip: Optional[str],
-        trusted_networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]],
+        proxy_ip: str | None,
+        trusted_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network],
     ) -> bool:
         """Check if the direct connection IP is from a trusted proxy."""
         if not proxy_ip or not trusted_networks:
@@ -109,8 +109,8 @@ class IPAddressUtils:
 
     @staticmethod
     def is_internal_ip(
-        client_ip: Optional[str],
-        internal_networks: Optional[List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]] = None,
+        client_ip: str | None,
+        internal_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None,
     ) -> bool:
         """
         Check if a client IP is from an internal/private network.
@@ -137,7 +137,7 @@ class IPAddressUtils:
     @staticmethod
     def is_request_from_trusted_proxy(
         request: Request,
-        general_settings: Optional[Dict[str, Any]] = None,
+        general_settings: dict[str, Any] | None = None,
     ) -> bool:
         """
         Return True if X-Forwarded-* headers on this request should be trusted.
@@ -194,7 +194,7 @@ class IPAddressUtils:
     def extract_client_ip_from_xff_hops(
         xff_header: str,
         num_trusted_hops: int,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Resolve the originating client IP from an X-Forwarded-For chain by
         counting ``num_trusted_hops`` entries from the right.
@@ -247,8 +247,8 @@ class IPAddressUtils:
     @staticmethod
     def get_mcp_client_ip(
         request: Request,
-        general_settings: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
+        general_settings: dict[str, Any] | None = None,
+    ) -> str | None:
         """
         Extract client IP from a FastAPI request for MCP access control.
 

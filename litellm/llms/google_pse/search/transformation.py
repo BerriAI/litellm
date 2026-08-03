@@ -4,7 +4,7 @@ Calls Google Programmable Search Engine (PSE) API to search the web.
 Google PSE API Reference: https://developers.google.com/custom-search/v1/reference/rest/v1/cse/list
 """
 
-from typing import Dict, List, Literal, Optional, TypedDict, Union
+from typing import Literal, TypedDict
 
 import httpx
 
@@ -70,11 +70,11 @@ class GooglePSESearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
 
@@ -103,9 +103,9 @@ class GooglePSESearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -128,13 +128,13 @@ class GooglePSESearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         api_base: str | None = None,
-        search_engine_id: Optional[str] = None,
+        search_engine_id: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Google PSE API format.
 
