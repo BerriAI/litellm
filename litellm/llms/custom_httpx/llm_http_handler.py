@@ -1737,6 +1737,15 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
         )
 
+        # Sign the request if the provider requires it (e.g. AWS SigV4)
+        headers, signed_json_body = provider_config.sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=data,
+            api_base=complete_url,
+            api_key=api_key,
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=query if isinstance(query, str) else str(query),
@@ -1761,6 +1770,14 @@ class BaseLLMHTTPHandler:
                 response = client.get(
                     url=complete_url,
                     headers=headers,
+                )
+            elif signed_json_body is not None:
+                # Send the signed body verbatim — re-serializing would break the signature
+                response = client.post(
+                    url=complete_url,
+                    headers=headers,
+                    data=signed_json_body,
+                    timeout=timeout,
                 )
             else:
                 # Make POST request with JSON data
@@ -1821,6 +1838,15 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
         )
 
+        # Sign the request if the provider requires it (e.g. AWS SigV4)
+        headers, signed_json_body = provider_config.sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=data,
+            api_base=complete_url,
+            api_key=api_key,
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=query if isinstance(query, str) else str(query),
@@ -1850,6 +1876,14 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.get(
                     url=complete_url,
                     headers=headers,
+                )
+            elif signed_json_body is not None:
+                # Send the signed body verbatim — re-serializing would break the signature
+                response = await async_httpx_client.post(
+                    url=complete_url,
+                    headers=headers,
+                    data=signed_json_body,
+                    timeout=timeout,
                 )
             else:
                 # Make async POST request with JSON data
