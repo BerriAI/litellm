@@ -55,6 +55,7 @@ from litellm.proxy.auth.auth_checks import (
     get_project_object,
     get_team_object,
 )
+from litellm.proxy.auth.access_schedule import ScheduleInvalid, parse_access_schedule
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import (
@@ -663,6 +664,17 @@ def _check_permissions_caller_permission(
         status_code=403,
         detail={"error": "Only proxy admins can set `permissions`."},
     )
+
+
+def _validate_access_schedule(data: GenerateRequestBase) -> None:
+    if "permissions" not in data.model_fields_set and not data.permissions:
+        return
+    parsed = parse_access_schedule(data.permissions)
+    if isinstance(parsed, ScheduleInvalid):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Invalid permissions.access_schedule: {parsed.error}"},
+        )
 
 
 def _check_budget_limits_delegation_ceiling(
@@ -1668,6 +1680,7 @@ async def generate_key_fn(
             data=data,
             user_api_key_dict=user_api_key_dict,
         )
+        _validate_access_schedule(data)
 
         # For non-admin internal users: auto-assign caller's user_id if not provided
         # This prevents creating unbound keys with no user association (LIT-1884)
@@ -2388,6 +2401,7 @@ async def _validate_update_key_data(
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
+    _validate_access_schedule(data)
 
     _validate_caller_can_change_key_ownership(
         data=data,

@@ -1329,6 +1329,129 @@ async def test_scim_deactivated_user_key_is_rejected():
             setattr(_proxy_server_mod, attr, val)
 
 
+@pytest.mark.parametrize(
+    "access_schedule, expect_denied",
+    [
+        ({"timezone": "UTC", "windows": [{"days": ["__OTHER_DAY__"], "start": "00:00", "end": "23:59"}]}, True),
+        ({"timezone": "Not/AZone", "windows": []}, True),
+        (
+            {
+                "timezone": "UTC",
+                "windows": [
+                    {"days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "start": "00:00", "end": "12:00"},
+                    {"days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "start": "12:00", "end": "23:59:59.999999"},
+                ],
+            },
+            False,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_virtual_key_access_schedule_enforced_in_auth(access_schedule, expect_denied):
+    """The auth flow must deny a virtual key whose recurring access_schedule
+    excludes the current time (or is invalid), and allow one that includes it.
+    """
+    from datetime import datetime, timezone
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.proxy_server import hash_token
+
+    _day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    other_day = _day_names[(datetime.now(timezone.utc).weekday() + 3) % 7]
+    windows = [
+        {**w, "days": [other_day if d == "__OTHER_DAY__" else d for d in w["days"]]}
+        for w in access_schedule["windows"]
+    ]
+    permissions = {"access_schedule": {**access_schedule, "windows": windows}}
+
+    api_key = "sk-access-schedule-key"
+    hashed_key = hash_token(api_key)
+    valid_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hashed_key,
+        user_id="schedule-user",
+        permissions=permissions,
+    )
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs_to_set = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _original_values = {attr: getattr(_proxy_server_mod, attr, None) for attr in _attrs_to_set}
+    try:
+        for attr, val in _attrs_to_set.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new_callable=AsyncMock,
+                return_value=valid_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            if expect_denied:
+                with pytest.raises(ProxyException) as exc_info:
+                    await _user_api_key_auth_builder(
+                        request=request,
+                        api_key=f"Bearer {api_key}",
+                        azure_api_key_header="",
+                        anthropic_api_key_header=None,
+                        google_ai_studio_api_key_header=None,
+                        azure_apim_header=None,
+                        request_data={},
+                    )
+                assert exc_info.value.type == ProxyErrorTypes.key_access_schedule_denied
+                assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+                assert exc_info.value.param != api_key
+            else:
+                result = await _user_api_key_auth_builder(
+                    request=request,
+                    api_key=f"Bearer {api_key}",
+                    azure_api_key_header="",
+                    anthropic_api_key_header=None,
+                    google_ai_studio_api_key_header=None,
+                    azure_apim_header=None,
+                    request_data={},
+                )
+                assert result.token == hashed_key
+    finally:
+        for attr, val in _original_values.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
 @pytest.mark.asyncio
 async def test_cached_proxy_admin_key_sets_via_virtual_key_marker():
     """Cached PROXY_ADMIN auth objects early-return before the marked DB and
