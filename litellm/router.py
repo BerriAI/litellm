@@ -126,6 +126,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
 )
 from litellm.router_utils.fallback_event_handlers import (
+    _FallbackContinuationState,
     _check_non_standard_fallback_format,
     get_fallback_model_group,
     run_async_fallback,
@@ -6134,13 +6135,17 @@ class Router:
 
         from litellm.exceptions import MidStreamFallbackError
 
-        remaining_fallback_model_groups: tuple[str, ...] | None = kwargs.get("_remaining_fallback_model_groups")
-        if isinstance(e, MidStreamFallbackError) and remaining_fallback_model_groups is not None:
+        fallback_continuation_state = (kwargs.get("metadata") or {}).get("_fallback_continuation_state")
+        if (
+            isinstance(e, MidStreamFallbackError)
+            and isinstance(fallback_continuation_state, _FallbackContinuationState)
+            and fallback_continuation_state.litellm_router is self
+        ):
             response = await run_async_fallback(
                 *args,
                 **input_kwargs,
-                fallback_model_group=remaining_fallback_model_groups,
-                original_model_group=kwargs.get("_fallback_root_model_group", original_model_group),
+                fallback_model_group=fallback_continuation_state.remaining_model_groups,
+                original_model_group=fallback_continuation_state.root_model_group,
             )
             return response
 
