@@ -17,6 +17,7 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
@@ -286,6 +287,79 @@ def test_rag_query_returns_response_cost_header(client_internal_user):
 
     assert response.status_code == 200, response.json()
     assert response.headers.get("x-litellm-response-cost") == "3.45e-06"
+
+
+@pytest.mark.asyncio
+async def test_rag_query_resolves_managed_vector_store_registry(client_internal_user):
+    """
+    /v1/rag/query must resolve the LiteLLM-managed vector store registry so the
+    configured provider and litellm_params (api_key, api_base) reach the
+    internal vector store search instead of defaulting to OpenAI.
+
+    Before the fix, retrieval_config["custom_llm_provider"] stayed whatever the
+    client sent and the registry credentials were never forwarded to
+    litellm.aquery, so a registered non-OpenAI vector store was always queried
+    via api.openai.com.
+    """
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+        LiteLLM_ManagedVectorStore,
+    )
+    from litellm.types.utils import ModelResponse
+
+    mock_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "vs_registered",
+        "custom_llm_provider": "bedrock",
+        "litellm_params": {"aws_region_name": "us-east-1"},
+    }
+
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = (
+        mock_vector_store
+    )
+
+    captured = {}
+
+    async def fake_aquery(**kwargs):
+        captured.update(kwargs)
+        return ModelResponse(
+            id="chatcmpl-test",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "The codename is AZURE-FALCON-42.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            model="gpt-4o-mini",
+            usage={"prompt_tokens": 35, "completion_tokens": 14, "total_tokens": 49},
+        )
+
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new=AsyncMock(side_effect=fake_aquery),
+        ),
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the codename?"}],
+                "retrieval_config": {
+                    "vector_store_id": "vs_registered",
+                    "custom_llm_provider": "openai",
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert captured["retrieval_config"]["custom_llm_provider"] == "bedrock"
+    assert captured["aws_region_name"] == "us-east-1"
 
 
 def test_rag_query_stream_returns_event_stream(client_internal_user):

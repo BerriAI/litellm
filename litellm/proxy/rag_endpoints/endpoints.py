@@ -26,6 +26,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     get_form_data,
 )
+from litellm.proxy.vector_store_endpoints.endpoints import (
+    _update_request_data_with_litellm_managed_vector_store_registry,
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
@@ -657,6 +660,12 @@ async def rag_query(
             user_api_key_dict=user_api_key_dict,
         )
 
+        resolved_vector_store = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={},
+            vector_store_id=retrieval_config["vector_store_id"],
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # Add litellm data
         request_data: dict[str, Any] = {}
         request_data = await add_litellm_data_to_request(
@@ -667,6 +676,14 @@ async def rag_query(
             version=version,
             proxy_config=proxy_config,
         )
+
+        resolved_provider = resolved_vector_store.pop("custom_llm_provider", None)
+        if resolved_provider is None:
+            resolved_provider = retrieval_config.get("custom_llm_provider")
+        if resolved_provider:
+            retrieval_config["custom_llm_provider"] = resolved_provider
+        resolved_vector_store.pop("litellm_credential_name", None)
+        request_data.update(resolved_vector_store)
 
         verbose_proxy_logger.debug("RAG Query - model: %s, retrieval_config: %s", model, retrieval_config)
 
