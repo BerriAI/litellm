@@ -22,7 +22,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
-import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
+import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Upload } from "antd";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -1005,16 +1005,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
     handleRemoveAudio();
     NotificationsManager.success("Chat history cleared.");
   };
-
-  if (userRole && userRole === "Admin Viewer") {
-    const { Title, Paragraph } = Typography;
-    return (
-      <div>
-        <Title level={1}>Access Denied</Title>
-        <Paragraph>Ask your proxy admin for access to test models</Paragraph>
-      </div>
-    );
-  }
 
   const onModelChange = (value: string) => {
     setSelectedModel(value);
