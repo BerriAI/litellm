@@ -81,6 +81,80 @@ def test_anthropic_json_mode_non_streaming_mixed_internal_and_user_tools():
     assert extra == '{"answer": 42}'
 
 
+def test_response_format_with_user_tools_allows_investigation_before_final_output():
+    """Structured output must not force the internal tool before user tools run."""
+    config = AnthropicConfig()
+    non_default_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "query_logs",
+                    "description": "Query logs for evidence.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query_string": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "FinalOutput",
+                "schema": {
+                    "type": "object",
+                    "properties": {"result": {"type": "string"}},
+                    "required": ["result"],
+                },
+            },
+        },
+        "thinking": {"type": "adaptive"},
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params={},
+        model="claude-sonnet-5",
+        drop_params=False,
+    )
+    assert optional_params["tool_choice"] == {"type": "any"}
+
+    config.transform_request(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "Investigate the logs."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert optional_params["tool_choice"] == {"type": "any"}
+
+    config.transform_request(
+        model="claude-sonnet-5",
+        messages=[
+            {"role": "user", "content": "Investigate the logs."},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "tool_query",
+                        "type": "function",
+                        "function": {"name": "query_logs", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "tool_query", "content": "logs"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert optional_params["tool_choice"] == {
+        "name": RESPONSE_FORMAT_TOOL_NAME,
+        "type": "tool",
+    }
+
+
 def test_calculate_usage():
     """
     Do not include cache_creation_input_tokens in the prompt_tokens

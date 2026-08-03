@@ -264,6 +264,51 @@ def test_handle_json_mode_chunk_regular_tool():
     assert tool_use["function"]["name"] == "get_weather"
 
 
+def test_handle_json_mode_chunk_interleaved_tools_keep_user_tool_arguments():
+    """A response-format block must not hide deltas from an interleaved user tool."""
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=True
+    )
+    response_format_tool = ChatCompletionToolCallChunk(
+        id="tool_json",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=RESPONSE_FORMAT_TOOL_NAME, arguments=""
+        ),
+        index=1,
+    )
+    user_tool = ChatCompletionToolCallChunk(
+        id="tool_query",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name="query_logs", arguments=""
+        ),
+        index=0,
+    )
+    user_tool_delta = ChatCompletionToolCallChunk(
+        id=None,
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=None, arguments='{"query_string":"executor error"}'
+        ),
+        index=0,
+    )
+
+    model_response_iterator._handle_json_mode_chunk(
+        "", user_tool, content_block_index=0
+    )
+    model_response_iterator._handle_json_mode_chunk(
+        "", response_format_tool, content_block_index=1
+    )
+    text, tool_use = model_response_iterator._handle_json_mode_chunk(
+        "", user_tool_delta, content_block_index=0
+    )
+
+    assert text == ""
+    assert tool_use is not None
+    assert tool_use["function"]["arguments"] == '{"query_string":"executor error"}'
+
+
 def test_handle_json_mode_chunk_streaming_response_format_tool():
     model_response_iterator = ModelResponseIterator(
         streaming_response=MagicMock(), sync_stream=True, json_mode=True
