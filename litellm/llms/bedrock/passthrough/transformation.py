@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Optional, cast
 
 from httpx import Response
 
@@ -36,8 +36,9 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         Returns:
             The encoded model_id suitable for use in endpoint URLs
         """
-        from litellm.passthrough.utils import CommonUtils
         import re
+
+        from litellm.passthrough.utils import CommonUtils
 
         # Create a temporary endpoint with the model_id to check if encoding is needed
         temp_endpoint = f"/model/{model_id}/converse"
@@ -53,13 +54,13 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: Optional[dict],
+        request_query_params: dict | None,
         litellm_params: dict,
-    ) -> Tuple["URL", str]:
+    ) -> tuple["URL", str]:
         optional_params = litellm_params.copy()
         model_id = optional_params.get("model_id", None)
 
@@ -96,10 +97,10 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         self,
         headers: dict,
         litellm_params: dict,
-        request_data: Optional[dict],
+        request_data: dict | None,
         api_base: str,
-        model: Optional[str] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        model: str | None = None,
+    ) -> tuple[dict, bytes | None]:
         optional_params = litellm_params.copy()
         return self._sign_request(
             service_name="bedrock",
@@ -153,7 +154,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
 
         return litellm_model_response
 
-    def _convert_raw_bytes_to_str_lines(self, raw_bytes: List[bytes]) -> List[str]:
+    def _convert_raw_bytes_to_str_lines(self, raw_bytes: list[bytes]) -> list[str]:
         from botocore.eventstream import EventStreamBuffer
 
         all_chunks = []
@@ -169,7 +170,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
 
     def handle_logging_collected_chunks(
         self,
-        all_chunks: List[str],
+        all_chunks: list[str],
         litellm_logging_obj: "LiteLLMLoggingObj",
         model: str,
         custom_llm_provider: str,

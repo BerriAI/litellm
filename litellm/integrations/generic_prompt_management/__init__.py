@@ -1,18 +1,19 @@
 """Generic prompt management integration for LiteLLM."""
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .generic_prompt_manager import GenericPromptManager
-    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    from .generic_prompt_manager import GenericPromptManager
 
 from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 
 from .generic_prompt_manager import GenericPromptManager
 
 # Global instances
-global_generic_prompt_config: Optional[dict] = None
+global_generic_prompt_config: dict | None = None
 
 
 def set_global_generic_prompt_config(config: dict) -> None:
@@ -72,7 +73,7 @@ prompt_initializer_registry = {
 # Export public API
 __all__ = [
     "GenericPromptManager",
-    "set_global_generic_prompt_config",
     "global_generic_prompt_config",
     "prompt_initializer_registry",
+    "set_global_generic_prompt_config",
 ]

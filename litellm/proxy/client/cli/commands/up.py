@@ -7,10 +7,11 @@ import shutil
 import signal
 import sys
 import threading
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import IO, Iterator, Mapping
+from typing import IO
 
 import click
 from pydantic import JsonValue, TypeAdapter, ValidationError

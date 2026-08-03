@@ -1,7 +1,7 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
@@ -94,11 +94,11 @@ class VertexAIPartnerModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: Optional[dict],
-        timeout: Union[float, httpx.Timeout],
+        headers: dict | None,
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,
@@ -189,7 +189,7 @@ class VertexAIPartnerModels(VertexBase):
                 # Build a new dict so we never mutate the shared deployment extra_headers object.
                 headers = {
                     **(headers or {}),
-                    "Authorization": "Bearer {}".format(access_token),
+                    "Authorization": f"Bearer {access_token}",
                 }
 
                 optional_params.update(

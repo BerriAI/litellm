@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from fastapi import HTTPException
 
 from litellm._logging import verbose_logger
@@ -34,7 +32,7 @@ def is_ui_session_credential(user_api_key_auth: UserAPIKeyAuth) -> bool:
 
 async def resolve_ui_session_team_ids(
     user_api_key_auth: UserAPIKeyAuth,
-) -> List[str]:
+) -> list[str]:
     """Resolve the real team ids backing a UI session token."""
 
     if not is_ui_session_credential(user_api_key_auth):
@@ -70,7 +68,7 @@ async def resolve_ui_session_team_ids(
     if user_obj is None or not user_obj.teams:
         return []
 
-    resolved_team_ids: List[str] = []
+    resolved_team_ids: list[str] = []
     for team_id in user_obj.teams:
         if team_id and team_id not in resolved_team_ids:
             resolved_team_ids.append(team_id)
@@ -122,7 +120,7 @@ async def acting_user_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
 
 async def build_effective_auth_contexts(
     user_api_key_auth: UserAPIKeyAuth,
-) -> List[UserAPIKeyAuth]:
+) -> list[UserAPIKeyAuth]:
     """Every auth context a management or listing surface must resolve a UI session token through:
     one per real team backing the session, plus the session user's own admitted identity, so a grant
     made directly to the user row is as visible to the dashboard as it is to a gateway session."""

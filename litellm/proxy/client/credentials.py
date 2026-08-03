@@ -1,11 +1,12 @@
+from typing import Any
+
 import requests
-from typing import Dict, Any, Optional, Union
 
 from .exceptions import UnauthorizedError
 
 
 class CredentialsManagementClient:
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
+    def __init__(self, base_url: str, api_key: str | None = None):
         """
         Initialize the CredentialsManagementClient.
 
@@ -16,7 +17,7 @@ class CredentialsManagementClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
@@ -31,7 +32,7 @@ class CredentialsManagementClient:
     def list(
         self,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         List all credentials.
 
@@ -66,10 +67,10 @@ class CredentialsManagementClient:
     def create(
         self,
         credential_name: str,
-        credential_info: Dict[str, Any],
-        credential_values: Dict[str, Any],
+        credential_info: dict[str, Any],
+        credential_values: dict[str, Any],
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Create a new credential.
 
@@ -114,7 +115,7 @@ class CredentialsManagementClient:
         self,
         credential_name: str,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Delete a credential by name.
 
@@ -151,7 +152,7 @@ class CredentialsManagementClient:
         self,
         credential_name: str,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Get a credential by name.
 

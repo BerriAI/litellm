@@ -2,7 +2,7 @@
 OpenAI Image Variations Handler
 """
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
@@ -19,7 +19,7 @@ from ..common_utils import OpenAIError
 class OpenAIImageVariationsHandler:
     def get_sync_client(
         self,
-        client: Optional[OpenAI],
+        client: OpenAI | None,
         init_client_params: dict,
     ):
         if client is None:
@@ -30,7 +30,7 @@ class OpenAIImageVariationsHandler:
             openai_client = client
         return openai_client
 
-    def get_async_client(self, client: Optional[AsyncOpenAI], init_client_params: dict) -> AsyncOpenAI:
+    def get_async_client(self, client: AsyncOpenAI | None, init_client_params: dict) -> AsyncOpenAI:
         if client is None:
             openai_client = AsyncOpenAI(
                 **init_client_params,
@@ -43,12 +43,12 @@ class OpenAIImageVariationsHandler:
         self,
         api_key: str,
         api_base: str,
-        organization: Optional[str],
-        client: Optional[AsyncOpenAI],
+        organization: str | None,
+        client: AsyncOpenAI | None,
         data: dict,
         headers: dict,
-        model: Optional[str],
-        timeout: Optional[float],
+        model: str | None,
+        timeout: float | None,
         max_retries: int,
         logging_obj: LiteLLMLoggingObj,
         model_response: ImageResponse,
@@ -113,18 +113,18 @@ class OpenAIImageVariationsHandler:
         model_response: ImageResponse,
         api_key: str,
         api_base: str,
-        model: Optional[str],
+        model: str | None,
         image: FileTypes,
-        timeout: Optional[float],
+        timeout: float | None,
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        print_verbose: Optional[Callable] = None,
+        print_verbose: Callable | None = None,
         logger_fn=None,
         client=None,
-        organization: Optional[str] = None,
-        headers: Optional[dict] = None,
+        organization: str | None = None,
+        headers: dict | None = None,
     ) -> ImageResponse:
         try:
             provider_config = ProviderConfigManager.get_provider_image_variation_config(

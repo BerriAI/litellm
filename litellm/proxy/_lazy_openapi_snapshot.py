@@ -11,7 +11,6 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Set
 
 SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
 HTTP_METHOD_SUFFIXES = {
@@ -39,7 +38,7 @@ def _stabilize_multi_method_route_ids(routes) -> None:
         route.unique_id = f"{operation_id}_{methods[0].lower()}"
 
 
-def load_snapshot() -> Optional[Dict[str, Dict]]:
+def load_snapshot() -> dict[str, dict] | None:
     if not SNAPSHOT_FILE.exists():
         return None
     try:
@@ -49,7 +48,7 @@ def load_snapshot() -> Optional[Dict[str, Dict]]:
         return None
 
 
-def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
+def _normalize_operation_ids(paths: dict[str, dict]) -> None:
     """Make FastAPI-generated operation IDs stable for multi-method routes.
 
     FastAPI derives the default operation ID suffix from the first item in the
@@ -80,7 +79,7 @@ def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
                     break
 
 
-def generate_snapshot() -> Dict[str, Dict]:
+def generate_snapshot() -> dict[str, dict]:
     import importlib
 
     from fastapi.openapi.utils import get_openapi
@@ -97,8 +96,8 @@ def generate_snapshot() -> Dict[str, Dict]:
         except Exception as exc:
             sys.stderr.write(f"warning: skip {feat.name}: {exc}\n")
 
-    fragments: Dict[str, Dict] = {}
-    used_operation_ids: Set[str] = set()
+    fragments: dict[str, dict] = {}
+    used_operation_ids: set[str] = set()
     for feat in LAZY_FEATURES:
         feat_routes = [r for r in app.routes if any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)]
         if not feat_routes:

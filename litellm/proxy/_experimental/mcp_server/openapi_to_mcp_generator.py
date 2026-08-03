@@ -8,7 +8,7 @@ import json
 import os
 import re
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import quote
 
 # Tool names emitted from OpenAPI specs must work across all major LLM providers.
@@ -35,30 +35,28 @@ def sanitize_openapi_tool_name(raw_name: str) -> str:
 
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 
 # Store the base URL and headers globally
 BASE_URL = ""
-HEADERS: Dict[str, str] = {}
+HEADERS: dict[str, str] = {}
 
 # Per-request auth header override for BYOK servers.
 # Set this ContextVar before calling a local tool handler to inject the user's
 # stored credential into the HTTP request made by the tool function closure.
-_request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "_request_auth_header", default=None
-)
+_request_auth_header: contextvars.ContextVar[str | None] = contextvars.ContextVar("_request_auth_header", default=None)
 
 # Per-request extra headers forwarded from the client request.
 # Populated from MCPServer.extra_headers names matched against raw request
 # headers in server.py before dispatching to a local/OpenAPI tool handler.
-_request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = contextvars.ContextVar(
+_request_extra_headers: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
     "_request_extra_headers", default=None
 )
 
@@ -90,7 +88,7 @@ def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> Dict[str, Any]:
+def load_openapi_spec(filepath: str) -> dict[str, Any]:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """
@@ -108,7 +106,7 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
+async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
         r = await async_safe_get(client, filepath)
@@ -123,7 +121,7 @@ async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
         return json.load(f)
 
 
-def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
+def get_base_url(spec: dict[str, Any], spec_path: str | None = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
@@ -173,7 +171,7 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
     return ""
 
 
-def _resolve_ref(param: Dict[str, Any], component_params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _resolve_ref(param: dict[str, Any], component_params: dict[str, Any]) -> dict[str, Any] | None:
     """Resolve a single parameter, following a $ref if present.
 
     Returns the resolved param dict, or None if the $ref target is absent from
@@ -186,7 +184,7 @@ def _resolve_ref(param: Dict[str, Any], component_params: Dict[str, Any]) -> Opt
     return component_params.get(ref.split("/")[-1])
 
 
-def _resolve_param_list(raw: List[Dict[str, Any]], component_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _resolve_param_list(raw: list[dict[str, Any]], component_params: dict[str, Any]) -> list[dict[str, Any]]:
     """Resolve $refs in a parameter list, dropping any unresolvable entries."""
     result = []
     for p in raw:
@@ -197,10 +195,10 @@ def _resolve_param_list(raw: List[Dict[str, Any]], component_params: Dict[str, A
 
 
 def resolve_operation_params(
-    operation: Dict[str, Any],
-    path_item: Dict[str, Any],
-    components: Dict[str, Any],
-) -> Dict[str, Any]:
+    operation: dict[str, Any],
+    path_item: dict[str, Any],
+    components: dict[str, Any],
+) -> dict[str, Any]:
     """Return a copy of *operation* with fully-resolved, merged parameters.
 
     Handles two common patterns in real-world OpenAPI specs:
@@ -225,7 +223,7 @@ def resolve_operation_params(
     return result
 
 
-def extract_parameters(operation: Dict[str, Any]) -> tuple:
+def extract_parameters(operation: dict[str, Any]) -> tuple:
     """Extract parameter names from OpenAPI operation."""
     path_params = []
     query_params = []
@@ -251,7 +249,7 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
     return path_params, query_params, body_params
 
 
-def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
+def build_input_schema(operation: dict[str, Any]) -> dict[str, Any]:
     """Build MCP input schema from OpenAPI operation."""
     properties = {}
     required = []
@@ -297,8 +295,8 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _merge_openapi_tool_request_headers(
-    static_headers: Dict[str, str],
-) -> Dict[str, str]:
+    static_headers: dict[str, str],
+) -> dict[str, str]:
     """Merge static closure headers with per-request ContextVar overrides.
 
     Precedence (highest to lowest):
@@ -327,7 +325,7 @@ def _merge_openapi_tool_request_headers(
     static = static_headers or {}
 
     static_lower_names = {k.lower() for k in static}
-    effective_headers: Dict[str, str] = {k: v for k, v in request_extra.items() if k.lower() not in static_lower_names}
+    effective_headers: dict[str, str] = {k: v for k, v in request_extra.items() if k.lower() not in static_lower_names}
     effective_headers.update(static)
 
     override_auth = _request_auth_header.get()
@@ -348,9 +346,9 @@ def _merge_openapi_tool_request_headers(
 def create_tool_function(
     path: str,
     method: str,
-    operation: Dict[str, Any],
+    operation: dict[str, Any],
     base_url: str,
-    headers: Optional[Dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
 ):
     """Create a tool function for an OpenAPI operation.
 
@@ -402,7 +400,7 @@ def create_tool_function(
                 url = url.replace("{{" + param_name + "}}", safe_value)
 
         # Build query params using original parameter names
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         for param_name in query_params:
             param_value = kwargs.get(param_name, "")
             if param_value:
@@ -410,7 +408,7 @@ def create_tool_function(
                 params[param_name] = param_value
 
         # Build request body
-        json_body: Optional[Dict[str, Any]] = None
+        json_body: dict[str, Any] | None = None
         if body_params:
             # Try "body" first (most common), then check all body param names
             body_value = kwargs.get("body", {})
@@ -449,7 +447,7 @@ def create_tool_function(
     return tool_function
 
 
-def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):
+def register_tools_from_openapi(spec: dict[str, Any], base_url: str):
     """Register MCP tools from OpenAPI specification."""
     paths = spec.get("paths", {})
     used_names: set = set()

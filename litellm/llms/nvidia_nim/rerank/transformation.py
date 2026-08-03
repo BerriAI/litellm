@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Union
+from typing import Any, Literal
 
 import httpx
 from typing_extensions import Required, TypedDict
@@ -28,7 +28,7 @@ class NvidiaNimPassageObject(TypedDict):
 class NvidiaNimRerankRequest(TypedDict, total=False):
     model: Required[str]
     query: Required[NvidiaNimQueryObject]
-    passages: Required[List[NvidiaNimPassageObject]]
+    passages: Required[list[NvidiaNimPassageObject]]
     truncate: Literal["NONE", "END"]
     top_k: int
 
@@ -39,7 +39,7 @@ class NvidiaNimRankingResult(TypedDict):
 
 
 class NvidiaNimRerankResponse(TypedDict):
-    rankings: Required[List[NvidiaNimRankingResult]]
+    rankings: Required[list[NvidiaNimRankingResult]]
 
 
 class NvidiaNimRerankConfig(BaseRerankConfig):
@@ -86,8 +86,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             return api_base
 
         # Ensure we don't have duplicate /v1
-        if api_base.endswith("/v1"):
-            api_base = api_base[:-3]
+        api_base = api_base.removesuffix("/v1")
 
         # Strip nvidia_nim/ prefix from model name if present
         clean_model = self._get_clean_model_name(model)
@@ -110,15 +109,15 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Map Cohere/OpenAI rerank params to Nvidia NIM format.
 
@@ -128,7 +127,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         Nvidia NIM specific params (passed through as-is from non_default_params):
         - truncate: How to truncate input if too long (NONE, END)
         """
-        optional_nvidia_nim_rerank_params: Dict[str, Any] = {
+        optional_nvidia_nim_rerank_params: dict[str, Any] = {
             "query": query,
             "documents": documents,
         }
@@ -174,7 +173,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -202,7 +201,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         query_obj: NvidiaNimQueryObject = {"text": query}
 
         # Transform documents to passages format
-        passages: List[NvidiaNimPassageObject] = []
+        passages: list[NvidiaNimPassageObject] = []
         for doc in documents:
             if isinstance(doc, str):
                 passages.append({"text": doc})
@@ -293,11 +292,11 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         nvidia_response: NvidiaNimRerankResponse = raw_response_json
 
         # Transform Nvidia NIM response to LiteLLM format
-        results: List[RerankResponseResult] = []
+        results: list[RerankResponseResult] = []
         rankings = nvidia_response.get("rankings", [])
 
         # Get original documents from request if we need to include them
-        original_passages: List[NvidiaNimPassageObject] = request_data.get("passages", [])
+        original_passages: list[NvidiaNimPassageObject] = request_data.get("passages", [])
 
         for ranking in rankings:
             result_item: RerankResponseResult = {
@@ -327,9 +326,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             meta=meta,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BaseLLMException(
             status_code=status_code,
             message=error_message,

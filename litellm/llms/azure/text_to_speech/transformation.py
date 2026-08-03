@@ -4,7 +4,8 @@ Azure AVA (Cognitive Services) Text-to-Speech transformation
 Maps OpenAI TTS spec to Azure Cognitive Services TTS API
 """
 
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -61,16 +62,16 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: Optional[Union[str, Dict]],
-        optional_params: Dict,
-        litellm_params_dict: Dict,
+        voice: str | dict | None,
+        optional_params: dict,
+        litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]],
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, Any] | None,
         base_llm_http_handler: Any,
         aspeech: bool,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         **kwargs: Any,
     ) -> Union[
         "HttpxBinaryResponseContent",
@@ -100,7 +101,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Convert voice to string if it's a dict (for Azure AVA, voice must be a string)
-        voice_str: Optional[str] = None
+        voice_str: str | None = None
         if isinstance(voice, str):
             voice_str = voice
         elif isinstance(voice, dict):
@@ -161,9 +162,9 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     def _build_express_as_element(
         self,
         content: str,
-        style: Optional[str] = None,
-        styledegree: Optional[str] = None,
-        role: Optional[str] = None,
+        style: str | None = None,
+        styledegree: str | None = None,
+        role: str | None = None,
     ) -> str:
         """
         Build mstts:express-as element with optional style, styledegree, and role attributes
@@ -193,9 +194,9 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _get_voice_language(
         self,
-        voice_name: Optional[str],
-        explicit_lang: Optional[str] = None,
-    ) -> Optional[str]:
+        voice_name: str | None,
+        explicit_lang: str | None = None,
+    ) -> str | None:
         """
         Get the language for the voice element's xml:lang attribute
 
@@ -223,11 +224,11 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: Dict,
-        voice: Optional[Union[str, Dict]] = None,
+        optional_params: dict,
+        voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: Dict = {},
-    ) -> Tuple[Optional[str], Dict]:
+        kwargs: dict = {},
+    ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to Azure AVA TTS parameters
         """
@@ -237,7 +238,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         # OpenAI uses voice as a required param, hence not in optional_params
         ##########################################################
         # If it's already an Azure voice, use it directly
-        mapped_voice: Optional[str] = None
+        mapped_voice: str | None = None
         if isinstance(voice, str):
             if voice in self.VOICE_MAPPINGS:
                 mapped_voice = self.VOICE_MAPPINGS[voice]
@@ -281,8 +282,8 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure environment and set up authentication headers
@@ -311,7 +312,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -384,9 +385,9 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: Optional[str],
-        optional_params: Dict,
-        litellm_params: Dict,
+        voice: str | None,
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:
         """

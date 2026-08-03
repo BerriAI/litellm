@@ -13,7 +13,6 @@ global state.
 """
 
 import re
-from typing import Tuple
 
 from botocore.exceptions import (
     CredentialRetrievalError,
@@ -66,7 +65,7 @@ class BedrockMantleAuthMixin:
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> Tuple[dict, bytes | None]:
+    ) -> tuple[dict, bytes | None]:
         bearer = self._resolve_bearer_token(api_key)
         if not bearer:
             # Pin the credential-scope region to the region of the actual signing URL

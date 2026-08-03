@@ -2,27 +2,27 @@
 Supports syncing responses to Google Cloud Storage Buckets using HTTP requests.
 """
 
-import json
 import asyncio
-from typing import Optional
+import json
 from urllib.parse import quote
 
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
     _get_httpx_client,
+    get_async_httpx_client,
     httpxSpecialProvider,
 )
+
 from .base_cache import BaseCache
 
 
 class GCSCache(BaseCache):
     def __init__(
         self,
-        bucket_name: Optional[str] = None,
-        path_service_account: Optional[str] = None,
-        gcs_path: Optional[str] = None,
+        bucket_name: str | None = None,
+        path_service_account: str | None = None,
+        gcs_path: str | None = None,
     ) -> None:
         super().__init__()
         self.bucket_name = bucket_name or GCSBucketBase(bucket_name=None).BUCKET_NAME

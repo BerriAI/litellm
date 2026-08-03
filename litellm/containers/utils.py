@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, TypeVar
+from typing import Any, TypeVar
 
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -61,7 +61,7 @@ class ContainerRequestUtils:
     def get_optional_params_container_create(
         container_provider_config: BaseContainerConfig,
         container_create_optional_params: ContainerCreateOptionalRequestParams,
-    ) -> Dict:
+    ) -> dict:
         """Get the optional parameters for container creation."""
         supported_params = container_provider_config.get_supported_openai_params()
 
@@ -97,9 +97,9 @@ class ContainerRequestUtils:
     @staticmethod
     def encode_container_id_in_response(
         response_obj: T,
-        custom_llm_provider: Optional[str],
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: str | None,
+        litellm_metadata: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> T:
         """
         Encode container_id in response object with provider/model metadata for routing.
@@ -124,7 +124,7 @@ class ContainerRequestUtils:
         """
         # Extract model_id from litellm_metadata
         litellm_metadata = litellm_metadata or {}
-        model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
+        model_info: dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
 
         # Check if we should encode based on routing metadata

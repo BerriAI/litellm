@@ -11,7 +11,7 @@ POST /v1/tool/policy            - Update the input_policy / output_policy for a 
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Annotated, Any, List, Optional
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, TypeAdapter
@@ -107,7 +107,7 @@ async def get_tool_policy_options(
     response_model=ToolListResponse,
 )
 async def list_tools(
-    input_policy: Optional[ToolInputPolicy] = None,
+    input_policy: ToolInputPolicy | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -270,7 +270,7 @@ async def get_tool_detail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _input_snippet_for_tool_log(sl: Any, max_len: int = 200) -> Optional[str]:
+def _input_snippet_for_tool_log(sl: Any, max_len: int = 200) -> str | None:
     """Short snippet from messages or proxy_server_request for tool usage log row."""
     if sl is None:
         return None
@@ -299,7 +299,7 @@ def _input_snippet_for_tool_log(sl: Any, max_len: int = 200) -> Optional[str]:
     return _snippet_str(psr, max_len)
 
 
-def _snippet_str(text: Any, max_len: int = 200) -> Optional[str]:
+def _snippet_str(text: Any, max_len: int = 200) -> str | None:
     if text is None:
         return None
     if isinstance(text, str):
@@ -330,8 +330,8 @@ async def get_tool_usage_logs(
     tool_name: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
-    start_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
-    end_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    start_date: str | None = Query(None, description="YYYY-MM-DD"),
+    end_date: str | None = Query(None, description="YYYY-MM-DD"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -346,8 +346,8 @@ async def get_tool_usage_logs(
     try:
         where: dict = {"tool_name": tool_name}
         if start_date or end_date:
-            start_time_filter: Optional[datetime] = None
-            end_time_filter: Optional[datetime] = None
+            start_time_filter: datetime | None = None
+            end_time_filter: datetime | None = None
             if start_date:
                 try:
                     start_time_filter = datetime.strptime(start_date + "T00:00:00", "%Y-%m-%dT%H:%M:%S").replace(
@@ -383,7 +383,7 @@ async def get_tool_usage_logs(
         spend_logs = await SpendLogsRepository(prisma_client).table.find_many(where={"request_id": {"in": request_ids}})
         log_by_id = {s.request_id: s for s in spend_logs}
 
-        logs_out: List[ToolUsageLogEntry] = []
+        logs_out: list[ToolUsageLogEntry] = []
         for r in index_rows:
             sl = log_by_id.get(r.request_id)
             if not sl:
@@ -442,7 +442,7 @@ async def get_tool(
 async def _resolve_key_hash_to_object_permission_id(
     prisma_client: "PrismaClient",
     key_hash: str,
-) -> Optional[str]:
+) -> str | None:
     """Resolve key (hash or raw) to object_permission_id; create permission if key has none."""
     from litellm.proxy.proxy_server import hash_token
 
@@ -473,7 +473,7 @@ async def _resolve_key_hash_to_object_permission_id(
 async def _resolve_team_id_to_object_permission_id(
     prisma_client: "PrismaClient",
     team_id: str,
-) -> Optional[str]:
+) -> str | None:
     """Resolve team_id to object_permission_id; create permission if team has none."""
     if not team_id or not team_id.strip():
         return None
@@ -619,8 +619,8 @@ async def update_tool_policy(
 )
 async def delete_tool_policy_override(
     tool_name: str,
-    team_id: Optional[str] = Query(None, description="Team ID of the override to remove"),
-    key_hash: Optional[str] = Query(None, description="Key hash of the override to remove"),
+    team_id: str | None = Query(None, description="Team ID of the override to remove"),
+    key_hash: str | None = Query(None, description="Key hash of the override to remove"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """

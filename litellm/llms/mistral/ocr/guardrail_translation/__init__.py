@@ -8,4 +8,4 @@ guardrail_translation_mappings = {
     CallTypes.aocr: OCRHandler,
 }
 
-__all__ = ["guardrail_translation_mappings", "OCRHandler"]
+__all__ = ["OCRHandler", "guardrail_translation_mappings"]

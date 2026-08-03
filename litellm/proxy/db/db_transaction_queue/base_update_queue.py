@@ -3,7 +3,6 @@ Base class for in memory buffer for database transactions
 """
 
 import asyncio
-from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
@@ -51,7 +50,6 @@ class BaseUpdateQueue:
 
     async def _emit_new_item_added_to_queue_event(
         self,
-        queue_size: Optional[int] = None,
+        queue_size: int | None = None,
     ):
         """placeholder, emit event when a new item is added to the queue"""
-        pass

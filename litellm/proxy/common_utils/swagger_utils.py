@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -6,7 +6,7 @@ from litellm.exceptions import LITELLM_EXCEPTION_TYPES
 
 
 class ErrorResponse(BaseModel):
-    detail: Dict[str, Any] = Field(
+    detail: dict[str, Any] = Field(
         ...,
         example={  # type: ignore
             "error": {
