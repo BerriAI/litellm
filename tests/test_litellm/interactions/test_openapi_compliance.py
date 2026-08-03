@@ -106,25 +106,63 @@ class TestRequestCompliance:
         assert "array" in input_types, "Input should support array"
 
     def test_content_schema_uses_discriminator(self, spec_dict):
-        """Verify Content uses type discriminator."""
+        """Verify Content is a oneOf over the content types, distinguishable by `type`.
+
+        Google's spec dropped the explicit OpenAPI `discriminator` keyword from
+        `Content` at some point after 2025-12-16; the schema is now a plain `oneOf`
+        with no `discriminator` object. LiteLLM's own Pydantic model
+        (`litellm.types.interactions.generated.Content`) still declares its own
+        `discriminator="type"` independently of this JSON Schema keyword, since
+        each content variant carries a distinguishing `type` literal - so this
+        check now verifies the oneOf shape directly rather than requiring the
+        (optional, and no longer present) `discriminator` keyword.
+        """
         content_schema = spec_dict["components"]["schemas"]["Content"]
 
-        assert "discriminator" in content_schema
-        assert content_schema["discriminator"]["propertyName"] == "type"
+        one_of = content_schema.get("oneOf", [])
+        assert one_of, "Content schema should be a oneOf"
 
-        # Check TextContent is an option (via mapping if present, or via oneOf refs)
-        mapping = content_schema["discriminator"].get("mapping")
-        if mapping:
-            assert "text" in mapping
-            print(f"Content type discriminator mapping: {list(mapping.keys())}")
-        else:
-            # Discriminator without explicit mapping — verify via oneOf
-            one_of = content_schema.get("oneOf", [])
-            ref_names = [opt["$ref"].split("/")[-1] for opt in one_of if "$ref" in opt]
+        if "discriminator" in content_schema:
+            assert content_schema["discriminator"]["propertyName"] == "type"
+            mapping = content_schema["discriminator"].get("mapping")
+            if mapping:
+                assert "text" in mapping
+                print(f"Content type discriminator mapping: {list(mapping.keys())}")
+                return
+
+        ref_names = [opt["$ref"].split("/")[-1] for opt in one_of if "$ref" in opt]
+        assert (
+            "TextContent" in ref_names
+        ), f"TextContent not found in oneOf refs: {ref_names}"
+
+        # `discriminator="type"` on litellm's Pydantic `Content` RootModel only
+        # works if every variant schema requires a `type` field with a single
+        # literal value (`const`, or a one-element `enum`), and those literals
+        # are unique across variants. Verify that invariant directly against
+        # the spec's variant schemas, since the JSON Schema `discriminator`
+        # keyword that used to guarantee this is gone.
+        type_literals = []
+        for ref_name in ref_names:
+            variant_schema = spec_dict["components"]["schemas"][ref_name]
             assert (
-                "TextContent" in ref_names
-            ), f"TextContent not found in oneOf refs: {ref_names}"
-            print(f"Content type discriminator (no mapping), oneOf refs: {ref_names}")
+                "type" in variant_schema.get("required", [])
+            ), f"{ref_name} does not require a 'type' field"
+
+            type_prop = variant_schema["properties"]["type"]
+            if "const" in type_prop:
+                literal = type_prop["const"]
+            elif len(type_prop.get("enum", [])) == 1:
+                literal = type_prop["enum"][0]
+            else:
+                raise AssertionError(
+                    f"{ref_name}.type is not a single literal value: {type_prop}"
+                )
+            type_literals.append(literal)
+
+        assert len(type_literals) == len(
+            set(type_literals)
+        ), f"Content variants do not have unique 'type' literals: {type_literals}"
+        print(f"Content oneOf refs: {ref_names}, type literals: {type_literals}")
 
     def test_text_content_schema(self, spec_dict):
         """Verify TextContent schema."""
@@ -182,7 +220,8 @@ class TestResponseCompliance:
         # `status` is an output-only field; validate against the response schema.
         schema = spec_dict["components"]["schemas"]["Interaction"]
         status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026).
+        # Google Interactions API uses lowercase status values (updated Feb 2026;
+        # "queued" added after 2025-12-16 for interactions awaiting execution).
         # Keep this an exact match: this test intentionally breaks CI when
         # Google changes the live spec — that breakage is how we get notified
         # to review the change.
@@ -194,6 +233,7 @@ class TestResponseCompliance:
             "cancelled",
             "incomplete",
             "budget_exceeded",
+            "queued",
         ]
         assert status_prop["enum"] == expected_statuses
         print(f"✓ Status enum values: {expected_statuses}")
