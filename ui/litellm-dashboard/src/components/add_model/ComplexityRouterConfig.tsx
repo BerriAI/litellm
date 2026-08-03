@@ -14,7 +14,7 @@ export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
 export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
-export const DEFAULT_SESSION_AFFINITY = true;
+export const DEFAULT_SESSION_AFFINITY = false;
 
 export interface ComplexityTiers {
   SIMPLE: string[];
@@ -244,10 +244,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <Text strong>Pin a session to its first model</Text>
                 </div>
                 <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
-                  On by default. The model chosen on a session&apos;s first turn is reused for every later turn, which
-                  preserves provider prompt caches and avoids cross-model conversation-history errors. Turn this off to
-                  re-classify every turn, which routes each turn to the cheapest adequate tier at the cost of losing
-                  those caches.
+                  Off by default: every turn is classified on its own merits and routed to the cheapest adequate tier.
+                  Turn this on to reuse the model chosen on a session&apos;s first turn for every later turn, which
+                  preserves provider prompt caches and avoids cross-model conversation-history errors, at the cost of
+                  keeping the whole session on the first turn&apos;s tier.
                 </Text>
               </>
             ),

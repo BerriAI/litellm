@@ -211,16 +211,16 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
     expect(result.session_affinity).toBe(true);
   });
 
-  it("re-asserts the backend's on-by-default when the form value is absent, rather than dropping the key", () => {
-    const result = buildUpdatedComplexityRouterConfig({ ...STORED, session_affinity: false }, FORM_VALUE);
-    expect(result.session_affinity).toBe(true);
+  it("re-asserts the backend's off-by-default when the form value is absent, rather than dropping the key", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, session_affinity: true }, FORM_VALUE);
+    expect(result.session_affinity).toBe(false);
   });
 
-  it("stops a stored session_affinity=false from surviving a save that turned the toggle back on", () => {
+  it("stops a stored session_affinity=true from surviving a save that turned the toggle back off", () => {
     const result = buildUpdatedComplexityRouterConfig(
-      { ...STORED, session_affinity: false },
-      { ...FORM_VALUE, session_affinity: true },
+      { ...STORED, session_affinity: true },
+      { ...FORM_VALUE, session_affinity: false },
     );
-    expect(result.session_affinity).toBe(true);
+    expect(result.session_affinity).toBe(false);
   });
 });

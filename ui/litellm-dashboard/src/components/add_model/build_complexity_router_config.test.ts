@@ -19,7 +19,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierContextWindowSize: undefined,
   classifierContextPerTurnChars: undefined,
   classifierContextIncludeAssistantTurns: undefined,
-  sessionAffinity: true,
+  sessionAffinity: false,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
@@ -39,7 +39,7 @@ describe("buildComplexityRouterConfig", () => {
     expect(config).toEqual({
       tiers,
       classifier_type: "heuristic",
-      session_affinity: true,
+      session_affinity: false,
       escalation_keywords: ["LITELLM ESCALATE"],
     });
   });
@@ -225,14 +225,14 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.return_raw_model_name).toBeUndefined();
   });
 
-  it("writes session_affinity=false so turning the toggle off overrides the backend's on-by-default", () => {
-    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinity: false });
-    expect(config.session_affinity).toBe(false);
-  });
-
-  it("writes session_affinity explicitly when on, so the stored config never relies on the backend default", () => {
+  it("writes session_affinity=true so turning the toggle on overrides the backend's off-by-default", () => {
     const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinity: true });
     expect(config.session_affinity).toBe(true);
+  });
+
+  it("writes session_affinity explicitly when off, so the stored config never relies on the backend default", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinity: false });
+    expect(config.session_affinity).toBe(false);
   });
 
   it("includes return_raw_model_name when enabled", () => {

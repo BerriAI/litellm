@@ -2903,7 +2903,7 @@ class TestRoutingDecisionCauseLogging:
 
 
 class TestSessionAffinity:
-    """Test the session_affinity sticky-routing behavior (on by default)."""
+    """Test the session_affinity sticky-routing behavior (off by default)."""
 
     REASONING_MESSAGE = [
         {
@@ -2917,18 +2917,14 @@ class TestSessionAffinity:
     def session_affinity_config(self, basic_config) -> Dict:
         return {**basic_config, "session_affinity": True}
 
-    @pytest.fixture
-    def session_affinity_disabled_config(self, basic_config) -> Dict:
-        return {**basic_config, "session_affinity": False}
-
     @staticmethod
     def _request_kwargs(session_id: str) -> Dict:
         return {"metadata": {"session_id": session_id}}
 
     @pytest.mark.asyncio
-    async def test_enabled_by_default_pins_model(self, mock_router_instance, basic_config):
-        """Regression: session_affinity defaults to True, so a shared session_id pins the
-        first turn's model and later turns reuse it instead of reclassifying."""
+    async def test_disabled_by_default_reclassifies_every_turn(self, mock_router_instance, basic_config):
+        """Regression: session_affinity defaults to False, so a shared session_id must NOT
+        pin the first turn's model; every turn is classified on its own merits."""
         assert "session_affinity" not in basic_config
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
@@ -2944,19 +2940,17 @@ class TestSessionAffinity:
             model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
         )
         assert first.model == "o1-preview"
-        assert second.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
 
     @pytest.mark.asyncio
-    async def test_can_be_disabled_reclassifies_every_turn(
-        self, mock_router_instance, session_affinity_disabled_config
-    ):
-        """Regression: session_affinity=False must still reclassify every turn even when a
-        shared session_id is present, so the opt-out keeps working."""
+    async def test_can_be_enabled_to_pin_every_later_turn(self, mock_router_instance, session_affinity_config):
+        """Regression: session_affinity=True is the opt-in, so a shared session_id reuses the
+        first turn's model instead of reclassifying."""
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config=session_affinity_disabled_config,
+            complexity_router_config=session_affinity_config,
         )
         request_kwargs = self._request_kwargs("session-1")
         first = await router.async_pre_routing_hook(
@@ -2966,7 +2960,7 @@ class TestSessionAffinity:
             model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
         )
         assert first.model == "o1-preview"
-        assert second.model == "gpt-4o-mini"
+        assert second.model == "o1-preview"
 
     @pytest.mark.asyncio
     async def test_pins_model_after_first_turn(self, mock_router_instance, session_affinity_config):
