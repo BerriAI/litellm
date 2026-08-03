@@ -142,7 +142,7 @@ async def anthropic_response(
         _usage = _blocked_response_usage(e.original_response)
 
         _anthropic_response = AnthropicMessagesResponse(
-            id=f"msg_{str(uuid.uuid4())}",
+            id=f"msg_{uuid.uuid4()!s}",
             type="message",
             role="assistant",
             content=[{"type": "text", "text": e.message}],
@@ -189,9 +189,7 @@ async def anthropic_response(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.anthropic_response(): Exception occured - {}".format(str(e))
-        )
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.anthropic_response(): Exception occured - {e!s}")
 
         # Extract model_id from request metadata (same as success path)
         litellm_metadata = data.get("litellm_metadata", {}) or {}
@@ -211,7 +209,7 @@ async def anthropic_response(
             litellm_logging_obj=None,
         )
 
-        error_msg = f"{str(e)}"
+        error_msg = f"{e!s}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
@@ -303,10 +301,8 @@ async def count_tokens(
             detail=detail,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
-        )
-        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {str(e)}"})
+        verbose_proxy_logger.exception(f"litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {e!s}")
+        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e!s}"})
 
 
 @router.post(

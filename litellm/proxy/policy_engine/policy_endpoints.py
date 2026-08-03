@@ -4,8 +4,6 @@ CRUD ENDPOINTS FOR POLICIES
 Provides REST API endpoints for managing policies and policy attachments.
 """
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
@@ -75,7 +73,7 @@ def _config_attachment_to_db_response(index: int, attachment: PolicyAttachment) 
     dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyListDBResponse,
 )
-async def list_policies(version_status: Optional[str] = None):
+async def list_policies(version_status: str | None = None):
     """
     List all policies from the database and config.yaml. Optionally filter by version_status.
 

@@ -3,7 +3,7 @@ Qostodian Nexus (by Qohash) — LiteLLM guardrail integration.
 """
 
 import os
-from typing import TYPE_CHECKING, Literal, Optional, Type
+from typing import TYPE_CHECKING, Literal, Optional
 
 from litellm.integrations.custom_guardrail import log_guardrail_information
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
@@ -23,7 +23,7 @@ GUARDRAIL_NAME = "qostodian_nexus"
 class QostodianNexus(GenericGuardrailAPI):
     def __init__(
         self,
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
         **kwargs,
     ):
         api_base = api_base or os.environ.get("QOSTODIAN_NEXUS_API_BASE", "http://nexus:8800")
@@ -70,7 +70,7 @@ class QostodianNexus(GenericGuardrailAPI):
         )
 
     @classmethod
-    def get_config_model(cls) -> Optional[Type[QostodianNexusConfigModel]]:
+    def get_config_model(cls) -> type[QostodianNexusConfigModel] | None:
         """
         Returns the config model for Qostodian Nexus.
         """

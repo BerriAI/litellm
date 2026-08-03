@@ -1,5 +1,4 @@
 import base64
-from typing import Union
 
 import httpx
 
@@ -41,7 +40,7 @@ class BedrockAudioTranscriptionRustDispatch:
         custom_llm_provider: str,
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
-        timeout: Union[float, httpx.Timeout] | None,
+        timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
         rust_response = rust_transcription_bridge.transcription(
             model=model,
@@ -67,7 +66,7 @@ class BedrockAudioTranscriptionRustDispatch:
         custom_llm_provider: str,
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
-        timeout: Union[float, httpx.Timeout] | None,
+        timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
         rust_response = await rust_transcription_bridge.atranscription(
             model=model,

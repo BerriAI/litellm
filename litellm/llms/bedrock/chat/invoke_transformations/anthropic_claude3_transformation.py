@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -57,13 +57,13 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     anthropic_version: str = "bedrock-2023-05-31"
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "bedrock"
 
     def should_strip_billing_metadata(self) -> bool:
         return True
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
     def map_openai_params(
@@ -127,7 +127,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -155,7 +155,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     async def async_transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -183,7 +183,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def _build_bedrock_anthropic_request_base(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -251,10 +251,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def _compute_bedrock_invoke_beta_headers(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         headers: dict,
-    ) -> List[str]:
+    ) -> list[str]:
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
         programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools)
@@ -309,7 +309,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 if not isinstance(source_url, str):
                     continue
 
-                inferred_format: Optional[str] = None
+                inferred_format: str | None = None
                 if source_url.lower().endswith(".pdf"):
                     inferred_format = "application/pdf"
                 base64_url = convert_url_to_base64(url=source_url)
@@ -348,7 +348,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 if not isinstance(source_url, str):
                     continue
 
-                inferred_format: Optional[str] = None
+                inferred_format: str | None = None
                 if source_url.lower().endswith(".pdf"):
                     inferred_format = "application/pdf"
                 base64_url = await async_convert_url_to_base64(url=source_url)
@@ -394,12 +394,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         return AnthropicConfig.transform_response(
             self,

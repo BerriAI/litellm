@@ -3,7 +3,7 @@ import mimetypes
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Literal, Optional
 
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-def _is_base64_encoded_unified_file_id(b64_uid: str) -> Union[str, Literal[False]]:
+def _is_base64_encoded_unified_file_id(b64_uid: str) -> str | Literal[False]:
     # Ensure b64_uid is a string and not a mock object
     if not isinstance(b64_uid, str):
         return False
@@ -43,7 +43,7 @@ def convert_b64_uid_to_unified_uid(b64_uid: str) -> str:
         return b64_uid
 
 
-def get_models_from_unified_file_id(unified_file_id: str) -> List[str]:
+def get_models_from_unified_file_id(unified_file_id: str) -> list[str]:
     """
     Extract model names from unified file ID.
 
@@ -64,7 +64,7 @@ def get_models_from_unified_file_id(unified_file_id: str) -> List[str]:
         return []
 
 
-def get_model_id_from_unified_batch_id(file_id: str) -> Optional[str]:
+def get_model_id_from_unified_batch_id(file_id: str) -> str | None:
     """
     Get the model_id from the file_id
 
@@ -150,7 +150,7 @@ def encode_batch_response_ids(response, model: str) -> None:
             )
 
 
-def decode_model_from_file_id(encoded_id: str) -> Optional[str]:
+def decode_model_from_file_id(encoded_id: str) -> str | None:
     """
     Extract model name from an encoded file/batch ID.
     Handles IDs that start with "file-" or "batch_" prefix.
@@ -224,8 +224,8 @@ def is_model_embedded_id(file_id: str) -> bool:
 def extract_model_from_sources(
     file_id: str,
     request,  # FastAPI Request object
-    data: Optional[dict] = None,
-) -> tuple[Optional[str], Optional[str]]:
+    data: dict | None = None,
+) -> tuple[str | None, str | None]:
     """
     Extract model information from multiple sources in priority order:
     1. Embedded in file_id (highest priority)
@@ -297,7 +297,7 @@ def get_team_provider_credentials(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
-) -> Optional[dict]:
+) -> dict | None:
     """
     Resolve upstream credentials for a provider-scoped file operation
     (e.g. GET /v1/files), which doesn't pin a model.
@@ -352,12 +352,12 @@ def get_team_provider_credentials(
     )
     key_model_allowlist_set = frozenset(key_model_allowlist)
 
-    def _key_may_use(public_model_name: Optional[str]) -> bool:
+    def _key_may_use(public_model_name: str | None) -> bool:
         if not key_model_allowlist_set:
             return True
         return public_model_name is not None and public_model_name in key_model_allowlist_set
 
-    def _provider_credentials(model_id: str) -> Optional[dict]:
+    def _provider_credentials(model_id: str) -> dict | None:
         credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
             return credentials
@@ -438,7 +438,7 @@ def apply_team_provider_credentials(
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
-    file_id: Optional[str] = None,
+    file_id: str | None = None,
     include_internal_credentials: bool = False,
 ) -> None:
     """
@@ -466,7 +466,7 @@ def handle_model_based_routing(
     llm_router,  # Router instance
     data: dict,
     check_file_id_encoding: bool = True,
-) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
+) -> tuple[bool, str | None, str | None, dict | None]:
     """
     Orchestrate model-based credential routing for file operations.
 
@@ -600,7 +600,7 @@ def detect_content_type_from_filename(filename: str) -> str:
     return "application/octet-stream"
 
 
-def normalize_mime_type_for_provider(mime_type: str, provider: Optional[str] = None) -> str:
+def normalize_mime_type_for_provider(mime_type: str, provider: str | None = None) -> str:
     """
     Normalize MIME type for specific provider requirements.
 
@@ -653,7 +653,7 @@ def is_gemini_supported_mime_type(mime_type: str) -> bool:
     )
 
 
-def get_content_type_from_file_object(file_object: Optional[dict]) -> str:
+def get_content_type_from_file_object(file_object: dict | None) -> str:
     """
     Determine content type from file object (from database or API response).
 
@@ -706,8 +706,8 @@ class FileCreationParams:
     """
 
     target_storage: str = "default"
-    target_model_names: List[str] = field(default_factory=list)
-    model: Optional[str] = None
+    target_model_names: list[str] = field(default_factory=list)
+    model: str | None = None
 
     def __post_init__(self):
         """Normalize and validate parameters after initialization."""
@@ -724,9 +724,9 @@ class FileCreationParams:
 
 async def extract_file_creation_params(
     request: "Request",
-    request_body: Optional[dict] = None,
-    target_model_names_form: Optional[str] = None,
-    target_storage_form: Optional[str] = None,
+    request_body: dict | None = None,
+    target_model_names_form: str | None = None,
+    target_storage_form: str | None = None,
 ) -> FileCreationParams:
     """
     Extract file creation parameters from request.
@@ -763,7 +763,7 @@ async def extract_file_creation_params(
     )
 
 
-def _extract_target_storage_simple(target_storage_form: Optional[str] = None) -> str:
+def _extract_target_storage_simple(target_storage_form: str | None = None) -> str:
     """
     Extract target_storage parameter from form field.
 
@@ -779,8 +779,8 @@ def _extract_target_storage_simple(target_storage_form: Optional[str] = None) ->
 
 
 def _extract_target_model_names_simple(
-    target_model_names_form: Optional[str] = None,
-) -> List[str]:
+    target_model_names_form: str | None = None,
+) -> list[str]:
     """
     Extract target_model_names parameter from form field.
     """
@@ -800,7 +800,7 @@ def _is_target_model_names_key(key: str) -> bool:
     return key == "target_model_names" or (key.startswith("target_model_names[") and key.endswith("]"))
 
 
-async def _extract_target_model_names_from_form(request: "Request") -> List[str]:
+async def _extract_target_model_names_from_form(request: "Request") -> list[str]:
     """
     Collect target_model_names from the raw multipart form.
 
@@ -812,13 +812,13 @@ async def _extract_target_model_names_from_form(request: "Request") -> List[str]
     """
     form_data = await request.form()
 
-    names: List[str] = []
+    names: list[str] = []
     for key, value in form_data.multi_items():
         if _is_target_model_names_key(key) and isinstance(value, str):
             names.extend(_extract_target_model_names_simple(value))
 
     seen = set()
-    result: List[str] = []
+    result: list[str] = []
     for name in names:
         if name and name not in seen:
             seen.add(name)
@@ -827,8 +827,8 @@ async def _extract_target_model_names_from_form(request: "Request") -> List[str]
 
 
 def validate_managed_files_requirement(
-    target_model_names: List[str],
-    model: Optional[str] = None,
+    target_model_names: list[str],
+    model: str | None = None,
 ) -> None:
     """
     Enforce proxy-level managed files when litellm.require_managed_files is enabled.
@@ -838,8 +838,9 @@ def validate_managed_files_requirement(
             target_model_names is missing or a model parameter routes the request
             through the direct provider path instead of the managed-files hook.
     """
-    import litellm
     from fastapi import HTTPException
+
+    import litellm
 
     if litellm.require_managed_files is not True:
         return
@@ -865,7 +866,7 @@ def validate_managed_files_requirement(
         )
 
 
-def _extract_model_param(request: "Request", request_body: dict) -> Optional[str]:
+def _extract_model_param(request: "Request", request_body: dict) -> str | None:
     """
     Extract model parameter from request.
 
@@ -991,7 +992,7 @@ async def ensure_batch_response_managed_file_ids(
 
 async def get_batch_from_database(
     batch_id: str,
-    unified_batch_id: Union[str, Literal[False]],
+    unified_batch_id: str | Literal[False],
     managed_files_obj,
     prisma_client,
     verbose_proxy_logger,
@@ -1035,7 +1036,7 @@ async def get_batch_from_database(
             if isinstance(db_batch_object.file_object, str)
             else db_batch_object.file_object
         )
-        response = LiteLLMBatch(**batch_data)
+        response = LiteLLMBatch.model_validate(batch_data)
         response.id = batch_id
 
         # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
@@ -1052,7 +1053,7 @@ async def get_batch_from_database(
 
 async def update_batch_in_database(
     batch_id: str,
-    unified_batch_id: Union[str, Literal[False]],
+    unified_batch_id: str | Literal[False],
     response,
     managed_files_obj,
     prisma_client,

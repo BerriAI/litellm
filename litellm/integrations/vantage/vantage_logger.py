@@ -7,7 +7,7 @@ so users can simply set ``success_callback: ["vantage"]`` in their proxy config.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -36,11 +36,11 @@ class VantageLogger(FocusLogger):
     def __init__(
         self,
         *,
-        api_key: Optional[str] = None,
-        integration_token: Optional[str] = None,
-        base_url: Optional[str] = None,
-        frequency: Optional[str] = None,
-        interval_seconds: Optional[int] = None,
+        api_key: str | None = None,
+        integration_token: str | None = None,
+        base_url: str | None = None,
+        frequency: str | None = None,
+        interval_seconds: int | None = None,
         **kwargs: Any,
     ) -> None:
         resolved_api_key = api_key or os.getenv("VANTAGE_API_KEY")
@@ -49,7 +49,7 @@ class VantageLogger(FocusLogger):
         resolved_frequency = (frequency or os.getenv("VANTAGE_EXPORT_FREQUENCY") or "hourly").lower()
 
         raw_interval = interval_seconds or os.getenv("VANTAGE_EXPORT_INTERVAL_SECONDS")
-        resolved_interval: Optional[int] = None
+        resolved_interval: int | None = None
         if raw_interval is not None:
             try:
                 resolved_interval = int(raw_interval)
@@ -59,7 +59,7 @@ class VantageLogger(FocusLogger):
                     raw_interval,
                 )
 
-        destination_config: Dict[str, Any] = {}
+        destination_config: dict[str, Any] = {}
         if resolved_api_key:
             destination_config["api_key"] = resolved_api_key
         if resolved_token:
@@ -114,7 +114,7 @@ class VantageLogger(FocusLogger):
         scheduler: AsyncIOScheduler,
     ) -> None:
         """Register the Vantage export job with the provided scheduler."""
-        vantage_loggers: List[CustomLogger] = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        vantage_loggers: list[CustomLogger] = litellm.logging_callback_manager.get_custom_loggers_for_type(
             callback_type=VantageLogger
         )
         if not vantage_loggers:

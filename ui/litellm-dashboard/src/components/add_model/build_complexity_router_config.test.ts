@@ -16,6 +16,9 @@ const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
+  classifierContextWindowSize: undefined,
+  classifierContextPerTurnChars: undefined,
+  classifierContextIncludeAssistantTurns: undefined,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
@@ -73,6 +76,52 @@ describe("buildComplexityRouterConfig", () => {
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
     });
     expect(config.classifier_llm_config).toBeUndefined();
+  });
+
+  it("includes classifier_context_window_size and classifier_context_per_turn_chars only when classifier_type is llm", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierContextWindowSize: 5,
+      classifierContextPerTurnChars: 300,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_context_window_size).toBe(5);
+    expect(config.classifier_context_per_turn_chars).toBe(300);
+  });
+
+  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is heuristic even if values linger in state", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "heuristic",
+      classifierContextWindowSize: 5,
+      classifierContextPerTurnChars: 300,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+  });
+
+  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is llm but neither was set, leaving the backend default", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    });
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+  });
+
+  it("allows classifier_context_window_size of 0, distinct from unset, to send no prior-turn context", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierContextWindowSize: 0,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_context_window_size).toBe(0);
   });
 
   it("sends keyword_tier_rules with their per-tier targeting preserved (not flattened)", () => {
@@ -268,5 +317,37 @@ describe("getSemanticConfigError", () => {
     expect(
       getSemanticConfigError({ semanticMatchingEnabled: true, embeddingModel: "voyage-3-5", keywordTierRules: [rule] }),
     ).toBeNull();
+  });
+});
+
+describe("buildComplexityRouterConfig assistant turns", () => {
+  const llmParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  };
+
+  it("emits the field when the LLM classifier is selected", () => {
+    const config = buildComplexityRouterConfig({ ...llmParams, classifierContextIncludeAssistantTurns: true });
+    expect(config.classifier_context_include_assistant_turns).toBe(true);
+  });
+
+  it("emits the switch turned off, since false is a choice the operator made and not an absent value", () => {
+    const config = buildComplexityRouterConfig({ ...llmParams, classifierContextIncludeAssistantTurns: false });
+    expect(config.classifier_context_include_assistant_turns).toBe(false);
+  });
+
+  it("omits it when classifier_type is heuristic even if a value lingers in state", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "heuristic",
+      classifierContextIncludeAssistantTurns: true,
+    });
+    expect(config.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+
+  it("omits it when unset, leaving the backend default", () => {
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_context_include_assistant_turns).toBeUndefined();
   });
 });

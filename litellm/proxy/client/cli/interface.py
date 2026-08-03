@@ -1,15 +1,11 @@
 # stdlib imports
 import os
 import sys
-from typing import TYPE_CHECKING
 
 # third party imports
 import click
 
 from litellm._logging import verbose_logger
-
-if TYPE_CHECKING:
-    pass
 
 
 def styled_prompt():

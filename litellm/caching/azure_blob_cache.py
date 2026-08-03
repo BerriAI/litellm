@@ -19,12 +19,12 @@ from .base_cache import BaseCache
 
 class AzureBlobCache(BaseCache):
     def __init__(self, account_url, container) -> None:
-        from azure.storage.blob import BlobServiceClient
         from azure.core.exceptions import ResourceExistsError
         from azure.identity import DefaultAzureCredential
         from azure.identity.aio import (
             DefaultAzureCredential as AsyncDefaultAzureCredential,
         )
+        from azure.storage.blob import BlobServiceClient
         from azure.storage.blob.aio import BlobServiceClient as AsyncBlobServiceClient
 
         self.container_client = BlobServiceClient(

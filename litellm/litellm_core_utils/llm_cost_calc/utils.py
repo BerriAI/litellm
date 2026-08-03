@@ -1,9 +1,10 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal, Mapping, Optional, Tuple, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -49,7 +50,7 @@ _SERVICE_TIER_TO_COST_KEY_SUFFIX: Mapping[str, str] = MappingProxyType(
 )
 
 
-def _get_token_detail_value(details: object, key: str) -> Optional[int]:
+def _get_token_detail_value(details: object, key: str) -> int | None:
     if isinstance(details, dict):
         value = details.get(key)
     else:
@@ -57,7 +58,7 @@ def _get_token_detail_value(details: object, key: str) -> Optional[int]:
     return value if isinstance(value, int) else None
 
 
-def _get_web_search_requests(server_tool_use: Any) -> Optional[int]:
+def _get_web_search_requests(server_tool_use: Any) -> int | None:
     """
     Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
     that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
@@ -114,9 +115,9 @@ def _generic_cost_per_character(
     custom_llm_provider: str,
     prompt_characters: float,
     completion_characters: float,
-    custom_prompt_cost: Optional[float],
-    custom_completion_cost: Optional[float],
-) -> Tuple[Optional[float], Optional[float]]:
+    custom_prompt_cost: float | None,
+    custom_completion_cost: float | None,
+) -> tuple[float | None, float | None]:
     """
     Calculates cost per character for aspeech/speech calls.
 
@@ -142,18 +143,14 @@ def _generic_cost_per_character(
     try:
         if custom_prompt_cost is None:
             assert "input_cost_per_character" in model_info and model_info["input_cost_per_character"] is not None, (
-                "model info for model={} does not have 'input_cost_per_character'-pricing\nmodel_info={}".format(
-                    model, model_info
-                )
+                f"model info for model={model} does not have 'input_cost_per_character'-pricing\nmodel_info={model_info}"
             )
             custom_prompt_cost = model_info["input_cost_per_character"]
 
         prompt_cost = prompt_characters * custom_prompt_cost
     except Exception as e:
         verbose_logger.exception(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
-                str(e)
-            )
+            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {e!s}\nDefaulting to None"
         )
 
         prompt_cost = None
@@ -162,17 +159,13 @@ def _generic_cost_per_character(
     try:
         if custom_completion_cost is None:
             assert "output_cost_per_character" in model_info and model_info["output_cost_per_character"] is not None, (
-                "model info for model={} does not have 'output_cost_per_character'-pricing\nmodel_info={}".format(
-                    model, model_info
-                )
+                f"model info for model={model} does not have 'output_cost_per_character'-pricing\nmodel_info={model_info}"
             )
             custom_completion_cost = model_info["output_cost_per_character"]
         completion_cost = completion_characters * custom_completion_cost
     except Exception as e:
         verbose_logger.exception(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
-                str(e)
-            )
+            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {e!s}\nDefaulting to None"
         )
 
         completion_cost = None
@@ -180,7 +173,7 @@ def _generic_cost_per_character(
     return prompt_cost, completion_cost
 
 
-def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> str:
+def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
     """
     Get the appropriate cost key based on service tier.
 
@@ -207,8 +200,8 @@ def _parse_above_token_threshold(key: str) -> float:
 
 
 def _get_token_base_cost(
-    model_info: ModelInfo, usage: Usage, service_tier: Optional[str] = None
-) -> Tuple[float, float, float, float, float]:
+    model_info: ModelInfo, usage: Usage, service_tier: str | None = None
+) -> tuple[float, float, float, float, float]:
     """
     Return prompt cost, completion cost, and cache costs for a given model and usage.
 
@@ -259,7 +252,7 @@ def _get_token_base_cost(
         )
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
-    threshold: Optional[float] = None
+    threshold: float | None = None
     for key in sorted(threshold_keys, key=_parse_above_token_threshold, reverse=True):
         value = model_info.get(key)
         if value is not None:
@@ -365,7 +358,7 @@ def _get_token_base_cost(
     )
 
 
-def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: Optional[float]) -> float:
+def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: float | None) -> float:
     """
     Generic cost calculator for any usage component
 
@@ -383,7 +376,7 @@ def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: 
     return 0.0
 
 
-def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: Optional[float] = 0.0) -> Optional[float]:
+def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: float | None = 0.0) -> float | None:
     # Sometimes the cost per unit is a string (e.g.: If a value like "3e-7" was read from the config.yaml)
     cost_per_unit = model_info.get(cost_key)
     if isinstance(cost_per_unit, float):
@@ -424,7 +417,7 @@ def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: Opti
 
 def calculate_cache_writing_cost(
     cache_creation_tokens: int,
-    cache_creation_token_details: Optional[CacheCreationTokenDetails],
+    cache_creation_token_details: CacheCreationTokenDetails | None,
     cache_creation_cost_above_1hr: float,
     cache_creation_cost: float,
 ) -> float:
@@ -449,7 +442,7 @@ def calculate_cache_writing_cost(
 class PromptTokensDetailsResult(TypedDict):
     cache_hit_tokens: int
     cache_creation_tokens: int
-    cache_creation_token_details: Optional[CacheCreationTokenDetails]
+    cache_creation_token_details: CacheCreationTokenDetails | None
     text_tokens: int
     audio_tokens: int
     image_tokens: int
@@ -461,10 +454,10 @@ class PromptTokensDetailsResult(TypedDict):
 
 
 def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
-    cache_hit_tokens = cast(Optional[int], getattr(usage.prompt_tokens_details, "cached_tokens", 0)) or 0
+    cache_hit_tokens = cast(int | None, getattr(usage.prompt_tokens_details, "cached_tokens", 0)) or 0
     cache_creation_tokens = (
         cast(
-            Optional[int],
+            int | None,
             getattr(usage.prompt_tokens_details, "cache_write_tokens", 0)
             or getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0),
         )
@@ -472,36 +465,36 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     )
     cache_creation_token_details = (
         cast(
-            Optional[CacheCreationTokenDetails],
+            CacheCreationTokenDetails | None,
             getattr(usage.prompt_tokens_details, "cache_creation_token_details", None),
         )
         or None
     )
     text_tokens = (
-        cast(Optional[int], getattr(usage.prompt_tokens_details, "text_tokens", None))
+        cast(int | None, getattr(usage.prompt_tokens_details, "text_tokens", None))
         or 0  # default to prompt tokens, if this field is not set
     )
-    audio_tokens = cast(Optional[int], getattr(usage.prompt_tokens_details, "audio_tokens", 0)) or 0
-    image_tokens = cast(Optional[int], getattr(usage.prompt_tokens_details, "image_tokens", 0)) or 0
+    audio_tokens = cast(int | None, getattr(usage.prompt_tokens_details, "audio_tokens", 0)) or 0
+    image_tokens = cast(int | None, getattr(usage.prompt_tokens_details, "image_tokens", 0)) or 0
     video_tokens = _coerce_token_count(getattr(usage.prompt_tokens_details, "video_tokens", 0))
     character_count = (
         cast(
-            Optional[int],
+            int | None,
             getattr(usage.prompt_tokens_details, "character_count", 0),
         )
         or 0
     )
-    image_count = cast(Optional[int], getattr(usage.prompt_tokens_details, "image_count", 0)) or 0
+    image_count = cast(int | None, getattr(usage.prompt_tokens_details, "image_count", 0)) or 0
     video_length_seconds = (
         cast(
-            Optional[float],
+            float | None,
             getattr(usage.prompt_tokens_details, "video_length_seconds", 0),
         )
         or 0.0
     )
     audio_length_seconds = (
         cast(
-            Optional[float],
+            float | None,
             getattr(usage.prompt_tokens_details, "audio_length_seconds", 0),
         )
         or 0.0
@@ -533,28 +526,28 @@ class CompletionTokensDetailsResult(TypedDict):
 def _parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResult:
     audio_tokens = (
         cast(
-            Optional[int],
+            int | None,
             getattr(usage.completion_tokens_details, "audio_tokens", 0),
         )
         or 0
     )
     text_tokens = (
         cast(
-            Optional[int],
+            int | None,
             getattr(usage.completion_tokens_details, "text_tokens", None),
         )
         or 0  # default to completion tokens, if this field is not set
     )
     reasoning_tokens = (
         cast(
-            Optional[int],
+            int | None,
             getattr(usage.completion_tokens_details, "reasoning_tokens", 0),
         )
         or 0
     )
     image_tokens = (
         cast(
-            Optional[int],
+            int | None,
             getattr(usage.completion_tokens_details, "image_tokens", 0),
         )
         or 0
@@ -577,7 +570,7 @@ def _calculate_input_cost(
     cache_read_cost: float,
     cache_creation_cost: float,
     cache_creation_cost_above_1hr: float,
-    service_tier: Optional[str] = None,
+    service_tier: str | None = None,
 ) -> float:
     """
     Calculates the input cost for a given model, prompt tokens, and completion tokens.
@@ -653,7 +646,7 @@ def _calculate_input_cost(
     return prompt_cost
 
 
-def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: Optional[str]) -> float:
+def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
     """
     Resolve the per-model regional-processing uplift multiplier for a given
     data-residency region.
@@ -688,9 +681,9 @@ def generic_cost_per_token(
     model: str,
     usage: Usage,
     custom_llm_provider: str,
-    service_tier: Optional[str] = None,
-    data_residency: Optional[str] = None,
-) -> Tuple[float, float]:
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -748,8 +741,7 @@ def generic_cost_per_token(
     if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
         text_tokens = usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens
         # Clamp to zero: inconsistent streaming usage
-        if text_tokens < 0:
-            text_tokens = 0
+        text_tokens = max(text_tokens, 0)
         prompt_tokens_details["text_tokens"] = text_tokens
 
     (
@@ -861,10 +853,10 @@ class TokenTypeCostBreakdown:
 
 def get_token_type_cost_breakdown(
     model: str,
-    custom_llm_provider: Optional[str],
+    custom_llm_provider: str | None,
     usage: Usage,
-    service_tier: Optional[str] = None,
-    data_residency: Optional[str] = None,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -909,7 +901,7 @@ def get_token_type_cost_breakdown(
 
     cache_read_tokens = 0
     cache_creation_tokens = 0
-    cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
+    cache_creation_token_details: CacheCreationTokenDetails | None = None
     if usage.prompt_tokens_details is not None:
         prompt_tokens_details = _parse_prompt_tokens_details(usage)
         cache_read_tokens = prompt_tokens_details["cache_hit_tokens"]
@@ -949,7 +941,7 @@ def calculate_image_response_cost_from_usage(
     model: str,
     image_response: ImageResponse,
     custom_llm_provider: str,
-) -> Optional[float]:
+) -> float | None:
     """
     Calculate image generation cost from usage metadata when available.
 
@@ -974,7 +966,7 @@ def calculate_image_response_cost_from_usage(
         return None
 
     input_tokens_details = getattr(usage, "input_tokens_details", None)
-    prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+    prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     if input_tokens_details is not None:
         prompt_tokens_details = PromptTokensDetailsWrapper(
             text_tokens=getattr(input_tokens_details, "text_tokens", None),
@@ -1075,12 +1067,12 @@ class CostCalculatorUtils:
     def route_image_generation_cost_calculator(
         model: str,
         completion_response: ImageResponse,
-        custom_llm_provider: Optional[str] = None,
-        quality: Optional[str] = None,
-        n: Optional[int] = None,
-        size: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        call_type: Optional[str] = None,
+        custom_llm_provider: str | None = None,
+        quality: str | None = None,
+        n: int | None = None,
+        size: str | None = None,
+        optional_params: dict | None = None,
+        call_type: str | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -1195,29 +1187,10 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
             )
-        elif custom_llm_provider == litellm.LlmProviders.OPENAI.value:
-            # gpt-image models use token-based pricing.
-            model_lower = model.lower()
-            if "gpt-image" in model_lower:
-                from litellm.llms.openai.image_generation.cost_calculator import (
-                    cost_calculator as openai_gpt_image_cost_calculator,
-                )
-
-                return openai_gpt_image_cost_calculator(
-                    model=model,
-                    image_response=completion_response,
-                    custom_llm_provider=custom_llm_provider,
-                )
-            # Fall through to default for DALL-E models
-            return default_image_cost_calculator(
-                model=model,
-                quality=quality,
-                custom_llm_provider=custom_llm_provider,
-                n=n,
-                size=size,
-                optional_params=optional_params,
-            )
-        elif custom_llm_provider == litellm.LlmProviders.AZURE.value:
+        elif (
+            custom_llm_provider == litellm.LlmProviders.OPENAI.value
+            or custom_llm_provider == litellm.LlmProviders.AZURE.value
+        ):
             # gpt-image models use token-based pricing.
             model_lower = model.lower()
             if "gpt-image" in model_lower:

@@ -3,7 +3,7 @@
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
 
 
-def _litellm_key_from_request(request: Request) -> Optional[str]:
+def _litellm_key_from_request(request: Request) -> str | None:
     """Return the LiteLLM API key presented on the request, or ``None``.
 
     Accepts the key from ``x-litellm-api-key`` (what MCP clients such as Claude Desktop/Code

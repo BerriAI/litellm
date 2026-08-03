@@ -8,7 +8,7 @@ import enum
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
@@ -46,11 +46,11 @@ class _Action(str, enum.Enum):
 class NomaV2Guardrail(CustomGuardrail):
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        application_id: Optional[str] = None,
-        monitor_mode: Optional[bool] = None,
-        block_failures: Optional[bool] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        application_id: str | None = None,
+        monitor_mode: bool | None = None,
+        block_failures: bool | None = None,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -76,7 +76,7 @@ class NomaV2Guardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
             NomaV2GuardrailConfigModel,
         )
@@ -84,7 +84,7 @@ class NomaV2Guardrail(CustomGuardrail):
         return NomaV2GuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
@@ -104,7 +104,7 @@ class NomaV2Guardrail(CustomGuardrail):
         return parsed.hostname == _DEFAULT_API_BASE_HOSTNAME
 
     @staticmethod
-    def _get_non_empty_str(value: Any) -> Optional[str]:
+    def _get_non_empty_str(value: Any) -> str | None:
         if not isinstance(value, str):
             return None
         stripped = value.strip()
@@ -129,7 +129,7 @@ class NomaV2Guardrail(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
-        application_id: Optional[str],
+        application_id: str | None,
     ) -> dict:
         payload_request_data = self._sanitize_payload_for_transport(request_data)
         if logging_obj is not None:
@@ -256,7 +256,7 @@ class NomaV2Guardrail(CustomGuardrail):
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
         if not isinstance(dynamic_params, dict):
             dynamic_params = {}
-        response_json: Optional[dict] = None
+        response_json: dict | None = None
 
         # Per-request dynamic params can override configured application context.
         application_id = self._get_non_empty_str(dynamic_params.get("application_id"))

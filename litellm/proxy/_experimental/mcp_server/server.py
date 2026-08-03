@@ -65,6 +65,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     extract_mcp_tool_result_error_message,
     get_server_prefix,
     iter_known_server_prefixes,
+    match_known_tool_name,
 )
 from litellm.proxy._types import (
     ProxyException,
@@ -804,7 +805,7 @@ if MCP_AVAILABLE:
             }
             return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
         except Exception as e:
-            verbose_logger.exception(f"Error in list_tools endpoint: {str(e)}")
+            verbose_logger.exception(f"Error in list_tools endpoint: {e!s}")
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
@@ -1079,26 +1080,26 @@ if MCP_AVAILABLE:
                     isError=True,
                 )
             except BlockedPiiEntityError as e:
-                verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
+                verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {e!s}")
                 return CallToolResult(
                     content=[
                         TextContent(
-                            text=f"Error: Blocked PII entity detected - {str(e)}",
+                            text=f"Error: Blocked PII entity detected - {e!s}",
                             type="text",
                         )
                     ],
                     isError=True,
                 )
             except GuardrailRaisedException as e:
-                verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
+                verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {e!s}")
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: Guardrail violation - {str(e)}", type="text")],
+                    content=[TextContent(text=f"Error: Guardrail violation - {e!s}", type="text")],
                     isError=True,
                 )
             except HTTPException as e:
-                verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
+                verbose_logger.error(f"HTTPException in MCP tool call: {e!s}")
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: {str(e.detail)}", type="text")],
+                    content=[TextContent(text=f"Error: {e.detail!s}", type="text")],
                     isError=True,
                 )
             except MCPUpstreamAuthError as e:
@@ -1120,7 +1121,7 @@ if MCP_AVAILABLE:
             except Exception as e:
                 verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: {str(e)}", type="text")],
+                    content=[TextContent(text=f"Error: {e!s}", type="text")],
                     isError=True,
                 )
 
@@ -1172,7 +1173,7 @@ if MCP_AVAILABLE:
             verbose_logger.info(f"MCP list_prompts - Successfully returned {len(prompts)} prompts")
             return prompts
         except Exception as e:
-            verbose_logger.exception(f"Error in list_prompts endpoint: {str(e)}")
+            verbose_logger.exception(f"Error in list_prompts endpoint: {e!s}")
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
@@ -1264,7 +1265,7 @@ if MCP_AVAILABLE:
             verbose_logger.info(f"MCP list_resources - Successfully returned {len(resources)} resources")
             return resources
         except Exception as e:
-            verbose_logger.exception(f"Error in list_resources endpoint: {str(e)}")
+            verbose_logger.exception(f"Error in list_resources endpoint: {e!s}")
             return []
         finally:
             if _session_reset_token is not None:
@@ -1309,7 +1310,7 @@ if MCP_AVAILABLE:
             )
             return resource_templates
         except Exception as e:
-            verbose_logger.exception(f"Error in list_resource_templates endpoint: {str(e)}")
+            verbose_logger.exception(f"Error in list_resource_templates endpoint: {e!s}")
             return []
         finally:
             if _session_reset_token is not None:
@@ -1416,34 +1417,17 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
-    def _tool_name_matches(tool_name: str, filter_list: list[str]) -> bool:
+    def _tool_name_matches(tool_name: str, filter_list: list[str], mcp_server: MCPServer) -> bool:
         """
         Check if a tool name matches any name in the filter list.
 
-        Checks both the full tool name and unprefixed version (without server prefix).
-        This allows users to configure simple tool names regardless of prefixing.
-        Comparison is case-insensitive to handle OpenAPI operationIds that may be in camelCase.
-
-        Args:
-            tool_name: The tool name to check (may be prefixed like "server-tool_name")
-            filter_list: List of tool names to match against
-
-        Returns:
-            True if the tool name (prefixed or unprefixed) is in the filter list
+        Reads the same owner the server-level permission checks use, so discovery hides
+        exactly what dispatch refuses. ``mcp_server`` is required: guessing the boundary
+        at the first separator mismatches every tool on a server whose prefix contains
+        the separator.
         """
-        from litellm.proxy._experimental.mcp_server.utils import (
-            split_server_prefix_from_name,
-        )
-
-        # Normalize filter list to lowercase for case-insensitive comparison
-        filter_list_lower = [f.lower() for f in filter_list]
-
-        if tool_name.lower() in filter_list_lower:
-            return True
-
-        # Check if the unprefixed name is in the list (case-insensitive)
-        unprefixed_name, _ = split_server_prefix_from_name(tool_name)
-        return unprefixed_name.lower() in filter_list_lower
+        bare_name = strip_known_server_prefix(tool_name, mcp_server)
+        return match_known_tool_name(bare_name, mcp_server, filter_list) is not None
 
     def filter_tools_by_allowed_tools(
         tools: list[MCPTool],
@@ -1473,12 +1457,16 @@ if MCP_AVAILABLE:
         if server_applies_tool_allowlist(mcp_server):
             if not mcp_server.allowed_tools:
                 return []
-            tools_to_return = [tool for tool in tools if _tool_name_matches(tool.name, mcp_server.allowed_tools)]
+            tools_to_return = [
+                tool for tool in tools if _tool_name_matches(tool.name, mcp_server.allowed_tools, mcp_server)
+            ]
 
         # Filter by disallowed_tools (blacklist)
         if mcp_server.disallowed_tools:
             tools_to_return = [
-                tool for tool in tools_to_return if not _tool_name_matches(tool.name, mcp_server.disallowed_tools)
+                tool
+                for tool in tools_to_return
+                if not _tool_name_matches(tool.name, mcp_server.disallowed_tools, mcp_server)
             ]
 
         return tools_to_return
@@ -1498,7 +1486,7 @@ if MCP_AVAILABLE:
             return tools
 
         for tool in tools:
-            unprefixed, _ = split_server_prefix_from_name(tool.name)
+            unprefixed = strip_known_server_prefix(tool.name, mcp_server)
             lookup_key = unprefixed or tool.name
             if lookup_key in display_name_map:
                 tool.name = display_name_map[lookup_key]
@@ -2048,7 +2036,7 @@ if MCP_AVAILABLE:
                     verbose_logger.debug(f"MCP list_tools: omitting {server.name}; it needs upstream auth")
                     return [], classify_list_exception(e)
                 except Exception as e:
-                    verbose_logger.exception(f"Error getting tools from server {server.name}: {str(e)}")
+                    verbose_logger.exception(f"Error getting tools from server {server.name}: {e!s}")
                     return [], classify_list_exception(e)
 
             # Fetch tools from all servers in parallel
@@ -2181,7 +2169,7 @@ if MCP_AVAILABLE:
 
                 verbose_logger.debug(f"Successfully fetched {len(prompts)} prompts from server {server.name}")
             except Exception as e:
-                verbose_logger.exception(f"Error getting prompts from server {server.name}: {str(e)}")
+                verbose_logger.exception(f"Error getting prompts from server {server.name}: {e!s}")
                 # Continue with other servers instead of failing completely
 
         verbose_logger.info(f"Successfully fetched {len(all_prompts)} prompts total from all MCP servers")
@@ -2233,7 +2221,7 @@ if MCP_AVAILABLE:
 
                 verbose_logger.debug(f"Successfully fetched {len(resources)} resources from server {server.name}")
             except Exception as e:
-                verbose_logger.exception(f"Error getting resources from server {server.name}: {str(e)}")
+                verbose_logger.exception(f"Error getting resources from server {server.name}: {e!s}")
 
         verbose_logger.info(f"Successfully fetched {len(all_resources)} resources total from all MCP servers")
 
@@ -2317,14 +2305,16 @@ if MCP_AVAILABLE:
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
-        if allowed_tool_names is None:
-            return tools
 
         # Tools arrive prefixed with the server's own prefix; strip exactly that
         # prefix (resolved from the server) rather than the first separator, so a
         # prefix containing the separator still reduces to the stored bare name.
         server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-        return [t for t in tools if strip_known_server_prefix(t.name, server) in allowed_tool_names]
+        return [
+            t
+            for t in tools
+            if MCPRequestHandler.tool_is_granted(strip_known_server_prefix(t.name, server), allowed_tool_names)
+        ]
 
     async def _list_mcp_tools(
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -2369,7 +2359,7 @@ if MCP_AVAILABLE:
             verbose_logger.debug(f"Successfully fetched {len(listing.tools)} tools from managed MCP servers")
             return listing
         except Exception as e:
-            verbose_logger.exception(f"Error getting tools from managed MCP servers: {str(e)}")
+            verbose_logger.exception(f"Error getting tools from managed MCP servers: {e!s}")
             # Continue with an empty listing instead of failing completely
             return AggregateToolListing(tools=[], outcomes={})
 
@@ -2408,7 +2398,7 @@ if MCP_AVAILABLE:
             )
             verbose_logger.debug(f"Successfully fetched {len(managed_prompts)} prompts from managed MCP servers")
         except Exception as e:
-            verbose_logger.exception(f"Error getting tools from managed MCP servers: {str(e)}")
+            verbose_logger.exception(f"Error getting tools from managed MCP servers: {e!s}")
             # Continue with empty managed tools list instead of failing completely
 
         return managed_prompts
@@ -2438,7 +2428,7 @@ if MCP_AVAILABLE:
             )
             verbose_logger.debug(f"Successfully fetched {len(managed_resources)} resources from managed MCP servers")
         except Exception as e:
-            verbose_logger.exception(f"Error getting resources from managed MCP servers: {str(e)}")
+            verbose_logger.exception(f"Error getting resources from managed MCP servers: {e!s}")
 
         return managed_resources
 
@@ -2699,6 +2689,7 @@ if MCP_AVAILABLE:
                         break
             if mcp_server is not None:
                 server_name = mcp_server.name
+                original_tool_name = strip_known_server_prefix(name, mcp_server)
 
             if requested_server is not None:
                 if mcp_server is not None and mcp_server.server_id != requested_server.server_id:
@@ -2716,6 +2707,7 @@ if MCP_AVAILABLE:
                 if mcp_server is None:
                     mcp_server = requested_server
                     server_name = requested_server.name
+                    original_tool_name = strip_known_server_prefix(name, requested_server)
 
         # Only enforce server-level permissions when we can resolve a server
         if server_name:
@@ -2887,13 +2879,14 @@ if MCP_AVAILABLE:
                 _request_resolved_auth_headers.reset(_resolved_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
-        # Try managed MCP server tool (pass the full prefixed name)
+        # Try managed MCP server tool (the name is bare; the prefix boundary was
+        # already resolved above against this server's registered prefixes)
         # Primary and recommended way to use external MCP servers
         #########################################################
         elif mcp_server:
             response = await _handle_managed_mcp_tool(
                 server_name=server_name,
-                name=original_tool_name,  # Pass the full name (potentially prefixed)
+                name=original_tool_name,
                 arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -2909,6 +2902,54 @@ if MCP_AVAILABLE:
         # Deprecated: Local MCP Server Tool
         #########################################################
         else:
+            # Gate only what can actually dispatch. When the unprefixed name is
+            # not in the registry either, `_handle_local_mcp_tool` below reports
+            # 404 and nothing runs, so demanding a server here would turn every
+            # unknown tool name into a misleading 503.
+            if global_mcp_tool_registry.get_tool(original_tool_name) is not None:
+                # `mcp_server` is None here because the tool name is not in the
+                # tool -> server mapping, but the name still carries a prefix
+                # that the server-level check above compared against the
+                # caller's `allowed_mcp_servers` by exact `name`. So the named
+                # server is in that list and can carry the tool-level checks,
+                # even with the mapping cold. Resolve it from
+                # `allowed_mcp_servers` rather than the registry: the registry
+                # would happily return a server the caller holds no grant for,
+                # and matching anything other than `name` would accept a server
+                # the check never validated.
+                prefix_server = next(
+                    (candidate for candidate in allowed_mcp_servers if candidate.name == server_name),
+                    None,
+                )
+                if prefix_server is None:
+                    # A non-empty prefix that passed the server-level check
+                    # always matches here, so this arm only fires when the
+                    # prefix was empty, which is exactly the case that check
+                    # skips. Fail closed rather than dispatch with no server to
+                    # evaluate a tool ceiling against.
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            f"MCP server for tool '{original_tool_name}' is not available; "
+                            "refusing to dispatch without authorization checks. "
+                            "Retry once the server is registered."
+                        ),
+                    )
+
+                from litellm.proxy.proxy_server import proxy_logging_obj
+
+                hook_result = await global_mcp_server_manager.pre_call_tool_check(
+                    name=original_tool_name,
+                    arguments=arguments,
+                    server_name=server_name,
+                    user_api_key_auth=user_api_key_auth,
+                    proxy_logging_obj=proxy_logging_obj,
+                    server=prefix_server,
+                    raw_headers=raw_headers,
+                )
+                if "arguments" in hook_result:
+                    arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
+
             local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
@@ -3294,8 +3335,8 @@ if MCP_AVAILABLE:
                 result = tool.handler(**arguments)
             return [TextContent(text=str(result), type="text")]
         except Exception as e:
-            verbose_logger.exception(f"Error executing local tool {name}: {str(e)}")
-            return [TextContent(text=f"Error: {str(e)}", type="text")]
+            verbose_logger.exception(f"Error executing local tool {name}: {e!s}")
+            return [TextContent(text=f"Error: {e!s}", type="text")]
 
     def _get_mcp_servers_in_path(path: str) -> list[str] | None:
         """

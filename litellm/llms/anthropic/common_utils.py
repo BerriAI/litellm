@@ -4,7 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -44,17 +44,16 @@ def _strip_bedrock_id_suffixes(model: str) -> str:
     )
 
 
-def is_anthropic_oauth_key(value: Optional[str]) -> bool:
+def is_anthropic_oauth_key(value: str | None) -> bool:
     """Check if a value contains an Anthropic OAuth token (sk-ant-oat*)."""
     if value is None:
         return False
     # Handle both raw token and "Bearer <token>" format
-    if value.startswith("Bearer "):
-        value = value[7:]
+    value = value.removeprefix("Bearer ")
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
 
-def _merge_beta_headers(existing: Optional[str], new_beta: str) -> str:
+def _merge_beta_headers(existing: str | None, new_beta: str) -> str:
     """Merge a new beta value into an existing comma-separated anthropic-beta header."""
     if not existing:
         return new_beta
@@ -63,7 +62,7 @@ def _merge_beta_headers(existing: Optional[str], new_beta: str) -> str:
     return ",".join(sorted(betas))
 
 
-def optionally_handle_anthropic_oauth(headers: dict, api_key: Optional[str]) -> tuple[dict, Optional[str]]:
+def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tuple[dict, str | None]:
     """
     Handle Anthropic OAuth token detection and header setup.
 
@@ -99,13 +98,13 @@ class AnthropicError(BaseLLMException):
         self,
         status_code: int,
         message,
-        headers: Optional[httpx.Headers] = None,
+        headers: httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
 class AnthropicModelInfo(BaseLLMModelInfo):
-    def is_cache_control_set(self, messages: List[AllMessageValues]) -> bool:
+    def is_cache_control_set(self, messages: list[AllMessageValues]) -> bool:
         """
         Return if {"cache_control": ..} in message content block
 
@@ -122,21 +121,21 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
-    def is_file_id_used(self, messages: List[AllMessageValues]) -> bool:
+    def is_file_id_used(self, messages: list[AllMessageValues]) -> bool:
         """
         Return if {"source": {"type": "file", "file_id": ..}} in message content block
         """
         file_ids = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
 
-    def is_mcp_server_used(self, mcp_servers: Optional[List[AnthropicMcpServerTool]]) -> bool:
+    def is_mcp_server_used(self, mcp_servers: list[AnthropicMcpServerTool] | None) -> bool:
         if mcp_servers is None:
             return False
         if mcp_servers:
             return True
         return False
 
-    def is_computer_tool_used(self, tools: Optional[List[AllAnthropicToolsValues]]) -> Optional[str]:
+    def is_computer_tool_used(self, tools: list[AllAnthropicToolsValues] | None) -> str | None:
         """Returns the computer tool version if used, e.g. 'computer_20250124' or None"""
         if tools is None:
             return None
@@ -145,7 +144,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return tool["type"]
         return None
 
-    def is_web_search_tool_used(self, tools: Optional[List[AllAnthropicToolsValues]]) -> bool:
+    def is_web_search_tool_used(self, tools: list[AllAnthropicToolsValues] | None) -> bool:
         """Returns True if web_search tool is used"""
         if tools is None:
             return False
@@ -154,7 +153,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         return False
 
-    def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
+    def is_pdf_used(self, messages: list[AllMessageValues]) -> bool:
         """
         Set to true if media passed into messages.
 
@@ -166,7 +165,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                         return True
         return False
 
-    def is_tool_search_used(self, tools: Optional[List]) -> bool:
+    def is_tool_search_used(self, tools: list | None) -> bool:
         """
         Check if tool search tools are present in the tools list.
         """
@@ -182,7 +181,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         return False
 
-    def is_programmatic_tool_calling_used(self, tools: Optional[List]) -> bool:
+    def is_programmatic_tool_calling_used(self, tools: list | None) -> bool:
         """
         Check if programmatic tool calling is being used (tools with allowed_callers field).
 
@@ -208,7 +207,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
-    def is_input_examples_used(self, tools: Optional[List]) -> bool:
+    def is_input_examples_used(self, tools: list | None) -> bool:
         """
         Check if input_examples is being used in any tools.
 
@@ -297,7 +296,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return model
 
     @staticmethod
-    def _model_map_lookup_candidates(model: str) -> List[str]:
+    def _model_map_lookup_candidates(model: str) -> list[str]:
         """Model-map keys to try for ``model``: the id itself, the same id with a
         bedrock/vertex routing prefix removed, the Bedrock base model, and each of
         those normalized by stripping a Bedrock version suffix (``-v1:0`` fully or
@@ -337,7 +336,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return list(dict.fromkeys((*primary, *normalized)))
 
     @staticmethod
-    def _get_model_capability(model: str, key: str) -> Optional[bool]:
+    def _get_model_capability(model: str, key: str) -> bool | None:
         """Read boolean capability ``key`` from the model map, or None when
         no entry declares it."""
         from litellm.utils import _get_bundled_model_cost_map
@@ -354,7 +353,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return None
 
     @staticmethod
-    def _get_exact_model_capability(model: str, key: str) -> Optional[bool]:
+    def _get_exact_model_capability(model: str, key: str) -> bool | None:
         """Read boolean capability ``key`` from the exact model-map entry only.
 
         Unlike ``_get_model_capability``, does not walk stripped provider aliases.
@@ -364,7 +363,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return value if isinstance(value, bool) else None
 
     @staticmethod
-    def _get_provider_resolved_capability(model: str, key: str, custom_llm_provider: str) -> Optional[bool]:
+    def _get_provider_resolved_capability(model: str, key: str, custom_llm_provider: str) -> bool | None:
         """Resolve boolean capability ``key`` for ``model`` under the caller's provider.
 
         Returns the flag when the provider-aware lookup resolves ``model`` to an
@@ -422,8 +421,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def is_effort_used(
         self,
-        optional_params: Optional[dict],
-        model: Optional[str] = None,
+        optional_params: dict | None,
+        model: str | None = None,
         *,
         custom_llm_provider: str,
     ) -> bool:
@@ -456,7 +455,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
-    def is_code_execution_tool_used(self, tools: Optional[List]) -> bool:
+    def is_code_execution_tool_used(self, tools: list | None) -> bool:
         """
         Check if code execution tool is being used.
 
@@ -471,7 +470,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         return False
 
-    def is_container_with_skills_used(self, optional_params: Optional[dict]) -> bool:
+    def is_container_with_skills_used(self, optional_params: dict | None) -> bool:
         """
         Check if container with skills is being used.
 
@@ -487,7 +486,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         return False
 
-    def _get_user_anthropic_beta_headers(self, anthropic_beta_header: Optional[str]) -> Optional[List[str]]:
+    def _get_user_anthropic_beta_headers(self, anthropic_beta_header: str | None) -> list[str] | None:
         if anthropic_beta_header is None:
             return None
         return anthropic_beta_header.split(",")
@@ -514,14 +513,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def get_anthropic_beta_list(
         self,
         model: str,
-        optional_params: Optional[dict] = None,
-        computer_tool_used: Optional[str] = None,
+        optional_params: dict | None = None,
+        computer_tool_used: str | None = None,
         prompt_caching_set: bool = False,
         file_id_used: bool = False,
         mcp_server_used: bool = False,
         *,
         custom_llm_provider: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get list of common beta headers based on the features that are active.
 
@@ -566,10 +565,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def get_anthropic_headers(
         self,
-        api_key: Optional[str] = None,
-        auth_token: Optional[str] = None,
-        anthropic_version: Optional[str] = None,
-        computer_tool_used: Optional[str] = None,
+        api_key: str | None = None,
+        auth_token: str | None = None,
+        anthropic_version: str | None = None,
+        computer_tool_used: str | None = None,
         prompt_caching_set: bool = False,
         pdf_used: bool = False,
         file_id_used: bool = False,
@@ -580,7 +579,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         input_examples_used: bool = False,
         effort_used: bool = False,
         is_vertex_request: bool = False,
-        user_anthropic_beta_headers: Optional[List[str]] = None,
+        user_anthropic_beta_headers: list[str] | None = None,
         code_execution_tool_used: bool = False,
         container_with_skills_used: bool = False,
         api_base: str | None = None,
@@ -654,12 +653,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Dict:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
         if api_base is None and isinstance(litellm_params, dict):
             api_base = litellm_params.get("api_base")
         use_bearer_for_custom_base: bool = bool(
@@ -669,7 +668,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         api_key = AnthropicModelInfo.get_api_key(api_key)
         # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
-        auth_token: Optional[str] = None
+        auth_token: str | None = None
         if api_key is None:
             auth_token = AnthropicModelInfo.get_auth_token()
         if api_key is None and auth_token is None:
@@ -721,7 +720,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return headers
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         from litellm.secret_managers.main import get_secret_str
 
         return (
@@ -732,13 +731,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         from litellm.secret_managers.main import get_secret_str
 
         return api_key or get_secret_str("ANTHROPIC_API_KEY")
 
     @staticmethod
-    def get_auth_token(auth_token: Optional[str] = None) -> Optional[str]:
+    def get_auth_token(auth_token: str | None = None) -> str | None:
         """Get auth token from ANTHROPIC_AUTH_TOKEN env var.
 
         Unlike api_key (which uses X-Api-Key header), auth_token uses
@@ -771,10 +770,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return None
 
     @staticmethod
-    def get_base_model(model: Optional[str] = None) -> Optional[str]:
+    def get_base_model(model: str | None = None) -> str | None:
         return model.replace("anthropic/", "") if model else None
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = AnthropicModelInfo.get_api_base(api_base)
         auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if api_base is None or auth_header is None:
@@ -804,7 +803,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             litellm_model_names.append(litellm_model_name)
         return litellm_model_names
 
-    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+    def get_token_counter(self) -> BaseTokenCounter | None:
         """
         Factory method to create an Anthropic token counter.
 
@@ -818,7 +817,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
-def strip_advisor_blocks_from_messages(messages: List[Any], replace_with_text: bool = False) -> List[Any]:
+def strip_advisor_blocks_from_messages(messages: list[Any], replace_with_text: bool = False) -> list[Any]:
     """
     Remove (or replace) server_tool_use (name='advisor') and advisor_tool_result blocks
     from assistant message content.
@@ -919,7 +918,7 @@ def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
     return "thinking" in lower and "signature" in lower and ("invalid" in lower or "valid string" in lower)
 
 
-def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[Any]:
+def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[Any]:
     """
     Return a new message list with thinking / redacted_thinking content blocks removed
     from each message. Used to recover from invalid thinking signatures on retry.
@@ -927,7 +926,7 @@ def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[A
     Messages whose content is a list and becomes empty after stripping are omitted,
     since Anthropic rejects empty content arrays.
     """
-    out: List[Any] = []
+    out: list[Any] = []
     for m in messages:
         if not isinstance(m, dict):
             out.append(m)
@@ -946,7 +945,7 @@ def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[A
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
-    data: Dict[str, Any],
+    data: dict[str, Any],
 ) -> None:
     """
     Mutate an Anthropic Messages-style request dict: strip thinking blocks from
@@ -959,8 +958,8 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
 
 
 def strip_empty_text_blocks_from_anthropic_messages(
-    messages: List[Any],
-) -> List[Any]:
+    messages: list[Any],
+) -> list[Any]:
     """
     Return a new message list with empty or whitespace-only ``{"type": "text"}``
     content blocks removed.
@@ -980,7 +979,7 @@ def strip_empty_text_blocks_from_anthropic_messages(
     The caller's list and its content blocks are never mutated; modified
     messages are returned as shallow copies with a fresh content list.
     """
-    out: List[Any] = []
+    out: list[Any] = []
     for m in messages:
         if not isinstance(m, dict) or not isinstance(m.get("content"), list):
             out.append(m)
@@ -1058,7 +1057,7 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any
     return out
 
 
-def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:
+def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     openai_headers = {}
     if "anthropic-ratelimit-requests-limit" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]

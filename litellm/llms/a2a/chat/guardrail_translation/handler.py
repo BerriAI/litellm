@@ -11,7 +11,7 @@ A2A Protocol Format:
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.a2a.common_utils import serialize_a2a_data_part
@@ -67,10 +67,10 @@ class A2AGuardrailHandler(BaseTranslation):
             verbose_proxy_logger.debug("A2A: No parts in message, skipping guardrail")
             return data
 
-        texts_to_check: List[str] = []
+        texts_to_check: list[str] = []
         # Track which parts contain scannable content, and which field to write
         # the guardrailed value back to ("text" or "data")
-        part_mappings: List[Tuple[int, str]] = []
+        part_mappings: list[tuple[int, str]] = []
 
         # Step 1: Extract text from all text parts, and serialized data from all data parts
         for part_idx, part in enumerate(parts):
@@ -122,7 +122,7 @@ class A2AGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process A2A output response by applying guardrails to text content.
@@ -159,10 +159,10 @@ class A2AGuardrailHandler(BaseTranslation):
             return response
 
         # Find all text-containing parts in the response
-        texts_to_check: List[str] = []
+        texts_to_check: list[str] = []
         # Each mapping is (path_to_parts_list, part_index)
         # path_to_parts_list is a tuple of keys to navigate to the parts list
-        task_mappings: List[Tuple[Tuple[str, ...], int, str]] = []
+        task_mappings: list[tuple[tuple[str, ...], int, str]] = []
 
         # Extract texts from all possible locations
         self._extract_texts_from_result(
@@ -226,12 +226,12 @@ class A2AGuardrailHandler(BaseTranslation):
 
     async def process_output_streaming_response(
         self,
-        responses_so_far: List[Any],
+        responses_so_far: list[Any],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: Optional[dict] = None,
-    ) -> List[Any]:
+        request_data: dict | None = None,
+    ) -> list[Any]:
         """
         Process A2A streaming output by applying guardrails to accumulated text.
 
@@ -274,14 +274,14 @@ class A2AGuardrailHandler(BaseTranslation):
         guardrailed_text = guardrailed_texts[0]
 
         # Find first chunk (by original index) that has text; put full guardrailed text there and clear rest
-        first_chunk_with_text: Optional[int] = chunk_indices_with_text[0] if chunk_indices_with_text else None
+        first_chunk_with_text: int | None = chunk_indices_with_text[0] if chunk_indices_with_text else None
 
         for orig_i, obj in valid_parsed:
             result = obj.get("result", {})
             if not isinstance(result, dict):
                 continue
-            texts_in_chunk: List[str] = []
-            mappings: List[Tuple[Tuple[str, ...], int, str]] = []
+            texts_in_chunk: list[str] = []
+            mappings: list[tuple[tuple[str, ...], int, str]] = []
             self._extract_texts_from_result(
                 result=result,
                 texts_to_check=texts_in_chunk,
@@ -319,10 +319,10 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _parse_streaming_responses(
         self,
-        responses_so_far: List[Any],
-    ) -> Tuple[List[Optional[Dict[str, Any]]], List[Tuple[int, Dict[str, Any]]]]:
+        responses_so_far: list[Any],
+    ) -> tuple[list[dict[str, Any] | None], list[tuple[int, dict[str, Any]]]]:
         """Parse JSON-RPC items, returning aligned parsed list and valid entries."""
-        parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
+        parsed: list[dict[str, Any] | None] = [None] * len(responses_so_far)
         for i, item in enumerate(responses_so_far):
             if isinstance(item, dict):
                 obj = item
@@ -340,13 +340,13 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _collect_text_from_parsed_chunks(
         self,
-        valid_parsed: List[Tuple[int, Dict[str, Any]]],
-    ) -> Tuple[str, List[int]]:
+        valid_parsed: list[tuple[int, dict[str, Any]]],
+    ) -> tuple[str, list[int]]:
         """Collect text from parsed chunks, returning combined text and indices."""
         from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 
-        text_parts: List[str] = []
-        chunk_indices_with_text: List[int] = []
+        text_parts: list[str] = []
+        chunk_indices_with_text: list[int] = []
         for _idx, (orig_i, obj) in enumerate(valid_parsed):
             t = extract_text_from_a2a_response(obj)
             if t:
@@ -356,9 +356,9 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _extract_texts_from_result(
         self,
-        result: Dict[str, Any],
-        texts_to_check: List[str],
-        task_mappings: List[Tuple[Tuple[str, ...], int, str]],
+        result: dict[str, Any],
+        texts_to_check: list[str],
+        task_mappings: list[tuple[tuple[str, ...], int, str]],
     ) -> None:
         """
         Extract text from all possible locations in an A2A result.
@@ -425,10 +425,10 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _extract_texts_from_parts(
         self,
-        parts: List[Dict[str, Any]],
-        path: Tuple[str, ...],
-        texts_to_check: List[str],
-        task_mappings: List[Tuple[Tuple[str, ...], int, str]],
+        parts: list[dict[str, Any]],
+        path: tuple[str, ...],
+        texts_to_check: list[str],
+        task_mappings: list[tuple[tuple[str, ...], int, str]],
         depth: int = 0,
         max_depth: int = 10,
     ) -> None:
@@ -465,8 +465,8 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _apply_text_to_path(
         self,
-        result: Dict[Union[str, int], Any],
-        path: Tuple[str, ...],
+        result: dict[str | int, Any],
+        path: tuple[str, ...],
         part_idx: int,
         field: str,
         text: str,
