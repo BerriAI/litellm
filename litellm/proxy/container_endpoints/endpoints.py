@@ -21,6 +21,9 @@ from litellm.proxy.container_endpoints.ownership import (
     get_container_forwarding_params,
     record_container_owner,
 )
+from litellm.proxy.container_endpoints.request_utils import (
+    get_container_list_query_params,
+)
 
 router = APIRouter()
 
@@ -206,9 +209,7 @@ async def list_containers(
         version,
     )
 
-    # Read query parameters
-    query_params = dict(request.query_params)
-    data: Dict[str, Any] = {"query_params": query_params}
+    data: Dict[str, Any] = get_container_list_query_params(request)
 
     # Extract custom_llm_provider using priority chain
     custom_llm_provider = (
