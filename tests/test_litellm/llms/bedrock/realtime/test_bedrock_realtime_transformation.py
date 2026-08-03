@@ -614,16 +614,30 @@ class TestBedrockRealtimeResponseTransformation:
         assert args["location"] == "San Francisco"
 
     def test_transform_tool_use_event_directly(self):
-        """Test transform_tool_use_event directly for guard clause and input parsing"""
+        """Test transform_tool_use_event directly for input parsing and missing IDs"""
         config = BedrockRealtimeConfig()
 
-        # Guard clause: missing IDs returns empty result
+        # Missing IDs still emit a function call (Nova Sonic starts tools with role=TOOL)
         events, tool_call_id, tool_name = config.transform_tool_use_event(
-            {"toolUse": {}}, None, "resp_123"
+            {
+                "toolUse": {
+                    "toolUseId": "tool_call_no_ids",
+                    "toolName": "get_weather",
+                    "content": json.dumps({"location": "Seattle"}),
+                }
+            },
+            None,
+            None,
         )
-        assert events == []
-        assert tool_call_id == ""
-        assert tool_name == ""
+        assert len(events) == 1
+        assert events[0]["type"] == "response.function_call_arguments.done"
+        assert events[0]["call_id"] == "tool_call_no_ids"
+        assert events[0]["name"] == "get_weather"
+        assert events[0]["response_id"].startswith("resp_")
+        assert events[0]["item_id"].startswith("item_")
+        assert json.loads(events[0]["arguments"]) == {"location": "Seattle"}
+        assert tool_call_id == "tool_call_no_ids"
+        assert tool_name == "get_weather"
 
         # JSON string content is parsed and converted to a function call event
         events, tool_call_id, tool_name = config.transform_tool_use_event(
@@ -641,6 +655,8 @@ class TestBedrockRealtimeResponseTransformation:
         assert events[0]["type"] == "response.function_call_arguments.done"
         assert events[0]["call_id"] == "tool_call_123"
         assert events[0]["name"] == "get_weather"
+        assert events[0]["response_id"] == "resp_123"
+        assert events[0]["item_id"] == "item_123"
         assert json.loads(events[0]["arguments"]) == {"location": "San Francisco"}
 
         # Invalid JSON content falls back to empty arguments

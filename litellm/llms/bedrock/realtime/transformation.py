@@ -1026,11 +1026,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug("Handling toolUse")
         tool_use = event["toolUse"]
 
-        if not current_output_item_id or not current_response_id:
-            return [], "", ""
+        response_id = current_response_id or f"resp_{uuid.uuid4()}"
+        item_id = current_output_item_id or f"item_{uuid.uuid4()}"
 
-        # Parse the tool input. Nova 2 Sonic sends arguments in `content`;
-        # fall back to `input` for backward compatibility.
         tool_input = {}
         raw_input = tool_use["content"] if "content" in tool_use else tool_use.get("input")
         if raw_input:
@@ -1042,15 +1040,13 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         tool_call_id = tool_use.get("toolUseId", "")
         tool_name = tool_use.get("toolName", "")
 
-        # Create a function call arguments done event
-        # This is a custom event format that matches what clients expect
         from typing import cast
 
         function_call_event: dict[str, Any] = {
             "type": "response.function_call_arguments.done",
             "event_id": f"event_{uuid.uuid4()}",
-            "response_id": current_response_id,
-            "item_id": current_output_item_id,
+            "response_id": response_id,
+            "item_id": item_id,
             "output_index": 0,
             "call_id": tool_call_id,
             "name": tool_name,
