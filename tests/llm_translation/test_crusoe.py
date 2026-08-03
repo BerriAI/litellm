@@ -6,31 +6,31 @@ from unittest import mock
 
 import litellm
 
-CRUSOE_API_BASE = "https://managed-inference-api-proxy.crusoecloud.com/v1"
+CRUSOE_API_BASE = "https://api.inference.crusoecloud.com/v1"
 
 
-def test_crusoe_json_registry():
-    """Test CrusoeChatConfig is loaded from JSON provider registry"""
-    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+def test_crusoe_native_config():
+    """Test CrusoeConfig is registered as the native provider config"""
+    from litellm.llms.crusoe.chat.transformation import CrusoeConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
 
-    assert JSONProviderRegistry.exists("crusoe")
-    config = JSONProviderRegistry.get("crusoe")
-    assert config is not None
-    assert config.base_url == CRUSOE_API_BASE
-    assert config.api_key_env == "CRUSOE_API_KEY"
-    assert config.api_base_env == "CRUSOE_API_BASE"
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="meta-llama/Llama-3.3-70B-Instruct",
+        provider=LlmProviders.CRUSOE,
+    )
+    assert isinstance(config, CrusoeConfig)
 
 
-def test_crusoe_get_openai_compatible_provider_info():
-    """Test Crusoe provider info retrieval"""
-    from litellm.llms.openai_like.dynamic_config import create_config_class
-    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-    config = create_config_class(JSONProviderRegistry.get("crusoe"))()
+def test_crusoe_provider_info_resolution():
+    """Test Crusoe provider info retrieval via get_llm_provider"""
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     # Test with default values (no env vars set)
     with mock.patch.dict(os.environ, {}, clear=True):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        model, provider, api_key, api_base = get_llm_provider(
+            "crusoe/meta-llama/Llama-3.3-70B-Instruct"
+        )
         assert api_base == CRUSOE_API_BASE
         assert api_key is None
 
@@ -42,7 +42,9 @@ def test_crusoe_get_openai_compatible_provider_info():
             "CRUSOE_API_BASE": "https://custom.crusoecloud.com/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        model, provider, api_key, api_base = get_llm_provider(
+            "crusoe/meta-llama/Llama-3.3-70B-Instruct"
+        )
         assert api_base == "https://custom.crusoecloud.com/v1"
         assert api_key == "test-key"
 
@@ -54,8 +56,10 @@ def test_crusoe_get_openai_compatible_provider_info():
             "CRUSOE_API_BASE": "https://env.crusoecloud.com/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://param.crusoecloud.com/v1", "param-key"
+        model, provider, api_key, api_base = get_llm_provider(
+            "crusoe/meta-llama/Llama-3.3-70B-Instruct",
+            api_base="https://param.crusoecloud.com/v1",
+            api_key="param-key",
         )
         assert api_base == "https://param.crusoecloud.com/v1"
         assert api_key == "param-key"
