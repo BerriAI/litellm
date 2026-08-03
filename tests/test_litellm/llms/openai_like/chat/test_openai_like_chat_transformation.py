@@ -96,6 +96,24 @@ def test_custom_openai_get_models_requires_api_base():
         CustomOpenAIChatConfig().get_models(api_base=None)
 
 
+def test_custom_openai_get_models_does_not_use_openai_api_key(monkeypatch):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"data": [{"id": "my-custom-model"}]}
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-api-key")
+
+    with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
+        models = CustomOpenAIChatConfig().get_models(
+            api_base="https://my-openai-compatible-endpoint/v1"
+        )
+
+    assert models == ["custom_openai/my-custom-model"]
+    mock_get.assert_called_once_with(
+        url="https://my-openai-compatible-endpoint/v1/models",
+        headers={"Authorization": "Bearer "},
+    )
+
+
 def test_openai_model_info_uses_openai_config():
     config = ProviderConfigManager.get_provider_model_info(
         model=None,
