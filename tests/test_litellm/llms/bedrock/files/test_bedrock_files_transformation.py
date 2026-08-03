@@ -1337,6 +1337,23 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert "input" not in model_input
         assert "max_output_tokens" not in model_input
 
+    def test_responses_record_keeps_metadata(self):
+        """`metadata` reaches the bridge, which reads it as its own kwarg."""
+        model_input = self._transform(
+            {
+                "custom_id": "4b",
+                "method": "POST",
+                "url": "/v1/responses",
+                "body": {
+                    "model": self.PASSTHROUGH_MODEL,
+                    "input": "hi",
+                    "metadata": {"tenant": "acct-1"},
+                },
+            }
+        )
+
+        assert model_input["metadata"] == {"tenant": "acct-1"}
+
     @pytest.mark.parametrize(
         "body",
         [
