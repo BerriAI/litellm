@@ -2016,6 +2016,48 @@ async def test_ProxyConfig__get_hierarchical_router_settings_missing_returns_non
     assert out is None
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__get_hierarchical_router_settings_falls_back_to_team(monkeypatch):
+    """A key with no router_settings inherits the team's, so a team-level
+    model_group_alias reaches the request path at all."""
+    pc = ProxyConfig()
+    fake_key = SimpleNamespace(router_settings=None, team_id="team-1")
+    team_settings = {"model_group_alias": {"group-a": "group-b"}}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_team_object",
+        AsyncMock(return_value=SimpleNamespace(router_settings=team_settings)),
+    )
+
+    out = await pc._get_hierarchical_router_settings(
+        user_api_key_dict=fake_key,
+        prisma_client=None,
+        proxy_logging_obj=None,
+    )
+
+    assert out == team_settings
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__get_hierarchical_router_settings_key_shadows_team_entirely(monkeypatch):
+    """Resolution returns whichever object it finds first, it does not merge
+    per field, so a key that sets any router setting hides every team setting
+    including an alias the key itself never set."""
+    pc = ProxyConfig()
+    fake_key = SimpleNamespace(router_settings={"num_retries": 3}, team_id="team-1")
+    team_lookup = AsyncMock(return_value=SimpleNamespace(router_settings={"model_group_alias": {"group-a": "group-b"}}))
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_team_object", team_lookup)
+
+    out = await pc._get_hierarchical_router_settings(
+        user_api_key_dict=fake_key,
+        prisma_client=None,
+        proxy_logging_obj=None,
+    )
+
+    assert out == {"num_retries": 3}
+    assert "model_group_alias" not in out
+    team_lookup.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._add_router_settings_from_db_config
 # ---------------------------------------------------------------------------

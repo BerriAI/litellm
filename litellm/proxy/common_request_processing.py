@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -53,6 +54,7 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
@@ -382,6 +384,39 @@ async def _authorize_response_file_search_vector_stores(
             vector_store_id=vector_store_id,
             user_api_key_dict=user_api_key_dict,
         )
+
+
+async def _resolve_per_request_model_group_alias(
+    requested_model: object,
+    router_settings: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+) -> str | None:
+    """
+    Resolve ``router_settings.model_group_alias`` coming from a key or team.
+
+    The Router only ever resolves aliases from its own instance attribute, which
+    holds the global config map and is shared across requests, so a per-request
+    map has to be applied here instead of being forwarded to the Router.
+
+    Model access was authorized against the requested group, so the target is
+    authorized in its own right before the rewrite; a key that may not call the
+    target gets the usual 403 rather than being quietly served it.
+
+    Returns the target model group, or None when no alias applies.
+    """
+    if not isinstance(requested_model, str):
+        return None
+    target = resolve_model_group_alias(router_settings.get("model_group_alias"), requested_model)
+    if target is None or target == requested_model:
+        return None
+    await can_key_call_resolved_model(
+        model=target,
+        llm_model_list=llm_router.model_list,
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    return target
 
 
 async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
@@ -1285,6 +1320,35 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
 
+        # Apply hierarchical router_settings (Key > Team)
+        # Global router_settings are already on the Router object itself.
+        # This sits with the other alias rewrites, and ahead of the guardrail
+        # merge and the pre-call hooks, so everything that keys off the model
+        # group -- model-level guardrails, per-model budgets and rate limits,
+        # the logging object -- sees the group that will actually serve.
+        if llm_router is not None and proxy_config is not None:
+            from litellm.proxy.proxy_server import prisma_client
+
+            router_settings = await proxy_config._get_hierarchical_router_settings(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+            # If router_settings found (from key or team), apply them
+            # Pass settings as per-request overrides instead of creating a new Router
+            # This avoids expensive Router instantiation on each request
+            if router_settings is not None:
+                self.data["router_settings_override"] = router_settings
+                alias_target = await _resolve_per_request_model_group_alias(
+                    requested_model=self.data.get("model"),
+                    router_settings=router_settings,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_router=llm_router,
+                )
+                if alias_target is not None:
+                    self.data["model"] = alias_target
+
         self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
@@ -1338,23 +1402,6 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             call_type=route_type,  # type: ignore
         )
-
-        # Apply hierarchical router_settings (Key > Team)
-        # Global router_settings are already on the Router object itself.
-        if llm_router is not None and proxy_config is not None:
-            from litellm.proxy.proxy_server import prisma_client
-
-            router_settings = await proxy_config._get_hierarchical_router_settings(
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-            # If router_settings found (from key or team), apply them
-            # Pass settings as per-request overrides instead of creating a new Router
-            # This avoids expensive Router instantiation on each request
-            if router_settings is not None:
-                self.data["router_settings_override"] = router_settings
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
