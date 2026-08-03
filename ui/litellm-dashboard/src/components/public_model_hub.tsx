@@ -468,8 +468,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const agentColumns = useMemo(() => getPublicAgentHubColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
   const mcpColumns = useMemo(() => getPublicMCPHubColumns({ onServerClick: showMcpModal }), [showMcpModal]);
 
-  return (
-    <ThemeProvider accessToken={accessToken}>
+  // When embedded in the dashboard, the outer shell already owns ThemeProvider.
+  // Nesting another provider creates independent dark-mode state that goes stale
+  // when the navbar toggle updates the parent context / document class.
+  const content = (
       <div className={isEmbedded ? "w-full" : "min-h-screen bg-white dark:bg-[#0e0e0e]"}>
         {/* Navigation - only show when not embedded */}
         {!isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
@@ -1526,8 +1528,13 @@ if __name__ == "__main__":
           )}
         </Modal>
       </div>
-    </ThemeProvider>
   );
+
+  if (isEmbedded) {
+    return content;
+  }
+
+  return <ThemeProvider accessToken={accessToken}>{content}</ThemeProvider>;
 };
 
 export default PublicModelHub;
