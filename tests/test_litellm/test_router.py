@@ -6574,3 +6574,35 @@ def test_model_info_is_active_for_environment_matrix(monkeypatch):
     monkeypatch.delenv("LITELLM_ENVIRONMENT")
     with pytest.raises(ValueError, match="LITELLM_ENVIRONMENT"):
         model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})
+
+
+def test_get_fallback_model_group_from_fallbacks_honors_wildcard_and_stripped_keys():
+    """_get_fallback_model_group_from_fallbacks (used for context_window_fallbacks and
+    content_policy_fallbacks) did an exact-key match only, while the canonical
+    get_fallback_model_group resolver used by the regular fallbacks path also honors
+    provider-stripped keys and the "*" wildcard. A "*" or provider-prefixed fallback
+    config was silently ignored, and the original exception was re-raised as if no
+    fallback were configured."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    assert router._get_fallback_model_group_from_fallbacks(
+        fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}],
+        model_group="gpt-3.5-turbo",
+    ) == ["gpt-4"]
+
+    assert router._get_fallback_model_group_from_fallbacks(
+        fallbacks=[{"*": ["gpt-4"]}],
+        model_group="gpt-3.5-turbo",
+    ) == ["gpt-4"]
+
+    assert router._get_fallback_model_group_from_fallbacks(
+        fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}],
+        model_group="openai/gpt-3.5-turbo",
+    ) == ["gpt-4"]
