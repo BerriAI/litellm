@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import os
 import re
 import time
 from collections import OrderedDict
@@ -724,12 +725,11 @@ def clean_headers(
 
 
 @lru_cache(maxsize=1)
-def _secret_mcp_auth_header_names() -> frozenset[str]:
-    """Resolve the MCP client-side auth header name once per process.
+def _secret_manager_mcp_auth_header_name() -> frozenset[str]:
+    """Consult the secret manager once for the MCP client-side auth header name.
 
-    get_secret_str issues a blocking secret-manager SDK call when one is configured,
-    and the caller runs on every proxied request, so the deployment-static value is
-    cached rather than looked up per request.
+    get_secret_str issues a blocking SDK call when a secret manager is configured, and
+    the caller runs on every proxied request, so only this source is cached.
     """
     secret_name = get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME")
     return frozenset({secret_name.lower()}) if secret_name else frozenset()
@@ -738,17 +738,22 @@ def _secret_mcp_auth_header_names() -> frozenset[str]:
 def configured_credential_header_names(general_settings: Mapping[str, Any] | None) -> frozenset[str]:
     """Credential header names that are only knowable from this deployment's config.
 
-    The MCP client-side auth header can be renamed through either source, so both
-    candidate names are collected instead of resolving their precedence; redacting a
-    name this deployment no longer uses is free, missing the one it does use is not.
+    The MCP client-side auth header can be renamed through either source, so every
+    candidate name is collected instead of resolving their precedence; redacting a name
+    this deployment no longer uses is free, missing the one it does use is not.
 
-    Only general_settings is read per call; see _secret_mcp_auth_header_names for why
-    the other source is cached.
+    The env var and general_settings are read per call because the config reloader
+    rewrites both at runtime, and MCPRequestHandler resolves the same setting per
+    request; caching them here would keep logging a renamed header in the clear until
+    the process restarted.
     """
-    settings_name = general_settings.get("mcp_client_side_auth_header_name") if general_settings else None
-    if isinstance(settings_name, str) and settings_name:
-        return _secret_mcp_auth_header_names() | frozenset({settings_name.lower()})
-    return _secret_mcp_auth_header_names()
+    live_names = (
+        os.environ.get("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME"),
+        general_settings.get("mcp_client_side_auth_header_name") if general_settings else None,
+    )
+    return _secret_manager_mcp_auth_header_name() | frozenset(
+        name.lower() for name in live_names if isinstance(name, str) and name
+    )
 
 
 def _is_credential_header(header: str, configured_names: frozenset[str]) -> bool:
