@@ -211,6 +211,11 @@ class CredentialLiteLLMParams(BaseModel):
     aws_bedrock_runtime_endpoint: Optional[str] = None
     aws_bedrock_project_id: Optional[str] = None
     s3_bucket_name: Optional[str] = None
+    s3_output_bucket_name: Optional[str] = None
+    s3_region_name: Optional[str] = None
+    s3_encryption_key_id: Optional[str] = None
+    aws_batch_role_arn: Optional[str] = None
+    bedrock_tags: Optional[List[Dict[str, str]]] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 
