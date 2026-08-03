@@ -1,7 +1,7 @@
 import re
 from copy import deepcopy
 from enum import Enum
-from typing import Any, Literal, get_type_hints
+from typing import Any, Literal, List, get_type_hints
 
 import httpx
 
