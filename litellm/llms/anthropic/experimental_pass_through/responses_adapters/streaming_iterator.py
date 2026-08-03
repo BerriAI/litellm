@@ -246,12 +246,20 @@ class AnthropicResponsesStreamWrapper:
                     cache_read_tokens = int(
                         getattr(usage, "cache_read_input_tokens", 0) or 0
                     )
-                    # Fall back to OpenAI-style input_tokens_details.cached_tokens
-                    if not cache_read_tokens:
-                        details = getattr(usage, "input_tokens_details", None)
-                        if details is not None:
+                    # Fall back to OpenAI-style input_tokens_details.
+                    # Reads: cached_tokens. Writes (GPT-5.6+): cache_write_tokens
+                    # (or cache_creation_tokens alias used elsewhere in LiteLLM).
+                    details = getattr(usage, "input_tokens_details", None)
+                    if details is not None:
+                        if not cache_read_tokens:
                             cache_read_tokens = int(
                                 getattr(details, "cached_tokens", 0) or 0
+                            )
+                        if not cache_creation_tokens:
+                            cache_creation_tokens = int(
+                                getattr(details, "cache_write_tokens", 0)
+                                or getattr(details, "cache_creation_tokens", 0)
+                                or 0
                             )
 
             # Check if tool_use was in the output to override stop_reason

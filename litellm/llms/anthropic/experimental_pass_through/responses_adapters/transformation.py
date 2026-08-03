@@ -469,20 +469,31 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         output_tokens = int(getattr(raw_usage, "output_tokens", 0) or 0)
 
         # Prefer direct Anthropic-style cache fields if present, then fall back
-        # to OpenAI-style input_tokens_details.cached_tokens (same order as the
-        # streaming iterator).
+        # to OpenAI-style input_tokens_details (same order as the streaming
+        # iterator). GPT-5.6+ reports writes as cache_write_tokens; older
+        # OpenAI models typically omit writes so creation stays 0.
         cache_read_input_tokens = int(
             getattr(raw_usage, "cache_read_input_tokens", 0) or 0
         )
-        if not cache_read_input_tokens and raw_usage and raw_usage.input_tokens_details:
-            cache_read_input_tokens = int(
-                raw_usage.input_tokens_details.cached_tokens or 0
-            )
+        cache_creation_input_tokens = int(
+            getattr(raw_usage, "cache_creation_input_tokens", 0) or 0
+        )
+        details = getattr(raw_usage, "input_tokens_details", None) if raw_usage else None
+        if details is not None:
+            if not cache_read_input_tokens:
+                cache_read_input_tokens = int(getattr(details, "cached_tokens", 0) or 0)
+            if not cache_creation_input_tokens:
+                cache_creation_input_tokens = int(
+                    getattr(details, "cache_write_tokens", 0)
+                    or getattr(details, "cache_creation_tokens", 0)
+                    or 0
+                )
 
         anthropic_usage = AnthropicUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
         )
 
         return AnthropicMessagesResponse(

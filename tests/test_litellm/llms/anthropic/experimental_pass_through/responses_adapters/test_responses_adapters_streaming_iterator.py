@@ -132,9 +132,10 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
         ]
 
 
-class TestProcessEventCacheReadUsage:
-    """response.completed usage must map OpenAI cached_tokens onto Anthropic
-    cache_read_input_tokens, preferring a direct Anthropic-style field when set.
+class TestProcessEventCacheUsage:
+    """response.completed usage must map OpenAI cache details onto Anthropic
+    cache_read_input_tokens / cache_creation_input_tokens, preferring direct
+    Anthropic-style fields when set.
     """
 
     def test_cache_read_from_input_tokens_details_cached_tokens(self):
@@ -171,3 +172,66 @@ class TestProcessEventCacheReadUsage:
         chunks = _process_all([{"type": "response.completed", "response": response}])
         deltas = [c for c in chunks if c["type"] == "message_delta"]
         assert deltas[0]["usage"]["cache_read_input_tokens"] == 900
+
+    def test_cache_write_from_input_tokens_details_cache_write_tokens(self):
+        usage = type(
+            "Usage",
+            (),
+            {
+                "input_tokens": 2000,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "input_tokens_details": type(
+                    "Details",
+                    (),
+                    {"cached_tokens": 0, "cache_write_tokens": 1969},
+                )(),
+            },
+        )()
+        response = type("Response", (), {"status": "completed", "usage": usage, "output": []})()
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        deltas = [c for c in chunks if c["type"] == "message_delta"]
+        assert deltas[0]["usage"]["cache_creation_input_tokens"] == 1969
+
+    def test_cache_write_from_input_tokens_details_cache_creation_tokens_alias(self):
+        usage = type(
+            "Usage",
+            (),
+            {
+                "input_tokens": 2000,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "input_tokens_details": type(
+                    "Details",
+                    (),
+                    {"cached_tokens": 0, "cache_creation_tokens": 800},
+                )(),
+            },
+        )()
+        response = type("Response", (), {"status": "completed", "usage": usage, "output": []})()
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        deltas = [c for c in chunks if c["type"] == "message_delta"]
+        assert deltas[0]["usage"]["cache_creation_input_tokens"] == 800
+
+    def test_cache_write_prefers_direct_cache_creation_input_tokens(self):
+        usage = type(
+            "Usage",
+            (),
+            {
+                "input_tokens": 2000,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 700,
+                "input_tokens_details": type(
+                    "Details",
+                    (),
+                    {"cached_tokens": 0, "cache_write_tokens": 1969},
+                )(),
+            },
+        )()
+        response = type("Response", (), {"status": "completed", "usage": usage, "output": []})()
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        deltas = [c for c in chunks if c["type"] == "message_delta"]
+        assert deltas[0]["usage"]["cache_creation_input_tokens"] == 700
