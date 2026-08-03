@@ -12100,9 +12100,7 @@ class Router:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
 
-        Embeddings also arrive as `input`, but as a `list[str]` batch rather than Responses
-        input items. Those are counted as text, since the Responses transform expects
-        object-shaped items and raises on plain strings.
+        Embeddings send `input` as a `list[str]` batch, counted as text.
         """
         from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
             anthropic_system_to_openai_message,
