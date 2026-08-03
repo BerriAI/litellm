@@ -3809,7 +3809,11 @@ async def block_team(
 
 
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise Exception("No DB Connected.")
@@ -3827,9 +3831,22 @@ async def block_team(
         user_api_key_dict=user_api_key_dict,
     )
 
+    # `include` mirrors the relations the auth path consumes off the cached
+    # team object so that `_refresh_cached_team` doesn't null them out.
     record = await TeamRepository(prisma_client).table.update(
         where={"team_id": data.team_id},
         data={"blocked": True},  # type: ignore
+        include={"object_permission": True},  # pyright: ignore[reportArgumentType]  # Prisma include arg type
+    )
+
+    # Refresh the in-memory cached team so the very next auth check sees
+    # `blocked=True`. Without this, requests already in flight (and any
+    # pod with a warmed management-object cache) keep using the stale
+    # `blocked=False` row until the cache TTL expires. See #35565.
+    await _refresh_cached_team(
+        team_row=record,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     return record
@@ -3858,7 +3875,11 @@ async def unblock_team(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise Exception("No DB Connected.")
@@ -3876,9 +3897,21 @@ async def unblock_team(
         user_api_key_dict=user_api_key_dict,
     )
 
+    # `include` mirrors the relations the auth path consumes off the cached
+    # team object so that `_refresh_cached_team` doesn't null them out.
     record = await TeamRepository(prisma_client).table.update(
         where={"team_id": data.team_id},
         data={"blocked": False},  # type: ignore
+        include={"object_permission": True},  # pyright: ignore[reportArgumentType]  # Prisma include arg type
+    )
+
+    # Refresh the in-memory cached team so the very next auth check sees
+    # `blocked=False`. Without this, callers see stale `Team=... is blocked`
+    # errors until the cache TTL expires. See #35565.
+    await _refresh_cached_team(
+        team_row=record,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     return record

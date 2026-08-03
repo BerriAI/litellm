@@ -1916,6 +1916,114 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
         assert update_call_kwargs.get("include", {}).get("object_permission") is True
 
 
+@pytest.mark.parametrize("endpoint_name", ["block_team", "unblock_team"])
+@pytest.mark.asyncio
+async def test_team_block_unblock_refresh_team_cache(endpoint_name):
+    """
+    Regression pin for #35565: `/team/block` and `/team/unblock` previously
+    only updated Postgres, leaving the in-memory `team_id:{team_id}` cache
+    serving the pre-mutation `blocked` flag until the management-object
+    TTL expired. After a block, auth kept admitting calls; after an
+    unblock, auth kept rejecting them.
+
+    Pin: both endpoints must call `_cache_team_object` with the updated
+    team row so the very next auth check sees the new blocked state.
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        BlockTeamRequest,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        block_team,
+        unblock_team,
+    )
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id")
+
+    existing_team = MagicMock()
+    existing_team.model_dump.return_value = {
+        "team_id": "team-block-test",
+        "blocked": False,
+        "object_permission_id": "op-block",
+        "object_permission": {
+            "object_permission_id": "op-block",
+            "search_tools": ["allowed-tool-A"],
+        },
+    }
+
+    expected_blocked = endpoint_name == "block_team"
+    updated_team = MagicMock()
+    updated_team.team_id = "team-block-test"
+    updated_team.model_dump.return_value = {
+        "team_id": "team-block-test",
+        "blocked": expected_blocked,
+        "object_permission_id": "op-block",
+        "object_permission": {
+            "object_permission_id": "op-block",
+            "search_tools": ["allowed-tool-A"],
+        },
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+            new_callable=AsyncMock,
+        ) as mock_cache_team,
+    ):
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
+
+        if endpoint_name == "block_team":
+            await block_team(
+                data=BlockTeamRequest(team_id="team-block-test"),
+                http_request=mock_request,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+        else:
+            await unblock_team(
+                data=BlockTeamRequest(team_id="team-block-test"),
+                http_request=mock_request,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        # Pin: cache refresh must run with the updated team row (#35565).
+        assert mock_cache_team.await_count == 1, (
+            f"{endpoint_name} must call _cache_team_object exactly once "
+            f"after the DB update (#35565 regression pin); "
+            f"got await_count={mock_cache_team.await_count}"
+        )
+        call_kwargs = mock_cache_team.await_args.kwargs
+        assert call_kwargs["team_id"] == "team-block-test"
+        # The cached object must carry the *post-mutation* `blocked` flag,
+        # not the pre-mutation `False` from `existing_team`. Both rows share
+        # team_id, so the only field that actually pins the update flow is
+        # `blocked`.
+        assert call_kwargs["team_table"].team_id == "team-block-test"
+        assert call_kwargs["team_table"].blocked is expected_blocked
+        # And the cached object MUST carry the `object_permission` relation
+        # (same reason as LIT-3244 follow-up): without
+        # `include={"object_permission": True}` on the Prisma update, the
+        # cached team would have object_permission=None and downstream
+        # consumers (validate_key_search_tools_against_team etc.) would
+        # stop enforcing the team's allowlist.
+        assert call_kwargs["team_table"].object_permission is not None
+        assert call_kwargs["team_table"].object_permission.search_tools == ["allowed-tool-A"]
+        # Pin the Prisma call shape too — the regression lives in *what the
+        # update asks for*, so the contract that the update includes
+        # `object_permission` belongs in this test.
+        update_call_kwargs = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs
+        assert update_call_kwargs.get("include", {}).get("object_permission") is True
+
+
 @pytest.mark.asyncio
 async def test_update_team_team_member_budget_not_passed_to_db():
     """
