@@ -268,8 +268,6 @@ def supports_response_json_schema(model: str) -> bool:
     return bool(gemini_2_plus_pattern.search(model_lower))
 
 
-from typing import Literal
-
 all_gemini_url_modes = Literal["chat", "embedding", "batch_embedding", "image_generation", "count_tokens"]
 
 
