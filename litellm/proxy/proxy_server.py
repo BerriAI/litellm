@@ -8205,6 +8205,8 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
+        else:
+            await proxy_config._init_non_llm_objects_in_db(prisma_client=prisma_client)
 
             proxy_config.start_config_sync_subscriber(
                 prisma_client=prisma_client,
