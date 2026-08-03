@@ -16,9 +16,20 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, NamedTuple
 
 from litellm._logging import verbose_router_logger
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+# One long cached prompt with a short completion: the shape auto-routed traffic takes,
+# and the shape whose ordering a flat-rate comparison gets wrong.
+_REFERENCE_REQUEST = Usage(
+    prompt_tokens=20_000,
+    completion_tokens=1_000,
+    total_tokens=21_000,
+    prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=19_000, cache_creation_tokens=1_000, text_tokens=0),
+)
 
 
 class Baseline(NamedTuple):
@@ -82,44 +93,46 @@ def _models_in(router: "Router", group_name: str) -> tuple[Baseline, ...]:
     return tuple(c for index in indices if (c := candidate(index)) is not None)
 
 
-def _priced(router: "Router", candidate: Baseline) -> tuple[float, float, Baseline] | None:
-    """``(output_rate, input_rate, candidate)``, or ``None`` when it cannot be priced.
+def _priced(router: "Router", candidate: Baseline) -> tuple[float, Baseline] | None:
+    """``(cost_of_the_reference_request, candidate)``, or ``None`` when unpriceable.
 
-    Rates come from `Router.get_deployment_model_info`, which owns what a deployment is
-    actually charged: it merges the deployment's own configured prices over the built-in
-    map, folds in `base_model` defaults for deployments whose name is not a model, and
-    falls back to the model name when the deployment overrides nothing. Every override
-    shape is its problem, not ours.
-
-    A candidate that costs nothing per token cannot stand in for what the traffic would
-    otherwise have cost; as a baseline it would report the whole real spend as a loss.
+    "Most expensive" is a property of a request, not of a rate: a deployment dearer per
+    output token can be cheaper per cached token, so comparing a chosen pair of rates
+    orders cache-heavy traffic backwards. Costing one reference request through the same
+    engine the savings use leaves cache rates, tiered tables and every other billing
+    dimension to that engine. A candidate that prices to nothing there cannot stand in
+    for what the traffic would have cost.
     """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+
+    provider, _, model_name = candidate.model.partition("/")
     try:
         info = router.get_deployment_model_info(candidate.deployment_id or "", candidate.model)
+        if info is None:
+            return None
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model_name or candidate.model,
+            usage=_REFERENCE_REQUEST,
+            custom_llm_provider=provider,
+            model_info=info,
+        )
     except Exception as e:  # noqa: BLE001  # an unpriceable candidate simply cannot be the baseline
         verbose_router_logger.debug("savings baseline: no pricing for candidate %s (%s)", candidate.model, e)
         return None
-    if info is None:
+    cost = prompt_cost + completion_cost
+    if cost <= 0.0:
+        verbose_router_logger.debug("savings baseline: candidate %s prices to nothing", candidate.model)
         return None
-    output_rate, input_rate = info.get("output_cost_per_token") or 0.0, info.get("input_cost_per_token") or 0.0
-    if output_rate <= 0.0 and input_rate <= 0.0:
-        verbose_router_logger.debug("savings baseline: candidate %s has no per-token price", candidate.model)
-        return None
-    return (output_rate, input_rate, candidate)
+    return (cost, candidate)
 
 
 def _most_expensive(router: "Router", candidates: Iterable[Baseline]) -> Baseline | None:
-    """The priciest candidate by output rate, input rate breaking the tie.
-
-    Ranked on what each candidate really costs, so a deployment whose configured price
-    is the expensive one is chosen as the counterfactual; ranking on the public rate
-    picks the wrong baseline and then prices it at a rate nobody pays.
-    """
+    """The candidate that would have cost the most on the reference request."""
     priced = tuple(r for candidate in candidates if (r := _priced(router, candidate)) is not None)
     if not priced:
         verbose_router_logger.debug("savings baseline: no priceable candidates; savings driver disabled")
         return None
-    return max(priced)[2]
+    return max(priced)[1]
 
 
 def resolve_baseline(configured: str | None, router: "Router", group_names: Iterable[str]) -> Baseline | None:
