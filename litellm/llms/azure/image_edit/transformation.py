@@ -108,18 +108,22 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         # Create a new dictionary with existing params
         query_params = dict(original_url.params)
 
-        # Add api_version if needed
-        if "api-version" not in query_params and api_version:
-            query_params["api-version"] = api_version
-
-        # Add the path to the base URL using the model as deployment name
-        if "/openai/deployments/" not in api_base:
+        if api_version in {"v1", "preview"}:
             new_url = _add_path_to_api_base(
                 api_base=api_base,
-                ending_path=f"/openai/deployments/{model}/images/edits",
+                ending_path="/openai/v1/images/edits",
             )
+            query_params["api-version"] = "preview"
         else:
-            new_url = api_base
+            if "api-version" not in query_params and api_version:
+                query_params["api-version"] = api_version
+            if "/openai/deployments/" not in api_base:
+                new_url = _add_path_to_api_base(
+                    api_base=api_base,
+                    ending_path=f"/openai/deployments/{model}/images/edits",
+                )
+            else:
+                new_url = api_base
 
         # Use the new query_params dictionary
         final_url = httpx.URL(new_url).copy_with(params=query_params)

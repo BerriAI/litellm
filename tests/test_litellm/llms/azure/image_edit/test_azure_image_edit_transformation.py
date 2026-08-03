@@ -2,6 +2,7 @@ import urllib.parse
 from unittest.mock import patch
 
 import litellm
+import pytest
 from litellm.llms.azure.image_edit.transformation import AzureImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -140,6 +141,33 @@ def test_azure_finalize_image_edit_strips_model_after_openai_transform():
     assert data_out.get("prompt") == prompt
     assert data_out.get("n") == 1
     assert len(files) >= 1
+
+
+@pytest.mark.parametrize("api_version", ("v1", "preview"))
+def test_azure_v1_image_edit_uses_integrated_endpoint_and_keeps_model(api_version):
+    config = AzureImageEditConfig()
+    model = "gpt-image-1"
+    litellm_params = GenericLiteLLMParams(
+        api_base="https://example.openai.azure.com",
+        api_version=api_version,
+    )
+    data, _ = config.transform_image_edit_request(
+        model=model,
+        prompt="add a hat",
+        image=b"fake_png_bytes",
+        image_edit_optional_request_params={"n": 1},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    resolved = config.get_complete_url(
+        model=model,
+        api_base=litellm_params.api_base,
+        litellm_params=litellm_params.model_dump(exclude_none=True),
+    )
+
+    assert resolved == "https://example.openai.azure.com/openai/v1/images/edits?api-version=preview"
+    assert config.finalize_image_edit_request_data(data, resolved)["model"] == model
 
 
 # ---------------------------------------------------------------------------
