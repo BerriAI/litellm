@@ -261,6 +261,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
   const [mockTestFallbacks, setMockTestFallbacks] = useState<boolean>(false);
+  const [streamingEnabled, setStreamingEnabled] = useState<boolean>(() => {
+    if (simplified) return true;
+    const saved = sessionStorage.getItem("streamingEnabled");
+    return saved === null ? true : saved === "true";
+  });
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
@@ -372,6 +377,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     sessionStorage.removeItem("selectedMCPTools"); // Clean up old key
 
     if (!simplified) {
+      sessionStorage.setItem("streamingEnabled", JSON.stringify(streamingEnabled));
       if (selectedModel) {
         sessionStorage.setItem("selectedModel", selectedModel);
       } else {
@@ -392,6 +398,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     selectedMCPServers,
     mcpServerToolRestrictions,
     selectedVoice,
+    streamingEnabled,
   ]);
 
   useEffect(() => {
@@ -771,6 +778,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             handleMCPEvent,
             mockTestFallbacks,
             mcpToolsets,
+            streamingEnabled,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -852,6 +860,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServers,
             mcpServerToolRestrictions,
             mcpToolsets,
+            streamingEnabled,
+            updateTotalLatency,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -1035,6 +1045,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return !model.mode || model.mode === "chat";
   };
 
+  const supportsStreamingToggle = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES;
+
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
   return (
@@ -1184,10 +1196,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <span className="flex items-center">
                         <RobotOutlined className="mr-2" /> Select Model
                       </span>
-                      {isChatModel() ? (
+                      {isChatModel() || supportsStreamingToggle ? (
                         <Popover
                           content={
                             <AdditionalModelSettings
+                              showAdvancedParams={isChatModel()}
                               temperature={temperature}
                               maxTokens={maxTokens}
                               useAdvancedParams={useAdvancedParams}
@@ -1196,6 +1209,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               onUseAdvancedParamsChange={setUseAdvancedParams}
                               mockTestFallbacks={mockTestFallbacks}
                               onMockTestFallbacksChange={setMockTestFallbacks}
+                              streamingEnabled={streamingEnabled}
+                              onStreamingChange={supportsStreamingToggle ? setStreamingEnabled : undefined}
                             />
                           }
                           title="Model Settings"
