@@ -1,8 +1,17 @@
-from typing import Dict, List, Union, Any, Optional
+from typing import Dict, List, TypedDict, Union, Any, Optional
 
 from pydantic import BaseModel, Field
 
 from ...router import ModelGroupInfo
+
+
+class PrismaCompatibleCreateDBModel(TypedDict):
+    model_id: Optional[str]
+    model_name: str
+    litellm_params: str
+    model_info: str
+    created_by: str
+    updated_by: str
 
 
 class ModelGroupInfoProxy(ModelGroupInfo):

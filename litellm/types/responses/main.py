@@ -1,7 +1,7 @@
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Protocol, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import PrivateAttr
+from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Any, List, Optional, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -140,3 +140,13 @@ class DecodedResponseId(TypedDict, total=False):
     custom_llm_provider: Optional[str]
     model_id: Optional[str]
     response_id: str
+
+
+class ApplyPatchToolCallLike(Protocol):
+    """Structural view of an openai ``ResponseApplyPatchToolCall`` used by the completion bridge."""
+
+    @property
+    def call_id(self) -> str: ...
+
+    @property
+    def operation(self) -> BaseModel: ...

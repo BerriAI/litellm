@@ -295,8 +295,12 @@ def _convert_mcp_content_to_openai(
     return _convert_single_content(content)
 
 
+def _required_attr(obj: object, name: str) -> object:
+    return getattr(obj, name)
+
+
 def _convert_single_content(
-    content: Any,
+    content: object,
 ) -> "dict[str, object] | list[dict[str, object]]":
     """Convert a single MCP content item to OpenAI format.
 
@@ -310,7 +314,7 @@ def _convert_single_content(
 
     content_type = getattr(content, "type", None)
     if content_type == "text":
-        return {"type": "text", "text": content.text}
+        return {"type": "text", "text": _required_attr(content, "text")}
     elif content_type == "image":
         data = getattr(content, "data", "")
         mime_type = getattr(content, "mimeType", "image/png")
@@ -581,12 +585,28 @@ def _convert_mcp_tool_choice_to_openai(
     return "auto"
 
 
+class _SamplingToolCallFunction(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def arguments(self) -> str | dict[str, object]: ...
+
+
+class _SamplingToolCall(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def function(self) -> _SamplingToolCallFunction: ...
+
+
 class _SamplingResponseMessage(Protocol):
     @property
     def content(self) -> str | None: ...
 
     @property
-    def tool_calls(self) -> Sequence[object] | None: ...
+    def tool_calls(self) -> Sequence[_SamplingToolCall] | None: ...
 
 
 class _SamplingResponseChoice(Protocol):
@@ -641,7 +661,7 @@ def _convert_openai_response_to_mcp_result(
         stop_reason = "endTurn"
     actual_model: str = getattr(response, "model", model_name) or model_name
     # Check if response has tool calls
-    tool_calls = getattr(message, "tool_calls", None)
+    tool_calls: Sequence[_SamplingToolCall] | None = getattr(message, "tool_calls", None)
     if tool_calls:
         # Build ToolUseContent items
         content_parts: list[SamplingMessageContentBlock] = []
