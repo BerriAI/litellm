@@ -426,13 +426,13 @@ class ComplexityRouterConfig(BaseModel):
 
     # Session affinity: pin the first turn's routed model for the rest of the session
     session_affinity: bool = Field(
-        default=True,
+        default=False,
         description=(
             "When True and a session_id is resolvable on the request, pin the model chosen on the "
             "session's first turn and reuse it for every later turn, skipping re-classification. "
-            "On by default so multi-turn sessions stay on one model, preserving provider prompt "
-            "caches and avoiding cross-model conversation-history errors. Set False to reclassify "
-            "every turn."
+            "Off by default so every turn is classified on its own merits and routed to the cheapest "
+            "adequate tier. Set True to keep a multi-turn session on one model, which preserves "
+            "provider prompt caches and avoids cross-model conversation-history errors."
         ),
     )
     session_affinity_ttl_seconds: int = Field(

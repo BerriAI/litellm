@@ -10,6 +10,7 @@ import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_m
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
+  DEFAULT_SESSION_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
@@ -102,6 +103,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       classifier_context_window_size: classifierContextWindowSize,
       classifier_context_per_turn_chars: classifierContextPerTurnChars,
       classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
+      session_affinity: sessionAffinity = DEFAULT_SESSION_AFFINITY,
       adaptive = false,
       adaptive_weights: adaptiveWeights = DEFAULT_ADAPTIVE_WEIGHTS,
       tier_distance_penalty: tierDistancePenalty = DEFAULT_TIER_DISTANCE_PENALTY,
@@ -148,6 +150,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           classifierContextWindowSize,
           classifierContextPerTurnChars,
           classifierContextIncludeAssistantTurns,
+          sessionAffinity,
           customTechnicalKeywords,
           keywordTierRules,
           semanticMatchingEnabled,

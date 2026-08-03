@@ -15,6 +15,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextWindowSize: number | undefined;
   classifierContextPerTurnChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
+  sessionAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
   semanticMatchingEnabled: boolean;
@@ -35,6 +36,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_window_size?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
+  session_affinity: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -78,6 +80,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextWindowSize,
   classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
+  sessionAffinity,
   customTechnicalKeywords,
   keywordTierRules,
   semanticMatchingEnabled,
@@ -110,6 +113,7 @@ export const buildComplexityRouterConfig = ({
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),
+    session_affinity: sessionAffinity,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,
