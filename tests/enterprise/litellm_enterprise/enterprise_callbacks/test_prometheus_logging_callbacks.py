@@ -1153,7 +1153,6 @@ def test_deployment_state_management(prometheus_logger):
     test_params = {
         "litellm_model_name": "gpt-5-mini",
         "model_id": "model-123",
-        "api_base": "https://api.openai.com",
         "api_provider": "openai",
     }
 
@@ -1162,7 +1161,6 @@ def test_deployment_state_management(prometheus_logger):
     prometheus_logger.litellm_deployment_state.labels.assert_called_with(
         litellm_model_name=test_params["litellm_model_name"],
         model_id=test_params["model_id"],
-        api_base=test_params["api_base"],
         api_provider=test_params["api_provider"],
     )
     prometheus_logger.litellm_deployment_state.labels().set.assert_called_with(0)
