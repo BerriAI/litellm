@@ -24,6 +24,48 @@ from litellm.types.responses.main import DeleteResponseResult
 router = APIRouter()
 
 
+def _cursor_data_generator(response, user_api_key_dict, request_data, request=None):
+    """
+    Transform Responses API streaming chunks to chat-completion SSE for Cursor.
+
+    ``request`` is accepted for parity with ``select_data_generator`` /
+    ``base_process_llm_request``, which always pass ``request=`` on the
+    streaming path (#35632).
+    """
+    from litellm.completion_extras.litellm_responses_transformation.handler import (
+        responses_api_bridge,
+    )
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    if isinstance(response, BaseResponsesAPIStreamingIterator):
+        completion_stream = responses_api_bridge.transformation_handler.get_model_response_iterator(
+            streaming_response=cast(AsyncIterator[str], response),
+            sync_stream=False,
+            json_mode=False,
+        )
+        logging_obj = request_data.get("litellm_logging_obj")
+        streamwrapper = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=request_data.get("model", ""),
+            custom_llm_provider=None,
+            logging_obj=logging_obj,
+        )
+        return async_data_generator(
+            response=streamwrapper,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            request=request,
+        )
+    return async_data_generator(
+        response=response,
+        user_api_key_dict=user_api_key_dict,
+        request_data=request_data,
+        request=request,
+    )
+
+
 @router.post(
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
@@ -314,10 +356,8 @@ async def cursor_chat_completions(
     from litellm.completion_extras.litellm_responses_transformation.handler import (
         responses_api_bridge,
     )
-    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.proxy.proxy_server import (
         _read_request_body,
-        async_data_generator,
         general_settings,
         llm_router,
         proxy_config,
@@ -329,7 +369,6 @@ async def cursor_chat_completions(
         user_temperature,
         version,
     )
-    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
 
@@ -342,58 +381,6 @@ async def cursor_chat_completions(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
-    def cursor_data_generator(
-        response, user_api_key_dict, request_data, request=None
-    ):
-        """
-        Custom generator that transforms Responses API streaming chunks to chat completion chunks.
-
-        This generator is used for the cursor endpoint to convert Responses API format responses
-        to chat completion format that Cursor IDE expects.
-
-        Args:
-            response: The streaming response (BaseResponsesAPIStreamingIterator or other)
-            user_api_key_dict: User API key authentication dict
-            request_data: Request data containing model, logging_obj, etc.
-            request: Optional FastAPI Request — accepted for parity with
-                ``select_data_generator`` / ``base_process_llm_request``, which
-                always pass ``request=`` on the streaming path (#35632).
-
-        Returns:
-            Async generator that yields SSE-formatted chat completion chunks
-        """
-        # If response is a BaseResponsesAPIStreamingIterator, transform it first
-        if isinstance(response, BaseResponsesAPIStreamingIterator):
-            # Transform Responses API iterator to chat completion iterator
-            # Cast to AsyncIterator[str] since BaseResponsesAPIStreamingIterator implements __aiter__/__anext__
-            completion_stream = responses_api_bridge.transformation_handler.get_model_response_iterator(
-                streaming_response=cast(AsyncIterator[str], response),
-                sync_stream=False,
-                json_mode=False,
-            )
-            # Wrap in CustomStreamWrapper to get the async generator
-            logging_obj = request_data.get("litellm_logging_obj")
-            streamwrapper = CustomStreamWrapper(
-                completion_stream=completion_stream,
-                model=request_data.get("model", ""),
-                custom_llm_provider=None,
-                logging_obj=logging_obj,
-            )
-            # Use async_data_generator to format as SSE
-            return async_data_generator(
-                response=streamwrapper,
-                user_api_key_dict=user_api_key_dict,
-                request_data=request_data,
-                request=request,
-            )
-        # Otherwise, use the default generator
-        return async_data_generator(
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            request_data=request_data,
-            request=request,
-        )
-
     try:
         response = await processor.base_process_llm_request(
             request=request,
@@ -404,7 +391,7 @@ async def cursor_chat_completions(
             llm_router=llm_router,
             general_settings=general_settings,
             proxy_config=proxy_config,
-            select_data_generator=cursor_data_generator,
+            select_data_generator=_cursor_data_generator,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
