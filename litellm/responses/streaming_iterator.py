@@ -5,11 +5,11 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -34,6 +34,18 @@ from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
+if TYPE_CHECKING:
+    from litellm.types.guardrails import PresidioPerRequestConfig
+    from litellm.types.llms.openai import (
+        PART_UNION_TYPES,
+        ContentPartDoneEvent,
+        ResponseAPIUsage,
+        ResponseCreatedEvent,
+        ResponseInProgressEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamingResponse,
+    )
+
 
 @lru_cache(maxsize=1)
 def _get_openai_response_types():
@@ -42,7 +54,7 @@ def _get_openai_response_types():
     return openai_types
 
 
-def _log_background_task_failure(task: asyncio.Task[Any], *, task_name: str) -> None:
+def _log_background_task_failure(task: asyncio.Task[None], *, task_name: str) -> None:
     if task.cancelled():
         return
     exception = task.exception()
@@ -98,6 +110,20 @@ def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]
     return message, error_type, code
 
 
+class _StreamCachingHandler(Protocol):
+    """Caching-handler surface attached to the logging object, used to cache completed streamed responses."""
+
+    original_function: Callable[..., object]
+
+    def _should_store_result_in_cache(
+        self, original_function: Callable[..., object], kwargs: dict[str, object]
+    ) -> bool: ...
+
+    @staticmethod
+    def should_store(handler: _StreamCachingHandler, kwargs: dict[str, object]) -> bool:
+        return handler._should_store_result_in_cache(original_function=handler.original_function, kwargs=kwargs)
+
+
 def _status_code_for_error_fields(error_type: str | None, error_code: str | None) -> int:
     fields = tuple(field for field in (error_code, error_type) if field is not None)
     if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
@@ -131,7 +157,7 @@ class BaseResponsesAPIStreamingIterator:
         self.logging_obj = logging_obj
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
-        self.completed_response: Any | None = None
+        self.completed_response: ResponsesAPIStreamingResponse | None = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
@@ -154,7 +180,7 @@ class BaseResponsesAPIStreamingIterator:
             model=model or "",
             optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
         )
-        _model_info: dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        _model_info: dict[str, object] = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
         self._hidden_params = {
             "model_id": _model_info.get("id", None),
             "api_base": _api_base,
@@ -176,7 +202,7 @@ class BaseResponsesAPIStreamingIterator:
                 llm_provider=self.custom_llm_provider or "",
             )
 
-    def _process_chunk(self, chunk) -> Any | None:
+    def _process_chunk(self, chunk: str) -> ResponsesAPIStreamingResponse | None:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
@@ -196,7 +222,7 @@ class BaseResponsesAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk = json.loads(chunk)
+            parsed_chunk: object = json.loads(chunk)
 
             # Format as ResponsesAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
@@ -212,7 +238,7 @@ class BaseResponsesAPIStreamingIterator:
                 # Using getattr(..., "response") alone is unsafe with Mocks: they synthesize a
                 # truthy child Mock for any attribute, which breaks tests and is wrong on stream.
                 if "response" in parsed_chunk:
-                    response_object = getattr(openai_responses_api_chunk, "response", None)
+                    response_object: ResponsesAPIResponse | None = getattr(openai_responses_api_chunk, "response", None)
                     if response_object is not None:
                         response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
                             responses_api_response=response_object,
@@ -250,7 +276,7 @@ class BaseResponsesAPIStreamingIterator:
                             model_id=_stream_model_id,
                         )
                 elif _event_type == ResponsesAPIStreamEvents.CONTENT_PART_DONE:
-                    _part = getattr(openai_responses_api_chunk, "part", None)
+                    _part: object = getattr(openai_responses_api_chunk, "part", None)
                     if _part is not None:
                         if isinstance(_part, dict):
                             ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
@@ -273,7 +299,7 @@ class BaseResponsesAPIStreamingIterator:
                         openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                         openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                     ):
-                        item = getattr(openai_responses_api_chunk, "item", None)
+                        item: object = getattr(openai_responses_api_chunk, "item", None)
                         if item:
                             encrypted_content = getattr(item, "encrypted_content", None)
                             if encrypted_content and isinstance(encrypted_content, str):
@@ -299,9 +325,11 @@ class BaseResponsesAPIStreamingIterator:
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
                     if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
-                        response_obj: Any | None = getattr(openai_responses_api_chunk, "response", None)
+                        response_obj: ResponsesAPIResponse | None = getattr(
+                            openai_responses_api_chunk, "response", None
+                        )
                         if response_obj:
-                            usage_obj: Any | None = getattr(response_obj, "usage", None)
+                            usage_obj: object | None = getattr(response_obj, "usage", None)
                             if usage_obj is not None:
                                 try:
                                     cost: float | None = self.logging_obj._response_cost_calculator(result=response_obj)
@@ -377,10 +405,10 @@ class BaseResponsesAPIStreamingIterator:
             )
         self._run_post_success_hooks(end_time=end_time)
 
-    def _handle_logging_completed_response(self):
+    def _handle_logging_completed_response(self) -> None:
         """Base implementation - should be overridden by subclasses"""
 
-    def _handle_logging_failed_response(self):
+    def _handle_logging_failed_response(self) -> None:
         """
         Handle logging for RESPONSE_FAILED events by routing to failure handlers.
 
@@ -389,8 +417,10 @@ class BaseResponsesAPIStreamingIterator:
         async_failure_handler / failure_handler so logging integrations correctly
         record the call as failed.
         """
-        response_obj = getattr(self.completed_response, "response", None) if self.completed_response else None
-        error_info = getattr(response_obj, "error", None) if response_obj else None
+        response_obj: ResponsesAPIResponse | None = (
+            getattr(self.completed_response, "response", None) if self.completed_response else None
+        )
+        error_info: object | None = getattr(response_obj, "error", None) if response_obj else None
         error_message, error_type, error_code = _error_event_fields(error_info)
         self._record_failed_response_usage(response_obj)
         exception = litellm.APIError(
@@ -401,10 +431,10 @@ class BaseResponsesAPIStreamingIterator:
         )
         self._handle_failure(exception)
 
-    def _record_failed_response_usage(self, response_obj: Any | None) -> None:
+    def _record_failed_response_usage(self, response_obj: ResponsesAPIResponse | None) -> None:
         if response_obj is None or self.logging_obj is None:
             return
-        usage_obj = getattr(response_obj, "usage", None)
+        usage_obj: ResponseAPIUsage | None = getattr(response_obj, "usage", None)
         if usage_obj is None:
             return
         try:
@@ -451,7 +481,7 @@ class BaseResponsesAPIStreamingIterator:
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
 
-    def _get_completed_response_object(self) -> Any | None:
+    def _get_completed_response_object(self) -> ResponsesAPIResponse | None:
         openai_types = _get_openai_response_types()
         completed_response = self.completed_response
         if isinstance(completed_response, openai_types.ResponsesAPIResponse):
@@ -476,15 +506,15 @@ class BaseResponsesAPIStreamingIterator:
         if response_obj is None:
             return
 
-        caching_handler = getattr(self.logging_obj, "_llm_caching_handler", None)
+        caching_handler: _StreamCachingHandler | None = getattr(self.logging_obj, "_llm_caching_handler", None)
         if caching_handler is None:
             return
 
-        request_kwargs = getattr(caching_handler, "request_kwargs", None)
+        request_kwargs: object = getattr(caching_handler, "request_kwargs", None)
         if not isinstance(request_kwargs, dict) or request_kwargs.get("stream") is not True:
             return
         request_kwargs = request_kwargs.copy()
-        preset_cache_key = getattr(caching_handler, "preset_cache_key", None)
+        preset_cache_key: object = getattr(caching_handler, "preset_cache_key", None)
         request_cache_key = request_kwargs.pop("cache_key", None)
         if preset_cache_key is None:
             preset_cache_key = request_cache_key
@@ -494,10 +524,7 @@ class BaseResponsesAPIStreamingIterator:
         if preset_cache_key is not None:
             request_kwargs["cache_key"] = preset_cache_key
 
-        if not caching_handler._should_store_result_in_cache(
-            original_function=caching_handler.original_function,
-            kwargs=request_kwargs,
-        ):
+        if not _StreamCachingHandler.should_store(caching_handler, request_kwargs):
             return
 
         if litellm.cache is None:
@@ -527,7 +554,9 @@ class BaseResponsesAPIStreamingIterator:
 
         self._completed_response_cached = True
 
-    async def _call_post_streaming_deployment_hook(self, chunk):
+    async def _call_post_streaming_deployment_hook(
+        self, chunk: ResponsesAPIStreamingResponse
+    ) -> ResponsesAPIStreamingResponse:
         """
         Allow callbacks to modify streaming chunks before returning (parity with chat).
         """
@@ -564,7 +593,9 @@ class BaseResponsesAPIStreamingIterator:
         except Exception:
             return chunk
 
-    async def call_post_streaming_hooks_for_testing(self, chunk):
+    async def call_post_streaming_hooks_for_testing(
+        self, chunk: ResponsesAPIStreamingResponse
+    ) -> ResponsesAPIStreamingResponse:
         """
         Helper to invoke streaming deployment hooks explicitly (used in tests).
         """
@@ -666,7 +697,9 @@ class BaseResponsesAPIStreamingIterator:
             pass
 
 
-async def call_post_streaming_hooks_for_testing(iterator, chunk):
+async def call_post_streaming_hooks_for_testing(
+    iterator: BaseResponsesAPIStreamingIterator, chunk: ResponsesAPIStreamingResponse
+) -> ResponsesAPIStreamingResponse:
     """
     Module-level helper for tests to ensure hooks can be invoked even if the iterator is wrapped.
     """
@@ -707,7 +740,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
             while True:
@@ -753,7 +786,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._handle_failure(e)
             raise e
 
-    def _handle_logging_completed_response(self):
+    def _handle_logging_completed_response(self) -> None:
         """Handle logging for completed responses in async context"""
         self._log_completed_response(is_async=True)
 
@@ -789,7 +822,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self):
+    def __next__(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
             while True:
@@ -835,7 +868,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._handle_failure(e)
             raise e
 
-    def _handle_logging_completed_response(self):
+    def _handle_logging_completed_response(self) -> None:
         """Handle logging for completed responses in sync context"""
         self._log_completed_response(is_async=False)
 
@@ -880,7 +913,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _set_events_from_response(
         self,
-        transformed: Any,
+        transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
         self._events = _build_synthetic_response_events(
@@ -894,7 +927,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
         evt = self._events[self._idx]
@@ -908,7 +941,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopIteration
         evt = self._events[self._idx]
@@ -923,7 +956,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __init__(
         self,
-        response: Any,
+        response: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict[str, Any] | None = None,
         call_type: str | None = None,
@@ -941,13 +974,13 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self._completed_response_cache_hit = True
         self._persist_completed_response_before_logging = False
-        self._events: list[Any] = []
+        self._events: list[ResponsesAPIStreamingResponse] = []
         self._idx = 0
         self._set_events_from_response(transformed=response, logging_obj=logging_obj)
 
     def _set_events_from_response(
         self,
-        transformed: Any,
+        transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
         self._events = _build_synthetic_response_events(
@@ -961,7 +994,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
         evt = self._events[self._idx]
@@ -975,7 +1008,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopIteration
         evt = self._events[self._idx]
@@ -997,11 +1030,11 @@ def _dump_response_object(obj: Any) -> dict[str, Any]:
 
 def _build_response_status_event(
     event_type: Literal[
-        "response.created",
-        "response.in_progress",
+        ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
     ],
-    transformed: Any,
-) -> Any:
+    transformed: ResponsesAPIResponse,
+) -> ResponseCreatedEvent | ResponseInProgressEvent:
     openai_types = _get_openai_response_types()
     in_progress_response = transformed.model_copy(
         deep=True,
@@ -1018,10 +1051,10 @@ def _build_content_part_done_event(
     output_index: int,
     content_index: int,
     part_payload: dict[str, Any],
-) -> Any | None:
+) -> ContentPartDoneEvent | None:
     openai_types = _get_openai_response_types()
     part_type = part_payload.get("type")
-    part: Any
+    part: PART_UNION_TYPES
     if part_type == "output_text":
         annotations = [
             openai_types.BaseLiteLLMOpenAIResponseObject(**annotation)
@@ -1057,7 +1090,7 @@ def _build_content_part_done_event(
 
 def _add_text_like_part_events(
     *,
-    events: list[Any],
+    events: list[ResponsesAPIStreamingResponse],
     item_id: str,
     output_index: int,
     content_index: int,
@@ -1123,13 +1156,13 @@ def _add_text_like_part_events(
 
 def _build_synthetic_response_events(
     *,
-    transformed: Any,
+    transformed: ResponsesAPIResponse,
     logging_obj: LiteLLMLoggingObj,
     chunk_size: int,
-) -> list[Any]:
+) -> list[ResponsesAPIStreamingResponse]:
     openai_types = _get_openai_response_types()
     if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-        usage_obj: Any | None = getattr(transformed, "usage", None)
+        usage_obj: object | None = getattr(transformed, "usage", None)
         if usage_obj is not None:
             try:
                 cost: float | None = logging_obj._response_cost_calculator(result=transformed)
@@ -1138,13 +1171,14 @@ def _build_synthetic_response_events(
             except Exception:
                 pass
 
-    events: list[Any] = [
+    events: list[ResponsesAPIStreamingResponse] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
     ]
 
     sequence_number = 0
-    for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
+    output_items: Sequence[object] = getattr(transformed, "output", []) or []
+    for output_index, output_item in enumerate(output_items):
         output_item_payload = _dump_response_object(output_item)
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
@@ -1158,7 +1192,8 @@ def _build_synthetic_response_events(
         )
 
         if item_type == "message":
-            for content_index, part in enumerate(output_item_payload.get("content", []) or []):
+            content_payload: Sequence[object] = output_item_payload.get("content", []) or []
+            for content_index, part in enumerate(content_payload):
                 part_payload = _dump_response_object(part)
                 events.append(
                     openai_types.ContentPartAddedEvent(
@@ -1205,7 +1240,8 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            for summary_index, summary in enumerate(output_item_payload.get("summary", []) or []):
+            summary_payload_items: Sequence[object] = output_item_payload.get("summary", []) or []
+            for summary_index, summary in enumerate(summary_payload_items):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
                 for i in range(0, len(summary_text), chunk_size):
@@ -1277,6 +1313,46 @@ RESPONSES_WS_LOGGED_EVENT_TYPES = [
 RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES = frozenset({"input_text", "output_text", "text"})
 
 
+class _ClientWebSocket(Protocol):
+    """Client-facing socket surface used by the Responses WebSocket handlers."""
+
+    async def send_text(self, data: str) -> None: ...
+
+    async def receive_text(self) -> str: ...
+
+
+class _BackendWebSocket(Protocol):
+    """Upstream provider socket surface used by the Responses WebSocket handlers."""
+
+    async def recv(self, decode: bool = ...) -> str | bytes: ...
+
+    async def send(self, message: str) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+class _PIIMaskingGuardrail(Protocol):
+    """Guardrail surface used for Presidio PII masking/unmasking of WebSocket frames."""
+
+    def get_presidio_settings_from_request_data(
+        self, data: Mapping[str, object]
+    ) -> PresidioPerRequestConfig | None: ...
+
+    async def check_pii(
+        self,
+        text: str,
+        output_parse_pii: bool,
+        presidio_config: PresidioPerRequestConfig | None,
+        request_data: Mapping[str, object],
+    ) -> str: ...
+
+    def _unmask_pii_text(self, text: str, pii_tokens: Mapping[str, str]) -> str: ...
+
+    @staticmethod
+    def unmask(guardrail: _PIIMaskingGuardrail, text: str, pii_tokens: Mapping[str, str]) -> str:
+        return guardrail._unmask_pii_text(text, pii_tokens)
+
+
 class ResponsesWebSocketStreaming:
     """
     Manages bidirectional WebSocket forwarding for the Responses API
@@ -1292,31 +1368,31 @@ class ResponsesWebSocketStreaming:
 
     def __init__(
         self,
-        websocket: Any,
-        backend_ws: Any,
+        websocket: _ClientWebSocket,
+        backend_ws: _BackendWebSocket,
         logging_obj: LiteLLMLoggingObj,
-        user_api_key_dict: Any | None = None,
-        request_data: dict | None = None,
+        user_api_key_dict: object | None = None,
+        request_data: dict[str, object] | None = None,
         first_message: str | None = None,
-        guardrail_callbacks: list[Any] | None = None,
-        output_guardrail_callbacks: list[Any] | None = None,
+        guardrail_callbacks: list[_PIIMaskingGuardrail] | None = None,
+        output_guardrail_callbacks: list[_PIIMaskingGuardrail] | None = None,
         authorized_model: str | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: dict = request_data or {}
-        self.messages: list[dict] = []
+        self.request_data: dict[str, object] = request_data or {}
+        self.messages: list[dict[str, object]] = []
         self.input_messages: list[dict[str, str]] = []
         self.first_message = first_message
-        self.guardrail_callbacks: list[Any] = guardrail_callbacks or []
-        self.output_guardrail_callbacks: list[Any] = output_guardrail_callbacks or []
+        self.guardrail_callbacks: list[_PIIMaskingGuardrail] = guardrail_callbacks or []
+        self.output_guardrail_callbacks: list[_PIIMaskingGuardrail] = output_guardrail_callbacks or []
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
 
-    def _should_store_event(self, event_obj: dict) -> bool:
+    def _should_store_event(self, event_obj: dict[str, object]) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
 
     def _store_event(self, event: Any) -> None:
@@ -1333,7 +1409,7 @@ class ResponsesWebSocketStreaming:
         if self._should_store_event(event_obj):
             self.messages.append(event_obj)
 
-    def _collect_input_from_client_event(self, message: Any) -> None:
+    def _collect_input_from_client_event(self, message: object) -> None:
         """Extract user input content from response.create for logging."""
         try:
             if isinstance(message, str):
@@ -1368,7 +1444,7 @@ class ResponsesWebSocketStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _store_input(self, message: Any) -> None:
+    def _store_input(self, message: object) -> None:
         self._collect_input_from_client_event(message)
         if self.logging_obj:
             self.logging_obj.pre_call(input=message, api_key="")
@@ -1429,7 +1505,7 @@ class ResponsesWebSocketStreaming:
         finally:
             await self._log_messages()
 
-    def _enforce_authorized_model(self, msg_obj: dict) -> bool:
+    def _enforce_authorized_model(self, msg_obj: dict[str, object]) -> bool:
         """
         Overwrite any ``model`` field in a ``response.create`` frame with the
         connection-authorized model to prevent deployment-substitution attacks.
@@ -1495,8 +1571,9 @@ class ResponsesWebSocketStreaming:
             #   nested: {"type": "response.create", "response": {"input": ..., "instructions": ...}}
             # Mask "input" and "instructions" in both shapes so PII is never
             # forwarded unmasked regardless of where the client places it.
-            nested_response = msg_obj.get("response") if isinstance(msg_obj.get("response"), dict) else None
-            text_containers: list[tuple[dict, str]] = []
+            raw_nested_response = msg_obj.get("response")
+            nested_response = raw_nested_response if isinstance(raw_nested_response, dict) else None
+            text_containers: list[tuple[dict[str, object], str]] = []
             for container in (msg_obj, nested_response):
                 if container is None:
                     continue
@@ -1590,7 +1667,8 @@ class ResponsesWebSocketStreaming:
         if not self.guardrail_callbacks:
             return response_str
 
-        pii_tokens: dict[str, str] = (self.request_data.get("metadata") or {}).get("pii_tokens", {})
+        metadata = self.request_data.get("metadata")
+        pii_tokens: dict[str, str] = metadata.get("pii_tokens", {}) if isinstance(metadata, dict) else {}
         if not pii_tokens:
             return response_str
 
@@ -1618,7 +1696,7 @@ class ResponsesWebSocketStreaming:
                         continue
                     text = content_block.get("text")
                     if isinstance(text, str):
-                        unmasked = cb._unmask_pii_text(text, pii_tokens)
+                        unmasked = _PIIMaskingGuardrail.unmask(cb, text, pii_tokens)
                         if unmasked != text:
                             content_block["text"] = unmasked
                             modified = True
@@ -1627,7 +1705,7 @@ class ResponsesWebSocketStreaming:
         if event_type in self._DELTA_EVENT_TYPES:
             delta = evt_obj.get("delta")
             if isinstance(delta, str):
-                unmasked = cb._unmask_pii_text(delta, pii_tokens)
+                unmasked = _PIIMaskingGuardrail.unmask(cb, delta, pii_tokens)
                 if unmasked != delta:
                     evt_obj["delta"] = unmasked
                     return json.dumps(evt_obj)
@@ -1650,7 +1728,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         try:
-            evt_obj = json.loads(response_str)
+            evt_obj: Mapping[str, object] = json.loads(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -1756,12 +1834,12 @@ class ResponsesWebSocketStreaming:
 # Managed WebSocket mode (HTTP-backed, provider-agnostic)
 # ---------------------------------------------------------------------------
 
-_RESPONSE_CREATE_PARAMS: frozenset = (
+_RESPONSE_CREATE_PARAMS: frozenset[str] = (
     _get_openai_response_types().ResponsesAPIRequestParams.__required_keys__
     | _get_openai_response_types().ResponsesAPIRequestParams.__optional_keys__
 )
 
-_MANAGED_WS_SKIP_KWARGS: frozenset = frozenset(
+_MANAGED_WS_SKIP_KWARGS: frozenset[str] = frozenset(
     {
         "litellm_logging_obj",
         "litellm_call_id",
@@ -1793,10 +1871,10 @@ class ManagedResponsesWebSocketHandler:
 
     def __init__(
         self,
-        websocket: Any,
+        websocket: _ClientWebSocket,
         model: str,
         logging_obj: LiteLLMLoggingObj,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: object | None = None,
         litellm_metadata: dict[str, Any] | None = None,
         api_key: str | None = None,
         api_base: str | None = None,

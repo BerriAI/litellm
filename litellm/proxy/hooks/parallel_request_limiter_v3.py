@@ -8,7 +8,7 @@ import asyncio
 import binascii
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,9 +16,10 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Literal,
+    Protocol,
+    TypeAlias,
     TypedDict,
     Union,
-    cast,
 )
 
 from litellm import DualCache
@@ -44,6 +45,7 @@ from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 from litellm.types.utils import (
     CallTypes,
+    CallTypesLiteral,
     EmbeddingResponse,
     ModelResponse,
     TextCompletionResponse,
@@ -54,6 +56,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
+    from litellm.types.agents import AgentResponse
     from litellm.types.caching import RedisPipelineIncrementOperation
 
     Span = Union[_Span, Any]
@@ -300,6 +303,15 @@ _TPM_FLOOR_FRACTION = 4
 PARALLEL_REQUEST_SLOT_TTL_SECONDS = 3600
 
 
+LuaReplyValue: TypeAlias = int | str | bytes
+CachedCounterValue: TypeAlias = int | str | bytes | None
+CachedGaugeValue: TypeAlias = dict[str, object] | int | str | bytes | None
+
+
+class AsyncLuaScript(Protocol):
+    def __call__(self, *, keys: Sequence[str], args: Sequence[float | str]) -> Awaitable[list[LuaReplyValue]]: ...
+
+
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: int | None
     tokens_per_unit: int | None
@@ -340,6 +352,29 @@ class RateLimitResponse(TypedDict):
 class RateLimitResponseWithDescriptors(TypedDict):
     descriptors: list[RateLimitDescriptor]
     response: RateLimitResponse
+
+
+class WindowedKeyMetadata(TypedDict):
+    requests_limit: int | None
+    tokens_limit: int | None
+    window_size: int
+    descriptor_key: str
+
+
+class AtomicCounterMeta(TypedDict):
+    descriptor_key: str
+    current_limit: int
+    rate_limit_type: Literal["requests", "tokens"]
+    window_key: str
+    counter_key: str
+    increment: int
+    ttl: int
+    window_size: int
+
+
+class AtomicCounterState(TypedDict):
+    window_expired: bool
+    current: int
 
 
 @dataclass(slots=True)
@@ -423,25 +458,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+        redis_cache = self.internal_usage_cache.dual_cache.redis_cache
+        if redis_cache is not None:
+            self.batch_rate_limiter_script: AsyncLuaScript | None = redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
             )
-            self.token_increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+            self.token_increment_script: AsyncLuaScript | None = redis_cache.async_register_script(
                 TOKEN_INCREMENT_SCRIPT
             )
-            self.check_and_increment_by_n_script = (
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(CHECK_AND_INCREMENT_BY_N_SCRIPT)
+            self.check_and_increment_by_n_script: AsyncLuaScript | None = redis_cache.async_register_script(
+                CHECK_AND_INCREMENT_BY_N_SCRIPT
             )
-            self.parallel_acquire_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+            self.parallel_acquire_script: AsyncLuaScript | None = redis_cache.async_register_script(
                 PARALLEL_ACQUIRE_SCRIPT
             )
-            self.parallel_release_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+            self.parallel_release_script: AsyncLuaScript | None = redis_cache.async_register_script(
                 PARALLEL_RELEASE_SCRIPT
             )
-            self.parallel_count_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                PARALLEL_COUNT_SCRIPT
-            )
+            self.parallel_count_script: AsyncLuaScript | None = redis_cache.async_register_script(PARALLEL_COUNT_SCRIPT)
         else:
             self.batch_rate_limiter_script = None
             self.token_increment_script = None
@@ -459,7 +493,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self.tpm_reservation_enabled = os.getenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "true").lower() == "true"
 
         # Batch rate limiter (lazy loaded)
-        self._batch_rate_limiter: Any | None = None
+        self._batch_rate_limiter: CustomLogger | None = None
 
         # Serializes multi-phase check+increment sequences (batch + dynamic
         # limiters) within this process to close the TOCTOU window between
@@ -477,7 +511,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # one round-trip.
         self._check_and_increment_lock = asyncio.Lock()
 
-    def _get_batch_rate_limiter(self) -> Any | None:
+    def _get_batch_rate_limiter(self) -> CustomLogger | None:
         """Get or lazy-load the batch rate limiter."""
         if self._batch_rate_limiter is None:
             try:
@@ -604,12 +638,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         keys: list[str],
         now_int: int,
         window_size: int,
-    ) -> list[Any]:
+    ) -> list[CachedCounterValue]:
         """
         Implement sliding window rate limiting logic using in-memory cache operations.
         This follows the same logic as the Redis Lua script but uses async cache operations.
         """
-        results: list[Any] = []
+        results: list[CachedCounterValue] = []
 
         # Process each window/counter pair
         for i in range(0, len(keys), 2):
@@ -618,7 +652,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             increment_value = 1
 
             # Get the window start time
-            window_start = await self.internal_usage_cache.async_get_cache(
+            window_start: CachedCounterValue = await self.internal_usage_cache.async_get_cache(
                 key=window_key,
                 litellm_parent_otel_span=None,
                 local_only=True,
@@ -645,7 +679,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 results.append(increment_value)  # counter
             else:
                 # Increment the counter
-                current_counter = await self.internal_usage_cache.async_get_cache(
+                current_counter: CachedCounterValue = await self.internal_usage_cache.async_get_cache(
                     key=counter_key,
                     litellm_parent_otel_span=None,
                     local_only=True,
@@ -679,8 +713,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def is_cache_list_over_limit(
         self,
         keys_to_fetch: list[str],
-        cache_values: list[Any],
-        key_metadata: dict[str, Any],
+        cache_values: Sequence[CachedCounterValue],
+        key_metadata: dict[str, WindowedKeyMetadata],
     ) -> RateLimitResponse:
         """
         Check if the cache values are over the limit.
@@ -783,7 +817,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         keys_to_fetch: list[str],
         now_int: int,
-    ) -> list[Any]:
+    ) -> list[CachedCounterValue]:
         """
         Execute Redis operations grouped by hash tag for cluster compatibility.
 
@@ -792,13 +826,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             now_int: int - Current timestamp
 
         Returns:
-            List[Any] - List of cache values
+            list[CachedCounterValue] - List of cache values
         """
         if self.batch_rate_limiter_script is None:
             return []
 
         key_groups = self._group_keys_by_hash_tag(keys_to_fetch)
-        all_cache_values = []
+        all_cache_values: list[CachedCounterValue] = []
 
         for hash_tag, group_keys in key_groups.items():
             try:
@@ -866,7 +900,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         windowed_response = RateLimitResponse(overall_code="OK", statuses=[])
         if keys_to_fetch:
             ## CHECK IN-MEMORY CACHE
-            cache_values = await self.internal_usage_cache.async_batch_get_cache(
+            cache_values: Sequence[CachedCounterValue] | None = await self.internal_usage_cache.async_batch_get_cache(
                 keys=keys_to_fetch,
                 parent_otel_span=parent_otel_span,
                 local_only=True,
@@ -888,9 +922,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
                 # For keys that don't exist yet, set them to 0
                 if cache_values is None:
-                    cache_values = []
-                    for _ in keys_to_fetch:
-                        cache_values.append(str(now_int) if _.endswith(":window") else 0)
+                    cache_values = [str(now_int) if key.endswith(":window") else 0 for key in keys_to_fetch]
             elif self.batch_rate_limiter_script is not None:
                 # NORMAL MODE: Increment counters in Redis
                 # Group keys by hash tag for Redis cluster compatibility
@@ -949,14 +981,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         descriptors: list[RateLimitDescriptor],
         skip_tpm_check: bool,
-    ) -> tuple[list[str], dict[str, dict[str, Any]], list[ParallelRequestGauge]]:
+    ) -> tuple[list[str], dict[str, WindowedKeyMetadata], list[ParallelRequestGauge]]:
         """
         Split descriptors into the windowed (window_key, counter_key) fetch
         list with its per-window metadata, and the concurrency gauges for
         descriptors carrying a max_parallel_requests limit.
         """
         keys_to_fetch: list[str] = []
-        key_metadata: dict[str, dict[str, Any]] = {}
+        key_metadata: dict[str, WindowedKeyMetadata] = {}
         gauges: list[ParallelRequestGauge] = []
         for descriptor in descriptors:
             descriptor_key = descriptor["key"]
@@ -995,12 +1027,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if not rate_limit_set:
                 continue
 
-            key_metadata[window_key] = {
-                "requests_limit": (int(requests_limit) if requests_limit is not None else None),
-                "tokens_limit": int(tokens_limit) if tokens_limit is not None else None,
-                "window_size": int(window_size),
-                "descriptor_key": descriptor_key,
-            }
+            key_metadata[window_key] = WindowedKeyMetadata(
+                requests_limit=(int(requests_limit) if requests_limit is not None else None),
+                tokens_limit=int(tokens_limit) if tokens_limit is not None else None,
+                window_size=int(window_size),
+                descriptor_key=descriptor_key,
+            )
         return keys_to_fetch, key_metadata, gauges
 
     def _gauge_status(self, gauge: ParallelRequestGauge, in_flight: int, code: str) -> RateLimitStatus:
@@ -1012,7 +1044,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptor_key=gauge["descriptor_key"],
         )
 
-    def _gauge_in_flight_from_cache_value(self, raw_value: Any) -> int:
+    def _gauge_in_flight_from_cache_value(self, raw_value: CachedGaugeValue) -> int:
         """
         In-flight count from a cached gauge value: a dict of slot_id ->
         acquire timestamp when the in-memory registry is authoritative, or
@@ -1114,7 +1146,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         gauge_keys: list[str],
         parent_otel_span: Span | None = None,
     ) -> list[int]:
-        values = await self.internal_usage_cache.async_batch_get_cache(
+        values: Sequence[CachedGaugeValue] | None = await self.internal_usage_cache.async_batch_get_cache(
             keys=gauge_keys,
             parent_otel_span=parent_otel_span,
             local_only=True,
@@ -1143,7 +1175,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         cutoff = now - PARALLEL_REQUEST_SLOT_TTL_SECONDS
         states: list[tuple[dict[str, float] | None, int]] = []
         for gauge in gauges:
-            raw_value = await self.internal_usage_cache.async_get_cache(
+            raw_value: CachedGaugeValue = await self.internal_usage_cache.async_get_cache(
                 key=gauge["counter_key"],
                 litellm_parent_otel_span=parent_otel_span,
                 local_only=True,
@@ -1218,7 +1250,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         async with self._check_and_increment_lock:
             for counter_key in counter_keys:
-                raw_value = await self.internal_usage_cache.async_get_cache(
+                raw_value: CachedGaugeValue = await self.internal_usage_cache.async_get_cache(
                     key=counter_key,
                     litellm_parent_otel_span=parent_otel_span,
                     local_only=True,
@@ -1226,7 +1258,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if isinstance(raw_value, dict):
                     if slot_id not in raw_value:
                         continue
-                    new_value: dict[str, float] | int = {key: ts for key, ts in raw_value.items() if key != slot_id}
+                    new_value: dict[str, object] | int = {key: ts for key, ts in raw_value.items() if key != slot_id}
                 elif raw_value is None:
                     continue
                 else:
@@ -1277,7 +1309,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Build per-descriptor (keys, args, meta) groups. All keys within a
         # group share the descriptor's {key:value} hash tag, so a single Lua
         # call per group never triggers CROSSSLOT on Redis Cluster.
-        descriptor_groups: list[tuple[list[str], list[Any], list[dict[str, Any]]]] = []
+        descriptor_groups: list[tuple[list[str], list[int], list[AtomicCounterMeta]]] = []
         for descriptor, increment_amounts in zip(descriptors, increments):
             keys, args, meta = self._build_descriptor_atomic_payload(
                 descriptor=descriptor,
@@ -1300,7 +1332,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 parent_otel_span=parent_otel_span,
             )
 
-        flat_meta: list[dict[str, Any]] = [m for _keys, _args, group_meta in descriptor_groups for m in group_meta]
+        flat_meta: list[AtomicCounterMeta] = [m for _keys, _args, group_meta in descriptor_groups for m in group_meta]
         async with self._check_and_increment_lock:
             return await self._atomic_check_and_increment_in_memory(
                 per_counter_meta=flat_meta,
@@ -1311,7 +1343,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         descriptor: RateLimitDescriptor,
         increment_amounts: dict[Literal["requests", "tokens"], int],
-    ) -> tuple[list[str], list[Any], list[dict[str, Any]]]:
+    ) -> tuple[list[str], list[int], list[AtomicCounterMeta]]:
         """
         Build (KEYS, ARGV, per-counter meta) for a single descriptor's Lua
         call. All keys returned share the descriptor's {key:value} hash tag.
@@ -1325,11 +1357,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
 
         keys: list[str] = []
-        args: list[Any] = []
-        meta: list[dict[str, Any]] = []
+        args: list[int] = []
+        meta: list[AtomicCounterMeta] = []
 
-        for rate_limit_type in ("requests", "tokens"):
-            rlt: Literal["requests", "tokens"] = cast(Literal["requests", "tokens"], rate_limit_type)
+        rate_limit_types: tuple[Literal["requests", "tokens"], ...] = ("requests", "tokens")
+        for rlt in rate_limit_types:
             if rlt == "requests":
                 limit_value = rate_limit.get("requests_per_unit")
                 inc_amount = int(increment_amounts.get("requests", 0) or 0)
@@ -1350,22 +1382,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             #   [limit, increment, ttl_seconds, window_size_seconds].
             args.extend([int(limit_value), inc_amount, ttl_seconds, window_size_seconds])
             meta.append(
-                {
-                    "descriptor_key": descriptor_key,
-                    "current_limit": int(limit_value),
-                    "rate_limit_type": rlt,
-                    "window_key": window_key,
-                    "counter_key": counter_key,
-                    "increment": inc_amount,
-                    "ttl": ttl_seconds,
-                    "window_size": window_size_seconds,
-                }
+                AtomicCounterMeta(
+                    descriptor_key=descriptor_key,
+                    current_limit=int(limit_value),
+                    rate_limit_type=rlt,
+                    window_key=window_key,
+                    counter_key=counter_key,
+                    increment=inc_amount,
+                    ttl=ttl_seconds,
+                    window_size=window_size_seconds,
+                )
             )
         return keys, args, meta
 
     async def _atomic_lua_per_descriptor(
         self,
-        descriptor_groups: list[tuple[list[str], list[Any], list[dict[str, Any]]]],
+        descriptor_groups: list[tuple[list[str], list[int], list[AtomicCounterMeta]]],
         parent_otel_span: Span | None = None,
     ) -> RateLimitResponse:
         """
@@ -1374,7 +1406,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptor i, refund descriptors 0..i-1's increments. On Lua failure
         mid-loop, refund applied increments and fall back to in-memory.
         """
-        applied: list[list[dict[str, Any]]] = []
+        applied: list[list[AtomicCounterMeta]] = []
         statuses: list[RateLimitStatus] = []
 
         for _idx, (keys, args, meta) in enumerate(descriptor_groups):
@@ -1397,7 +1429,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"{self.window_size}s)."
                 )
                 await self._refund_applied_descriptor_groups(applied)
-                flat_meta: list[dict[str, Any]] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
+                flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
                 async with self._check_and_increment_lock:
                     return await self._atomic_check_and_increment_in_memory(
                         per_counter_meta=flat_meta,
@@ -1415,7 +1447,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def _refund_applied_descriptor_groups(
         self,
-        applied: list[list[dict[str, Any]]],
+        applied: list[list[AtomicCounterMeta]],
     ) -> None:
         """
         Decrement counters for descriptor groups already applied via Lua.
@@ -1441,8 +1473,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _build_atomic_response(
         self,
-        raw: list[Any],
-        per_counter_meta: list[dict[str, Any]],
+        raw: list[LuaReplyValue],
+        per_counter_meta: list[AtomicCounterMeta],
     ) -> RateLimitResponse:
         """Convert Lua script return value to RateLimitResponse.
 
@@ -1493,7 +1525,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def _atomic_check_and_increment_in_memory(
         self,
-        per_counter_meta: list[dict[str, Any]],
+        per_counter_meta: list[AtomicCounterMeta],
         parent_otel_span: Span | None = None,
     ) -> RateLimitResponse:
         """In-memory all-or-nothing check-and-increment. Caller holds lock.
@@ -1508,10 +1540,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         now_int = int(self._get_current_time().timestamp())
 
         # Pass 1: read state, validate.
-        descriptor_state: list[dict[str, Any]] = []
+        descriptor_state: list[AtomicCounterState] = []
         for meta in per_counter_meta:
             window_size = meta["window_size"]
-            window_start = await self.internal_usage_cache.async_get_cache(
+            window_start: CachedCounterValue = await self.internal_usage_cache.async_get_cache(
                 key=meta["window_key"],
                 litellm_parent_otel_span=parent_otel_span,
                 local_only=True,
@@ -1547,7 +1579,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         )
                     ],
                 )
-            descriptor_state.append({"window_expired": window_expired, "current": current_counter})
+            descriptor_state.append(AtomicCounterState(window_expired=window_expired, current=current_counter))
 
         # Pass 2: apply increments.
         statuses: list[RateLimitStatus] = []
@@ -1920,7 +1952,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         return rpm_limit_type == "dynamic" or tpm_limit_type == "dynamic"
 
-    def _get_agent_from_registry(self, agent_id: str) -> Any | None:
+    def _get_agent_from_registry(self, agent_id: str) -> "AgentResponse | None":
         """Look up an agent from the in-memory registry by ID."""
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
@@ -1969,8 +2001,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if agent is None:
             return descriptors
 
-        agent_rpm = getattr(agent, "rpm_limit", None)
-        agent_tpm = getattr(agent, "tpm_limit", None)
+        agent_rpm = agent.rpm_limit
+        agent_tpm = agent.tpm_limit
         if agent_rpm is not None or agent_tpm is not None:
             descriptors.append(
                 RateLimitDescriptor(
@@ -1984,8 +2016,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-        session_rpm = getattr(agent, "session_rpm_limit", None)
-        session_tpm = getattr(agent, "session_tpm_limit", None)
+        session_rpm = agent.session_rpm_limit
+        session_tpm = agent.session_tpm_limit
         if session_rpm is not None or session_tpm is not None:
             session_id = self._get_session_id_from_data(data)
             if session_id is not None:
@@ -2244,7 +2276,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Fail safe: enforce limits if we can't check
             return True
 
-    def get_rate_limiter_for_call_type(self, call_type: str) -> Any | None:
+    def get_rate_limiter_for_call_type(self, call_type: str) -> CustomLogger | None:
         """Get the rate limiter for the call type."""
         if call_type == "acreate_batch":
             batch_limiter = self._get_batch_rate_limiter()
@@ -2372,8 +2404,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: str,
-    ):
+        call_type: CallTypesLiteral,
+    ) -> Exception | str | dict[str, object] | None:
         """
         Pre-call hook to check rate limits before making the API call.
         Supports dynamic rate limiting based on deployment health.
@@ -2698,8 +2730,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Get operations for this hash tag group
             group_operations = [op for op in pipeline_operations if op["key"] in group_keys]
 
-            keys = []
-            args = []
+            keys: list[str] = []
+            args: list[float] = []
 
             for op in group_operations:
                 # Convert None TTL to 0 for Lua script
@@ -2767,15 +2799,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     @staticmethod
     def _merge_ratelimit_statuses_into_additional_headers(
-        additional_headers: dict[str, Any],
+        additional_headers: dict[str, object],
         statuses: list[RateLimitStatus],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Return ``additional_headers`` extended with
         ``x-ratelimit-{descriptor_key}-{remaining|limit}-{rate_limit_type}``
         entries. Non-mutating so callers pick their own target dict.
         """
-        merged: dict[str, Any] = dict(additional_headers)
+        merged: dict[str, object] = dict(additional_headers)
         for status in statuses:
             prefix = f"x-ratelimit-{status['descriptor_key']}"
             merged[f"{prefix}-remaining-{status['rate_limit_type']}"] = status["limit_remaining"]
@@ -2785,7 +2817,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _collect_tpm_scope_targets(
         self,
         standard_logging_metadata: dict[str, Any],
-        kwargs: Any,
+        kwargs: object,
         model_group: str | None,
     ) -> list[tuple[str, str]]:
         """
@@ -2882,8 +2914,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _build_success_event_pipeline_operations(
         self,
-        kwargs: Any,
-        response_obj: Any,
+        kwargs: dict[str, object],
+        response_obj: object,
         rate_limit_type: Literal["output", "input", "total"],
     ) -> list[RedisPipelineIncrementOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""
@@ -2894,7 +2926,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Get metadata from standard_logging_object - this correctly handles both
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object = kwargs.get("standard_logging_object") or {}
-        standard_logging_metadata = standard_logging_object.get("metadata") or {}
+        standard_logging_metadata = (
+            standard_logging_object.get("metadata") or {} if isinstance(standard_logging_object, dict) else {}
+        )
 
         model_group = get_model_group_from_litellm_kwargs(kwargs)
 
@@ -3008,9 +3042,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     async def async_logging_hook(
         self,
         kwargs: dict,
-        result: Any,
+        result: object,
         call_type: str,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, object]:
         """
         Mirror the pre-call rate-limit snapshot into the SLP so streaming
         success callbacks see the same ``x-ratelimit-*`` headers the
@@ -3027,8 +3061,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _mirror_ratelimit_response_into_logging_payload(
         self,
-        kwargs: Any,
-        response_obj: Any,
+        kwargs: object,
+        response_obj: object,
     ) -> None:
         """
         Copy the stashed ``RateLimitResponse`` into the SLP's
