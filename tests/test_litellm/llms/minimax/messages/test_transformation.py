@@ -8,9 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../"))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import completion
@@ -29,10 +27,59 @@ def test_minimax_anthropic_config():
     assert api_base == "https://api.minimax.io/anthropic/v1/messages"
 
     # Test get_api_base with custom value
-    custom_base = config.get_api_base(
-        api_base="https://api.minimaxi.com/anthropic/v1/messages"
-    )
+    custom_base = config.get_api_base(api_base="https://api.minimaxi.com/anthropic/v1/messages")
     assert custom_base == "https://api.minimaxi.com/anthropic/v1/messages"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected_url"),
+    [
+        (
+            "https://api.minimax.io",
+            "https://api.minimax.io/anthropic/v1/messages",
+        ),
+        (
+            "https://api.minimax.io/",
+            "https://api.minimax.io/anthropic/v1/messages",
+        ),
+        (
+            "https://api.minimax.io/v1",
+            "https://api.minimax.io/anthropic/v1/messages",
+        ),
+        (
+            "https://api.minimax.io/v1/messages",
+            "https://api.minimax.io/anthropic/v1/messages",
+        ),
+        (
+            "https://api.minimax.io/anthropic",
+            "https://api.minimax.io/anthropic/v1/messages",
+        ),
+        (
+            "https://api.minimax.io/anthropic/v1",
+            "https://api.minimax.io/anthropic/v1/messages",
+        ),
+        (
+            "https://api.minimax.io/anthropic/v1/messages",
+            "https://api.minimax.io/anthropic/v1/messages",
+        ),
+        (
+            "https://gateway.example/minimax?region=global#messages",
+            "https://gateway.example/minimax/anthropic/v1/messages?region=global#messages",
+        ),
+    ],
+)
+def test_minimax_messages_complete_url_normalizes_api_base(api_base: str, expected_url: str):
+    config = MinimaxMessagesConfig()
+
+    complete_url = config.get_complete_url(
+        api_base=api_base,
+        api_key="test-key",
+        model="MiniMax-M2.1",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert complete_url == expected_url
 
 
 def test_minimax_provider_routing():

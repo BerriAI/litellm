@@ -2,6 +2,8 @@
 MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
 """
 
+from urllib.parse import urlsplit, urlunsplit
+
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -60,15 +62,26 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         Get the complete URL for MiniMax API.
         Override to ensure we use MiniMax's endpoint, not Anthropic's.
         """
-        # Get the base URL (either provided or default MiniMax endpoint)
         base_url = self.get_api_base(api_base=api_base)
-
-        # If the base URL already includes the full path, return it
-        if base_url.endswith("/v1/messages"):
-            return base_url
-
-        # Otherwise append the messages endpoint
-        if base_url.endswith("/"):
-            return f"{base_url}v1/messages"
-        else:
-            return f"{base_url}/v1/messages"
+        parsed_url = urlsplit(base_url)
+        path_parts = tuple(part for part in parsed_url.path.split("/") if part)
+        base_path_parts = (
+            path_parts[:-2]
+            if path_parts[-2:] == ("v1", "messages")
+            else path_parts[:-1]
+            if path_parts[-1:] in (("v1",), ("messages",))
+            else path_parts
+        )
+        provider_path_parts = (
+            base_path_parts if base_path_parts[-1:] == ("anthropic",) else (*base_path_parts, "anthropic")
+        )
+        path = "/" + "/".join((*provider_path_parts, "v1", "messages"))
+        return urlunsplit(
+            (
+                parsed_url.scheme,
+                parsed_url.netloc,
+                path,
+                parsed_url.query,
+                parsed_url.fragment,
+            )
+        )
