@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getProxyBaseUrl } from "@/components/networking";
+import { isSubmitEnterKey } from "@/utils/keyboardUtils";
 import { OPEN_AI_VOICE_SELECT_OPTIONS } from "./chatConstants";
 
 interface RealtimeMessage {
@@ -455,7 +456,9 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") sendTextMessage();
+                if (isSubmitEnterKey(e)) {
+                  sendTextMessage();
+                }
               }}
               className="h-10 flex-1"
             />
