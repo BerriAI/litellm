@@ -3,7 +3,7 @@ Vertex AI DeepSeek OCR transformation implementation.
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -43,13 +43,13 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
         litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
 

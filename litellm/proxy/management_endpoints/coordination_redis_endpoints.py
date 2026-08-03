@@ -16,7 +16,6 @@ import json
 from collections.abc import Mapping
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
@@ -91,7 +90,7 @@ def _redact_credentials(settings: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _redact_all_values(settings: Optional[Mapping[str, object]]) -> dict[str, object]:
+def _redact_all_values(settings: Mapping[str, object] | None) -> dict[str, object]:
     """Replace every value with a fixed marker, preserving the key set.
 
     The audit row shows *which* fields changed without the audit table becoming
@@ -171,7 +170,7 @@ async def _read_general_settings() -> dict[str, object]:
     return _SETTINGS_ADAPTER.validate_python(config_param.param_value)
 
 
-async def get_persisted_coordination_redis_settings() -> Optional[dict[str, object]]:
+async def get_persisted_coordination_redis_settings() -> dict[str, object] | None:
     """The coordination_redis block saved to the database, if any.
 
     Read at startup so settings saved from the admin UI take effect on the next
@@ -183,7 +182,7 @@ async def get_persisted_coordination_redis_settings() -> Optional[dict[str, obje
     return None
 
 
-async def _current_coordination_redis_settings() -> Optional[dict[str, object]]:
+async def _current_coordination_redis_settings() -> dict[str, object] | None:
     """The coordination_redis block the proxy would boot with.
 
     The persisted row wins over the yaml-loaded config state because startup
@@ -205,7 +204,7 @@ async def _current_coordination_redis_settings() -> Optional[dict[str, object]]:
     return None
 
 
-def _coordination_redis_source(settings: Optional[Mapping[str, object]]) -> Optional[CoordinationRedisSource]:
+def _coordination_redis_source(settings: Mapping[str, object] | None) -> CoordinationRedisSource | None:
     """Which source the proxy's coordination Redis comes from, in startup precedence order.
 
     Mirrors `ProxyConfig._init_coordination_redis` -> `ProxyConfig._init_cache`:
@@ -236,10 +235,10 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 async def _emit_coordination_redis_audit_log(
     *,
     action: AUDIT_ACTIONS,
-    before_settings: Optional[Mapping[str, object]],
-    after_settings: Optional[Mapping[str, object]],
+    before_settings: Mapping[str, object] | None,
+    after_settings: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
-    litellm_changed_by: Optional[str],
+    litellm_changed_by: str | None,
 ) -> None:
     """Emit an audit-log row for a /coordination_redis/settings mutation."""
     if litellm.store_audit_logs is not True:
@@ -271,7 +270,7 @@ class CoordinationRedisSettingsResponse(BaseModel):
     fields: list[CoordinationRedisSettingsField] = Field(
         description="List of all configurable coordination Redis settings with metadata"
     )
-    source: Optional[CoordinationRedisSource] = Field(
+    source: CoordinationRedisSource | None = Field(
         description="Where the proxy's coordination Redis comes from; null when it has none"
     )
 
@@ -282,7 +281,7 @@ class CoordinationRedisSettingsRequest(BaseModel):
 
 class CoordinationRedisTestResponse(BaseModel):
     status: str = Field(description="Connection status: 'healthy' or 'unhealthy'")
-    error: Optional[str] = Field(default=None, description="Error message if the connection failed")
+    error: str | None = Field(default=None, description="Error message if the connection failed")
 
 
 @router.get(
@@ -324,7 +323,7 @@ async def get_coordination_redis_settings(
 async def update_coordination_redis_settings(
     request: CoordinationRedisSettingsRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
@@ -413,7 +412,7 @@ async def check_coordination_redis_connection(
     settings = _merge_over_saved(request.settings, saved_settings or {})
     params = _validated_params(settings)
 
-    redis_cache: Optional[RedisCache] = None
+    redis_cache: RedisCache | None = None
     try:
         redis_cache = _build_redis_usage_cache(params.model_dump(exclude_none=True))
         await asyncio.wait_for(redis_cache.ping(), timeout=_PING_TIMEOUT_SECONDS)

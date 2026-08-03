@@ -1,6 +1,5 @@
 import enum
 import heapq
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -25,14 +24,14 @@ class Scheduler:
 
     def __init__(
         self,
-        polling_interval: Optional[float] = None,
-        redis_cache: Optional[RedisCache] = None,
+        polling_interval: float | None = None,
+        redis_cache: RedisCache | None = None,
     ):
         """
         polling_interval: float or null - frequency of polling queue. Default is 3ms.
         """
         self.queue: list = []
-        default_in_memory_ttl: Optional[float] = None
+        default_in_memory_ttl: float | None = None
         if redis_cache is not None:
             # if redis-cache available frequently poll that instead of using in-memory.
             default_in_memory_ttl = SchedulerCacheKeys.default_in_memory_ttl.value
@@ -63,7 +62,7 @@ class Scheduler:
         """
         queue = await self.get_queue(model_name=model_name)
         if not queue:
-            raise Exception("Incorrectly setup. Queue is invalid. Queue={}".format(queue))
+            raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
         # ------------
         # Setup values
@@ -99,7 +98,7 @@ class Scheduler:
         """Return if the id is at the top of the queue. Don't pop the value from heap."""
         queue = await self.get_queue(model_name=model_name)
         if not queue:
-            raise Exception("Incorrectly setup. Queue is invalid. Queue={}".format(queue))
+            raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
         # ------------
         # Setup values
@@ -120,7 +119,7 @@ class Scheduler:
         Return a queue for that specific model group
         """
         if self.cache is not None:
-            _cache_key = "{}:{}".format(SchedulerCacheKeys.queue.value, model_name)
+            _cache_key = f"{SchedulerCacheKeys.queue.value}:{model_name}"
             response = await self.cache.async_get_cache(key=_cache_key)
             if response is None or not isinstance(response, list):
                 return []
@@ -133,6 +132,5 @@ class Scheduler:
         Save the updated queue of the model group
         """
         if self.cache is not None:
-            _cache_key = "{}:{}".format(SchedulerCacheKeys.queue.value, model_name)
+            _cache_key = f"{SchedulerCacheKeys.queue.value}:{model_name}"
             await self.cache.async_set_cache(key=_cache_key, value=queue)
-        return None

@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -39,7 +39,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         BaseImageGenerationConfig.__init__(self)
         VertexLLM.__init__(self)
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Imagen API supported parameters
         """
@@ -56,7 +56,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         mapped_params = {}
 
         for k, v in non_default_params.items():
-            if k not in optional_params.keys():
+            if k not in optional_params:
                 if k in supported_params:
                     # Map OpenAI parameters to Imagen format
                     if k == "n":
@@ -82,7 +82,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         }
         return aspect_ratio_map.get(size, "1:1")
 
-    def _resolve_vertex_project(self) -> Optional[str]:
+    def _resolve_vertex_project(self) -> str | None:
         return (
             getattr(self, "_vertex_project", None)
             or os.environ.get("VERTEXAI_PROJECT")
@@ -90,7 +90,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             or get_secret_str("VERTEXAI_PROJECT")
         )
 
-    def _resolve_vertex_location(self) -> Optional[str]:
+    def _resolve_vertex_location(self) -> str | None:
         return (
             getattr(self, "_vertex_location", None)
             or os.environ.get("VERTEXAI_LOCATION")
@@ -100,7 +100,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             or get_secret_str("VERTEX_LOCATION")
         )
 
-    def _resolve_vertex_credentials(self) -> Optional[str]:
+    def _resolve_vertex_credentials(self) -> str | None:
         return (
             getattr(self, "_vertex_credentials", None)
             or os.environ.get("VERTEXAI_CREDENTIALS")
@@ -111,12 +111,12 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for Vertex AI Imagen predict API
@@ -147,11 +147,11 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = headers or {}
 
@@ -213,8 +213,8 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Imagen image generation response to litellm ImageResponse format

@@ -31,7 +31,7 @@ Events:
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -77,7 +77,7 @@ _SEMCONV_CACHE_TOKEN_ATTRIBUTES = {
 _INFERENCE_DETAILS_EVENT_NAME = "gen_ai.client.inference.operation.details"
 
 
-def parse_semconv_opt_in(raw: Optional[str]) -> Set[OTELSemconvCategory]:
+def parse_semconv_opt_in(raw: str | None) -> set[OTELSemconvCategory]:
     """Parse the comma-separated OTEL_SEMCONV_STABILITY_OPT_IN value into the
     set of recognized categories. Unknown tokens are ignored per the spec."""
     if not raw:
@@ -121,13 +121,13 @@ class OTELGenAISemconvMixin:
 
         def _capture_in_event(self) -> bool: ...
 
-        def _transform_messages_to_otel_semantic_conventions(self, messages: Union[List[dict], str]) -> List[dict]: ...
+        def _transform_messages_to_otel_semantic_conventions(self, messages: list[dict] | str) -> list[dict]: ...
 
-        def _transform_choices_to_otel_semantic_conventions(self, choices: List[dict]) -> List[dict]: ...
+        def _transform_choices_to_otel_semantic_conventions(self, choices: list[dict]) -> list[dict]: ...
 
         def _to_ns(self, dt: datetime) -> int: ...
 
-        def _otel_log_types(self) -> Tuple[Any, Any]: ...
+        def _otel_log_types(self) -> tuple[Any, Any]: ...
 
     @property
     def _gen_ai_semconv_latest_experimental(self) -> bool:
@@ -195,13 +195,13 @@ class OTELGenAISemconvMixin:
             if value:
                 self.safe_set_attribute(span=span, key=semconv_key, value=value)
 
-    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str) -> Dict[str, Any]:
+    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str) -> dict[str, Any]:
         """Build the attribute payload for the inference-details event.
 
         Always includes provider/operation; input/output messages are added
         only when content capture is enabled and non-empty. Mixin-internal.
         """
-        attrs: Dict[str, Any] = {
+        attrs: dict[str, Any] = {
             "event_name": _INFERENCE_DETAILS_EVENT_NAME,
             "gen_ai.provider.name": provider,
             "gen_ai.operation.name": self._gen_ai_operation_name(kwargs),

@@ -11,7 +11,6 @@ import base64
 import json
 import re
 import traceback
-from typing import List, Optional
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -27,10 +26,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.utils import StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
-from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 
 _BASE64_INLINE_PATTERN = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
@@ -44,28 +43,28 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
     def __init__(
         self,
         # --- Standard SQS params ---
-        sqs_queue_url: Optional[str] = None,
-        sqs_region_name: Optional[str] = None,
-        sqs_api_version: Optional[str] = None,
+        sqs_queue_url: str | None = None,
+        sqs_region_name: str | None = None,
+        sqs_api_version: str | None = None,
         sqs_use_ssl: bool = True,
-        sqs_verify: Optional[bool] = None,
-        sqs_endpoint_url: Optional[str] = None,
-        sqs_aws_access_key_id: Optional[str] = None,
-        sqs_aws_secret_access_key: Optional[str] = None,
-        sqs_aws_session_token: Optional[str] = None,
-        sqs_aws_session_name: Optional[str] = None,
-        sqs_aws_profile_name: Optional[str] = None,
-        sqs_aws_role_name: Optional[str] = None,
-        sqs_aws_web_identity_token: Optional[str] = None,
-        sqs_aws_sts_endpoint: Optional[str] = None,
-        sqs_flush_interval: Optional[int] = DEFAULT_SQS_FLUSH_INTERVAL_SECONDS,
-        sqs_batch_size: Optional[int] = DEFAULT_SQS_BATCH_SIZE,
+        sqs_verify: bool | None = None,
+        sqs_endpoint_url: str | None = None,
+        sqs_aws_access_key_id: str | None = None,
+        sqs_aws_secret_access_key: str | None = None,
+        sqs_aws_session_token: str | None = None,
+        sqs_aws_session_name: str | None = None,
+        sqs_aws_profile_name: str | None = None,
+        sqs_aws_role_name: str | None = None,
+        sqs_aws_web_identity_token: str | None = None,
+        sqs_aws_sts_endpoint: str | None = None,
+        sqs_flush_interval: int | None = DEFAULT_SQS_FLUSH_INTERVAL_SECONDS,
+        sqs_batch_size: int | None = DEFAULT_SQS_BATCH_SIZE,
         sqs_config=None,
         sqs_strip_base64_files: bool = False,
         # --- 🔐 Application-level encryption params ---
         sqs_aws_use_application_level_encryption: bool = False,
-        sqs_app_encryption_key_b64: Optional[str] = None,
-        sqs_app_encryption_aad: Optional[str] = None,
+        sqs_app_encryption_key_b64: str | None = None,
+        sqs_app_encryption_aad: str | None = None,
         **kwargs,
     ) -> None:
         try:
@@ -110,33 +109,33 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 batch_size=sqs_batch_size,
             )
 
-            self.log_queue: List[StandardLoggingPayload] = []
+            self.log_queue: list[StandardLoggingPayload] = []
             BaseAWSLLM.__init__(self)
 
         except Exception as e:
-            print_verbose(f"Got exception on init sqs client {str(e)}")
+            print_verbose(f"Got exception on init sqs client {e!s}")
             raise e
 
     def _init_sqs_params(
         self,
-        sqs_queue_url: Optional[str] = None,
-        sqs_region_name: Optional[str] = None,
-        sqs_api_version: Optional[str] = None,
+        sqs_queue_url: str | None = None,
+        sqs_region_name: str | None = None,
+        sqs_api_version: str | None = None,
         sqs_use_ssl: bool = True,
-        sqs_verify: Optional[bool] = None,
-        sqs_endpoint_url: Optional[str] = None,
-        sqs_aws_access_key_id: Optional[str] = None,
-        sqs_aws_secret_access_key: Optional[str] = None,
-        sqs_aws_session_token: Optional[str] = None,
-        sqs_aws_session_name: Optional[str] = None,
-        sqs_aws_profile_name: Optional[str] = None,
-        sqs_aws_role_name: Optional[str] = None,
-        sqs_aws_web_identity_token: Optional[str] = None,
-        sqs_aws_sts_endpoint: Optional[str] = None,
+        sqs_verify: bool | None = None,
+        sqs_endpoint_url: str | None = None,
+        sqs_aws_access_key_id: str | None = None,
+        sqs_aws_secret_access_key: str | None = None,
+        sqs_aws_session_token: str | None = None,
+        sqs_aws_session_name: str | None = None,
+        sqs_aws_profile_name: str | None = None,
+        sqs_aws_role_name: str | None = None,
+        sqs_aws_web_identity_token: str | None = None,
+        sqs_aws_sts_endpoint: str | None = None,
         sqs_strip_base64_files: bool = False,
         sqs_aws_use_application_level_encryption: bool = False,
-        sqs_app_encryption_key_b64: Optional[str] = None,
-        sqs_app_encryption_aad: Optional[str] = None,
+        sqs_app_encryption_key_b64: str | None = None,
+        sqs_app_encryption_aad: str | None = None,
         sqs_config=None,
     ) -> None:
         litellm.aws_sqs_callback_params = litellm.aws_sqs_callback_params or {}
@@ -189,7 +188,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         self.sqs_app_encryption_aad = (
             litellm.aws_sqs_callback_params.get("sqs_app_encryption_aad") or sqs_app_encryption_aad
         )
-        self.app_crypto: Optional["AppCrypto"] = None
+        self.app_crypto: AppCrypto | None = None
         if self.sqs_aws_use_application_level_encryption:
             from litellm.litellm_core_utils.app_crypto import AppCrypto
 
@@ -216,7 +215,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 self.batch_size,
             )
         except Exception as e:
-            verbose_logger.exception(f"sqs Layer Error - {str(e)}")
+            verbose_logger.exception(f"sqs Layer Error - {e!s}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -234,8 +233,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
+            verbose_logger.exception(f"Datadog Layer Error - {e!s}\n{traceback.format_exc()}")
 
     async def async_send_batch(self) -> None:
         verbose_logger.debug(f"sqs logger - sending batch of {len(self.log_queue)}")
@@ -307,7 +305,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
             response.raise_for_status()
         except Exception as e:
-            verbose_logger.exception(f"Error sending to SQS: {str(e)}")
+            verbose_logger.exception(f"Error sending to SQS: {e!s}")
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
         """

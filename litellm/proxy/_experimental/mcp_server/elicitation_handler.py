@@ -9,7 +9,8 @@ MCP Spec Reference:
     https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
 """
 
-from typing import Any, Optional, Union
+from typing import Any, Union
+
 from litellm._logging import verbose_logger
 
 # Guard imports that require the mcp package
@@ -30,8 +31,8 @@ except ImportError:
 async def handle_elicitation_request(
     context: Any,
     params: "ElicitRequestParams",
-    downstream_session: Optional[Any] = None,
-    downstream_capabilities: Optional[Any] = None,
+    downstream_session: Any | None = None,
+    downstream_capabilities: Any | None = None,
 ) -> Union["ElicitResult", "ErrorData"]:
     """
     Handle an MCP elicitation/create request from an upstream MCP server.
@@ -78,14 +79,14 @@ async def handle_elicitation_request(
         verbose_logger.exception("MCP elicitation handler failed: %s", e)
         return ErrorData(
             code=-1,
-            message=f"Elicitation failed: {str(e)}",
+            message=f"Elicitation failed: {e!s}",
         )
 
 
 async def _relay_elicitation_to_downstream(
     params: "ElicitRequestParams",
     downstream_session: Any,
-    downstream_capabilities: Optional[Any] = None,
+    downstream_capabilities: Any | None = None,
 ) -> Union["ElicitResult", "ErrorData"]:
     """
     Relay an elicitation request to the downstream MCP client.

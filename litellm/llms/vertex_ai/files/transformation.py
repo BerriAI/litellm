@@ -5,17 +5,9 @@ import json
 import os
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import (
     Any,
-    Callable,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Tuple,
-    Union,
 )
 from urllib.parse import quote, unquote
 
@@ -42,8 +34,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
-    BaseFileUploadStream,
     BaseFilesConfig,
+    BaseFileUploadStream,
     LiteLLMLoggingObj,
 )
 from litellm.llms.vertex_ai.common_utils import (
@@ -56,6 +48,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     transform_openai_input_gemini_embed_content,
 )
+from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -65,7 +58,6 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
-from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.vertex_ai import GcsBucketResponse, GeminiEmbeddingInput
 from litellm.types.utils import (
     Embedding,
@@ -109,7 +101,7 @@ def _sanitize_gcp_label_value(value: str) -> str:
     return sanitized[:_GCP_LABEL_VALUE_MAX_LEN]
 
 
-def _encode_gcp_label_value_chunks(value: str) -> List[str]:
+def _encode_gcp_label_value_chunks(value: str) -> list[str]:
     """Encode arbitrary text across one or more GCP-label-safe values."""
     max_encoded_len = _GCP_LABEL_VALUE_MAX_LEN - len(_CUSTOM_ID_RAW_LABEL_PREFIX)
     encoded = base64.b32encode(value.encode("utf-8")).decode("ascii").rstrip("=").lower()
@@ -119,7 +111,7 @@ def _encode_gcp_label_value_chunks(value: str) -> List[str]:
     ] or [_CUSTOM_ID_RAW_LABEL_PREFIX]
 
 
-def _decode_gcp_label_value_chunks(values: List[str]) -> Optional[str]:
+def _decode_gcp_label_value_chunks(values: list[str]) -> str | None:
     """Decode values produced by _encode_gcp_label_value_chunks."""
     encoded_parts = []
     for value in values:
@@ -134,7 +126,7 @@ def _decode_gcp_label_value_chunks(values: List[str]) -> Optional[str]:
         return None
 
 
-def _set_litellm_batch_custom_id_labels(labels: Dict[str, str], custom_id: Any) -> None:
+def _set_litellm_batch_custom_id_labels(labels: dict[str, str], custom_id: Any) -> None:
     """
     Store OpenAI batch custom_id for Vertex batch correlation.
 
@@ -165,7 +157,7 @@ def _get_litellm_batch_custom_id(vertex_output_row: Mapping[str, Any]) -> str:
     return _get_litellm_batch_custom_id_from_labels(request_data.get("labels") or {})
 
 
-def _get_litellm_batch_custom_id_from_labels(labels: Dict[str, Any]) -> str:
+def _get_litellm_batch_custom_id_from_labels(labels: dict[str, Any]) -> str:
     """Prefer encoded custom_id when present (see _set_litellm_batch_custom_id_labels)."""
     raw = labels.get("litellm_custom_id_raw")
     if raw:
@@ -343,7 +335,7 @@ def _is_embeddings_batch_entry(openai_entry: Mapping[str, Any]) -> bool:
 
 def _openai_embedding_input_elements(
     embedding_input: GeminiEmbeddingInput,
-) -> tuple[Union[str, List[str]], ...]:
+) -> tuple[str | list[str], ...]:
     """
     Split an OpenAI `input` into the elements that each get their own embedding.
 
@@ -434,8 +426,8 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
 
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
-    openai_entry: Dict[str, Any],
-    map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
+    openai_entry: dict[str, Any],
+    map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> tuple[Mapping[str, Any], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.
@@ -466,7 +458,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     return ({"request": vertex_request_body},)
 
 
-def _iter_stripped_lines(raw_lines: Iterable[Union[str, bytes]]) -> Iterator[str]:
+def _iter_stripped_lines(raw_lines: Iterable[str | bytes]) -> Iterator[str]:
     """Decode (when needed), strip, and drop blank lines from an iterable of lines."""
     for raw in raw_lines:
         line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
@@ -537,7 +529,7 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
 
 def _iter_openai_jsonl_entries(
     openai_file_content: FileTypes,
-) -> Iterator[Dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     for line in _iter_openai_jsonl_lines(openai_file_content):
         yield json.loads(line)
 
@@ -553,7 +545,7 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
     def __init__(
         self,
         openai_file_content: FileTypes,
-        map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
+        map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> None:
         self._openai_file_content = openai_file_content
         self._map_openai_to_vertex_params = map_openai_to_vertex_params
@@ -586,11 +578,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if not api_key:
             api_key, _ = self.get_access_token(
@@ -604,7 +596,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _get_gcs_object_name_from_batch_jsonl(
         self,
-        openai_jsonl_content: List[Dict[str, Any]],
+        openai_jsonl_content: list[dict[str, Any]],
     ) -> str:
         """
         Gets a unique GCS object name for the VertexAI batch prediction job
@@ -639,7 +631,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             fallback_filename="file",
         )
 
-    def _get_configured_bucket_name(self, litellm_params: Dict) -> str:
+    def _get_configured_bucket_name(self, litellm_params: dict) -> str:
         bucket_name = (
             litellm_params.get("gcs_bucket_name") or litellm_params.get("bucket_name") or os.getenv("GCS_BUCKET_NAME")
         )
@@ -649,11 +641,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def get_complete_file_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
-        optional_params: Dict,
-        litellm_params: Dict,
+        optional_params: dict,
+        litellm_params: dict,
         data: CreateFileRequest,
     ) -> str:
         """
@@ -678,7 +670,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
         return f"{api_base}/{endpoint}"
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return []
 
     def map_openai_params(
@@ -692,8 +684,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _map_openai_to_vertex_params(
         self,
-        openai_request_body: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        openai_request_body: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         wrapper to call VertexGeminiConfig.map_openai_params
         """
@@ -717,7 +709,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         create_file_data: CreateFileRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[bytes, str, dict]:
+    ) -> bytes | str | dict:
         """
         2 Cases:
         1. Handle basic file upload
@@ -751,7 +743,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def transform_create_file_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
@@ -786,10 +778,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             object="file",
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[Dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return VertexAIError(status_code=status_code, message=error_message, headers=headers)
 
-    def _parse_gcs_uri(self, file_id: str, litellm_params: Optional[Dict] = None) -> Tuple[str, str]:
+    def _parse_gcs_uri(self, file_id: str, litellm_params: dict | None = None) -> tuple[str, str]:
         """
         Validate a managed GCS file_id and return (bucket, url-encoded-object-path).
         """
@@ -864,7 +856,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def transform_list_files_request(
         self,
-        purpose: Optional[str],
+        purpose: str | None,
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
@@ -875,7 +867,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-    ) -> List[OpenAIFileObject]:
+    ) -> list[OpenAIFileObject]:
         raise NotImplementedError("VertexAIFilesConfig does not support file listing")
 
     def transform_file_content_request(
@@ -1054,7 +1046,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _transform_single_vertex_batch_output_to_openai(
         self,
-        vertex_output: Dict[str, Any],
+        vertex_output: dict[str, Any],
         vertex_gemini_config: VertexGeminiConfig,
         logging_obj: Logging,
         mock_httpx_response: httpx.Response,
@@ -1106,6 +1098,6 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 custom_id=custom_id,
                 error={
                     "code": "transformation_error",
-                    "message": f"Failed to transform response: {str(e)}",
+                    "message": f"Failed to transform response: {e!s}",
                 },
             )

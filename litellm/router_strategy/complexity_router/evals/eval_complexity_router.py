@@ -12,7 +12,6 @@ import sys
 
 # ruff: noqa: T201
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -28,14 +27,14 @@ class EvalCase:
     prompt: str
     expected_tier: ComplexityTier
     description: str
-    system_prompt: Optional[str] = None
+    system_prompt: str | None = None
     # Allow some flexibility - if actual tier is in acceptable_tiers, still passes
-    acceptable_tiers: Optional[List[ComplexityTier]] = None
+    acceptable_tiers: list[ComplexityTier] | None = None
 
 
 # ─── Evaluation Dataset ───
 
-EVAL_CASES: List[EvalCase] = [
+EVAL_CASES: list[EvalCase] = [
     # === SIMPLE tier cases ===
     EvalCase(
         prompt="Hello!",
@@ -230,7 +229,7 @@ EVAL_CASES: List[EvalCase] = [
 ]
 
 
-def run_eval() -> Tuple[int, int, List[dict]]:
+def run_eval() -> tuple[int, int, list[dict]]:
     """
     Run the evaluation suite.
 

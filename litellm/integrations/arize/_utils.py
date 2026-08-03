@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, Any, Dict, Optional, Type
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import override
 
@@ -31,7 +31,7 @@ from litellm.integrations._types.open_inference import (
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: Dict[str, Any]):
+    def set_messages(span: "Span", kwargs: dict[str, Any]):
         messages = kwargs.get("messages")
 
         # for /chat/completions
@@ -302,7 +302,7 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
         )
 
 
-def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
+def _infer_open_inference_span_kind(call_type: str | None) -> str:
     """
     Map LiteLLM call types to OpenInference span kinds.
     """
@@ -360,7 +360,7 @@ def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
     return OpenInferenceSpanKindValues.UNKNOWN.value
 
 
-def _set_tool_attributes(span: "Span", optional_tools: Optional[list], metadata_tools: Optional[list]):
+def _set_tool_attributes(span: "Span", optional_tools: list | None, metadata_tools: list | None):
     """set tool attributes on span from optional_params or tool call metadata"""
     if optional_tools:
         for idx, tool in enumerate(optional_tools):
@@ -408,7 +408,7 @@ def _set_tool_attributes(span: "Span", optional_tools: Optional[list], metadata_
                 )
 
 
-def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMObsOTELAttributes]):
+def set_attributes(span: "Span", kwargs, response_obj, attributes: type[BaseLLMObsOTELAttributes]):
     """
     Populates span with OpenInference-compliant LLM attributes for Arize and Phoenix tracing.
     """
@@ -427,7 +427,7 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMO
     try:
         optional_params = _sanitize_optional_params(kwargs.get("optional_params"))
         litellm_params = kwargs.get("litellm_params", {}) or {}
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+        standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
         if standard_logging_payload is None:
             raise ValueError("standard_logging_object not found in kwargs")
 
@@ -482,19 +482,19 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMO
     )
 
 
-def _sanitize_optional_params(optional_params: Optional[dict]) -> dict:
+def _sanitize_optional_params(optional_params: dict | None) -> dict:
     if not isinstance(optional_params, dict):
         return {}
     optional_params.pop("secret_fields", None)
     return optional_params
 
 
-def _set_metadata_attributes(span: "Span", metadata: Optional[Any], span_attrs) -> None:
+def _set_metadata_attributes(span: "Span", metadata: Any | None, span_attrs) -> None:
     if metadata is not None:
         safe_set_attribute(span, span_attrs.METADATA, safe_dumps(metadata))
 
 
-def _extract_metadata_tools(metadata: Optional[Any]) -> Optional[list]:
+def _extract_metadata_tools(metadata: Any | None) -> list | None:
     if not isinstance(metadata, dict):
         return None
     llm_obj = metadata.get("llm")
@@ -503,7 +503,7 @@ def _extract_metadata_tools(metadata: Optional[Any]) -> Optional[list]:
     return None
 
 
-def _extract_optional_tools(optional_params: dict) -> Optional[list]:
+def _extract_optional_tools(optional_params: dict) -> list | None:
     return optional_params.get("tools") if isinstance(optional_params, dict) else None
 
 
@@ -544,7 +544,7 @@ def _set_request_attributes(
         safe_set_attribute(span, "llm.response.model", response_obj.get("model"))
 
 
-def _set_model_params(span: "Span", model_params: Optional[dict], span_attrs) -> None:
+def _set_model_params(span: "Span", model_params: dict | None, span_attrs) -> None:
     if not model_params:
         return
 
@@ -606,7 +606,7 @@ def _coerce_response_obj_for_attrs(response_obj):
     return response_obj
 
 
-def _coerce_text(value) -> Optional[str]:
+def _coerce_text(value) -> str | None:
     """Best-effort text extraction from a message-content value.
 
     Returns None when no textual portion can be derived. Handles:
@@ -650,7 +650,7 @@ def _to_plain_dict(value):
     return value
 
 
-def _get_tool_calls(message) -> Optional[list]:
+def _get_tool_calls(message) -> list | None:
     """Return ``message.tool_calls`` only when it's a non-empty list.
 
     Works for dicts and Pydantic message objects via ``_safe_get``.
@@ -659,7 +659,7 @@ def _get_tool_calls(message) -> Optional[list]:
     return tool_calls if isinstance(tool_calls, list) and tool_calls else None
 
 
-def _normalize_tool_call(raw_tc) -> Optional[Dict[str, Any]]:
+def _normalize_tool_call(raw_tc) -> dict[str, Any] | None:
     """Normalize a single tool_call (dict or Pydantic) into a stable shape:
 
         {"id": str|None, "type": str, "function": {"name": str|None, "arguments": str|None}}
@@ -879,7 +879,7 @@ def _set_response_cost_attr(span: "Span", standard_logging_payload) -> None:
     safe_set_attribute(span, "llm.response.cost", cost_value)
 
 
-def _is_passthrough_call_type(call_type: Optional[str]) -> bool:
+def _is_passthrough_call_type(call_type: str | None) -> bool:
     if not call_type:
         return False
     lowered = str(call_type).lower()

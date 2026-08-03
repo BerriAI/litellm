@@ -5,8 +5,6 @@ Why separate file? Make it easy to see how transformation works
 """
 
 from litellm._uuid import uuid
-from typing import List, Optional, Union
-
 from litellm.types.llms.bedrock import (
     BedrockRerankBedrockRerankingConfiguration,
     BedrockRerankConfiguration,
@@ -29,7 +27,7 @@ from litellm.types.rerank import (
 
 
 class BedrockRerankConfig:
-    def _transform_sources(self, documents: List[Union[str, dict]]) -> List[BedrockRerankSource]:
+    def _transform_sources(self, documents: list[str | dict]) -> list[BedrockRerankSource]:
         """
         Transform the sources from RerankRequest format to Bedrock format.
         """
@@ -88,7 +86,7 @@ class BedrockRerankConfig:
         _tokens = RerankTokens(**response.get("usage", {}))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        _results: Optional[List[RerankResponseResult]] = None
+        _results: list[RerankResponseResult] | None = None
 
         bedrock_results = response.get("results")
         if bedrock_results:

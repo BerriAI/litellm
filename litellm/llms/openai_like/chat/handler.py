@@ -5,7 +5,8 @@ For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 """
 
 import json
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 
@@ -24,14 +25,14 @@ from .transformation import OpenAILikeChatConfig
 
 
 async def make_call(
-    client: Optional[AsyncHTTPHandler],
+    client: AsyncHTTPHandler | None,
     api_base: str,
     headers: dict,
     data: str,
     model: str,
     messages: list,
     logging_obj,
-    streaming_decoder: Optional[CustomStreamingDecoder] = None,
+    streaming_decoder: CustomStreamingDecoder | None = None,
     fake_stream: bool = False,
 ):
     if client is None:
@@ -58,16 +59,16 @@ async def make_call(
 
 
 def make_sync_call(
-    client: Optional[HTTPHandler],
+    client: HTTPHandler | None,
     api_base: str,
     headers: dict,
     data: str,
     model: str,
     messages: list,
     logging_obj,
-    streaming_decoder: Optional[CustomStreamingDecoder] = None,
+    streaming_decoder: CustomStreamingDecoder | None = None,
     fake_stream: bool = False,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    timeout: float | httpx.Timeout | None = None,
 ):
     if client is None:
         client = litellm.module_level_client  # Create a new client if none provided
@@ -118,8 +119,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         litellm_params=None,
         logger_fn=None,
         headers={},
-        client: Optional[AsyncHTTPHandler] = None,
-        streaming_decoder: Optional[CustomStreamingDecoder] = None,
+        client: AsyncHTTPHandler | None = None,
+        streaming_decoder: CustomStreamingDecoder | None = None,
         fake_stream: bool = False,
     ) -> CustomStreamWrapper:
         data["stream"] = True
@@ -151,18 +152,18 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         model_response: ModelResponse,
         custom_llm_provider: str,
         print_verbose: Callable,
-        client: Optional[AsyncHTTPHandler],
+        client: AsyncHTTPHandler | None,
         encoding,
         api_key,
         logging_obj,
         stream,
         data: dict,
-        base_model: Optional[str],
+        base_model: str | None,
         optional_params: dict,
         litellm_params=None,
         logger_fn=None,
         headers={},
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
         json_mode: bool = False,
     ) -> ModelResponse:
         if timeout is None:
@@ -212,23 +213,22 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        api_key: Optional[str],
+        api_key: str | None,
         logging_obj,
         optional_params: dict,
         acompletion=None,
         litellm_params: dict = {},
         logger_fn=None,
-        headers: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        custom_endpoint: Optional[bool] = None,
-        streaming_decoder: Optional[
-            CustomStreamingDecoder
-        ] = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
+        headers: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        custom_endpoint: bool | None = None,
+        streaming_decoder: CustomStreamingDecoder
+        | None = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
         fake_stream: bool = False,
     ):
         custom_endpoint = custom_endpoint or optional_params.pop("custom_endpoint", None)
-        base_model: Optional[str] = optional_params.pop("base_model", None)
+        base_model: str | None = optional_params.pop("base_model", None)
         api_base, headers = self._validate_environment(
             api_base=api_base,
             api_key=api_key,

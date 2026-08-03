@@ -2,12 +2,11 @@
 
 import os
 import subprocess
-from typing import List, Optional, Tuple
 
 from litellm._logging import verbose_logger
 
 
-def extract_sql_commands(diff_output: str) -> List[str]:
+def extract_sql_commands(diff_output: str) -> list[str]:
     """
     Extract SQL commands from the Prisma migrate diff output.
     Args:
@@ -44,7 +43,7 @@ def extract_sql_commands(diff_output: str) -> List[str]:
     return sql_commands
 
 
-def check_prisma_schema_diff_helper(db_url: str) -> Tuple[bool, List[str]]:
+def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
     """Checks for differences between current database and Prisma schema.
     Returns:
         A tuple containing:
@@ -89,7 +88,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> Tuple[bool, List[str]]:
         return False, []
 
 
-def check_prisma_schema_diff(db_url: Optional[str] = None) -> None:
+def check_prisma_schema_diff(db_url: str | None = None) -> None:
     """Main function to run the Prisma schema diff check."""
     if db_url is None:
         db_url = os.getenv("DATABASE_URL")
@@ -98,7 +97,5 @@ def check_prisma_schema_diff(db_url: Optional[str] = None) -> None:
     has_diff, message = check_prisma_schema_diff_helper(db_url)
     if has_diff:
         verbose_logger.exception(
-            "🚨🚨🚨 prisma schema out of sync with db. Consider running these sql_commands to sync the two - {}".format(
-                message
-            )
+            f"🚨🚨🚨 prisma schema out of sync with db. Consider running these sql_commands to sync the two - {message}"
         )

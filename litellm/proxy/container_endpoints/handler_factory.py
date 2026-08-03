@@ -7,7 +7,7 @@ FastAPI route handlers for ALL container file endpoints.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -25,14 +25,14 @@ from litellm.proxy.container_endpoints.ownership import (
 )
 
 
-def _load_endpoints_config() -> Dict:
+def _load_endpoints_config() -> dict:
     """Load the endpoints configuration from JSON file."""
     config_path = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
     with open(config_path) as f:
         return json.load(f)
 
 
-def get_all_route_types() -> List[str]:
+def get_all_route_types() -> list[str]:
     """Get all async route types for registration in route_llm_request.py"""
     config = _load_endpoints_config()
     return [endpoint["async_name"] for endpoint in config["endpoints"]]
@@ -52,7 +52,7 @@ def _get_container_provider_config(custom_llm_provider: str):
 
 
 def _create_handler_for_path_params(
-    path_params: List[str],
+    path_params: list[str],
     route_type: str,
     returns_binary: bool = False,
     is_multipart: bool = False,
@@ -194,7 +194,7 @@ async def _process_binary_request(
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "file_id": file_id,
         **(
             await get_container_forwarding_params(
@@ -356,7 +356,7 @@ async def _process_request(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
     route_type: str,
-    path_params: Dict[str, str],
+    path_params: dict[str, str],
 ):
     """Common request processing logic."""
     from litellm.proxy.proxy_server import (
@@ -374,7 +374,7 @@ async def _process_request(
     )
 
     query_params = dict(request.query_params)
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "query_params": query_params,
         **path_params,
     }
