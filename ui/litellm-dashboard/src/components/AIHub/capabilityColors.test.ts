@@ -10,9 +10,7 @@ describe("getCapabilityBadgeColor", () => {
   });
 
   it("uses different stable colors for different known capabilities", () => {
-    expect(getCapabilityBadgeColor("supports_function_calling")).not.toBe(
-      getCapabilityBadgeColor("supports_vision"),
-    );
+    expect(getCapabilityBadgeColor("supports_function_calling")).not.toBe(getCapabilityBadgeColor("supports_vision"));
   });
 
   it("is stable for unknown capability keys (hash-based)", () => {

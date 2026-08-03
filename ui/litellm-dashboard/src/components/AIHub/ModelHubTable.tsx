@@ -681,7 +681,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   }
 
                   return capabilities.map((capability) => (
-                    <Badge key={capability} color={getCapabilityBadgeColor(capability)}>
+                    <Badge
+                      key={capability}
+                      color={getCapabilityBadgeColor(capability)}
+                      data-testid={`model-detail-capability-${capability}`}
+                      data-capability-color={getCapabilityBadgeColor(capability)}
+                    >
                       {formatCapabilityName(capability)}
                     </Badge>
                   ));

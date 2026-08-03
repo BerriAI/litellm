@@ -1,6 +1,8 @@
 import * as networking from "@/components/networking";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { getCapabilityBadgeColor } from "./capabilityColors";
 import ModelHubTable from "./ModelHubTable";
 
 const mockUseUISettings = vi.hoisted(() => vi.fn());
@@ -166,6 +168,48 @@ describe("ModelHubTable", () => {
 
     expect(await screen.findByText("No models yet")).toBeInTheDocument();
     expect(networking.modelHubCall).not.toHaveBeenCalled();
+  });
+
+  it("applies stable capability colors in the model detail modal", async () => {
+    const user = userEvent.setup();
+    const model = {
+      model_group: "gpt-4o",
+      providers: ["openai"],
+      supports_function_calling: true,
+      supports_vision: true,
+      supports_parallel_function_calling: false,
+      is_public_model_group: true,
+    };
+    vi.mocked(networking.modelHubCall).mockResolvedValue({ data: [model] });
+    vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
+    vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(networking.getUiSettings).mockResolvedValue({ values: {} });
+    mockUseUISettings.mockReturnValue({
+      data: { values: {} },
+      isLoading: false,
+    });
+
+    renderWithProviders(
+      <ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole="proxy_admin" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "gpt-4o" }));
+
+    const visionBadge = await screen.findByTestId("model-detail-capability-supports_vision");
+    const functionBadge = screen.getByTestId("model-detail-capability-supports_function_calling");
+    expect(visionBadge).toHaveAttribute("data-capability-color", getCapabilityBadgeColor("supports_vision"));
+    expect(functionBadge).toHaveAttribute(
+      "data-capability-color",
+      getCapabilityBadgeColor("supports_function_calling"),
+    );
+    expect(visionBadge.getAttribute("data-capability-color")).not.toBe(
+      functionBadge.getAttribute("data-capability-color"),
+    );
   });
 
   it("should call getUiConfig before modelHubPublicModelsCall when publicPage is true", async () => {

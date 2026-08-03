@@ -1,5 +1,14 @@
 /** Stable Tremor badge colors for AI Hub capability pills. */
-export const CAPABILITY_BADGE_COLORS = ["blue", "purple", "orange", "green", "rose", "amber", "cyan", "indigo"] as const;
+export const CAPABILITY_BADGE_COLORS = [
+  "blue",
+  "purple",
+  "orange",
+  "green",
+  "rose",
+  "amber",
+  "cyan",
+  "indigo",
+] as const;
 
 export type CapabilityBadgeColor = (typeof CAPABILITY_BADGE_COLORS)[number];
 
