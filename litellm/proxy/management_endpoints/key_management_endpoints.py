@@ -940,7 +940,7 @@ async def _common_key_generation_helper(
         data = apply_enterprise_key_management_params(data, team_table)
     except Exception as e:
         verbose_proxy_logger.debug(
-            f"litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {e!s}"
+            f"litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {e}"
         )
 
     # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
@@ -1732,7 +1732,7 @@ async def generate_key_fn(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {e}")
         raise handle_exception_on_proxy(e)
 
 
@@ -1934,9 +1934,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
                 casted_metadata[k] = v
 
     except Exception as e:
-        verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - {e!s}"
-        )
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - {e}")
 
     non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
     return non_default_values
@@ -2799,10 +2797,10 @@ async def update_key_fn(  # noqa: C901  # single endpoint handling many optional
         return {"key": key, **response["data"]}
         # update based on remaining passed in values
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.update_key_fn(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.update_key_fn(): Exception occured - {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -3368,7 +3366,7 @@ async def delete_key_fn(
 
         return {"deleted_keys": deleted_keys}
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.delete_key_fn(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.delete_key_fn(): Exception occured - {e}")
         raise handle_exception_on_proxy(e)
 
 
@@ -3908,7 +3906,7 @@ async def generate_key_helper_fn(
                     # If it's not valid JSON/YAML, keep as is or set to empty dict
                     key_data["router_settings"] = {}
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise e
@@ -4115,7 +4113,7 @@ async def delete_verification_tokens(
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
         verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server.delete_verification_tokens(): Exception occured - {e!s}"
+            f"litellm.proxy.proxy_server.delete_verification_tokens(): Exception occured - {e}"
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
@@ -4387,7 +4385,7 @@ async def _rotate_master_key(
                     },
                 )
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to re-encrypt credential {cred.credential_name}: {e!s}")
+                verbose_proxy_logger.error(f"Failed to re-encrypt credential {cred.credential_name}: {e}")
                 # Continue with next credential instead of failing entire rotation
                 continue
         verbose_proxy_logger.debug(f"Successfully re-encrypted {len(credentials)} credentials with new master key")
@@ -5451,7 +5449,7 @@ async def list_keys(
         verbose_proxy_logger.exception(f"Error in list_keys: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"error({e!s})"),
+                message=getattr(e, "detail", f"error({e})"),
                 type=ProxyErrorTypes.internal_server_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -5603,7 +5601,7 @@ async def key_aliases(
         verbose_proxy_logger.exception(f"Error in key_aliases: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"error({e!s})"),
+                message=getattr(e, "detail", f"error({e})"),
                 type=ProxyErrorTypes.internal_server_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -6340,7 +6338,7 @@ async def key_health(
 
     except Exception as e:
         raise ProxyException(
-            message=f"Key health check failed: {e!s}",
+            message=f"Key health check failed: {e}",
             type=ProxyErrorTypes.internal_server_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -6425,7 +6423,7 @@ async def test_key_logging(
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,
             status="unhealthy",
-            details=f"Logging test failed: {e!s}",
+            details=f"Logging test failed: {e}",
         )
 
     await asyncio.sleep(2)  # wait for callbacks to run, callbacks use batching so wait for the flush event
@@ -6556,5 +6554,5 @@ def validate_model_max_budget(model_max_budget: dict | None) -> None:
                 BudgetConfig(**_info)
     except Exception as e:
         raise ValueError(
-            f"Invalid model_max_budget: {e!s}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
+            f"Invalid model_max_budget: {e}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
         )

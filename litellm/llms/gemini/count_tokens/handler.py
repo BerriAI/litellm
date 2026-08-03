@@ -155,8 +155,8 @@ class GoogleAIStudioTokenCounter:
                 status_code=e.response.status_code,
             ) from e
         except httpx.RequestError as e:
-            error_msg = f"Request to Google Gen AI Studio failed: {e!s}"
+            error_msg = f"Request to Google Gen AI Studio failed: {e}"
             raise litellm.APIConnectionError(message=error_msg, llm_provider="gemini", model=model) from e
         except Exception as e:
-            error_msg = f"Unexpected error during token counting: {e!s}"
+            error_msg = f"Unexpected error during token counting: {e}"
             raise Exception(error_msg) from e

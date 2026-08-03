@@ -130,7 +130,7 @@ class BedrockFilesHandler(BaseAWSLLM):
             response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
             file_content = response["Body"].read()
         except Exception as e:
-            raise ValueError(f"Failed to download file from S3: {s3_uri}. Error: {e!s}")
+            raise ValueError(f"Failed to download file from S3: {s3_uri}. Error: {e}")
 
         # Create mock HTTP response
         mock_response = httpx.Response(

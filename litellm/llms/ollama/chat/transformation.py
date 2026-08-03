@@ -369,7 +369,7 @@ class OllamaChatConfig(BaseConfig):
                 content=None,
                 tool_calls=[
                     {
-                        "id": f"call_{uuid.uuid4()!s}",
+                        "id": f"call_{uuid.uuid4()}",
                         "function": {
                             "name": function_call.get("name", litellm_params.get("function_name")),
                             "arguments": json.dumps(function_call.get("arguments", function_call)),

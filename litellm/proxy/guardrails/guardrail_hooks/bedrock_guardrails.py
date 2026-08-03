@@ -2266,4 +2266,4 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             raise
         except Exception as e:
             verbose_proxy_logger.error("Bedrock Guardrail: Failed to apply guardrail: %s", str(e))
-            raise Exception(f"Bedrock guardrail failed: {e!s}")
+            raise Exception(f"Bedrock guardrail failed: {e}")

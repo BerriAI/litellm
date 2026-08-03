@@ -13,6 +13,8 @@ export const rolesWithWriteAccess = ["Internal User", "Admin", "proxy_admin"];
 // Per the Admin Viewer principle: read parity with Proxy Admin, no writes,
 // no cost-incurring actions (Playground stays gated by `rolesWithWriteAccess`).
 export const rolesAllowedToViewWriteScopedPages = [...rolesWithWriteAccess, "Admin Viewer", "proxy_admin_viewer"];
+export const viewOnlyRoles = ["Admin Viewer", "Internal Viewer"];
+export const isViewOnlyRole = (role: string): boolean => viewOnlyRoles.includes(role);
 
 // Helper function to check if a role is in all_admin_roles
 export const isAdminRole = (role: string): boolean => {

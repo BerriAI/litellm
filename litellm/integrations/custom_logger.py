@@ -927,7 +927,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.debug(f"Error in handle_callback_failure for {callback_name}: {e!s}")
+            verbose_logger.debug(f"Error in handle_callback_failure for {callback_name}: {e}")
 
     async def _strip_base64_from_messages(
         self,

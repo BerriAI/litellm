@@ -2405,7 +2405,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_response = GenerateContentResponseBody(**raw_response.json())  # type: ignore
         except Exception as e:
             raise VertexAIError(
-                message=f"Error converting to valid response block={e!s}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
+                message=f"Error converting to valid response block={e}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
                 status_code=422,
                 headers=raw_response.headers,
             )
@@ -2512,7 +2512,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         except Exception as e:
             raise VertexAIError(
-                message=f"Error converting to valid response block={e!s}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
+                message=f"Error converting to valid response block={e}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
                 status_code=422,
                 headers=raw_response.headers,
             )

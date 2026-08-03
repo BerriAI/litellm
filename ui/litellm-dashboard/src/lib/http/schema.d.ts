@@ -14092,6 +14092,9 @@ export interface paths {
          * Disable Team Logging
          * @description Disable all logging callbacks for a team
          *
+         *     Callbacks registered through POST /team/{team_id}/callback and the Admin UI are cleared, so
+         *     re-enabling logging means registering them again with their callback_vars
+         *
          *     Parameters:
          *     - team_id (str, required): The unique identifier for the team
          *
@@ -23607,6 +23610,11 @@ export interface components {
              * @default []
              */
             models: string[];
+            /**
+             * Organization Id
+             * @description Default organization for new teams created without an explicit organization
+             */
+            organization_id?: string | null;
             /**
              * Rpm Limit
              * @description Default rpm limit for new automatically created teams
