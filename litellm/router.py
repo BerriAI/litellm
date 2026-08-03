@@ -115,6 +115,7 @@ from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
     filter_team_based_models,
     filter_web_search_deployments,
+    resolve_model_group_alias,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -10331,16 +10332,7 @@ class Router:
         - str, the litellm model name
         - None, if model is not in model group alias
         """
-        if model not in self.model_group_alias:
-            return None
-
-        _item = self.model_group_alias[model]
-        if isinstance(_item, str):
-            model = _item
-        else:
-            model = _item["model"]
-
-        return model
+        return resolve_model_group_alias(self.model_group_alias, model)
 
     def _get_deployment_by_litellm_model(self, model: str) -> list:
         """

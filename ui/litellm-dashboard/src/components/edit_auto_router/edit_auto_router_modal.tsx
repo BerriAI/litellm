@@ -13,6 +13,7 @@ import { hydrateKeywordTierRules, serializeKeywordTierRules } from "../add_model
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
+  DEFAULT_SESSION_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -36,6 +37,7 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_context_window_size",
   "classifier_context_per_turn_chars",
   "classifier_context_include_assistant_turns",
+  "session_affinity",
   "adaptive",
   "adaptive_weights",
   "tier_distance_penalty",
@@ -101,6 +103,7 @@ export const buildUpdatedComplexityRouterConfig = (
       value.classifier_context_include_assistant_turns !== undefined && {
         classifier_context_include_assistant_turns: value.classifier_context_include_assistant_turns,
       }),
+    session_affinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
     ...(customTechnicalKeywords &&
       customTechnicalKeywords.length > 0 && {
         custom_technical_keywords: customTechnicalKeywords,
@@ -218,6 +221,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
               ? parsedConfig.classifier_context_include_assistant_turns
               : undefined,
+          session_affinity:
+            typeof parsedConfig.session_affinity === "boolean"
+              ? parsedConfig.session_affinity
+              : DEFAULT_SESSION_AFFINITY,
           adaptive: parsedConfig.adaptive || false,
           adaptive_weights: parsedConfig.adaptive_weights,
           tier_distance_penalty: parsedConfig.tier_distance_penalty,

@@ -21,6 +21,8 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    TRUSTED_CALLBACK_VARS_FIELD,
+    _request_blocked_callback_params,
     iter_client_callback_metadata_dicts,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -363,6 +365,39 @@ def _strip_client_message_redaction_opt_out(data: dict[str, Any]) -> None:
         )
 
 
+def _strip_client_callback_credentials(
+    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    """Drop callback credentials and destinations supplied by the caller.
+
+    ``_request_blocked_callback_params`` (Datadog + GCS credentials, sites and agent
+    hosts) are already ignored when building ``standard_callback_dynamic_params``.
+    Strip them from the body and every client metadata slot as well, so a caller
+    cannot pair its own ``dd_site``/``dd_agent_host`` with the team's admin-configured
+    ``dd_api_key`` and have the resulting logs shipped to a host it controls.
+
+    ``TRUSTED_CALLBACK_VARS_FIELD`` is proxy-owned; it is cleared here and repopulated
+    from team/key callback settings in ``add_litellm_data_to_request``.
+    """
+    containers = (("body", data), *iter_client_callback_metadata_dicts(data))
+    stripped = tuple(
+        f"{label}.{field}"
+        for label, container in containers
+        for field in _request_blocked_callback_params
+        if field in container
+    )
+    for _, container in containers:
+        for field in _request_blocked_callback_params:
+            container.pop(field, None)
+    data.pop(TRUSTED_CALLBACK_VARS_FIELD, None)
+    if stripped:
+        verbose_proxy_logger.debug(
+            "Stripped client-supplied callback credentials from request: %s. "
+            "Configure these on the team or key callback settings instead.",
+            ", ".join(sorted(stripped)),
+        )
+
+
 def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
     """Drop pricing overrides from the request body and any metadata variant.
 
@@ -531,7 +566,8 @@ def safe_add_api_version_from_query_params(data: dict, request: Request):
 
 
 def convert_key_logging_metadata_to_callback(
-    data: AddTeamCallback, team_callback_settings_obj: TeamCallbackMetadata | None
+    data: AddTeamCallback,
+    team_callback_settings_obj: TeamCallbackMetadata | None,
 ) -> TeamCallbackMetadata:
     if team_callback_settings_obj is None:
         team_callback_settings_obj = TeamCallbackMetadata()
@@ -1595,6 +1631,10 @@ async def add_litellm_data_to_request(
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
 
+    # Same reason as the strips above: runs after the metadata string-to-dict parse
+    # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
+    _strip_client_callback_credentials(data)
+
     if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
         _strip_client_message_redaction_opt_out(data)
 
@@ -1803,6 +1843,9 @@ async def add_litellm_data_to_request(
             # unpack callback_vars in data
             for k, v in callback_settings_obj.callback_vars.items():
                 data[k] = v
+            # Callbacks that must not honour request-supplied credentials read this
+            # proxy-owned field instead of the raw request kwargs.
+            data[TRUSTED_CALLBACK_VARS_FIELD] = callback_settings_obj.callback_vars
 
     # Add disabled callbacks from key metadata
     if user_api_key_dict.metadata and "litellm_disabled_callbacks" in user_api_key_dict.metadata:
