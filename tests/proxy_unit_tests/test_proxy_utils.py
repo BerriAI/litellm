@@ -1785,6 +1785,28 @@ def test_get_temp_budget_increase_non_finite_is_ignored(bad_increase):
     assert _get_temp_budget_increase(token) is None
 
 
+@pytest.mark.parametrize("bad_increase", [-1, -0.01, -100.0])
+def test_get_temp_budget_increase_negative_is_ignored(bad_increase):
+    """A negative `temp_budget_increase` must be treated as no boost. Otherwise a caller
+    with /key/update access could use a field literally named "increase" to instead shrink
+    (or zero out) a key's effective budget window and block all of its requests."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+
+    future_expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": bad_increase,
+            "temp_budget_expiry": future_expiry,
+        },
+    )
+    assert _get_temp_budget_increase(token) is None
+
+
 @pytest.mark.parametrize(
     "metadata",
     [

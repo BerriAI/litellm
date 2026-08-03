@@ -2690,7 +2690,7 @@ def _get_temp_budget_increase(valid_token: UserAPIKeyAuth) -> float | None:
         return None
     if expiry.tzinfo is None:
         expiry = expiry.replace(tzinfo=timezone.utc)
-    if expiry > datetime.now(timezone.utc) and math.isfinite(increase):
+    if expiry > datetime.now(timezone.utc) and math.isfinite(increase) and increase >= 0:
         return increase
     return None
 
