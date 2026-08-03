@@ -18,6 +18,7 @@ from typing import (
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx  # type: ignore
+from openai import AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
 
 import litellm
@@ -57,6 +58,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
+from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -5919,14 +5921,15 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: Mapping[str, Any],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        extra_headers: dict[str, object] | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        extra_headers: Mapping[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
         api_version: str | None = None,
+        use_openai_sdk: bool = False,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/client_secrets to upstream provider.
@@ -5934,6 +5937,44 @@ class BaseLLMHTTPHandler:
         Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
         header auth when available; falls back to the legacy OpenAI-style defaults.
         """
+        if use_openai_sdk:
+            normalized_api_base = api_base.rstrip("/")
+            if not normalized_api_base.endswith("/v1"):
+                normalized_api_base = f"{normalized_api_base}/v1"
+            owns_client = not isinstance(client, AsyncOpenAI)
+            openai_client = (
+                client
+                if isinstance(client, AsyncOpenAI)
+                else AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0)
+            )
+            logging_obj.pre_call(
+                input=request_data,
+                api_key="",
+                additional_args={  # mutable-ok: logging owns a mutable request metadata payload
+                    "complete_input_dict": request_data,
+                    "api_base": normalized_api_base,
+                },
+            )
+            try:
+                raw_response = await openai_client.realtime.client_secrets.with_raw_response.create(
+                    **request_data,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                )
+                response_headers = {
+                    key: value
+                    for key, value in raw_response.headers.items()
+                    if key.lower() not in ("content-encoding", "content-length", "transfer-encoding")
+                }
+                return httpx.Response(
+                    status_code=raw_response.status_code,
+                    headers=response_headers,
+                    content=raw_response.content,
+                    request=httpx.Request("POST", f"{normalized_api_base}/realtime/client_secrets"),
+                )
+            finally:
+                if owns_client:
+                    await openai_client.close()
         return await self._async_realtime_session_post(
             endpoint="client_secrets",
             api_base=api_base,
@@ -5955,10 +5996,10 @@ class BaseLLMHTTPHandler:
         request_data: dict[str, Any],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        extra_headers: dict[str, object] | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        extra_headers: Mapping[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
         """Forward POST /v1/realtime/transcription_sessions to upstream provider."""
@@ -5976,18 +6017,79 @@ class BaseLLMHTTPHandler:
             api_version=api_version,
         )
 
+    async def async_realtime_translation_client_secret_handler(
+        self,
+        api_base: str,
+        api_key: str,
+        request_data: Mapping[str, Any],
+        logging_obj: LiteLLMLoggingObj,
+        timeout: float | httpx.Timeout,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
+        model: str | None = None,
+        extra_headers: Mapping[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
+        api_version: str | None = None,
+        use_openai_sdk: bool = False,
+    ) -> httpx.Response:
+        if use_openai_sdk:
+            normalized_api_base = api_base.rstrip("/")
+            if not normalized_api_base.endswith("/v1"):
+                normalized_api_base = f"{normalized_api_base}/v1"
+            owns_client = not isinstance(client, AsyncOpenAI)
+            openai_client = (
+                client
+                if isinstance(client, AsyncOpenAI)
+                else AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0)
+            )
+            logging_obj.pre_call(
+                input=request_data,
+                api_key="",
+                additional_args={  # mutable-ok: logging owns a mutable request metadata payload
+                    "complete_input_dict": request_data,
+                    "api_base": normalized_api_base,
+                },
+            )
+            try:
+                configured_client = openai_client.with_options(
+                    timeout=timeout,
+                    set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
+                        key: str(value) for key, value in (extra_headers or {}).items()
+                    },
+                )
+                return await configured_client.post(
+                    "/realtime/translations/client_secrets",
+                    cast_to=httpx.Response,
+                    body=request_data,
+                )
+            finally:
+                if owns_client:
+                    await openai_client.close()
+        return await self._async_realtime_session_post(
+            endpoint="translation_client_secrets",
+            api_base=api_base,
+            api_key=api_key,
+            request_data=request_data,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            provider_config=provider_config,
+            model=model,
+            extra_headers=extra_headers,
+            client=client,
+            api_version=api_version,
+        )
+
     async def _async_realtime_session_post(
         self,
-        endpoint: Literal["client_secrets", "transcription_sessions"],
+        endpoint: Literal["client_secrets", "transcription_sessions", "translation_client_secrets"],
         api_base: str,
         api_key: str,
         request_data: dict[str, Any],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        extra_headers: dict[str, object] | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        extra_headers: Mapping[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
         """
@@ -6009,13 +6111,18 @@ class BaseLLMHTTPHandler:
                 url = provider_config.get_transcription_session_url(
                     api_base=api_base, model=model or "", api_version=api_version
                 )
+            elif endpoint == "translation_client_secrets":
+                url = provider_config.get_translation_client_secret_url(
+                    api_base=api_base, model=model or "", api_version=api_version
+                )
             else:
                 url = provider_config.get_complete_url(api_base=api_base, model=model or "", api_version=api_version)
             headers: dict[str, Any] = provider_config.validate_environment(
                 headers={}, model=model or "", api_key=api_key
             )
         else:
-            url = f"{api_base.rstrip('/')}/v1/realtime/{endpoint}"
+            endpoint_path = "translations/client_secrets" if endpoint == "translation_client_secrets" else endpoint
+            url = f"{api_base.rstrip('/')}/v1/realtime/{endpoint_path}"
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -6049,6 +6156,73 @@ class BaseLLMHTTPHandler:
                 )
             raise
 
+    async def _async_realtime_calls_sdk(
+        self,
+        api_base: str,
+        openai_ephemeral_key: str,
+        sdp_text: str,
+        session_data: Mapping[str, object],
+        logging_obj: LiteLLMLoggingObj,
+        timeout: float | httpx.Timeout,
+        extra_headers: Mapping[str, object] | None,
+        client: object | None,
+        translation: bool,
+    ) -> httpx.Response:
+        normalized_api_base = api_base.rstrip("/")
+        if not normalized_api_base.endswith("/v1"):
+            normalized_api_base = f"{normalized_api_base}/v1"
+        owns_client = not isinstance(client, AsyncOpenAI)
+        openai_client = (
+            client
+            if isinstance(client, AsyncOpenAI)
+            else AsyncOpenAI(api_key=openai_ephemeral_key, base_url=normalized_api_base, max_retries=0)
+        )
+        logging_obj.pre_call(
+            input="realtime_sdp_offer",
+            api_key="",
+            additional_args={  # mutable-ok: logging owns a mutable request metadata payload
+                "api_base": normalized_api_base,
+                "session": session_data,
+            },
+        )
+        try:
+            if translation:
+                configured_client = openai_client.with_options(
+                    timeout=timeout,
+                    set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
+                        "Content-Type": "application/sdp",
+                        **{  # mutable-ok: caller headers are normalized into the SDK header mapping
+                            key: str(value) for key, value in (extra_headers or {}).items()
+                        },
+                    },
+                )
+                return await configured_client.post(
+                    "/realtime/translations/calls",
+                    cast_to=httpx.Response,
+                    content=sdp_text.encode("utf-8"),
+                )
+            raw_response = await openai_client.realtime.calls.with_raw_response.create(
+                sdp=sdp_text,
+                session=session_data,
+                extra_headers=extra_headers,
+                timeout=timeout,
+            )
+            return httpx.Response(
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+                content=raw_response.content,
+                request=httpx.Request("POST", f"{normalized_api_base}/realtime/calls"),
+            )
+        finally:
+            if owns_client:
+                await openai_client.close()
+
+    @staticmethod
+    def _get_realtime_async_http_client(client: object | None) -> AsyncHTTPHandler:
+        if isinstance(client, AsyncHTTPHandler):
+            return client
+        return get_async_httpx_client(llm_provider=litellm.LlmProviders.OPENAI)
+
     async def async_realtime_calls_handler(
         self,
         api_base: str,
@@ -6056,12 +6230,14 @@ class BaseLLMHTTPHandler:
         sdp_body: bytes,
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        session_config: dict[str, object] | None = None,
-        extra_headers: dict[str, object] | None = None,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        session_config: Mapping[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | AsyncOpenAI | None = None,
         api_version: str | None = None,
+        translation: bool = False,
+        use_openai_sdk: bool = False,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/calls (SDP exchange) to upstream provider.
@@ -6073,18 +6249,41 @@ class BaseLLMHTTPHandler:
           - sdp: the SDP offer (text)
           - session: JSON string with {"type": "realtime", "model": "...", ...}
         """
-        if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.OPENAI,
+        session_data = {**(session_config or {})}  # mutable-ok: model and session type are resolved locally
+        if "type" not in session_data:
+            session_data["type"] = "translation" if translation else "realtime"
+        if "model" not in session_data and model:
+            session_data["model"] = model
+
+        sdp_text = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
+
+        if use_openai_sdk:
+            return await self._async_realtime_calls_sdk(
+                api_base=api_base,
+                openai_ephemeral_key=openai_ephemeral_key,
+                sdp_text=sdp_text,
+                session_data=session_data,
+                logging_obj=logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                client=client,
+                translation=translation,
             )
-        else:
-            async_httpx_client = client
+
+        async_httpx_client = self._get_realtime_async_http_client(client)
 
         if provider_config is not None:
-            url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
+            url = (
+                provider_config.get_translation_calls_url(api_base=api_base, model=model or "", api_version=api_version)
+                if translation
+                else provider_config.get_realtime_calls_url(
+                    api_base=api_base, model=model or "", api_version=api_version
+                )
+            )
             headers: dict[str, Any] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
-            url = f"{api_base.rstrip('/')}/v1/realtime/calls"
+            path = "translations/calls" if translation else "calls"
+            url = f"{api_base.rstrip('/')}/v1/realtime/{path}"
             headers = {
                 "Authorization": f"Bearer {openai_ephemeral_key}",
             }
@@ -6092,14 +6291,8 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
-        # Build multipart form data: sdp + session JSON
-        session_data = session_config or {}
-        if "type" not in session_data:
-            session_data["type"] = "realtime"
-        if "model" not in session_data and model:
-            session_data["model"] = model
-
-        sdp_text = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
+        if translation:
+            headers["Content-Type"] = "application/sdp"
 
         files = {
             "sdp": (None, sdp_text, "text/plain"),
@@ -6117,12 +6310,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            return await async_httpx_client.post(
-                url=url,
-                headers=headers,
-                files=files,
-                timeout=timeout,
-            )
+            if translation:
+                return await async_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    content=sdp_text,
+                    timeout=timeout,
+                )
+            return await async_httpx_client.post(url=url, headers=headers, files=files, timeout=timeout)
         except Exception as e:
             if provider_config is not None:
                 raise self._handle_error(

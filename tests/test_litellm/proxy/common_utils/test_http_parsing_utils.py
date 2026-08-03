@@ -7,10 +7,9 @@ import orjson
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
+from starlette.datastructures import FormData
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 
 import litellm
@@ -356,9 +355,7 @@ async def test_circular_reference_handling():
 
     # Second parse using the same request - will use the modified cached value
     result2 = await _read_request_body(mock_request)
-    assert (
-        "proxy_server_request" not in result2
-    )  # This will pass, showing the cache pollution
+    assert "proxy_server_request" not in result2  # This will pass, showing the cache pollution
 
 
 @pytest.mark.asyncio
@@ -469,9 +466,7 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 
     # Cap the repair at ~100 bytes so the test stays fast and independent of the default.
-    monkeypatch.setattr(
-        http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024)
-    )
+    monkeypatch.setattr(http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024))
 
     small_body = b'{"model":"gpt-4o","x":"\\ud83d"}'
     assert len(small_body) <= 100
@@ -479,9 +474,7 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     assert repaired["model"] == "gpt-4o"
 
     padding = "a" * 200
-    large_body = (
-        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":"\\ud83d"}'
-    )
+    large_body = b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":"\\ud83d"}'
     assert len(large_body) > 100
     with pytest.raises(ProxyException) as exc_info:
         await _read_request_body(_make_json_request(large_body))
@@ -490,9 +483,7 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
 
     # Disabling the cap (0) restores repair for the same large body, proving the cap
     # — not the malformed content — is what short-circuits the repair.
-    monkeypatch.setattr(
-        http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 0
-    )
+    monkeypatch.setattr(http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 0)
     repaired_large = await _read_request_body(_make_json_request(large_body))
     assert repaired_large["model"] == "gpt-4o"
 
@@ -507,18 +498,24 @@ async def test_get_form_data():
     mock_request = MagicMock()
 
     # Create mock form data with array notation for timestamp_granularities
-    mock_form_data = {
-        "file": "file_object",  # In a real request this would be an UploadFile
-        "model": "gpt-4o-transcribe",
-        "include[]": "logprobs",  # Array notation
-        "language": "en",
-        "prompt": "Transcribe this audio file",
-        "response_format": "json",
-        "stream": "false",
-        "temperature": "0.2",
-        "timestamp_granularities[]": "word",  # First array item
-        "timestamp_granularities[]": "segment",  # Second array item (would overwrite in dict, but handled by the function)
-    }
+    mock_form_data = FormData(
+        [
+            ("file", "file_object"),
+            ("model", "gpt-4o-transcribe"),
+            ("include[]", "logprobs"),
+            ("language", "en"),
+            ("prompt", "Transcribe this audio file"),
+            ("response_format", "json"),
+            ("stream", "false"),
+            ("temperature", "0.2"),
+            ("timestamp_granularities[]", "word"),
+            ("timestamp_granularities[]", "segment"),
+            ("keywords[]", "LiteLLM"),
+            ("keywords[]", "Realtime API"),
+            ("languages[]", "en"),
+            ("languages[]", "fr"),
+        ]
+    )
 
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=mock_form_data)
@@ -542,9 +539,9 @@ async def test_get_form_data():
 
     assert "timestamp_granularities" in result
     assert isinstance(result["timestamp_granularities"], list)
-    # Note: In a real MultiDict, both values would be present
-    # But in our mock dictionary the second value overwrites the first
-    assert "segment" in result["timestamp_granularities"]
+    assert result["timestamp_granularities"] == ["word", "segment"]
+    assert result["keywords"] == ["LiteLLM", "Realtime API"]
+    assert result["languages"] == ["en", "fr"]
 
 
 def test_get_tags_from_request_body_with_metadata_tags():
@@ -722,9 +719,7 @@ def test_populate_request_with_path_params_does_not_overwrite_existing_values():
 
     # Verify existing values were NOT overwritten
     assert result["model"] == "gpt-4"  # Should keep original, not "gpt-3.5-turbo"
-    assert (
-        result["organization_id"] == "org-existing"
-    )  # Should keep original, not "org-query-param"
+    assert result["organization_id"] == "org-existing"  # Should keep original, not "org-query-param"
     # Verify other data is preserved
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
 
@@ -892,9 +887,7 @@ class TestGetTagsFromRequestBodyStringCoerce:
         )
 
         # Must not raise; must yield no metadata tags but keep root tags
-        tags = get_tags_from_request_body(
-            {"metadata": "not-json", "tags": ["root-only"]}
-        )
+        tags = get_tags_from_request_body({"metadata": "not-json", "tags": ["root-only"]})
         assert tags == ["root-only"]
 
     def test_dict_metadata_still_works(self):
@@ -951,9 +944,7 @@ class TestReadRequestBodyNonCanonicalContentType:
             "multiform/anything",
         ],
     )
-    async def test_json_body_with_formlike_content_type_parses_as_json(
-        self, content_type
-    ):
+    async def test_json_body_with_formlike_content_type_parses_as_json(self, content_type):
         payload = {"user_config": {"model_list": []}, "model": "x"}
 
         mock_request = MagicMock()

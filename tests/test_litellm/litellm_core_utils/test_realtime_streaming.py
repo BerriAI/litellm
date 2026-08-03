@@ -17,10 +17,6 @@ from litellm.litellm_core_utils.realtime_streaming import (
 )
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import (
-    OpenAIRealtimeStreamResponseBaseObject,
-    OpenAIRealtimeStreamSessionEvents,
-)
 
 
 def _make_transcript_event(text: str, item_id: str = "item_x") -> bytes:
@@ -604,6 +600,42 @@ async def test_client_ack_messages_keeps_beta_session_shape_for_beta_backend():
     assert "audio" not in session
 
 
+@pytest.mark.asyncio
+async def test_translation_session_update_omits_session_type():
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": []}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "translation",
+                        "audio": {"output": {"language": "fr"}},
+                    },
+                }
+            ),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        translation_session=True,
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend = json.loads(backend_ws.send.call_args_list[0].args[0])
+    assert "type" not in sent_to_backend["session"]
+    assert sent_to_backend["session"]["audio"]["output"]["language"] == "fr"
+
+
 def test_translate_event_to_beta_renames_delta_types():
     ev = RealTimeStreaming._translate_event_to_beta(
         {"type": "response.output_audio.delta", "delta": "abc", "event_id": "e1"}
@@ -809,8 +841,6 @@ async def test_transcription_captured_in_backend_to_client():
     Test that conversation.item.input_audio_transcription.completed events
     from the backend are captured as user input during the WebSocket session.
     """
-    import litellm
-
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
 
@@ -1097,8 +1127,6 @@ def test_capture_transcription_usage_deduplicates_when_already_stored():
     When the event is already in messages (logged via store_message), it must not
     be appended a second time by _capture_transcription_usage.
     """
-    import litellm
-
     streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
     # Add the event type to the default logged list so _should_store_message returns True.
     streaming.logged_real_time_event_types = ["conversation.item.input_audio_transcription.completed"]
@@ -2804,6 +2832,69 @@ def test_store_message_skips_pydantic_for_unlogged_audio_delta():
     assert streaming.messages == []
 
 
+def test_translation_audio_duration_is_finalized_once():
+    import base64
+
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    payload = base64.b64encode(bytes(48000)).decode()
+    streaming._capture_translation_output_audio({"type": "session.output_audio.delta", "delta": payload})
+    streaming._finalize_translation_usage()
+    streaming._finalize_translation_usage()
+
+    closed_events = [event for event in streaming.messages if event.get("type") == "session.closed"]
+    assert len(closed_events) == 1
+    assert closed_events[0]["usage"] == {"type": "duration", "output_seconds": 1.0}
+
+
+def test_translation_audio_duration_uses_session_output_format():
+    import base64
+
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._capture_translation_output_audio(
+        {
+            "type": "session.created",
+            "session": {"audio": {"output": {"format": {"type": "audio/pcmu", "rate": 8000}}}},
+        }
+    )
+    streaming._capture_translation_output_audio(
+        {
+            "type": "session.output_audio.delta",
+            "delta": base64.b64encode(bytes(8000)).decode(),
+        }
+    )
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages[-1]["usage"] == {"type": "duration", "output_seconds": 1.0}
+
+
+def test_translation_does_not_duplicate_provider_duration_usage():
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._translation_output_audio_bytes = 48000
+    streaming.messages.append({"type": "session.closed", "usage": {"type": "duration", "output_seconds": 0.5}})
+    streaming._finalize_translation_usage()
+
+    closed_events = [event for event in streaming.messages if event.get("type") == "session.closed"]
+    assert len(closed_events) == 1
+
+
 @pytest.mark.asyncio
 async def test_audio_delta_frame_parsed_at_most_once():
     client_ws = _beta_client_ws()
@@ -2966,7 +3057,9 @@ async def test_log_messages_routes_async_logging_through_bounded_worker():
 
         mock_worker.ensure_initialized_and_enqueue.assert_called_once()
         enqueued = mock_worker.ensure_initialized_and_enqueue.call_args
-        assert (enqueued.args or tuple(enqueued.kwargs.values()))[0] is logging_obj.dispatch_success_handlers.return_value
+        assert (enqueued.args or tuple(enqueued.kwargs.values()))[
+            0
+        ] is logging_obj.dispatch_success_handlers.return_value
         logging_obj.dispatch_success_handlers.assert_called_once_with(streaming.messages, prefer_async_handlers=True)
         logging_obj.success_handler.assert_not_called()
         # the bare create_task path must no longer be used for success logging

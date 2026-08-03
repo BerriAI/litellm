@@ -86,6 +86,7 @@ from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_toke
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.llms.openai import (
+    CachedTokensDetails,
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
     OpenAIModerationResponse,
@@ -900,6 +901,21 @@ def _get_usage_object(
         return None
 
 
+def _get_transcription_usage_duration(completion_response: object) -> float | None:
+    usage_object = (
+        completion_response.get("usage")
+        if isinstance(completion_response, dict)
+        else getattr(completion_response, "usage", None)
+    )
+    usage_type = usage_object.get("type") if isinstance(usage_object, dict) else getattr(usage_object, "type", None)
+    if usage_type != "duration":
+        return None
+    seconds = usage_object.get("seconds") if isinstance(usage_object, dict) else getattr(usage_object, "seconds", None)
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds < 0:
+        return None
+    return float(seconds)
+
+
 def _is_known_usage_objects(usage_obj):
     """Returns True if the usage obj is a known Usage type"""
     return (
@@ -1384,9 +1400,14 @@ def completion_cost(
                     # the response attribute (for verbose_json responses that
                     # naturally include duration from the provider).
                     _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    audio_transcription_file_duration = _hidden.get(
-                        "audio_transcription_duration",
-                        getattr(completion_response, "duration", 0.0),
+                    provider_duration = _get_transcription_usage_duration(completion_response)
+                    audio_transcription_file_duration = (
+                        provider_duration
+                        if provider_duration is not None
+                        else _hidden.get(
+                            "audio_transcription_duration",
+                            getattr(completion_response, "duration", 0.0),
+                        )
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
@@ -2170,11 +2191,27 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
-def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]:
-    field_names = list(type(prompt_tokens_details).model_fields)
-    if getattr(prompt_tokens_details, "cache_write_tokens", None) is None:
-        return field_names
-    return [attr for attr in field_names if attr != "cache_creation_tokens"]
+def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> tuple[str, ...]:
+    field_names = tuple(type(prompt_tokens_details).model_fields)
+    excluded_fields = (
+        frozenset({"cached_tokens_details"})
+        if getattr(prompt_tokens_details, "cache_write_tokens", None) is None
+        else frozenset({"cached_tokens_details", "cache_creation_tokens"})
+    )
+    return tuple(attr for attr in field_names if attr not in excluded_fields)
+
+
+def _combine_cached_token_details(
+    current: CachedTokensDetails | None,
+    new: CachedTokensDetails | None,
+) -> CachedTokensDetails | None:
+    if new is None:
+        return current
+    return CachedTokensDetails(
+        text_tokens=(getattr(current, "text_tokens", 0) or 0) + (new.text_tokens or 0),
+        audio_tokens=(getattr(current, "audio_tokens", 0) or 0) + (new.audio_tokens or 0),
+        image_tokens=(getattr(current, "image_tokens", 0) or 0) + (new.image_tokens or 0),
+    )
 
 
 class BaseTokenUsageProcessor:
@@ -2225,6 +2262,11 @@ class BaseTokenUsageProcessor:
                                 attr,
                                 current_val + new_val,
                             )
+
+                combined.prompt_tokens_details.cached_tokens_details = _combine_cached_token_details(
+                    current=combined.prompt_tokens_details.cached_tokens_details,
+                    new=usage.prompt_tokens_details.cached_tokens_details,
+                )
 
             # Handle nested completion_tokens_details
             if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
@@ -2289,6 +2331,7 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE = "conversation.item.input_audio_transcription.completed"
+_TRANSLATION_CLOSED_EVENT_TYPE = "session.closed"
 
 
 def handle_realtime_stream_cost_calculation(
@@ -2342,7 +2385,21 @@ def handle_realtime_stream_cost_calculation(
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
     )
-    total_cost = input_cost_per_token + output_cost_per_token + transcription_cost
+    translation_cost = handle_realtime_translation_cost_calculation(
+        results=results,
+        custom_llm_provider=custom_llm_provider,
+        litellm_model_name=litellm_model_name,
+    )
+    total_cost = input_cost_per_token + output_cost_per_token + transcription_cost + translation_cost
+
+    additional_costs = {  # mutable-ok: logging stores a mutable per-request cost breakdown
+        key: value
+        for key, value in (
+            ("transcription_cost", transcription_cost),
+            ("translation_cost", translation_cost),
+        )
+        if value > 0
+    }
 
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
@@ -2350,10 +2407,37 @@ def handle_realtime_stream_cost_calculation(
         completion_tokens_cost_usd_dollar=output_cost_per_token,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=total_cost,
-        additional_costs={"transcription_cost": transcription_cost} if transcription_cost > 0 else None,
+        additional_costs=additional_costs or None,
     )
 
     return total_cost
+
+
+def handle_realtime_translation_cost_calculation(
+    results: OpenAIRealtimeStreamList,
+    custom_llm_provider: str,
+    litellm_model_name: str,
+) -> float:
+    output_seconds = 0.0
+    for result in results:
+        if result.get("type") != _TRANSLATION_CLOSED_EVENT_TYPE:
+            continue
+        usage = result.get("usage")
+        if isinstance(usage, dict) and isinstance(usage.get("output_seconds"), (int, float)):
+            output_seconds += float(usage["output_seconds"])
+    if output_seconds <= 0:
+        return 0.0
+    try:
+        model_info = litellm.get_model_info(
+            model=litellm_model_name,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except Exception:
+        return 0.0
+    output_cost_per_second = model_info.get("output_cost_per_second")
+    if not isinstance(output_cost_per_second, (int, float)):
+        return 0.0
+    return output_seconds * output_cost_per_second
 
 
 def handle_realtime_transcription_cost_calculation(

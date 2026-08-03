@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).parents[2]
 GENERATOR_PATH = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 SCHEMA_PATH = REPO_ROOT / "model_prices_and_context_window.schema.json"
+BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 
 def build_validator(schema: dict) -> jsonschema.Draft202012Validator:
@@ -97,3 +98,68 @@ def test_schema_accepts_minimal_and_unknown_optional_fields(committed_schema: di
     validator = build_validator(committed_schema)
     assert validator.is_valid({"some-model": {"litellm_provider": "openai"}})
     assert validator.is_valid({"some-model": {"litellm_provider": "openai", "brand_new_field": {"nested": True}}})
+
+
+def test_latest_realtime_model_family_metadata(prices: dict):
+    canonical_models = {
+        "gpt-realtime-2",
+        "gpt-realtime-2.1",
+        "gpt-realtime-2.1-mini",
+        "gpt-realtime-translate",
+        "gpt-realtime-whisper",
+        "gpt-transcribe",
+        "gpt-live-transcribe",
+    }
+    assert canonical_models <= prices.keys()
+    assert {f"azure/{model}" for model in canonical_models} <= prices.keys()
+    assert prices["gpt-realtime-2"]["max_input_tokens"] == 128000
+    assert prices["gpt-realtime-2"]["max_output_tokens"] == 32000
+    assert prices["gpt-realtime-2.1-mini"]["max_output_tokens"] == 32000
+    assert prices["gpt-realtime-translate"]["output_cost_per_second"] == pytest.approx(0.034 / 60)
+    assert prices["azure/gpt-realtime-translate"]["max_input_tokens"] == 128000
+    assert prices["azure/gpt-realtime-translate"]["max_output_tokens"] == 4096
+    assert prices["azure/gpt-realtime-whisper"]["max_input_tokens"] == 128000
+    assert prices["azure/gpt-realtime-whisper"]["max_output_tokens"] == 4096
+    assert prices["gpt-transcribe"]["input_cost_per_second"] == pytest.approx(0.27 / 3600)
+    assert prices["gpt-live-transcribe"]["input_cost_per_second"] == pytest.approx(1.02 / 3600)
+
+
+def test_latest_azure_realtime_dated_variants(prices: dict):
+    assert {
+        "azure/gpt-realtime-2-2026-05-06",
+        "azure/gpt-realtime-2.1-2026-07-07",
+        "azure/gpt-realtime-2.1-mini-2026-07-07",
+        "azure/gpt-realtime-translate-2026-05-06",
+        "azure/gpt-realtime-translate-2026-05-07",
+        "azure/gpt-realtime-whisper-2026-05-06",
+        "azure/gpt-realtime-whisper-2026-05-07",
+    } <= prices.keys()
+
+
+@pytest.mark.parametrize(
+    ("model", "image_rate", "cached_image_rate"),
+    [
+        ("gpt-realtime-2", 5e-06, 5e-07),
+        ("gpt-realtime-2.1", 5e-06, 5e-07),
+        ("gpt-realtime-2.1-mini", 8e-07, 8e-08),
+        ("azure/gpt-realtime-2", 5e-06, 5e-07),
+        ("azure/gpt-realtime-2-2026-05-06", 5e-06, 5e-07),
+        ("azure/gpt-realtime-2.1", 5e-06, 5e-07),
+        ("azure/gpt-realtime-2.1-2026-07-07", 5e-06, 5e-07),
+        ("azure/gpt-realtime-2.1-mini", 8e-07, 8e-08),
+        ("azure/gpt-realtime-2.1-mini-2026-07-07", 8e-07, 8e-08),
+    ],
+)
+def test_latest_realtime_model_family_image_token_pricing(
+    prices: dict,
+    model: str,
+    image_rate: float,
+    cached_image_rate: float,
+):
+    assert prices[model]["input_cost_per_image_token"] == image_rate
+    assert prices[model]["cache_read_input_image_token_cost"] == cached_image_rate
+    assert "input_cost_per_image" not in prices[model]
+
+
+def test_model_prices_backup_is_synchronized():
+    assert PRICES_PATH.read_bytes() == BACKUP_PRICES_PATH.read_bytes()

@@ -23757,6 +23757,26 @@
           ],
           "title": "RealtimeClientSecretResponse",
           "type": "object"
+        },
+        "RealtimeTranscriptionSessionResponse": {
+          "additionalProperties": true,
+          "description": "Response from POST /v1/realtime/transcription_sessions.\n\n`client_secret.value` contains the encrypted token instead of the raw\nephemeral key. Unknown fields pass through unchanged.",
+          "properties": {
+            "client_secret": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Secret"
+            }
+          },
+          "title": "RealtimeTranscriptionSessionResponse",
+          "type": "object"
         }
       }
     },
@@ -23783,6 +23803,78 @@
       "/openai/v1/realtime/client_secrets": {
         "post": {
           "operationId": "create_realtime_client_secret_openai_v1_realtime_client_secrets_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/realtime/transcription_sessions": {
+        "post": {
+          "description": "Create an ephemeral Realtime transcription session\n(POST /v1/realtime/transcription_sessions) for the WebRTC/WebSocket flow.\n\nMirrors the client_secrets route but targets the transcription_sessions\nendpoint and encrypts the ephemeral key returned under `client_secret.value`.",
+          "operationId": "create_realtime_transcription_session_openai_v1_realtime_transcription_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeTranscriptionSessionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Transcription Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/realtime/translations/calls": {
+        "post": {
+          "operationId": "proxy_realtime_calls_openai_v1_realtime_translations_calls_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/realtime/translations/client_secrets": {
+        "post": {
+          "operationId": "create_realtime_client_secret_openai_v1_realtime_translations_client_secrets_post",
           "responses": {
             "200": {
               "content": {
@@ -23851,6 +23943,78 @@
           ]
         }
       },
+      "/realtime/transcription_sessions": {
+        "post": {
+          "description": "Create an ephemeral Realtime transcription session\n(POST /v1/realtime/transcription_sessions) for the WebRTC/WebSocket flow.\n\nMirrors the client_secrets route but targets the transcription_sessions\nendpoint and encrypts the ephemeral key returned under `client_secret.value`.",
+          "operationId": "create_realtime_transcription_session_realtime_transcription_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeTranscriptionSessionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Transcription Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/realtime/translations/calls": {
+        "post": {
+          "operationId": "proxy_realtime_calls_realtime_translations_calls_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/realtime/translations/client_secrets": {
+        "post": {
+          "operationId": "create_realtime_client_secret_realtime_translations_client_secrets_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
       "/v1/realtime/calls": {
         "post": {
           "operationId": "proxy_realtime_calls_v1_realtime_calls_post",
@@ -23873,6 +24037,78 @@
       "/v1/realtime/client_secrets": {
         "post": {
           "operationId": "create_realtime_client_secret_v1_realtime_client_secrets_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/realtime/transcription_sessions": {
+        "post": {
+          "description": "Create an ephemeral Realtime transcription session\n(POST /v1/realtime/transcription_sessions) for the WebRTC/WebSocket flow.\n\nMirrors the client_secrets route but targets the transcription_sessions\nendpoint and encrypts the ephemeral key returned under `client_secret.value`.",
+          "operationId": "create_realtime_transcription_session_v1_realtime_transcription_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeTranscriptionSessionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Transcription Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/realtime/translations/calls": {
+        "post": {
+          "operationId": "proxy_realtime_calls_v1_realtime_translations_calls_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/realtime/translations/client_secrets": {
+        "post": {
+          "operationId": "create_realtime_client_secret_v1_realtime_translations_client_secrets_post",
           "responses": {
             "200": {
               "content": {

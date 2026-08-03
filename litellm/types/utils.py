@@ -60,6 +60,7 @@ from .llms.base import HiddenParams
 from .llms.openai import (
     AllMessageValues,
     Batch,
+    CachedTokensDetails,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,
@@ -207,6 +208,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_read_input_token_cost: Optional[float]
+    cache_read_input_audio_token_cost: Optional[float]
+    cache_read_input_image_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
@@ -343,6 +346,11 @@ class CallTypes(str, Enum):
     asearch = "asearch"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
+    acreate_realtime_client_secret = "acreate_realtime_client_secret"
+    arealtime_calls = "arealtime_calls"
+    acreate_realtime_transcription_session = "acreate_realtime_transcription_session"
+    acreate_realtime_translation_client_secret = "acreate_realtime_translation_client_secret"
+    arealtime_translation_calls = "arealtime_translation_calls"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
@@ -560,10 +568,18 @@ CallTypesLiteral = Literal[
     "acreate_realtime_client_secret",
     "arealtime_calls",
     "acreate_realtime_transcription_session",
+    "acreate_realtime_translation_client_secret",
+    "arealtime_translation_calls",
 ]
 
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES = {
+    "/v1/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/openai/v1/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/v1/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
+    "/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
+    "/openai/v1/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
     # Chat Completions
     "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
     "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
@@ -873,9 +889,12 @@ API_ROUTE_TO_CALL_TYPES = {
     "/responses/{response_id}/input_items": [CallTypes.alist_input_items],
     "/v1/responses/{response_id}/input_items": [CallTypes.alist_input_items],
     # Realtime API
-    "/realtime": [CallTypes.arealtime],
-    "/v1/realtime": [CallTypes.arealtime],
-    "/openai/v1/realtime": [CallTypes.arealtime],
+    "/realtime": (CallTypes.arealtime,),
+    "/v1/realtime": (CallTypes.arealtime,),
+    "/openai/v1/realtime": (CallTypes.arealtime,),
+    "/realtime/translations": (CallTypes.arealtime,),
+    "/v1/realtime/translations": (CallTypes.arealtime,),
+    "/openai/v1/realtime/translations": (CallTypes.arealtime,),
     # Provider-specific routes
     "/anthropic/v1/messages": [CallTypes.anthropic_messages],
     # Google GenAI routes
@@ -1521,6 +1540,8 @@ class PromptTokensDetailsWrapper(
 
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
+
+    cached_tokens_details: Optional[CachedTokensDetails] = None
 
     video_tokens: Optional[int] = None
     """Video tokens sent to the model."""
@@ -2442,18 +2463,23 @@ class TranscriptionUsageTokensObject(BaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    input_token_details: TranscriptionUsageInputTokenDetailsObject
+    input_token_details: Optional[TranscriptionUsageInputTokenDetailsObject] = None
+
+
+class TranscriptionDetectedLanguage(BaseModel):
+    code: str
 
 
 class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
     usage: Optional[Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject]] = None
+    languages: Optional[Sequence[TranscriptionDetectedLanguage]] = None
 
     _hidden_params: dict = {}
     _response_headers: Optional[dict] = None
 
-    def __init__(self, text=None):
-        super().__init__(text=text)  # type: ignore
+    def __init__(self, text=None, usage=None, languages=None, **kwargs):
+        super().__init__(text=text, usage=usage, languages=languages, **kwargs)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -3187,6 +3213,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float] = None
     cache_read_input_token_cost_above_272k_tokens_flex: Optional[float] = None
     cache_read_input_audio_token_cost: Optional[float] = None
+    cache_read_input_image_token_cost: Optional[float] = None
     input_cost_per_character: Optional[float] = None
     input_cost_per_character_above_128k_tokens: Optional[float] = None
     input_cost_per_audio_token: Optional[float] = None
@@ -3803,11 +3830,11 @@ class RawRequestTypedDict(TypedDict, total=False):
     error: Optional[str]
 
 
-from litellm.models.credentials import CredentialBase as CredentialBase  # noqa: E402
-from litellm.models.credentials import CredentialItem as CredentialItem  # noqa: E402
 from litellm.models.credentials import (  # noqa: E402
     CreateCredentialItem as CreateCredentialItem,
 )
+from litellm.models.credentials import CredentialBase as CredentialBase  # noqa: E402
+from litellm.models.credentials import CredentialItem as CredentialItem  # noqa: E402
 
 
 class ExtractedFileData(TypedDict):
