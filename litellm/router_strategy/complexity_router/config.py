@@ -5,6 +5,7 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
+from collections.abc import Sequence
 from enum import Enum
 from typing import Literal
 
@@ -239,6 +240,13 @@ DEFAULT_TIER_MODELS: dict[str, str] = {
 }
 
 
+def _models_named_by(configured: str | Sequence[str] | None) -> tuple[str, ...]:
+    """The models a tier entry names. Absent, an empty pool and an empty pin all mean none."""
+    if isinstance(configured, str):
+        return (configured,) if configured else ()
+    return tuple(configured or ())
+
+
 class ClassifierLLMConfig(BaseModel):
     """Configuration for the LLM-based complexity classifier."""
 
@@ -469,6 +477,26 @@ class ComplexityRouterConfig(BaseModel):
         if value is None:
             return None
         return [stripped for keyword in value if (stripped := keyword.strip())]
+
+    @model_validator(mode="after")
+    def _require_a_model_for_every_tier(self) -> "ComplexityRouterConfig":
+        """Every tier must name at least one model of its own.
+
+        A tier left empty does not route nowhere; it routes somewhere else, to whichever
+        model the fallback chain reaches. That is a silent substitution of the model an
+        operator asked for, discoverable only by reading a spend log, so it is rejected at
+        config load instead. Omitting `tiers` entirely still works and fills in all four.
+        """
+        missing = tuple(tier.value for tier in TIER_SEVERITY_ORDER if not _models_named_by(self.tiers.get(tier.value)))
+        if not missing:
+            return self
+        raise ValueError(
+            f"complexity_router_config.tiers must name at least one model for every tier; "
+            f"no model for {', '.join(missing)}. A tier with no models of its own has its "
+            f"traffic served by another tier's model, so configure all of "
+            f"{', '.join(tier.value for tier in TIER_SEVERITY_ORDER)}, or omit `tiers` to take "
+            f"the defaults"
+        )
 
     @model_validator(mode="after")
     def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":
