@@ -3479,3 +3479,60 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+def test_streaming_alias_response_model_loses_to_exactly_priced_candidate(monkeypatch):
+    """A router model-group alias (e.g. ``anthropic/claude-sonnet-4-6-defaultcaching``)
+    is stamped onto streaming chunks by the proxy, so the reassembled response
+    carries the alias as its model name. The alias has no cost-map entry but
+    prefix-matches a Claude capability generalization rule, whose synthesized
+    entry prices at $0. The cost ladder must prefer the exactly priced
+    deployment model over the rule-derived alias instead of billing $0.
+    Regression test for streaming requests on Claude-named alias groups being
+    logged with zero spend since the fallback-generalizations feature.
+    """
+    from litellm.litellm_core_utils.fallback_generalizations import (
+        match_capability_generalizations,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    alias = "anthropic/claude-sonnet-4-6-defaultcaching"
+    assert alias not in litellm.model_cost
+    assert match_capability_generalizations("claude-sonnet-4-6-defaultcaching") is not None
+
+    usage = Usage(prompt_tokens=100, completion_tokens=10)
+    alias_cost = completion_cost(
+        completion_response=ModelResponse(usage=usage, model=alias),
+        model="anthropic/claude-sonnet-4-6",
+        custom_llm_provider="anthropic",
+    )
+    real_cost = completion_cost(
+        completion_response=ModelResponse(usage=usage, model="claude-sonnet-4-6"),
+        model="anthropic/claude-sonnet-4-6",
+        custom_llm_provider="anthropic",
+    )
+
+    assert real_cost > 0
+    assert alias_cost == real_cost
+
+
+def test_capability_rule_still_prices_model_with_no_exactly_priced_candidate(monkeypatch):
+    """When every ladder candidate is unmapped and only a capability rule
+    matches, the rule-derived entry must still resolve (at its synthesized $0)
+    rather than raising, preserving the fallback-generalizations behavior for
+    genuinely unknown models.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    alias = "anthropic/claude-sonnet-4-6-defaultcaching"
+    usage = Usage(prompt_tokens=100, completion_tokens=10)
+    cost = completion_cost(
+        completion_response=ModelResponse(usage=usage, model="claude-sonnet-4-6-defaultcaching"),
+        model=alias,
+        custom_llm_provider="anthropic",
+    )
+
+    assert cost == 0.0
