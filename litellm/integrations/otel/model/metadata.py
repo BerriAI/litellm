@@ -40,7 +40,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
-
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.model.semconv import resolve_operation
@@ -197,7 +196,7 @@ class LLMCallEvent:
     otel_destinations: tuple[OtelDestination, ...]
     # The ``standard_callback_dynamic_params`` routing the call to a per-tenant
     # tracer (its own exporter/endpoint), or ``None`` when the call isn't scoped.
-    dynamic_params: "StandardCallbackDynamicParams | None"
+    dynamic_params: StandardCallbackDynamicParams | None
     # True for synthetic proxy-gate logs (auth / rate-limit rejections): they fire
     # the ``pre_call`` hook but never made an upstream call, so they get no span.
     is_no_upstream_call: bool

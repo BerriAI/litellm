@@ -11,7 +11,7 @@ credential values only.
 """
 
 import os
-from typing import Callable, Mapping
+from collections.abc import Callable, Mapping
 
 from litellm.constants import LITELLM_LOGGING_CREDENTIAL_NAME_KEY
 from litellm.integrations.langfuse.langfuse_otel import (

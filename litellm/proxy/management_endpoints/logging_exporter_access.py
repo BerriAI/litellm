@@ -84,9 +84,12 @@ def resolved_logging_exporter_names(
     identity AND it actually builds. Names only; endpoints, headers, and the access map
     itself stay proxy-admin information.
 
-    The resolver also dedupes destinations that resolve to the same endpoint, headers and
-    resource attributes, so this drops the later duplicates too; listing both names would
-    advertise a second exporter that no trace ever reaches.
+    Every granting destination is named, including several that resolve to one export
+    target. This answers "which destinations route my traces", not "how many distinct
+    exports happen": the resolver collapses a shared target so the spans are sent once,
+    but each credential named here genuinely grants this identity. Picking one winner
+    per target would have to agree with the resolver's choice, and disagreeing named a
+    credential whose backend the request path never activated.
 
     Gated on ``is_otel_v2_enabled`` for parity with the resolver, which returns nothing
     when the flag is off: disclosing a destination the request path would never fire
@@ -95,28 +98,13 @@ def resolved_logging_exporter_names(
     if not is_otel_v2_enabled():
         return ()
     team_ids, org_ids = identity_scope(team_id, org_id)
-    granted = tuple(
-        (credential.credential_name, _export_target(built[1]))
+    return tuple(
+        credential.credential_name
         for credential in litellm.credential_list
         if (info := parse_credential_info(credential.credential_info)) is not None
         and info.credential_type == "logging"
         and access_grants(info.access, team_ids, org_ids)
-        if (built := destination_for_credential(credential)) is not None
-    )
-    targets = tuple(target for _name, target in granted)
-    return tuple(name for index, (name, target) in enumerate(granted) if target not in targets[:index])
-
-
-def _export_target(destination: "OtelDestination") -> tuple[object, ...]:
-    """What two destinations must share to be the same export target.
-
-    Two names for one target would advertise a second exporter that no trace ever reaches,
-    so the disclosure keeps only the first credential that resolves to each of these.
-    """
-    return (
-        destination.endpoint,
-        tuple(sorted(destination.headers.items())),
-        tuple(sorted(destination.resource_attributes.items())),
+        if destination_for_credential(credential) is not None
     )
 
 

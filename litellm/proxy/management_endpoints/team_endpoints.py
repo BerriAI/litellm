@@ -88,9 +88,6 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.management_endpoints.logging_exporter_access import (
-    resolved_logging_exporter_names,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -100,6 +97,9 @@ from litellm.proxy.management_endpoints.common_utils import (
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
+)
+from litellm.proxy.management_endpoints.logging_exporter_access import (
+    resolved_logging_exporter_names,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,

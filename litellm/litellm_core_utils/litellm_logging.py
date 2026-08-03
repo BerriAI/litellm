@@ -4180,7 +4180,7 @@ def _has_admin_owned_logging_destination(callback_name: str) -> bool:
     return False
 
 
-def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Optional[Any]:
+def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Any | None:
     """Build (or reuse) a single ``OpenTelemetryV2`` instance configured via the
     preset for ``callback_name`` when V2 owns this backend.
 

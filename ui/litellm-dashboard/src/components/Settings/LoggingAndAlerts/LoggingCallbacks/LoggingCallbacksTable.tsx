@@ -11,6 +11,7 @@ import {
   CallbackRow,
   callbackRowMode,
   getLoggingCallbacksTableColumns,
+  isDestination,
 } from "./LoggingCallbacksTableColumns";
 import { AlertingObject } from "./types";
 
@@ -71,7 +72,9 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       <DataTable
         data={callbacks as CallbackRow[]}
         columns={columns}
-        getRowId={(callback, index) => `${callback.name || index}-${callbackRowMode(callback)}`}
+        getRowId={(callback, index) =>
+          `${isDestination(callback) ? "destination" : "callback"}:${callback.name || index}-${callbackRowMode(callback)}`
+        }
         isLoading={isLoading}
         loadingMessage="Loading callbacks…"
         noDataMessage={<EmptyState />}

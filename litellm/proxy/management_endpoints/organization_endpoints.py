@@ -36,12 +36,12 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     update_budget,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.proxy.management_endpoints.logging_exporter_access import (
-    resolved_logging_exporter_names,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _user_has_admin_view,
+)
+from litellm.proxy.management_endpoints.logging_exporter_access import (
+    resolved_logging_exporter_names,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,

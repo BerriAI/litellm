@@ -202,6 +202,32 @@ describe("LoggingCallbacksTable", () => {
     expect(row).not.toBeNull();
     expect(within(row as HTMLElement).getByText("—")).toBeInTheDocument();
   });
+
+  it("gives a destination and a config callback of the same name distinct row ids", () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    });
+
+    render(
+      <LoggingCallbacksTable
+        callbacks={[
+          { name: "arize", type: "success", variables: baseVars },
+          {
+            name: "arize",
+            variables: baseVars,
+            credentialName: "arize",
+            access: { global: true },
+            resolvedScope: { global: true, teams: [], orgs: [] },
+          },
+        ]}
+        availableCallbacks={{}}
+      />,
+    );
+
+    expect(errors.filter((e) => /same key/i.test(e))).toHaveLength(0);
+    spy.mockRestore();
+  });
 });
 
 describe("read-only admin actions", () => {

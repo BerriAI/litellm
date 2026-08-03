@@ -280,10 +280,13 @@ def test_resolved_names_excludes_unbuildable(monkeypatch):
     assert resolved_logging_exporter_names("t1", None) == ("buildable-generic",)
 
 
-def test_resolved_names_drop_duplicates_of_the_same_target(monkeypatch):
-    """Regression: the resolver dedupes destinations resolving to the same endpoint,
-    headers and resource attributes, so disclosure must too. Listing both names told a
-    team it had two exporters when only one would ever receive a trace."""
+def test_resolved_names_keep_every_grant_sharing_one_target(monkeypatch):
+    """Regression: two credentials resolving to one export target are both named.
+
+    Disclosure once kept the first credential per target while the resolver's dict
+    comprehension kept the last, so /team/info named a credential whose backend the
+    request path never activated. Both grant the team, so both are disclosed and there
+    is no winner to disagree about; the resolver still collapses the shared target."""
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     same = "http://collector.example/shared/v1/traces"
     monkeypatch.setattr(
@@ -295,4 +298,32 @@ def test_resolved_names_drop_duplicates_of_the_same_target(monkeypatch):
             _cred("distinct", access={"teams": ["t1"]}),
         ],
     )
-    assert resolved_logging_exporter_names("t1", None) == ("dup-one", "distinct")
+    assert resolved_logging_exporter_names("t1", None) == ("dup-one", "dup-two", "distinct")
+
+
+@pytest.mark.asyncio
+async def test_disclosure_agrees_with_the_resolver_on_a_shared_target(monkeypatch):
+    """Regression: the disclosed names and the resolver's selection are derived from the
+    same grants, so no credential is disclosed that the resolver dropped entirely.
+
+    Pins the two sides together: the resolver collapses the duplicate target to a single
+    export, and every name it kept a destination for is disclosed."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    same = "http://collector.example/shared/v1/traces"
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            _cred("dup-one", access={"global": True}, endpoint=same),
+            _cred("dup-two", access={"global": True}, endpoint=same),
+        ],
+    )
+
+    destinations, _backends = await _resolve_logging_exporters(UserAPIKeyAuth(api_key="k"))
+
+    assert len(destinations) == 1
+    assert resolved_logging_exporter_names(None, None) == ("dup-one", "dup-two")

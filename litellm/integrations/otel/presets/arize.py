@@ -12,7 +12,6 @@ from litellm.integrations.otel.model.config import (
 from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
 
-
 ARIZE_PUBLIC_OTLP_ENDPOINT = "https://otlp.arize.com/v1"
 
 

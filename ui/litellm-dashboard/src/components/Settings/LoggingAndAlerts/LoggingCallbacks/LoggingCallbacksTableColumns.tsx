@@ -31,7 +31,7 @@ export type AvailableCallbacks = Record<string, AvailableCallbackMeta>;
 
 export const callbackRowMode = (record: CallbackRow): string => record.type || record.mode || "success";
 
-const isDestination = (record: AlertingObject): boolean => record.credentialName != null;
+export const isDestination = (record: AlertingObject): boolean => record.credentialName != null;
 
 const CALLBACK_MODE_LABELS: Record<string, string> = {
   success: "Success",
