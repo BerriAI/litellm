@@ -48,6 +48,9 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.get("reasoning_effort")
+        if isinstance(reasoning_effort, dict):
+            reasoning_effort = reasoning_effort.get("effort")
+            optional_params["reasoning_effort"] = reasoning_effort
 
         if reasoning_effort == "none":
             optional_params.pop("reasoning_effort", None)

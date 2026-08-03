@@ -199,3 +199,39 @@ def test_responses_bridge_inherits_deepseek_effort_mapping(reasoning_effort, exp
         assert "reasoning_effort" not in result
     else:
         assert "thinking" not in result
+
+
+@pytest.mark.parametrize(
+    ("reasoning_effort", "expected"),
+    [
+        ("none", {"thinking": {"type": "disabled"}}),
+        ("max", {"reasoning_effort": "max"}),
+    ],
+)
+def test_responses_bridge_extracts_effort_from_reasoning_with_summary(reasoning_effort, expected):
+    reasoning = {"effort": reasoning_effort, "summary": "detailed"}
+    responses_request = cast(
+        ResponsesAPIOptionalRequestParams,
+        {"reasoning": reasoning},
+    )
+    chat_request = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="deepseek-v4-flash",
+        input="Solve 1 + 1.",
+        responses_api_request=responses_request,
+        custom_llm_provider="deepseek",
+    )
+
+    assert chat_request["reasoning_effort"] == reasoning
+
+    result = DeepSeekChatConfig().map_openai_params(
+        non_default_params=chat_request,
+        optional_params={},
+        model="deepseek-v4-flash",
+        drop_params=False,
+    )
+
+    assert {key: result[key] for key in expected} == expected
+    if reasoning_effort == "none":
+        assert "reasoning_effort" not in result
+    else:
+        assert "thinking" not in result
