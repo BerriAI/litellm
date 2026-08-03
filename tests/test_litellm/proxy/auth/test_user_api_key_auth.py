@@ -3726,6 +3726,17 @@ async def test_centralized_common_checks_http_exception_without_team_id():
             setattr(_proxy_server_mod, k, v)
 
 
+def test_team_obj_from_token_preserves_model_max_budget():
+    """The DB-fallback team object must carry model_max_budget: dropping it made
+    team model caps silently unenforced (and untracked) for the whole window a
+    team fetch kept failing (Veria finding)."""
+    from litellm.proxy.auth.user_api_key_auth import _team_obj_from_token
+
+    budget = {"gpt-4": {"budget_limit": 5.0, "time_period": "1d"}}
+    token = UserAPIKeyAuth(api_key="sk-test", team_id="team-1", team_model_max_budget=budget)
+    assert _team_obj_from_token(token).model_max_budget == budget
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_team_404_does_not_zero_other_contexts():
     """Per-fetch isolation: an HTTPException(404) from get_team_object

@@ -386,7 +386,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             self._get_model_without_custom_llm_provider(model), None
         )
 
-    def _get_model_without_custom_llm_provider(self, model: str) -> str:
+    @staticmethod
+    def _get_model_without_custom_llm_provider(model: str) -> str:
         if "/" in model:
             return model.split("/")[-1]
         return model

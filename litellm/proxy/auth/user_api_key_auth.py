@@ -2072,6 +2072,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     return LiteLLM_TeamTableCachedObj(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
+        model_max_budget=valid_token.team_model_max_budget,
         soft_budget=valid_token.team_soft_budget,
         spend=valid_token.team_spend,
         tpm_limit=valid_token.team_tpm_limit,

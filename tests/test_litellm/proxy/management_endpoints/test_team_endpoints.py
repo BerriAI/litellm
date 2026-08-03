@@ -10742,3 +10742,49 @@ class TestTeamModelMaxBudgetUpdateAuthority:
             user_api_key_dict=self._team_admin(),
             existing_model_max_budget=self._existing(),
         )
+
+
+class TestValidateTeamModelMaxBudget:
+    """_validate_team_model_max_budget gates /team/new and /team/update: budget
+    shapes must parse and no two entries may collapse to one model after the
+    provider prefix is stripped, else spend splits across counters and the team
+    can consume up to every duplicate's cap (Greptile finding)."""
+
+    def _validate(self, model_max_budget):
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _validate_team_model_max_budget,
+        )
+
+        _validate_team_model_max_budget(model_max_budget)
+
+    def test_normalized_duplicate_entries_rejected(self):
+        from litellm.proxy._types import ProxyException
+
+        with pytest.raises(ProxyException) as exc_info:
+            self._validate(
+                {
+                    "openai/gpt-4": {"budget_limit": 5.0, "time_period": "1d"},
+                    "gpt-4": {"budget_limit": 50.0, "time_period": "1d"},
+                }
+            )
+        assert exc_info.value.code == "400"
+        assert "openai/gpt-4" in exc_info.value.message
+        assert "gpt-4" in exc_info.value.message
+
+    def test_distinct_models_accepted(self):
+        self._validate(
+            {
+                "openai/gpt-4": {"budget_limit": 5.0, "time_period": "1d"},
+                "claude-3": {"budget_limit": 50.0, "time_period": "1d"},
+            }
+        )
+
+    def test_none_accepted(self):
+        self._validate(None)
+
+    def test_invalid_shape_still_rejected(self):
+        from litellm.proxy._types import ProxyException
+
+        with pytest.raises(ProxyException) as exc_info:
+            self._validate({"gpt-4": {"budget_limit": "not-a-number", "time_period": "1d"}})
+        assert exc_info.value.code == "400"

@@ -1077,6 +1077,59 @@ def _check_team_model_max_budget_update_authority(
             )
 
 
+def _validate_team_model_max_budget(
+    model_max_budget: Mapping[str, Mapping[str, str | float]] | None,
+) -> None:
+    """
+    Shared /team/new + /team/update validation: budget shapes must parse, and no
+    two entries may refer to the same model once the provider prefix is stripped,
+    since the entry name is the canonical spend-counter key and duplicates would
+    split one model's spend across counters.
+    """
+    if model_max_budget is None:
+        return
+
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        validate_model_max_budget,
+    )
+
+    try:
+        validate_model_max_budget(model_max_budget)
+    except ValueError as e:
+        raise ProxyException(
+            message=str(e),
+            type=ProxyErrorTypes.bad_request_error,
+            param="model_max_budget",
+            code="400",
+        )
+
+    normalized_names = tuple(
+        _PROXY_VirtualKeyModelMaxBudgetLimiter._get_model_without_custom_llm_provider(entry_name)
+        for entry_name in model_max_budget
+    )
+    colliding_entries = tuple(
+        sorted(
+            entry_name
+            for entry_name, normalized_name in zip(model_max_budget, normalized_names)
+            if normalized_names.count(normalized_name) > 1
+        )
+    )
+    if colliding_entries:
+        raise ProxyException(
+            message=(
+                f"model_max_budget entries {colliding_entries} refer to the same model "
+                "after the provider prefix is stripped; keep one entry per model so spend "
+                "accrues to a single counter"
+            ),
+            type=ProxyErrorTypes.bad_request_error,
+            param="model_max_budget",
+            code="400",
+        )
+
+
 def _should_auto_add_team_creator(
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
@@ -1233,20 +1286,7 @@ async def new_team(
                         },
                     )
 
-        if data.model_max_budget is not None:
-            from litellm.proxy.management_endpoints.key_management_endpoints import (
-                validate_model_max_budget,
-            )
-
-            try:
-                validate_model_max_budget(data.model_max_budget)
-            except ValueError as e:
-                raise ProxyException(
-                    message=str(e),
-                    type=ProxyErrorTypes.bad_request_error,
-                    param="model_max_budget",
-                    code="400",
-                )
+        _validate_team_model_max_budget(data.model_max_budget)
 
         # Check if license is over limit
         total_teams = await _team_db(prisma_client).count()
@@ -2021,20 +2061,7 @@ async def update_team(
             existing_model_max_budget=existing_team_row.model_max_budget,
         )
 
-        if data.model_max_budget is not None:
-            from litellm.proxy.management_endpoints.key_management_endpoints import (
-                validate_model_max_budget,
-            )
-
-            try:
-                validate_model_max_budget(data.model_max_budget)
-            except ValueError as e:
-                raise ProxyException(
-                    message=str(e),
-                    type=ProxyErrorTypes.bad_request_error,
-                    param="model_max_budget",
-                    code="400",
-                )
+        _validate_team_model_max_budget(data.model_max_budget)
 
         updated_kv = data.json(exclude_unset=True)
 
