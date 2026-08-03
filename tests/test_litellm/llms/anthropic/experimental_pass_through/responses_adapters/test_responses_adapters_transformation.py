@@ -823,11 +823,20 @@ def _make_mock_response(
     model: str = "gpt-4o",
     input_tokens: int = 100,
     output_tokens: int = 50,
+    cache_read_input_tokens: int | None = None,
+    cached_tokens: int | None = None,
 ) -> MagicMock:
     """Build a minimal mock ResponsesAPIResponse."""
     usage = MagicMock()
     usage.input_tokens = input_tokens
     usage.output_tokens = output_tokens
+    usage.cache_read_input_tokens = cache_read_input_tokens
+    if cached_tokens is None:
+        usage.input_tokens_details = None
+    else:
+        details = MagicMock()
+        details.cached_tokens = cached_tokens
+        usage.input_tokens_details = details
 
     resp = MagicMock()
     resp.id = response_id
@@ -960,6 +969,35 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["input_tokens"] == 200
         assert result["usage"]["output_tokens"] == 75
+        assert result["usage"].get("cache_read_input_tokens", 0) == 0
+
+    def test_cache_read_from_input_tokens_details_cached_tokens(self):
+        """OpenAI-style input_tokens_details.cached_tokens maps to cache_read_input_tokens."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            cached_tokens=1664,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 1664
+
+    def test_cache_read_prefers_direct_cache_read_input_tokens(self):
+        """Direct Anthropic-style cache_read_input_tokens wins over details.cached_tokens."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            cache_read_input_tokens=900,
+            cached_tokens=1664,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 900
+
+    def test_cache_read_from_direct_field_when_details_absent(self):
+        """Direct cache_read_input_tokens is used when input_tokens_details is missing."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            cache_read_input_tokens=512,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 512
 
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""

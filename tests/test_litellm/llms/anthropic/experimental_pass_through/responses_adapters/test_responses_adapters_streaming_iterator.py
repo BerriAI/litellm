@@ -130,3 +130,44 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestProcessEventCacheReadUsage:
+    """response.completed usage must map OpenAI cached_tokens onto Anthropic
+    cache_read_input_tokens, preferring a direct Anthropic-style field when set.
+    """
+
+    def test_cache_read_from_input_tokens_details_cached_tokens(self):
+        usage = type(
+            "Usage",
+            (),
+            {
+                "input_tokens": 1846,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "input_tokens_details": type("Details", (), {"cached_tokens": 1664})(),
+            },
+        )()
+        response = type("Response", (), {"status": "completed", "usage": usage, "output": []})()
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        deltas = [c for c in chunks if c["type"] == "message_delta"]
+        assert len(deltas) == 1
+        assert deltas[0]["usage"]["cache_read_input_tokens"] == 1664
+
+    def test_cache_read_prefers_direct_cache_read_input_tokens(self):
+        usage = type(
+            "Usage",
+            (),
+            {
+                "input_tokens": 1846,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 900,
+                "cache_creation_input_tokens": 0,
+                "input_tokens_details": type("Details", (), {"cached_tokens": 1664})(),
+            },
+        )()
+        response = type("Response", (), {"status": "completed", "usage": usage, "output": []})()
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        deltas = [c for c in chunks if c["type"] == "message_delta"]
+        assert deltas[0]["usage"]["cache_read_input_tokens"] == 900

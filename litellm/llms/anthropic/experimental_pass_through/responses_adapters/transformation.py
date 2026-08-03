@@ -468,8 +468,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         input_tokens = int(getattr(raw_usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(raw_usage, "output_tokens", 0) or 0)
 
-        cache_read_input_tokens = 0
-        if raw_usage and raw_usage.input_tokens_details:
+        # Prefer direct Anthropic-style cache fields if present, then fall back
+        # to OpenAI-style input_tokens_details.cached_tokens (same order as the
+        # streaming iterator).
+        cache_read_input_tokens = int(
+            getattr(raw_usage, "cache_read_input_tokens", 0) or 0
+        )
+        if not cache_read_input_tokens and raw_usage and raw_usage.input_tokens_details:
             cache_read_input_tokens = int(
                 raw_usage.input_tokens_details.cached_tokens or 0
             )
