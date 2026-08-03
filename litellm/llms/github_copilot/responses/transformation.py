@@ -53,13 +53,10 @@ def github_copilot_supports_responses_api(model: str) -> bool:
     register_model, which also clears the cache used here).
     """
     try:
-        info = _cached_get_model_info_helper(
-            model=model, custom_llm_provider="github_copilot"
-        )
+        info = _cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
     except Exception as e:
         verbose_logger.debug(
-            "github_copilot_supports_responses_api: get_model_info failed "
-            "for %s: %s",
+            "github_copilot_supports_responses_api: get_model_info failed for %s: %s",
             model,
             e,
         )
@@ -75,9 +72,7 @@ def github_copilot_supports_responses_api(model: str) -> bool:
     # model_cost entry via the resolved key.
     key = info.get("key")
     raw_info = litellm.model_cost.get(key) if isinstance(key, str) else None
-    endpoints = (
-        raw_info.get("supported_endpoints") if isinstance(raw_info, dict) else None
-    )
+    endpoints = raw_info.get("supported_endpoints") if isinstance(raw_info, dict) else None
     return isinstance(endpoints, list) and "/v1/responses" in endpoints
 
 
@@ -228,20 +223,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if input_param is not None:
                 initiator = self._get_initiator(input_param)
                 merged_headers["X-Initiator"] = initiator
-                verbose_logger.debug(
-                    f"GitHub Copilot Responses API: Set X-Initiator={initiator}"
-                )
+                verbose_logger.debug(f"GitHub Copilot Responses API: Set X-Initiator={initiator}")
 
                 # Add vision header if input contains images
                 if self._has_vision_input(input_param):
                     merged_headers["copilot-vision-request"] = "true"
-                    verbose_logger.debug(
-                        "GitHub Copilot Responses API: Enabled vision request"
-                    )
+                    verbose_logger.debug("GitHub Copilot Responses API: Enabled vision request")
 
-            verbose_logger.debug(
-                f"GitHub Copilot Responses API: Successfully configured headers for model {model}"
-            )
+            verbose_logger.debug(f"GitHub Copilot Responses API: Successfully configured headers for model {model}")
 
             return merged_headers
 
@@ -385,9 +374,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return self._contains_vision_content(input_param)
 
-    def _contains_vision_content(
-        self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
-    ) -> bool:
+    def _contains_vision_content(self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> bool:
         """
         Recursively check if a value contains vision content.
 
@@ -404,12 +391,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Check arrays
         if isinstance(value, list):
-            return any(
-                self._contains_vision_content(
-                    item, depth=depth + 1, max_depth=max_depth
-                )
-                for item in value
-            )
+            return any(self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value)
 
         # Only check dict/object types
         if not isinstance(value, dict):
@@ -423,10 +405,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Check content field recursively
         if "content" in value and isinstance(value["content"], list):
             return any(
-                self._contains_vision_content(
-                    item, depth=depth + 1, max_depth=max_depth
-                )
-                for item in value["content"]
+                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value["content"]
             )
 
         return False

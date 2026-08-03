@@ -8,6 +8,10 @@ from litellm.proxy._types import (
 )
 from litellm.secret_managers.main import str_to_bool
 
+# Bounds the __cause__/__context__ walk in is_database_service_unavailable_error_in_chain.
+# Real exception chains are a few links deep; the cap also makes the walk cycle-safe.
+_MAX_EXCEPTION_CHAIN_DEPTH = 20
+
 
 class PrismaDBExceptionHandler:
     """
@@ -65,6 +69,29 @@ class PrismaDBExceptionHandler:
         if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
             return True
         return False
+
+    @staticmethod
+    def is_prisma_data_error(e: Exception) -> bool:
+        """True iff ``e`` is a base prisma ``DataError``: the database processed
+        the statement and refused the data itself (e.g. ``invalid byte sequence
+        for encoding "UTF8": 0x00``), as opposed to a connectivity failure.
+
+        Matched by exact type, not ``isinstance``: the specific data-layer
+        subclasses (``UniqueViolationError``, ``TableNotFoundError``,
+        ``MissingRequiredValueError`` ...) all derive from ``DataError`` but
+        carry their own semantics, and a systemic one like a missing table must
+        not be mistaken for a single poison row and bisected away. A raw
+        Postgres execution error with no prisma P-code surfaces as the base
+        ``DataError``.
+
+        prisma also wraps the P1001 "can't reach database server" outage as a
+        base ``DataError``, so a caller that must not treat an outage as a
+        per-row data rejection has to additionally consult
+        ``is_database_service_unavailable_error`` before acting on a True here.
+        """
+        import prisma
+
+        return type(e) is prisma.errors.DataError
 
     @staticmethod
     def is_database_transport_error(e: Exception) -> bool:
@@ -196,6 +223,32 @@ class PrismaDBExceptionHandler:
         )
 
     @staticmethod
+    def is_database_service_unavailable_error_in_chain(e: BaseException) -> bool:
+        """Like ``is_database_service_unavailable_error`` but also walks the
+        ``__cause__`` / ``__context__`` chain.
+
+        ``is_database_service_unavailable_error`` classifies a single exception
+        by type, which a caller that catches a raw DB failure and re-raises a
+        domain exception of a different type defeats. ``get_user_object`` in
+        ``litellm/proxy/auth/auth_checks.py`` is the concrete case: it wraps
+        every DB error, a genuine outage included, in a bare ``ValueError``
+        whose original error survives only as ``__context__``. A type check on
+        the ``ValueError`` misses the outage, so the caller would mistake an
+        infrastructure fault for an auth failure. Walking the chain recovers the
+        real signal, which is the PEP 3134 way to inspect a wrapped cause.
+
+        The walk is depth-bounded, which also makes it cycle-safe.
+        """
+        current: BaseException | None = e
+        for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
+            if not isinstance(current, Exception):
+                return False
+            if PrismaDBExceptionHandler.is_database_service_unavailable_error(current):
+                return True
+            current = current.__cause__ or current.__context__
+        return False
+
+    @staticmethod
     def handle_db_exception(e: Exception):
         """
         Primary handler for `allow_requests_on_db_unavailable` flag. Decides whether to raise a DB Exception or not based on the flag.
@@ -305,9 +358,7 @@ async def call_with_db_reconnect_retry(
             (
                 lock_timeout_seconds
                 if lock_timeout_seconds is not None
-                else getattr(
-                    prisma_client, "_db_auth_reconnect_lock_timeout_seconds", None
-                )
+                else getattr(prisma_client, "_db_auth_reconnect_lock_timeout_seconds", None)
             ),
             _DEFAULT_RECONNECT_LOCK_TIMEOUT_SECONDS,
         )
@@ -332,8 +383,7 @@ async def call_with_db_reconnect_retry(
             )
         except Exception as reconnect_exc:
             verbose_proxy_logger.warning(
-                "DB reconnect attempt raised; preserving original transport error. "
-                "reason=%s reconnect_error=%s",
+                "DB reconnect attempt raised; preserving original transport error. reason=%s reconnect_error=%s",
                 reason,
                 reconnect_exc,
             )

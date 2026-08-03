@@ -46,9 +46,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         """
         from litellm.secret_managers.main import get_secret_str
 
-        complete_url: str = (
-            api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        complete_url: str = api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
 
         complete_url = complete_url.rstrip("/")
 
@@ -65,9 +63,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         complete_url = f"{complete_url}/{endpoint}"
         return complete_url
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Stable Diffusion models.
         """
@@ -272,8 +268,6 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
             if "timings" in response_data:
                 model_response._hidden_params["timings"] = response_data["timings"]
             if "has_nsfw_concepts" in response_data:
-                model_response._hidden_params["has_nsfw_concepts"] = response_data[
-                    "has_nsfw_concepts"
-                ]
+                model_response._hidden_params["has_nsfw_concepts"] = response_data["has_nsfw_concepts"]
 
         return model_response

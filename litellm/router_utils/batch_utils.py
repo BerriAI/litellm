@@ -8,9 +8,7 @@ from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 
 
 class InMemoryFile(io.BytesIO):
-    def __init__(
-        self, content: bytes, name: str, content_type: str = "application/jsonl"
-    ):
+    def __init__(self, content: bytes, name: str, content_type: str = "application/jsonl"):
         super().__init__(content)
         self.name = name
         self.content_type = content_type
@@ -55,9 +53,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> List[dict]:
             json_object = json.loads(buffer.strip())
             json_objects.append(json_object)
         except json.JSONDecodeError as e:
-            verbose_logger.error(
-                f"error parsing final buffer: {buffer[:100]}..., error: {e}"
-            )
+            verbose_logger.error(f"error parsing final buffer: {buffer[:100]}..., error: {e}")
             raise e
 
     return json_objects
@@ -82,43 +78,71 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         if isinstance(file_content, PathLike):
             return file_content
 
-        # Decode the bytes to a string and split into lines
-        # If file_content is a file-like object, read the bytes
-        if hasattr(file_content, "read"):
-            file_content_bytes = file_content.read()  # type: ignore
-        elif isinstance(file_content, tuple):
-            file_content_bytes = file_content[1]
-        else:
-            file_content_bytes = file_content
-
-        # Decode the bytes to a string and split into lines
-        if isinstance(file_content_bytes, bytes):
-            file_content_str = file_content_bytes.decode("utf-8")
-        elif isinstance(file_content_bytes, str):
-            file_content_str = file_content_bytes
+        # Iterate the source line-by-line WITHOUT reading it all into memory. A
+        # spooled upload handle (managed batches stream from it) is read straight
+        # off its backing; bytes/str are wrapped so they iterate line-by-line.
+        source = file_content[1] if isinstance(file_content, tuple) else file_content
+        if hasattr(source, "read"):
+            if hasattr(source, "seek"):
+                try:
+                    source.seek(0)  # type: ignore[attr-defined]
+                except (OSError, ValueError):
+                    pass
+            line_iter: object = source
+        elif isinstance(source, (bytes, bytearray)):
+            line_iter = io.BytesIO(bytes(source))
+        elif isinstance(source, str):
+            line_iter = io.StringIO(source)
         else:
             return file_content
 
-        # Parse JSONL properly, handling potential multiline JSON objects
-        json_objects = parse_jsonl_with_embedded_newlines(file_content_str)
+        # Rewrite one row at a time, writing straight into the output buffer
+        # instead of holding every parsed row in a list. Peak memory stays at
+        # ~one row plus the output rather than several full copies of the file,
+        # which the managed-files path depends on (it re-runs this rewrite once
+        # per target model). Lines are accumulated so JSON objects that span
+        # multiple physical lines still parse. Streaming the handle also means
+        # the model rewrite is actually applied to tuple-wrapped upload handles;
+        # otherwise a restricted body.model would survive and bypass the batch
+        # model allowlist (which validates the upload target alias).
+        output = InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
+        wrote_any = False
+        buffer = ""
+        for raw_line in line_iter:  # type: ignore[attr-defined]
+            buffer += raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
+            stripped = buffer.strip()
+            if not stripped:
+                buffer = ""
+                continue
+            try:
+                json_object = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue  # object not complete yet; keep accumulating
+            if isinstance(json_object, dict) and isinstance(json_object.get("body"), dict):
+                json_object["body"]["model"] = new_model_name
+            output.write((("\n" if wrote_any else "") + json.dumps(json_object)).encode("utf-8"))
+            wrote_any = True
+            buffer = ""
+
+        if buffer.strip():
+            # A row never parsed (truncated/malformed, or it swallowed the rows
+            # that followed it). Returning the partial `output` would silently
+            # drop those rows; return the unchanged original so the provider
+            # rejects the batch loudly instead of accepting a truncated one.
+            verbose_logger.error(f"error parsing trailing batch content: {buffer[:100]}...")
+            if hasattr(source, "seek"):
+                try:
+                    source.seek(0)  # type: ignore[attr-defined]
+                except (OSError, ValueError):
+                    pass
+            return file_content
 
         # If no valid JSON objects were found, return the original content
-        if len(json_objects) == 0:
+        if not wrote_any:
             return file_content
 
-        modified_lines = []
-        for json_object in json_objects:
-            # Replace the model name if it exists
-            if "body" in json_object:
-                json_object["body"]["model"] = new_model_name
-
-            # Convert the modified JSON object back to a string
-            modified_lines.append(json.dumps(json_object))
-
-        # Reassemble the modified lines and return as bytes
-        modified_file_content = "\n".join(modified_lines).encode("utf-8")
-
-        return InMemoryFile(modified_file_content, name="modified_file.jsonl", content_type="application/jsonl")  # type: ignore
+        output.seek(0)
+        return output  # type: ignore
 
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
         # return the original file content if there is an error replacing the model name
@@ -142,9 +166,7 @@ def _get_router_metadata_variable_name(function_name: Optional[str]) -> str:
             "_ageneric_api_call_with_fallbacks",
         ]
     )
-    if function_name and any(
-        method in function_name for method in ROUTER_METHODS_USING_LITELLM_METADATA
-    ):
+    if function_name and any(method in function_name for method in ROUTER_METHODS_USING_LITELLM_METADATA):
         return "litellm_metadata"
     else:
         return "metadata"

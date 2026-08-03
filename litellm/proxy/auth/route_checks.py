@@ -59,9 +59,7 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
 # paths directly because the request route carries the resolved key id.
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES = ("/regenerate", "/reset_spend")
 
-_AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS = frozenset(
-    ("openai_routes", "llm_api_routes")
-)
+_AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS = frozenset(("openai_routes", "llm_api_routes"))
 
 
 class RouteChecks:
@@ -84,9 +82,7 @@ class RouteChecks:
             pass
 
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
-        RouteChecks.is_virtual_key_allowed_to_call_route(
-            route=route, valid_token=valid_token, request=request
-        )
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token, request=request)
         return True
 
     @staticmethod
@@ -111,16 +107,11 @@ class RouteChecks:
 
         # explicit check for allowed routes (exact match or prefix match)
         for allowed_route in valid_token.allowed_routes:
-            if RouteChecks._route_matches_allowed_route(
-                route=route, allowed_route=allowed_route
-            ):
+            if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
                 return True
 
         ## check if 'allowed_route' is a field name in LiteLLMRoutes
-        if any(
-            allowed_route in LiteLLMRoutes._member_names_
-            for allowed_route in valid_token.allowed_routes
-        ):
+        if any(allowed_route in LiteLLMRoutes._member_names_ for allowed_route in valid_token.allowed_routes):
             for allowed_route in valid_token.allowed_routes:
                 if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
@@ -134,9 +125,7 @@ class RouteChecks:
                                 method=RouteChecks._get_request_method(request=request),
                             )
                         ):
-                            if RouteChecks.check_passthrough_route_access(
-                                route=route, user_api_key_dict=valid_token
-                            ):
+                            if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
                                 return True
                             denied_auth_enforced_pass_through_route = True
                         else:
@@ -150,9 +139,7 @@ class RouteChecks:
                             InitPassThroughEndpointHelpers,
                         )
 
-                        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                            route=route
-                        ):
+                        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
                             if RouteChecks.is_auth_enforced_pass_through_route(
                                 route=route,
                                 method=RouteChecks._get_request_method(request=request),
@@ -175,16 +162,12 @@ class RouteChecks:
                         # headers, env, credentials). POST/PUT/DELETE on
                         # these paths are admin-only management writes and
                         # are intentionally not covered.
-                        if RouteChecks._is_get_mcp_server_discovery_route(
-                            route=route, request=request
-                        ):
+                        if RouteChecks._is_get_mcp_server_discovery_route(route=route, request=request):
                             return True
 
         # check if wildcard pattern is allowed
         for allowed_route in valid_token.allowed_routes:
-            if RouteChecks._route_matches_wildcard_pattern(
-                route=route, pattern=allowed_route
-            ):
+            if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                 return True
 
         if denied_auth_enforced_pass_through_route:
@@ -264,9 +247,7 @@ class RouteChecks:
             route=route,
             method=RouteChecks._get_request_method(request=request),
         ):
-            RouteChecks._require_auth_pass_through_access(
-                route=route, valid_token=valid_token
-            )
+            RouteChecks._require_auth_pass_through_access(route=route, valid_token=valid_token)
         elif RouteChecks.is_llm_api_route(route=route):
             pass
         elif RouteChecks.is_info_route(route=route):
@@ -278,9 +259,7 @@ class RouteChecks:
                 # check if user can access this route
                 query_params = request.query_params
                 user_id = query_params.get("user_id")
-                verbose_proxy_logger.debug(
-                    f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}"
-                )
+                verbose_proxy_logger.debug(f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}")
                 if user_id and user_id != valid_token.user_id:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
@@ -309,25 +288,17 @@ class RouteChecks:
                 request_data=request_data,
                 request=request,
             )
-        elif (
-            _user_role == LitellmUserRoles.INTERNAL_USER.value
-            and RouteChecks.check_route_access(
-                route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value
-            )
+        elif _user_role == LitellmUserRoles.INTERNAL_USER.value and RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value
         ):
             pass
-        elif _user_is_org_admin(
-            request_data=request_data, user_object=user_obj
-        ) and RouteChecks.check_route_access(
+        elif _user_is_org_admin(request_data=request_data, user_object=user_obj) and RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value
         ):
             pass
-        elif (
-            _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            and RouteChecks.check_route_access(
-                route=route,
-                allowed_routes=LiteLLMRoutes.internal_user_view_only_routes.value,
-            )
+        elif _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value and RouteChecks.check_route_access(
+            route=route,
+            allowed_routes=LiteLLMRoutes.internal_user_view_only_routes.value,
         ):
             pass
         elif RouteChecks.check_route_access(
@@ -336,34 +307,24 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
-        elif RouteChecks.check_passthrough_route_access(
-            route=route, user_api_key_dict=valid_token
-        ):
+        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
             pass
         elif valid_token.allowed_routes is not None:
             # check if route is in allowed_routes (exact match or prefix match)
             route_allowed = False
             for allowed_route in valid_token.allowed_routes:
-                if RouteChecks._route_matches_allowed_route(
-                    route=route, allowed_route=allowed_route
-                ):
+                if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
                     route_allowed = True
                     break
 
-                if RouteChecks._route_matches_wildcard_pattern(
-                    route=route, pattern=allowed_route
-                ):
+                if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                     route_allowed = True
                     break
 
             if not route_allowed:
-                RouteChecks._raise_admin_only_route_exception(
-                    user_obj=user_obj, route=route
-                )
+                RouteChecks._raise_admin_only_route_exception(user_obj=user_obj, route=route)
         else:
-            RouteChecks._raise_admin_only_route_exception(
-                user_obj=user_obj, route=route
-            )
+            RouteChecks._raise_admin_only_route_exception(user_obj=user_obj, route=route)
 
     @staticmethod
     def custom_admin_only_route_check(route: str):
@@ -405,14 +366,10 @@ class RouteChecks:
         if route in LiteLLMRoutes.google_routes.value:
             return True
 
-        if RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value
-        ):
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value):
             return True
 
-        if RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.agent_routes.value
-        ):
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_routes.value):
             return True
 
         if route in LiteLLMRoutes.litellm_native_routes.value:
@@ -424,47 +381,35 @@ class RouteChecks:
             # Replace placeholders with regex pattern
             # placeholders are written as "/threads/{thread_id}"
             if "{" in openai_route:
-                if RouteChecks._route_matches_pattern(
-                    route=route, pattern=openai_route
-                ):
+                if RouteChecks._route_matches_pattern(route=route, pattern=openai_route):
                     return True
             # Check for wildcard patterns like "/containers/*"
             if RouteChecks._is_wildcard_pattern(pattern=openai_route):
-                if RouteChecks._route_matches_wildcard_pattern(
-                    route=route, pattern=openai_route
-                ):
+                if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=openai_route):
                     return True
 
         # Check for Google routes with placeholders like "/v1beta/models/{model_name}:generateContent"
         for google_route in LiteLLMRoutes.google_routes.value:
             if "{" in google_route:
-                if RouteChecks._route_matches_pattern(
-                    route=route, pattern=google_route
-                ):
+                if RouteChecks._route_matches_pattern(route=route, pattern=google_route):
                     return True
 
         # Check for Anthropic routes with placeholders
         for anthropic_route in LiteLLMRoutes.anthropic_routes.value:
             if "{" in anthropic_route:
-                if RouteChecks._route_matches_pattern(
-                    route=route, pattern=anthropic_route
-                ):
+                if RouteChecks._route_matches_pattern(route=route, pattern=anthropic_route):
                     return True
 
         if RouteChecks._is_azure_openai_route(route=route):
             return True
 
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if route == _llm_passthrough_route or route.startswith(
-                _llm_passthrough_route + "/"
-            ):
+            if route == _llm_passthrough_route or route.startswith(_llm_passthrough_route + "/"):
                 return True
         return False
 
     @staticmethod
-    def _is_get_mcp_server_discovery_route(
-        route: str, request: Optional[Request]
-    ) -> bool:
+    def _is_get_mcp_server_discovery_route(route: str, request: Optional[Request]) -> bool:
         """
         Returns True if `request` is a GET against one of the two read-only
         MCP-server discovery paths:
@@ -491,9 +436,7 @@ class RouteChecks:
         """
         Check if route is a management route
         """
-        return RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.management_routes.value
-        )
+        return RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.management_routes.value)
 
     @staticmethod
     def is_info_route(route: str) -> bool:
@@ -638,15 +581,9 @@ class RouteChecks:
         # wildcard match route is in allowed_routes
         # e.g calling /anthropic/v1/messages is allowed if allowed_routes has /anthropic/*
         #########################################################
-        wildcard_allowed_routes = [
-            route
-            for route in allowed_routes
-            if RouteChecks._is_wildcard_pattern(pattern=route)
-        ]
+        wildcard_allowed_routes = [route for route in allowed_routes if RouteChecks._is_wildcard_pattern(pattern=route)]
         for allowed_route in wildcard_allowed_routes:
-            if RouteChecks._route_matches_wildcard_pattern(
-                route=route, pattern=allowed_route
-            ):
+            if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                 return True
 
         #########################################################
@@ -656,8 +593,7 @@ class RouteChecks:
         # returns: True
         #########################################################
         if any(  # Check pattern match
-            RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
-            for allowed_route in allowed_routes
+            RouteChecks._route_matches_pattern(route=route, pattern=allowed_route) for allowed_route in allowed_routes
         ):
             return True
 
@@ -678,9 +614,7 @@ class RouteChecks:
         return method.upper()
 
     @staticmethod
-    def is_auth_enforced_pass_through_route(
-        route: str, method: Optional[str] = None
-    ) -> bool:
+    def is_auth_enforced_pass_through_route(route: str, method: Optional[str] = None) -> bool:
         """
         True for config/DB pass-through endpoints registered with auth=true.
 
@@ -692,9 +626,7 @@ class RouteChecks:
             InitPassThroughEndpointHelpers,
         )
 
-        route_info = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-            route=route, method=method
-        )
+        route_info = InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=route, method=method)
         if route_info is None:
             return False
         return route_info.get("auth") is True
@@ -717,16 +649,12 @@ class RouteChecks:
         """
         Require an explicit ``allowed_passthrough_routes`` match for auth=true pass-through.
         """
-        if RouteChecks.check_passthrough_route_access(
-            route=route, user_api_key_dict=valid_token
-        ):
+        if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
             return
         raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
     @staticmethod
-    def check_passthrough_route_access(
-        route: str, user_api_key_dict: UserAPIKeyAuth
-    ) -> bool:
+    def check_passthrough_route_access(route: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
         """
         Check if route is a passthrough route.
         Supports both exact match and prefix match.
@@ -735,10 +663,7 @@ class RouteChecks:
         team_metadata = user_api_key_dict.team_metadata or {}
         if metadata is None and team_metadata is None:
             return False
-        if (
-            "allowed_passthrough_routes" not in metadata
-            and "allowed_passthrough_routes" not in team_metadata
-        ):
+        if "allowed_passthrough_routes" not in metadata and "allowed_passthrough_routes" not in team_metadata:
             return False
         if (
             metadata.get("allowed_passthrough_routes") is None
@@ -747,16 +672,12 @@ class RouteChecks:
             return False
 
         allowed_passthrough_routes = (
-            metadata.get("allowed_passthrough_routes")
-            or team_metadata.get("allowed_passthrough_routes")
-            or []
+            metadata.get("allowed_passthrough_routes") or team_metadata.get("allowed_passthrough_routes") or []
         )
 
         # Check if route matches any allowed passthrough route (exact or prefix match)
         for allowed_route in allowed_passthrough_routes:
-            if RouteChecks._route_matches_allowed_route(
-                route=route, allowed_route=allowed_route
-            ):
+            if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
                 return True
 
         return False
@@ -862,9 +783,7 @@ class RouteChecks:
             )
 
         # Check if this is a write operation on management routes
-        if RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.management_routes.value
-        ):
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.management_routes.value):
             # For management routes, only allow read operations or specific allowed updates
             if route == "/user/update":
                 # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
@@ -877,8 +796,7 @@ class RouteChecks:
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
                             )
             elif route in _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES or (
-                route.startswith("/key/")
-                and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
+                route.startswith("/key/") and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
             ):
                 # Block write operations for PROXY_ADMIN_VIEW_ONLY
                 raise HTTPException(
@@ -923,13 +841,9 @@ class RouteChecks:
         # Legacy explicit-allow sets (kept for routes that are POST but
         # semantically read-only, e.g. /spend/calculate). Both admin_viewer_routes
         # and global_spend_tracking_routes are reads/listings.
-        if RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value
-        ):
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value):
             return
-        if RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.global_spend_tracking_routes.value
-        ):
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.global_spend_tracking_routes.value):
             return
 
         # NOTE: We intentionally do NOT fall back to allowing all

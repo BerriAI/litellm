@@ -34,16 +34,12 @@ def get_utc_datetime():
 
 
 class BraintrustLogger(CustomLogger):
-    def __init__(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> None:
+    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> None:
         super().__init__()
         self.is_mock_mode = should_use_braintrust_mock()
         if self.is_mock_mode:
             create_mock_braintrust_client()
-            verbose_logger.info(
-                "[BRAINTRUST MOCK] Braintrust logger initialized in mock mode"
-            )
+            verbose_logger.info("[BRAINTRUST MOCK] Braintrust logger initialized in mock mode")
         self.validate_environment(api_key=api_key)
         self.api_base = api_base or os.getenv("BRAINTRUST_API_BASE") or API_BASE
         self.default_project_id = None
@@ -52,12 +48,8 @@ class BraintrustLogger(CustomLogger):
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
         }
-        self._project_id_cache: Dict[str, str] = (
-            {}
-        )  # Cache mapping project names to IDs
-        self.global_braintrust_http_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self._project_id_cache: Dict[str, str] = {}  # Cache mapping project names to IDs
+        self.global_braintrust_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.global_braintrust_sync_http_handler = HTTPHandler()
 
     def validate_environment(self, api_key: Optional[str]):
@@ -143,23 +135,16 @@ class BraintrustLogger(CustomLogger):
             output = None
             choices = []
             if response_obj is not None and (
-                kwargs.get("call_type", None) == "embedding"
-                or isinstance(response_obj, litellm.EmbeddingResponse)
+                kwargs.get("call_type", None) == "embedding" or isinstance(response_obj, litellm.EmbeddingResponse)
             ):
                 output = None
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.ModelResponse
-            ):
+            elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
                 output = response_obj["choices"][0]["message"].json()
                 choices = response_obj["choices"]
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.TextCompletionResponse
-            ):
+            elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.ImageResponse
-            ):
+            elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
                 output = response_obj["data"]
 
             litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -169,9 +154,7 @@ class BraintrustLogger(CustomLogger):
             project_id = dynamic_metadata.get("project_id")
             if project_id is None:
                 project_name = dynamic_metadata.get("project_name")
-                project_id = (
-                    self.get_project_id_sync(project_name) if project_name else None
-                )
+                project_id = self.get_project_id_sync(project_name) if project_name else None
 
             if project_id is None:
                 if self.default_project_id is None:
@@ -206,8 +189,7 @@ class BraintrustLogger(CustomLogger):
                     "completion_tokens": usage_obj.completion_tokens,
                     "total_tokens": usage_obj.total_tokens,
                     "total_cost": cost,
-                    "time_to_first_token": end_time.timestamp()
-                    - start_time.timestamp(),
+                    "time_to_first_token": end_time.timestamp() - start_time.timestamp(),
                     "start": start_time.timestamp(),
                     "end": end_time.timestamp(),
                 }
@@ -278,23 +260,16 @@ class BraintrustLogger(CustomLogger):
             output = None
             choices = []
             if response_obj is not None and (
-                kwargs.get("call_type", None) == "embedding"
-                or isinstance(response_obj, litellm.EmbeddingResponse)
+                kwargs.get("call_type", None) == "embedding" or isinstance(response_obj, litellm.EmbeddingResponse)
             ):
                 output = None
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.ModelResponse
-            ):
+            elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
                 output = response_obj["choices"][0]["message"].json()
                 choices = response_obj["choices"]
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.TextCompletionResponse
-            ):
+            elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.ImageResponse
-            ):
+            elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
                 output = response_obj["data"]
 
             litellm_params = kwargs.get("litellm_params", {})
@@ -304,11 +279,7 @@ class BraintrustLogger(CustomLogger):
             project_id = dynamic_metadata.get("project_id")
             if project_id is None:
                 project_name = dynamic_metadata.get("project_name")
-                project_id = (
-                    await self.get_project_id_async(project_name)
-                    if project_name
-                    else None
-                )
+                project_id = await self.get_project_id_async(project_name) if project_name else None
 
             if project_id is None:
                 if self.default_project_id is None:
@@ -350,14 +321,8 @@ class BraintrustLogger(CustomLogger):
                 api_call_start_time = kwargs.get("api_call_start_time")
                 completion_start_time = kwargs.get("completion_start_time")
 
-                if (
-                    api_call_start_time is not None
-                    and completion_start_time is not None
-                ):
-                    metrics["time_to_first_token"] = (
-                        completion_start_time.timestamp()
-                        - api_call_start_time.timestamp()
-                    )
+                if api_call_start_time is not None and completion_start_time is not None:
+                    metrics["time_to_first_token"] = completion_start_time.timestamp() - api_call_start_time.timestamp()
 
             # Allow metadata override for span name
             span_name = dynamic_metadata.get("span_name", "Chat Completion")

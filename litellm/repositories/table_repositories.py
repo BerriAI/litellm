@@ -21,9 +21,7 @@ class PrismaTableRepository:
     @property
     def prisma_client(self) -> Any:
         if self._prisma_client is None:
-            raise RuntimeError(
-                "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
-            )
+            raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
 
     @property
@@ -77,6 +75,10 @@ class ManagedVectorStoresRepository(PrismaTableRepository):
 
 class MCPUserCredentialsRepository(PrismaTableRepository):
     table_name = "litellm_mcpusercredentials"
+
+
+class MCPServerOAuthClientRepository(PrismaTableRepository):
+    table_name = "litellm_mcpserveroauthclient"
 
 
 class PromptRepository(PrismaTableRepository):
@@ -177,6 +179,10 @@ class DailyTagSpendRepository(PrismaTableRepository):
 
 class SpendLogToolIndexRepository(PrismaTableRepository):
     table_name = "litellm_spendlogtoolindex"
+
+
+class DailyToolSpendRepository(PrismaTableRepository):
+    table_name = "litellm_dailytoolspend"
 
 
 class SpendLogGuardrailIndexRepository(PrismaTableRepository):

@@ -93,9 +93,7 @@ class PromptManager:
     def _load_prompts(self) -> None:
         """Load all .prompt files from the prompt directory."""
         if not self.prompt_directory or not self.prompt_directory.exists():
-            raise ValueError(
-                f"Prompt directory does not exist: {self.prompt_directory}"
-            )
+            raise ValueError(f"Prompt directory does not exist: {self.prompt_directory}")
 
         prompt_files = list(self.prompt_directory.glob("*.prompt"))
 
@@ -109,9 +107,7 @@ class PromptManager:
                 # Optional: print(f"Error loading prompt file {prompt_file}")
                 pass
 
-    def _load_prompts_from_json(
-        self, prompt_data: Dict[str, Dict[str, Any]], prompt_id: Optional[str] = None
-    ) -> None:
+    def _load_prompts_from_json(self, prompt_data: Dict[str, Dict[str, Any]], prompt_id: Optional[str] = None) -> None:
         """Load prompts from JSON data structure.
 
         Expected format:
@@ -147,9 +143,7 @@ class PromptManager:
                 # Optional: print(f"Error loading prompt from JSON: {prompt_id}")
                 pass
 
-    def _load_prompt_file(
-        self, file_path: Union[str, Path], prompt_id: str
-    ) -> PromptTemplate:
+    def _load_prompt_file(self, file_path: Union[str, Path], prompt_id: str) -> PromptTemplate:
         """Load and parse a single .prompt file."""
         if isinstance(file_path, str):
             file_path = Path(file_path)
@@ -213,9 +207,7 @@ class PromptManager:
         if template is None:
             available_prompts = list(self.prompts.keys())
             version_str = f" (version {version})" if version else ""
-            raise KeyError(
-                f"Prompt '{prompt_id}'{version_str} not found. Available prompts: {available_prompts}"
-            )
+            raise KeyError(f"Prompt '{prompt_id}'{version_str} not found. Available prompts: {available_prompts}")
 
         variables = prompt_variables or {}
 
@@ -231,9 +223,7 @@ class PromptManager:
         except Exception as e:
             raise ValueError(f"Error rendering template '{prompt_id}': {e}")
 
-    def _validate_input(
-        self, variables: Dict[str, Any], schema: Dict[str, Any]
-    ) -> None:
+    def _validate_input(self, variables: Dict[str, Any], schema: Dict[str, Any]) -> None:
         """Basic validation of input variables against schema."""
         for field_name, field_type in schema.items():
             if field_name in variables:
@@ -265,9 +255,7 @@ class PromptManager:
 
         return type_mapping.get(schema_type.lower(), str)  # type: ignore
 
-    def get_prompt(
-        self, prompt_id: str, version: Optional[int] = None
-    ) -> Optional[PromptTemplate]:
+    def get_prompt(self, prompt_id: str, version: Optional[int] = None) -> Optional[PromptTemplate]:
         """
         Get a prompt template by ID and optional version.
 
@@ -302,13 +290,9 @@ class PromptManager:
         if self.prompt_directory:
             self._load_prompts()
 
-    def add_prompt(
-        self, prompt_id: str, content: str, metadata: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def add_prompt(self, prompt_id: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Add a prompt template programmatically."""
-        template = PromptTemplate(
-            content=content, metadata=metadata or {}, template_id=prompt_id
-        )
+        template = PromptTemplate(content=content, metadata=metadata or {}, template_id=prompt_id)
         self.prompts[prompt_id] = template
 
     def prompt_file_to_json(self, file_path: Union[str, Path]) -> Dict[str, Any]:
@@ -365,8 +349,6 @@ class PromptManager:
             }
         return result
 
-    def load_prompts_from_json_data(
-        self, prompt_data: Dict[str, Dict[str, Any]]
-    ) -> None:
+    def load_prompts_from_json_data(self, prompt_data: Dict[str, Dict[str, Any]]) -> None:
         """Load additional prompts from JSON data (merges with existing prompts)."""
         self._load_prompts_from_json(prompt_data)

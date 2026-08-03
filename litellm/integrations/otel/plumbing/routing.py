@@ -60,9 +60,7 @@ class TenantTracerCache:
         self._config = config
         self._callback_name = callback_name
         self._tracer_name = tracer_name
-        self._providers: "OrderedDict[tuple[tuple[str, str], ...], TracerProvider]" = (
-            OrderedDict()
-        )
+        self._providers: "OrderedDict[tuple[tuple[str, str], ...], TracerProvider]" = OrderedDict()
 
     def tracer_for(self, default: Tracer, dynamic_params: Any) -> Tracer:
         """Return the tracer for this request.
@@ -102,8 +100,7 @@ class TenantTracerCache:
         exporters = [
             (
                 spec.model_copy(update=header_update)
-                if spec.owner == self._callback_name
-                and spec.kind.lower() not in _NON_OTLP_KINDS
+                if spec.owner == self._callback_name and spec.kind.lower() not in _NON_OTLP_KINDS
                 else spec
             )
             for spec in self._config.exporters

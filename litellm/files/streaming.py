@@ -94,9 +94,7 @@ class FileContentStreamingResponse:
         self._close_completed = True
         self._logging_completed = True
         stream_to_close = self.stream_iterator
-        self.stream_iterator = cast(
-            Union[Iterator[bytes], AsyncIterator[bytes]], iter(())
-        )
+        self.stream_iterator = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
 
         # Shield cleanup from request cancellation so upstream HTTP connections
         # are released promptly on client disconnects.
@@ -115,9 +113,7 @@ class FileContentStreamingResponse:
         self._close_completed = True
         self._logging_completed = True
         stream_to_close = self.stream_iterator
-        self.stream_iterator = cast(
-            Union[Iterator[bytes], AsyncIterator[bytes]], iter(())
-        )
+        self.stream_iterator = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
 
         if hasattr(stream_to_close, "close"):
             cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
@@ -134,9 +130,7 @@ class FileContentStreamingResponse:
     def _sync_hidden_params(self) -> None:
         litellm_params: dict[str, Any] = {}
         if self.logging_obj is not None:
-            litellm_params = (
-                self.logging_obj.model_call_details.get("litellm_params", {}) or {}
-            )
+            litellm_params = self.logging_obj.model_call_details.get("litellm_params", {}) or {}
 
         if "api_base" not in self._hidden_params and litellm_params.get("api_base"):
             self._hidden_params["api_base"] = litellm_params["api_base"]
@@ -232,12 +226,8 @@ class FileContentStreamingResponse:
         self._logging_completed = True
         end_time = datetime.datetime.now()
         traceback_str = traceback.format_exc()
-        self.logging_obj.failure_handler(
-            error, traceback_str, self._start_time, end_time
-        )
-        await self.logging_obj.async_failure_handler(
-            error, traceback_str, self._start_time, end_time
-        )
+        self.logging_obj.failure_handler(error, traceback_str, self._start_time, end_time)
+        await self.logging_obj.async_failure_handler(error, traceback_str, self._start_time, end_time)
 
     def _log_failure_sync(self, error: Exception) -> None:
         if self._logging_completed or self.logging_obj is None:
@@ -245,6 +235,4 @@ class FileContentStreamingResponse:
 
         self._logging_completed = True
         end_time = datetime.datetime.now()
-        self.logging_obj.failure_handler(
-            error, traceback.format_exc(), self._start_time, end_time
-        )
+        self.logging_obj.failure_handler(error, traceback.format_exc(), self._start_time, end_time)

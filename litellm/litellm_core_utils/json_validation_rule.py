@@ -44,9 +44,7 @@ def normalize_json_schema_types(
     }
 
     if isinstance(schema, list):
-        return [
-            normalize_json_schema_types(item, depth + 1, max_depth) for item in schema
-        ]
+        return [normalize_json_schema_types(item, depth + 1, max_depth) for item in schema]
 
     if isinstance(schema, dict):
         normalized_schema: Dict[str, Any] = {}
@@ -57,21 +55,15 @@ def normalize_json_schema_types(
             elif key == "properties" and isinstance(value, dict):
                 # Recursively normalize properties
                 normalized_schema[key] = {
-                    prop_key: normalize_json_schema_types(
-                        prop_value, depth + 1, max_depth
-                    )
+                    prop_key: normalize_json_schema_types(prop_value, depth + 1, max_depth)
                     for prop_key, prop_value in value.items()
                 }
             elif key == "items" and isinstance(value, (dict, list)):
                 # Recursively normalize array items
-                normalized_schema[key] = normalize_json_schema_types(
-                    value, depth + 1, max_depth
-                )
+                normalized_schema[key] = normalize_json_schema_types(value, depth + 1, max_depth)
             elif isinstance(value, (dict, list)):
                 # Recursively normalize any nested dict or list
-                normalized_schema[key] = normalize_json_schema_types(
-                    value, depth + 1, max_depth
-                )
+                normalized_schema[key] = normalize_json_schema_types(value, depth + 1, max_depth)
             else:
                 normalized_schema[key] = value
 
@@ -99,9 +91,7 @@ def normalize_tool_schema(tool: Dict[str, Any]) -> Dict[str, Any]:
     if "function" in tool and isinstance(tool["function"], dict):
         normalized_tool["function"] = tool["function"].copy()
         if "parameters" in tool["function"]:
-            normalized_tool["function"]["parameters"] = normalize_json_schema_types(
-                tool["function"]["parameters"]
-            )
+            normalized_tool["function"]["parameters"] = normalize_json_schema_types(tool["function"]["parameters"])
 
     return normalized_tool
 
@@ -121,13 +111,9 @@ def validate_schema(schema: dict, response: str):
     try:
         response_dict = json.loads(response)
     except json.JSONDecodeError:
-        raise JSONSchemaValidationError(
-            model="", llm_provider="", raw_response=response, schema=json.dumps(schema)
-        )
+        raise JSONSchemaValidationError(model="", llm_provider="", raw_response=response, schema=json.dumps(schema))
 
     try:
         validate(response_dict, schema=schema)
     except ValidationError:
-        raise JSONSchemaValidationError(
-            model="", llm_provider="", raw_response=response, schema=json.dumps(schema)
-        )
+        raise JSONSchemaValidationError(model="", llm_provider="", raw_response=response, schema=json.dumps(schema))

@@ -66,16 +66,12 @@ def _build_langgraph_platform_paths(
     """
     assistant_id = (params or {}).get("assistant_id")
     if not assistant_id:
-        raise AgentCardDiscoveryError(
-            "langgraph_platform discovery requires params.assistant_id"
-        )
+        raise AgentCardDiscoveryError("langgraph_platform discovery requires params.assistant_id")
     query = urlencode({"assistant_id": str(assistant_id)})
     return tuple(f"{path}?{query}" for path in AGENT_CARD_WELL_KNOWN_PATHS)
 
 
-def _paths_for_mode(
-    mode: DiscoveryMode, params: Optional[Dict[str, Any]]
-) -> Tuple[str, ...]:
+def _paths_for_mode(mode: DiscoveryMode, params: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
     if mode == DiscoveryMode.WELL_KNOWN_FALLBACK:
         return AGENT_CARD_WELL_KNOWN_PATHS
     if mode == DiscoveryMode.LANGGRAPH_PLATFORM:
@@ -127,9 +123,7 @@ async def fetch_well_known_card(
             response = await async_safe_get(client, url, headers=headers or {})
         except SSRFError as exc:
             last_error = f"{url}: {exc!s}"
-            verbose_proxy_logger.debug(
-                "A2A discovery blocked by SSRF guard for %s: %s", url, exc
-            )
+            verbose_proxy_logger.debug("A2A discovery blocked by SSRF guard for %s: %s", url, exc)
             continue
         except Exception as exc:
             last_error = f"{url}: {exc!s}"
@@ -138,9 +132,7 @@ async def fetch_well_known_card(
 
         if response.status_code >= 400:
             last_error = f"{url}: HTTP {response.status_code}"
-            verbose_proxy_logger.debug(
-                "A2A discovery HTTP %s for %s", response.status_code, url
-            )
+            verbose_proxy_logger.debug("A2A discovery HTTP %s for %s", response.status_code, url)
             continue
 
         try:
@@ -157,6 +149,5 @@ async def fetch_well_known_card(
         return card
 
     raise AgentCardDiscoveryError(
-        f"Could not fetch agent card from {base_url} (mode={discovery_mode.value}). "
-        f"Last error: {last_error}"
+        f"Could not fetch agent card from {base_url} (mode={discovery_mode.value}). Last error: {last_error}"
     )

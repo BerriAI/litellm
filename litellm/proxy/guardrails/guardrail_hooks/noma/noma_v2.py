@@ -8,7 +8,7 @@ import enum
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type, cast
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
@@ -53,42 +53,25 @@ class NomaV2Guardrail(CustomGuardrail):
         block_failures: Optional[bool] = None,
         **kwargs: Any,
     ) -> None:
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         self.api_key = api_key or os.environ.get("NOMA_API_KEY")
-        self.api_base = (
-            api_base or os.environ.get("NOMA_API_BASE") or _DEFAULT_API_BASE
-        ).rstrip("/")
+        self.api_base = (api_base or os.environ.get("NOMA_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
         self.application_id = application_id or os.environ.get("NOMA_APPLICATION_ID")
         if monitor_mode is None:
-            self.monitor_mode = (
-                os.environ.get("NOMA_MONITOR_MODE", "false").lower() == "true"
-            )
+            self.monitor_mode = os.environ.get("NOMA_MONITOR_MODE", "false").lower() == "true"
         else:
             self.monitor_mode = monitor_mode
 
         if block_failures is None:
-            self.block_failures = (
-                os.environ.get("NOMA_BLOCK_FAILURES", "true").lower() == "true"
-            )
+            self.block_failures = os.environ.get("NOMA_BLOCK_FAILURES", "true").lower() == "true"
         else:
             self.block_failures = block_failures
 
         if self._requires_api_key(api_base=self.api_base) and not self.api_key:
-            raise ValueError(
-                "Noma v2 guardrail requires api_key when using Noma SaaS endpoint"
-            )
+            raise ValueError("Noma v2 guardrail requires api_key when using Noma SaaS endpoint")
 
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.during_call,
-                GuardrailEventHooks.post_call,
-                GuardrailEventHooks.pre_mcp_call,
-                GuardrailEventHooks.during_mcp_call,
-            ]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         super().__init__(**kwargs)
 
@@ -99,6 +82,16 @@ class NomaV2Guardrail(CustomGuardrail):
         )
 
         return NomaV2GuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+        ]
 
     def _get_authorization_header(self) -> str:
         if not self.api_key:
@@ -140,9 +133,7 @@ class NomaV2Guardrail(CustomGuardrail):
     ) -> dict:
         payload_request_data = self._sanitize_payload_for_transport(request_data)
         if logging_obj is not None:
-            payload_request_data["litellm_logging_obj"] = getattr(
-                logging_obj, "model_call_details", None
-            )
+            payload_request_data["litellm_logging_obj"] = getattr(logging_obj, "model_call_details", None)
 
         payload: dict[str, Any] = {
             "inputs": inputs,
@@ -278,9 +269,7 @@ class NomaV2Guardrail(CustomGuardrail):
         if application_id is None:
             application_id = self._get_non_empty_str(
                 request_data.get("litellm_metadata", {}).get("user_api_key_alias")
-            ) or self._get_non_empty_str(
-                request_data.get("metadata", {}).get("user_api_key_alias")
-            )
+            ) or self._get_non_empty_str(request_data.get("metadata", {}).get("user_api_key_alias"))
 
         try:
             payload = self._build_scan_payload(
@@ -308,17 +297,13 @@ class NomaV2Guardrail(CustomGuardrail):
                 action=action,
             )
 
-            guardrail_status = (
-                "success" if action == _Action.NONE else "guardrail_intervened"
-            )
+            guardrail_status = "success" if action == _Action.NONE else "guardrail_intervened"
             return processed_inputs
 
         except NomaBlockedMessage as e:
             guardrail_status = "guardrail_intervened"
             guardrail_json_response = (
-                response_json
-                if isinstance(response_json, dict)
-                else getattr(e, "detail", {"error": "blocked"})
+                response_json if isinstance(response_json, dict) else getattr(e, "detail", {"error": "blocked"})
             )
             raise
         except Exception as e:

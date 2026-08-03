@@ -9,6 +9,7 @@ from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
+from litellm.types.llms.anthropic import AnthropicMessagesTool
 from litellm.types.utils import ChatCompletionMessageToolCall
 
 
@@ -75,6 +76,20 @@ def transform_mcp_tool_to_openai_responses_api_tool(
     )
 
 
+def transform_mcp_tool_to_anthropic_tool(mcp_tool: MCPTool) -> AnthropicMessagesTool:
+    """Convert an MCP tool to an Anthropic Messages API tool."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        sanitize_input_schema_for_anthropic,
+    )
+
+    return AnthropicMessagesTool(
+        name=mcp_tool.name,
+        description=mcp_tool.description or "",
+        input_schema=sanitize_input_schema_for_anthropic(mcp_tool.inputSchema),
+        type="custom",
+    )
+
+
 async def load_mcp_tools(
     session: ClientSession, format: Literal["mcp", "openai"] = "mcp"
 ) -> Union[List[MCPTool], List[ChatCompletionToolParam]]:
@@ -90,9 +105,7 @@ async def load_mcp_tools(
     """
     tools = await session.list_tools()
     if format == "openai":
-        return [
-            transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools.tools
-        ]
+        return [transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools.tools]
     return tools.tools
 
 
@@ -148,10 +161,8 @@ async def call_openai_tool(
     Returns:
         The result of the MCP tool call.
     """
-    mcp_tool_call_request_params = (
-        transform_openai_tool_call_request_to_mcp_tool_call_request(
-            openai_tool=openai_tool,
-        )
+    mcp_tool_call_request_params = transform_openai_tool_call_request_to_mcp_tool_call_request(
+        openai_tool=openai_tool,
     )
     return await call_mcp_tool(
         session=session,

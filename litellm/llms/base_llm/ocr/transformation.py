@@ -2,7 +2,7 @@
 Base OCR transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 import httpx
 from pydantic import PrivateAttr
@@ -25,16 +25,16 @@ DocumentType = Dict[str, str]
 class OCRPageDimensions(LiteLLMPydanticObjectBase):
     """Page dimensions from OCR response."""
 
-    dpi: Optional[int] = None
-    height: Optional[int] = None
-    width: Optional[int] = None
+    dpi: int | None = None
+    height: int | None = None
+    width: int | None = None
 
 
 class OCRPageImage(LiteLLMPydanticObjectBase):
     """Image extracted from OCR page."""
 
-    image_base64: Optional[str] = None
-    bbox: Optional[Dict[str, Any]] = None
+    image_base64: str | None = None
+    bbox: Dict[str, Any] | None = None
 
     model_config = {"extra": "allow"}
 
@@ -44,8 +44,8 @@ class OCRPage(LiteLLMPydanticObjectBase):
 
     index: int
     markdown: str
-    images: Optional[List[OCRPageImage]] = None
-    dimensions: Optional[OCRPageDimensions] = None
+    images: List[OCRPageImage] | None = None
+    dimensions: OCRPageDimensions | None = None
 
     model_config = {"extra": "allow"}
 
@@ -53,9 +53,9 @@ class OCRPage(LiteLLMPydanticObjectBase):
 class OCRUsageInfo(LiteLLMPydanticObjectBase):
     """Usage information from OCR response."""
 
-    pages_processed: Optional[int] = None
-    credits: Optional[float] = None
-    doc_size_bytes: Optional[int] = None
+    pages_processed: int | None = None
+    credits: float | None = None
+    doc_size_bytes: int | None = None
 
     model_config = {"extra": "allow"}
 
@@ -68,8 +68,11 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 
     pages: List[OCRPage]
     model: str
-    document_annotation: Optional[Any] = None
-    usage_info: Optional[OCRUsageInfo] = None
+    document_annotation: Any | None = None
+    usage_info: OCRUsageInfo | None = None
+    content: str | None = None
+    tables: list[dict[str, object]] | None = None
+    keyValuePairs: list[dict[str, object]] | None = None
     object: str = "ocr"
 
     model_config = {"extra": "allow"}
@@ -81,8 +84,8 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 class OCRRequestData(LiteLLMPydanticObjectBase):
     """OCR request data structure."""
 
-    data: Optional[Union[Dict, bytes]] = None
-    files: Optional[Dict[str, Any]] = None
+    data: Union[Dict, bytes] | None = None
+    files: Dict[str, Any] | None = None
 
 
 class BaseOCRConfig:
@@ -101,7 +104,7 @@ class BaseOCRConfig:
         """
         return []
 
-    def get_api_key_env_var(self) -> Optional[str]:
+    def get_api_key_env_var(self) -> str | None:
         """
         Return the provider-specific API key environment variable name, if any.
         """
@@ -120,9 +123,9 @@ class BaseOCRConfig:
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> Dict:
         """
@@ -133,10 +136,10 @@ class BaseOCRConfig:
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """
@@ -170,9 +173,7 @@ class BaseOCRConfig:
         Returns:
             OCRRequestData with data and files fields
         """
-        raise NotImplementedError(
-            "transform_ocr_request must be implemented by provider"
-        )
+        raise NotImplementedError("transform_ocr_request must be implemented by provider")
 
     async def async_transform_ocr_request(
         self,
@@ -218,9 +219,7 @@ class BaseOCRConfig:
         Transform provider-specific OCR response to standard format.
         Override in provider-specific implementations.
         """
-        raise NotImplementedError(
-            "transform_ocr_response must be implemented by provider"
-        )
+        raise NotImplementedError("transform_ocr_response must be implemented by provider")
 
     async def async_transform_ocr_response(
         self,

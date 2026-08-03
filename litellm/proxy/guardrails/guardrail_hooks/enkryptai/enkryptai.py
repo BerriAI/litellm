@@ -59,9 +59,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         policy_name: Optional[str] = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         # Set API configuration
         self.api_key = api_key or os.getenv("ENKRYPTAI_API_KEY")
@@ -70,9 +68,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 "EnkryptAI API key is required. Set ENKRYPTAI_API_KEY environment variable or pass api_key parameter."
             )
 
-        self.api_base = api_base or os.getenv(
-            "ENKRYPTAI_API_BASE", "https://api.enkryptai.com"
-        )
+        self.api_base = api_base or os.getenv("ENKRYPTAI_API_BASE", "https://api.enkryptai.com")
         self.api_url = f"{self.api_base}/guardrails/policy/detect"
 
         # Policy name can be passed as parameter or use guardrail_name
@@ -84,12 +80,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         self.optional_params = kwargs
 
         # Set supported event hooks
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-                GuardrailEventHooks.during_call,
-            ]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         super().__init__(guardrail_name=guardrail_name, **kwargs)
 
@@ -188,9 +179,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
 
             raise
 
-    def _process_enkryptai_guardrails_response(
-        self, response: EnkryptAIResponse
-    ) -> EnkryptAIProcessedResult:
+    def _process_enkryptai_guardrails_response(self, response: EnkryptAIResponse) -> EnkryptAIProcessedResult:
         """
         Process the response from the Enkrypt AI Guardrails API
 
@@ -221,9 +210,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
 
         return {"attacks_detected": detected_attacks, "attack_details": attack_details}
 
-    def _determine_guardrail_status(
-        self, response_json: EnkryptAIResponse
-    ) -> GuardrailStatus:
+    def _determine_guardrail_status(self, response_json: EnkryptAIResponse) -> GuardrailStatus:
         """
         Determine the guardrail status based on EnkryptAI API response.
 
@@ -237,9 +224,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 return "guardrail_failed_to_respond"
 
             # Process the response to check for violations
-            processed_result = self._process_enkryptai_guardrails_response(
-                response_json
-            )
+            processed_result = self._process_enkryptai_guardrails_response(response_json)
             attacks_detected = processed_result["attacks_detected"]
 
             if attacks_detected:
@@ -248,9 +233,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
             return "success"
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Error determining EnkryptAI guardrail status: %s", str(e)
-            )
+            verbose_proxy_logger.error("Error determining EnkryptAI guardrail status: %s", str(e))
             return "guardrail_failed_to_respond"
 
     def _create_error_message(self, processed_result: EnkryptAIProcessedResult) -> str:
@@ -266,9 +249,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         attacks_detected = processed_result["attacks_detected"]
         attack_details = processed_result["attack_details"]
 
-        error_message = (
-            f"Guardrail failed: {len(attacks_detected)} violation(s) detected\n\n"
-        )
+        error_message = f"Guardrail failed: {len(attacks_detected)} violation(s) detected\n\n"
 
         for attack_type in attacks_detected:
             error_message += f"- {attack_type.upper()}:\n"
@@ -281,18 +262,12 @@ class EnkryptAIGuardrails(CustomGuardrail):
             elif attack_type == "pii":
                 error_message += f"  PII Detected: {details.get('pii', {})}\n"
             elif attack_type == "toxicity":
-                toxic_types = [
-                    k
-                    for k, v in details.items()
-                    if isinstance(v, (int, float)) and v > 0.5
-                ]
+                toxic_types = [k for k, v in details.items() if isinstance(v, (int, float)) and v > 0.5]
                 error_message += f"  Types: {', '.join(toxic_types)}\n"
             elif attack_type == "keyword_detected":
                 error_message += f"  Keywords: {details.get('detected_keywords', [])}\n"
             elif attack_type == "bias":
-                error_message += (
-                    f"  Bias Detected: {details.get('bias_detected', False)}\n"
-                )
+                error_message += f"  Bias Detected: {details.get('bias_detected', False)}\n"
             else:
                 error_message += f"  Details: {details}\n"
             error_message += "\n"
@@ -331,14 +306,10 @@ class EnkryptAIGuardrails(CustomGuardrail):
                         request_data=data,
                     )
 
-                    verbose_proxy_logger.debug(
-                        "Guardrails async_pre_call_hook result: %s", result
-                    )
+                    verbose_proxy_logger.debug("Guardrails async_pre_call_hook result: %s", result)
 
                     # Process the guardrails response
-                    processed_result = self._process_enkryptai_guardrails_response(
-                        result
-                    )
+                    processed_result = self._process_enkryptai_guardrails_response(result)
                     attacks_detected = processed_result["attacks_detected"]
 
                     # If any attacks are detected, raise an error
@@ -347,9 +318,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                         raise ValueError(error_message)
 
         # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return data
 
@@ -383,14 +352,10 @@ class EnkryptAIGuardrails(CustomGuardrail):
                         request_data=data,
                     )
 
-                    verbose_proxy_logger.debug(
-                        "Guardrails async_moderation_hook result: %s", result
-                    )
+                    verbose_proxy_logger.debug("Guardrails async_moderation_hook result: %s", result)
 
                     # Process the guardrails response
-                    processed_result = self._process_enkryptai_guardrails_response(
-                        result
-                    )
+                    processed_result = self._process_enkryptai_guardrails_response(result)
                     attacks_detected = processed_result["attacks_detected"]
 
                     # If any attacks are detected, raise an error
@@ -399,9 +364,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                         raise ValueError(error_message)
 
         # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return data
 
@@ -423,17 +386,10 @@ class EnkryptAIGuardrails(CustomGuardrail):
         )
         from litellm.types.guardrails import GuardrailEventHooks
 
-        if (
-            self.should_run_guardrail(
-                data=data, event_type=GuardrailEventHooks.post_call
-            )
-            is not True
-        ):
+        if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return
 
-        verbose_proxy_logger.debug(
-            "async_post_call_success_hook response: %s", response
-        )
+        verbose_proxy_logger.debug("async_post_call_success_hook response: %s", response)
 
         # Check if the ModelResponse has text content in its choices
         # to avoid sending empty content to EnkryptAI (e.g., during tool calls)
@@ -441,39 +397,27 @@ class EnkryptAIGuardrails(CustomGuardrail):
             has_text_content = False
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(
-                        choice.message.content, str
-                    ):
+                    if choice.message.content and isinstance(choice.message.content, str):
                         has_text_content = True
                         break
 
             if not has_text_content:
-                verbose_proxy_logger.warning(
-                    "EnkryptAI: not running guardrail. No output text in response"
-                )
+                verbose_proxy_logger.warning("EnkryptAI: not running guardrail. No output text in response")
                 return
 
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
-                    verbose_proxy_logger.debug(
-                        "async_post_call_success_hook choice: %s", choice
-                    )
-                    if choice.message.content and isinstance(
-                        choice.message.content, str
-                    ):
+                    verbose_proxy_logger.debug("async_post_call_success_hook choice: %s", choice)
+                    if choice.message.content and isinstance(choice.message.content, str):
                         result = await self._call_enkryptai_guardrails(
                             prompt=choice.message.content,
                             request_data=data,
                         )
 
-                        verbose_proxy_logger.debug(
-                            "Guardrails async_post_call_success_hook result: %s", result
-                        )
+                        verbose_proxy_logger.debug("Guardrails async_post_call_success_hook result: %s", result)
 
                         # Process the guardrails response
-                        processed_result = self._process_enkryptai_guardrails_response(
-                            result
-                        )
+                        processed_result = self._process_enkryptai_guardrails_response(result)
                         attacks_detected = processed_result["attacks_detected"]
 
                         # If any attacks are detected, raise an error
@@ -482,9 +426,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                             raise ValueError(error_message)
 
         # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -553,3 +495,11 @@ class EnkryptAIGuardrails(CustomGuardrail):
         )
 
         return EnkryptAIGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.during_call,
+        ]

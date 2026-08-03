@@ -58,9 +58,7 @@ class PerplexitySearchConfig(BaseSearchConfig):
             default_api_base=self.PERPLEXITY_API_BASE,
         )
         if not api_key:
-            raise ValueError(
-                "PERPLEXITYAI_API_KEY is not set. Set `PERPLEXITYAI_API_KEY` environment variable."
-            )
+            raise ValueError("PERPLEXITYAI_API_KEY is not set. Set `PERPLEXITYAI_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -75,11 +73,7 @@ class PerplexitySearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = (
-            api_base
-            or get_secret_str("PERPLEXITY_API_BASE")
-            or self.PERPLEXITY_API_BASE
-        )
+        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or self.PERPLEXITY_API_BASE
 
         # append "/search" to the api base if it's not already there
         if not api_base.endswith("/search"):

@@ -152,11 +152,7 @@ async def _run_vector_searches(
                     vector_store_id=vs_id,
                     query=query,
                 )
-                results_data = (
-                    response.get("data")
-                    if isinstance(response, dict)
-                    else getattr(response, "data", None)
-                )
+                results_data = response.get("data") if isinstance(response, dict) else getattr(response, "data", None)
                 if results_data:
                     all_results.extend(results_data)
             except Exception as exc:
@@ -195,10 +191,7 @@ def _format_search_results_as_tool_output(
         file_id = _get_field(result, "file_id")
         filename = _get_field(result, "filename")
         content_items = _get_field(result, "content") or []
-        text_chunks = [
-            c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "")
-            for c in content_items
-        ]
+        text_chunks = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
         text = " ".join(t for t in text_chunks if t)
 
         header = f"[Result {i}"
@@ -230,10 +223,7 @@ def _build_search_results_for_include(
     for result in results:
         file_id = _get_field(result, "file_id") or ""
         content_items = _get_field(result, "content") or []
-        text_chunks = [
-            c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "")
-            for c in content_items
-        ]
+        text_chunks = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
         text = " ".join(t for t in text_chunks if t)
         formatted.append(
             {
@@ -326,27 +316,13 @@ def _build_message_output(
 def _extract_text_from_responses_output(response: ResponsesAPIResponse) -> str:
     """Pull the assistant's text from the provider's response."""
     for item in response.output:
-        item_type = (
-            item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-        )
+        item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
         if item_type == "message":
-            content = (
-                item.get("content")
-                if isinstance(item, dict)
-                else getattr(item, "content", [])
-            )
+            content = item.get("content") if isinstance(item, dict) else getattr(item, "content", [])
             for block in content or []:
-                block_type = (
-                    block.get("type")
-                    if isinstance(block, dict)
-                    else getattr(block, "type", None)
-                )
+                block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
                 if block_type == "output_text":
-                    raw = (
-                        block.get("text")
-                        if isinstance(block, dict)
-                        else getattr(block, "text", "")
-                    )
+                    raw = block.get("text") if isinstance(block, dict) else getattr(block, "text", "")
                     return str(raw) if raw is not None else ""
     return ""
 
@@ -373,9 +349,7 @@ def _synthesize_responses_api_response(
         created_at=getattr(original_response, "created_at", int(time.time())),
         status="completed",
         model=getattr(original_response, "model", ""),
-        output=cast(
-            List[Union[ResponseOutputItem, Dict[str, Any]]], synthesized_output
-        ),
+        output=cast(List[Union[ResponseOutputItem, Dict[str, Any]]], synthesized_output),
         usage=getattr(original_response, "usage", None),
         error=None,
     )
@@ -389,9 +363,7 @@ def _synthesize_responses_api_response(
                 else getattr(first_hidden, "response_cost", None)
             )
             if first_cost is not None:
-                current_cost = (
-                    hidden.get("response_cost") if isinstance(hidden, dict) else 0
-                )
+                current_cost = hidden.get("response_cost") if isinstance(hidden, dict) else 0
                 hidden["response_cost"] = (current_cost or 0) + first_cost
         synthesized._hidden_params = hidden
     return synthesized
@@ -402,9 +374,7 @@ def _synthesize_responses_api_response(
 # ---------------------------------------------------------------------------
 
 
-async def _call_aresponses(
-    input, model, tools, **kwargs
-):  # pragma: no cover – thin wrapper for patching in tests
+async def _call_aresponses(input, model, tools, **kwargs):  # pragma: no cover – thin wrapper for patching in tests
     from litellm.responses.main import aresponses
 
     return await aresponses(input=input, model=model, tools=tools, **kwargs)
@@ -420,8 +390,7 @@ def _prepare_emulated_file_search_call(
     updated_kwargs = kwargs
     if original_stream:
         verbose_logger.debug(
-            "Streaming is not yet supported for emulated file_search. "
-            "Disabling stream for this request."
+            "Streaming is not yet supported for emulated file_search. Disabling stream for this request."
         )
         updated_kwargs = {**kwargs, "stream": False}
 
@@ -431,16 +400,10 @@ def _prepare_emulated_file_search_call(
 def _extract_tool_call_fields(tool_call: Any, fallback_call_id: str) -> Tuple[str, str]:
     """Extract (call_id, raw_arguments_string) from a dict or Pydantic tool_call item."""
     if isinstance(tool_call, dict):
-        call_id = str(
-            tool_call.get("call_id") or tool_call.get("id") or fallback_call_id
-        )
+        call_id = str(tool_call.get("call_id") or tool_call.get("id") or fallback_call_id)
         raw_args = tool_call.get("arguments") or "{}"
     else:
-        raw_call_id = (
-            getattr(tool_call, "call_id", None)
-            or getattr(tool_call, "id", None)
-            or fallback_call_id
-        )
+        raw_call_id = getattr(tool_call, "call_id", None) or getattr(tool_call, "id", None) or fallback_call_id
         call_id = str(raw_call_id)
         raw_args = getattr(tool_call, "arguments", "{}") or "{}"
     return call_id, raw_args
@@ -470,9 +433,7 @@ async def _execute_file_search_tool_calls(
     all_results: List[VectorStoreSearchResult] = []
 
     for tool_call in file_search_calls:
-        call_id, raw_args = _extract_tool_call_fields(
-            tool_call, fallback_call_id=file_search_call_id
-        )
+        call_id, raw_args = _extract_tool_call_fields(tool_call, fallback_call_id=file_search_call_id)
 
         try:
             args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
@@ -514,9 +475,7 @@ def _build_follow_up_input(
     Serializes Pydantic model instances to plain dicts so the transformation layer can call .get().
     """
     original_input_items = (
-        list(input)
-        if isinstance(input, (list, tuple))
-        else [{"role": "user", "content": str(input)}]
+        list(input) if isinstance(input, (list, tuple)) else [{"role": "user", "content": str(input)}]
     )
     first_response_output_items: List[Any] = []
     for _item in first_response.output:

@@ -5,13 +5,10 @@ from .invoke_handler import (
     AmazonAnthropicClaudeStreamDecoder,
     AmazonDeepSeekR1StreamDecoder,
     AWSEventStreamDecoder,
-    BedrockLLM,
 )
 
 
-def get_bedrock_event_stream_decoder(
-    invoke_provider: Optional[str], model: str, sync_stream: bool, json_mode: bool
-):
+def get_bedrock_event_stream_decoder(invoke_provider: Optional[str], model: str, sync_stream: bool, json_mode: bool):
     if invoke_provider and invoke_provider == "anthropic":
         decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
             model=model,

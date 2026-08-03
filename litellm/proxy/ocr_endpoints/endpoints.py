@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -26,8 +27,6 @@ def _build_document_from_upload(
     Delegates to convert_file_document_to_url_document after resolving MIME type
     from the upload's content_type header or filename.
     """
-    from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
-
     mime_type = content_type.split(";")[0].strip() if content_type else None
     if not mime_type or mime_type == "application/octet-stream":
         if filename:
@@ -65,12 +64,8 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
     # request.form() may return either a FastAPI or Starlette UploadFile
     # depending on middleware; check both via isinstance (FastAPI's UploadFile
     # is a subclass of Starlette's) and fall back to duck-type check.
-    if uploaded_file is None or (
-        not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")
-    ):
-        raise ValueError(
-            "Multipart OCR request must include a 'file' field with the document to process"
-        )
+    if uploaded_file is None or (not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")):
+        raise ValueError("Multipart OCR request must include a 'file' field with the document to process")
 
     uploaded_file = cast(UploadFile, uploaded_file)
 
@@ -145,8 +140,7 @@ async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
         # Check if form data is available.
         if getattr(request, "_form", None) is not None:
             verbose_proxy_logger.debug(
-                "OCR request body is empty but form data is available from middleware — "
-                "processing as multipart form."
+                "OCR request body is empty but form data is available from middleware — processing as multipart form."
             )
             return await _parse_multipart_form(request)
 

@@ -72,9 +72,7 @@ class SpendCounterReseed:
             return lock
 
     @staticmethod
-    async def from_db(
-        prisma_client: Optional["PrismaClient"], counter_key: str
-    ) -> Optional[float]:
+    async def from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> Optional[float]:
         """
         Read the authoritative spend for a counter from the DB.
 
@@ -93,9 +91,7 @@ class SpendCounterReseed:
         try:
             if counter_key.startswith("spend:key:"):
                 token = counter_key[len("spend:key:") :]
-                row = await VerificationTokenRepository(
-                    prisma_client
-                ).table.find_unique(where={"token": token})
+                row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
             elif counter_key.startswith("spend:team_member:"):
                 suffix = counter_key[len("spend:team_member:") :]
                 if ":" not in suffix:
@@ -106,29 +102,21 @@ class SpendCounterReseed:
                 )
             elif counter_key.startswith("spend:team:"):
                 team_id = counter_key[len("spend:team:") :]
-                row = await TeamRepository(prisma_client).table.find_unique(
-                    where={"team_id": team_id}
-                )
+                row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             elif counter_key.startswith("spend:user:"):
                 user_id = counter_key[len("spend:user:") :]
-                row = await UserRepository(prisma_client).table.find_unique(
-                    where={"user_id": user_id}
-                )
+                row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
             elif counter_key.startswith("spend:end_user:"):
                 return None
             elif counter_key.startswith("spend:tag:"):
                 return None
             elif counter_key.startswith("spend:org:"):
                 org_id = counter_key[len("spend:org:") :]
-                row = await OrganizationRepository(prisma_client).table.find_unique(
-                    where={"organization_id": org_id}
-                )
+                row = await OrganizationRepository(prisma_client).table.find_unique(where={"organization_id": org_id})
             else:
                 return None
         except Exception:
-            verbose_proxy_logger.exception(
-                "SpendCounterReseed.from_db: failed for %s", counter_key
-            )
+            verbose_proxy_logger.exception("SpendCounterReseed.from_db: failed for %s", counter_key)
             return None
         if row is None:
             return None
@@ -171,9 +159,7 @@ class SpendCounterReseed:
             redis_clean_miss = False
             if spend_counter_cache.redis_cache is not None:
                 try:
-                    val = await spend_counter_cache.redis_cache.async_get_cache(
-                        key=counter_key
-                    )
+                    val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                     if val is not None:
                         return float(val)
                     redis_clean_miss = True
@@ -204,20 +190,14 @@ class SpendCounterReseed:
                     if seeded:
                         current_value = float(db_spend)
                     else:
-                        cached = await spend_counter_cache.redis_cache.async_get_cache(
-                            key=counter_key
-                        )
-                        current_value = (
-                            float(cached) if cached is not None else float(db_spend)
-                        )
+                        cached = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
+                        current_value = float(cached) if cached is not None else float(db_spend)
                     spend_counter_cache.in_memory_cache.set_cache(
                         key=counter_key,
                         value=current_value,
                     )
                 else:
-                    await spend_counter_cache.async_increment_cache(
-                        key=counter_key, value=db_spend, refresh_ttl=True
-                    )
+                    await spend_counter_cache.async_increment_cache(key=counter_key, value=db_spend, refresh_ttl=True)
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced: failed to warm counter %s",
@@ -269,16 +249,8 @@ class SpendCounterReseed:
         if not response:
             return 0.0
         first_row = response[0]
-        sum_row = (
-            first_row.get("_sum")
-            if isinstance(first_row, dict)
-            else getattr(first_row, "_sum", None)
-        )
-        spend = (
-            sum_row.get("spend")
-            if isinstance(sum_row, dict)
-            else getattr(sum_row, "spend", None)
-        )
+        sum_row = first_row.get("_sum") if isinstance(first_row, dict) else getattr(first_row, "_sum", None)
+        spend = sum_row.get("spend") if isinstance(sum_row, dict) else getattr(sum_row, "spend", None)
         return float(spend or 0.0)
 
     @staticmethod
@@ -295,9 +267,7 @@ class SpendCounterReseed:
             redis_clean_miss = False
             if spend_counter_cache.redis_cache is not None:
                 try:
-                    val = await spend_counter_cache.redis_cache.async_get_cache(
-                        key=counter_key
-                    )
+                    val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                     if val is not None:
                         return float(val)
                     redis_clean_miss = True
@@ -326,17 +296,11 @@ class SpendCounterReseed:
                     if seeded:
                         current_value = window_spend
                     else:
-                        current_cached_value = (
-                            await spend_counter_cache.redis_cache.async_get_cache(
-                                key=counter_key
-                            )
-                        )
+                        current_cached_value = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                         if current_cached_value is None:
-                            current_value = (
-                                await spend_counter_cache.redis_cache.async_increment(
-                                    key=counter_key,
-                                    value=window_spend,
-                                )
+                            current_value = await spend_counter_cache.redis_cache.async_increment(
+                                key=counter_key,
+                                value=window_spend,
                             )
                         else:
                             current_value = float(current_cached_value)
@@ -345,9 +309,7 @@ class SpendCounterReseed:
                         value=current_value,
                     )
                 else:
-                    await spend_counter_cache.async_increment_cache(
-                        key=counter_key, value=window_spend
-                    )
+                    await spend_counter_cache.async_increment_cache(key=counter_key, value=window_spend)
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced_window: failed to warm counter %s",

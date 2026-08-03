@@ -18,6 +18,15 @@ before the LLM call even starts), so a guardrail is a sibling of the LLM call,
 not a child of it. The emitter parents every span to the ambient OTel context
 (the active server span), which matches this.
 
+MCP spans (``MCP_TOOL_CALL``, ``MCP_LIST_TOOLS``) have two shapes, chosen at emit
+time by :func:`resolve_mcp_span_context`. When the client propagates trace context
+in ``params._meta`` MCP and the HTTP transport are independent contexts per the
+OTel GenAI MCP semconv, so the span parents to that propagated context and records
+the ``PROXY_REQUEST`` transport span as a span *link*, never a parent — the shape
+this registry's ``parent=None, links=PROXY_REQUEST`` entry encodes. When nothing is
+propagated (the common case) the span nests under the transport span of the request
+carrying that message, so the tool call stays in one trace.
+
 Not every service call becomes a span — :func:`span_role_for_service` decides:
 
 - ``DB_CALL`` (CLIENT) — outbound datastores (redis, postgres,
@@ -46,6 +55,7 @@ if TYPE_CHECKING:
     from litellm.integrations.otel.model.payloads import (
         GuardrailSpanData,
         LLMCallSpanData,
+        MCPListToolsSpanData,
         MCPToolCallSpanData,
         ProxyRequestSpanData,
         ServiceSpanData,
@@ -56,6 +66,7 @@ class SpanRole(str, Enum):
     PROXY_REQUEST = "proxy_request"
     LLM_CALL = "llm_call"
     MCP_TOOL_CALL = "mcp_tool_call"
+    MCP_LIST_TOOLS = "mcp_list_tools"
     GUARDRAIL = "guardrail"
     DB_CALL = "db_call"
     SERVICE = "service"
@@ -74,29 +85,28 @@ class SpanSpec:
     role: SpanRole
     kind: LiteLLMSpanKind
     parent: SpanRole | None
+    links: SpanRole | None = None
 
 
 SPAN_REGISTRY: dict[SpanRole, SpanSpec] = {
-    SpanRole.PROXY_REQUEST: SpanSpec(
-        SpanRole.PROXY_REQUEST, LiteLLMSpanKind.SERVER, parent=None
-    ),
-    SpanRole.LLM_CALL: SpanSpec(
-        SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-    ),
-    # The proxy is an MCP client to the upstream server it dispatches the tool
-    # call to, so this is a CLIENT span, sibling of the LLM call under the request.
+    SpanRole.PROXY_REQUEST: SpanSpec(SpanRole.PROXY_REQUEST, LiteLLMSpanKind.SERVER, parent=None),
+    SpanRole.LLM_CALL: SpanSpec(SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
+    # The proxy is an MCP client to the upstream server, so MCP spans are CLIENT
+    # spans. With trace context propagated in ``params._meta``, MCP and the HTTP
+    # transport are independent contexts (OTel GenAI MCP semconv): the span parents
+    # to the propagated context and records the PROXY_REQUEST transport span as a
+    # span *link*, never a parent — the shape ``parent=None, links=PROXY_REQUEST``
+    # encodes. With nothing propagated, ``resolve_mcp_span_context`` nests the span
+    # under that message's transport span instead, keeping the call in one trace.
     SpanRole.MCP_TOOL_CALL: SpanSpec(
-        SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
+        SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=None, links=SpanRole.PROXY_REQUEST
     ),
-    SpanRole.GUARDRAIL: SpanSpec(
-        SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST
+    SpanRole.MCP_LIST_TOOLS: SpanSpec(
+        SpanRole.MCP_LIST_TOOLS, LiteLLMSpanKind.CLIENT, parent=None, links=SpanRole.PROXY_REQUEST
     ),
-    SpanRole.DB_CALL: SpanSpec(
-        SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-    ),
-    SpanRole.SERVICE: SpanSpec(
-        SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST
-    ),
+    SpanRole.GUARDRAIL: SpanSpec(SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.DB_CALL: SpanSpec(SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.SERVICE: SpanSpec(SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
 }
 
 
@@ -138,9 +148,7 @@ def db_system(service_name: str) -> str | None:
 #   - ``auth``           — emitted instead as a live phase span (see
 #                          ``logger.phase_span``) so its DB lookups nest under it,
 #                          not as a flat post-hoc service span.
-_METRICS_ONLY_SERVICES: frozenset[str] = frozenset(
-    {"self", "router", "proxy_pre_call", "auth"}
-)
+_METRICS_ONLY_SERVICES: frozenset[str] = frozenset({"self", "router", "proxy_pre_call", "auth"})
 
 
 def span_role_for_service(service_name: str) -> SpanRole | None:
@@ -177,6 +185,12 @@ def mcp_tool_call_span_name(data: "MCPToolCallSpanData") -> str:
     return f"{data.method} {data.tool_name}".strip()
 
 
+def mcp_list_tools_span_name(data: "MCPListToolsSpanData") -> str:
+    """``"{mcp.method.name}"`` i.e. ``"tools/list"`` — no low-cardinality target, so
+    the method name alone names the span (MCP semconv)."""
+    return data.method
+
+
 def proxy_request_span_name(data: "ProxyRequestSpanData") -> str:
     """``"{method} {route}"`` (HTTP semconv)."""
     return f"{data.http_method} {data.route}".strip()
@@ -193,7 +207,8 @@ def service_span_name(data: "ServiceSpanData") -> str:
 
 
 def root_roles() -> list[SpanRole]:
-    """Roles that start a new trace (no in-process parent)."""
+    """Roles with no in-process parent. They start a new trace unless they adopt a
+    remote parent (e.g. an MCP span joining the client's propagated context)."""
     return [role for role, spec in SPAN_REGISTRY.items() if spec.parent is None]
 
 
@@ -210,6 +225,8 @@ def validate_registry(
             raise ValueError(f"SPAN_REGISTRY[{role}] has mismatched role {spec.role}")
         if spec.parent is not None and spec.parent not in reg:
             raise ValueError(f"span role {role} declares unknown parent {spec.parent}")
+        if spec.links is not None and spec.links not in reg:
+            raise ValueError(f"span role {role} declares unknown link target {spec.links}")
     missing = [role for role in SpanRole if role not in reg]
     if missing:
         raise ValueError(f"SPAN_REGISTRY is missing roles: {missing}")

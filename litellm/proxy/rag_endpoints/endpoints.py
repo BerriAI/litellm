@@ -11,14 +11,16 @@ from typing import Any, Dict, Optional, Tuple
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import ORJSONResponse, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -35,9 +37,7 @@ router = APIRouter()
 def _raise_vector_store_scan_depth_exceeded() -> None:
     raise HTTPException(
         status_code=400,
-        detail={
-            "error": f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while scanning vector_store_id values"
-        },
+        detail={"error": f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while scanning vector_store_id values"},
     )
 
 
@@ -73,9 +73,7 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
                     if not isinstance(value, str) or not value:
                         raise HTTPException(
                             status_code=400,
-                            detail={
-                                "error": "vector_store_id must be a non-empty string"
-                            },
+                            detail={"error": "vector_store_id must be a non-empty string"},
                         )
                     vector_store_ids.add(value)
                     continue
@@ -193,15 +191,11 @@ async def _save_vector_store_to_db_from_rag_ingest(
     elif hasattr(response, "vector_store_id"):
         vector_store_id = response.vector_store_id
     else:
-        verbose_proxy_logger.warning(
-            f"Unable to extract vector_store_id from response type: {type(response)}"
-        )
+        verbose_proxy_logger.warning(f"Unable to extract vector_store_id from response type: {type(response)}")
         return
 
     if vector_store_id is None or not isinstance(vector_store_id, str):
-        verbose_proxy_logger.warning(
-            "Vector store ID is None or not a string, skipping database save"
-        )
+        verbose_proxy_logger.warning("Vector store ID is None or not a string, skipping database save")
         return
 
     vector_store_config = ingest_options.get("vector_store", {})
@@ -210,9 +204,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
     # Extract litellm_vector_store_params for custom name and description
     litellm_vector_store_params = ingest_options.get("litellm_vector_store_params", {})
     custom_vector_store_name = litellm_vector_store_params.get("vector_store_name")
-    custom_vector_store_description = litellm_vector_store_params.get(
-        "vector_store_description"
-    )
+    custom_vector_store_description = litellm_vector_store_params.get("vector_store_description")
 
     # Extract provider-specific params from vector_store_config to save as litellm_params
     # This ensures params like aws_region_name, embedding_model, etc. are available for search
@@ -231,26 +223,20 @@ async def _save_vector_store_to_db_from_rag_ingest(
 
     try:
         # Check if vector store already exists in database
-        existing_vector_store = await ManagedVectorStoresRepository(
-            prisma_client
-        ).table.find_unique(where={"vector_store_id": vector_store_id})
+        existing_vector_store = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
+            where={"vector_store_id": vector_store_id}
+        )
 
         # Only create if it doesn't exist
         if existing_vector_store is None:
-            verbose_proxy_logger.info(
-                f"Saving newly created vector store {vector_store_id} to database"
-            )
+            verbose_proxy_logger.info(f"Saving newly created vector store {vector_store_id} to database")
 
             # Initialize metadata with first file
             initial_metadata = {"ingested_files": [file_entry]}
 
             # Use custom name if provided, otherwise default
-            vector_store_name = (
-                custom_vector_store_name or f"RAG Vector Store - {vector_store_id[:8]}"
-            )
-            vector_store_description = (
-                custom_vector_store_description or "Created via RAG ingest endpoint"
-            )
+            vector_store_name = custom_vector_store_name or f"RAG Vector Store - {vector_store_id[:8]}"
+            vector_store_description = custom_vector_store_description or "Created via RAG ingest endpoint"
 
             await create_vector_store_in_db(
                 vector_store_id=vector_store_id,
@@ -259,20 +245,14 @@ async def _save_vector_store_to_db_from_rag_ingest(
                 vector_store_name=vector_store_name,
                 vector_store_description=vector_store_description,
                 vector_store_metadata=initial_metadata,
-                litellm_params=(
-                    provider_specific_params if provider_specific_params else None
-                ),
+                litellm_params=(provider_specific_params if provider_specific_params else None),
                 team_id=user_api_key_dict.team_id,
                 user_id=user_api_key_dict.user_id,
             )
 
-            verbose_proxy_logger.info(
-                f"Vector store {vector_store_id} saved to database successfully"
-            )
+            verbose_proxy_logger.info(f"Vector store {vector_store_id} saved to database successfully")
         else:
-            verbose_proxy_logger.info(
-                f"Vector store {vector_store_id} already exists, appending file to metadata"
-            )
+            verbose_proxy_logger.info(f"Vector store {vector_store_id} already exists, appending file to metadata")
 
             # Update existing vector store with new file
             existing_metadata = existing_vector_store.vector_store_metadata or {}
@@ -298,16 +278,12 @@ async def _save_vector_store_to_db_from_rag_ingest(
             )
     except Exception as db_error:
         # Log the error but don't fail the request since ingestion succeeded
-        verbose_proxy_logger.exception(
-            f"Failed to save vector store {vector_store_id} to database: {db_error}"
-        )
+        verbose_proxy_logger.exception(f"Failed to save vector store {vector_store_id} to database: {db_error}")
 
 
 async def parse_rag_ingest_request(
     request: Request,
-) -> Tuple[
-    Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]
-]:
+) -> Tuple[Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]]:
     """
     Parse RAG ingest request.
 
@@ -378,9 +354,7 @@ async def parse_rag_ingest_request(
     if "vector_store" not in ingest_options:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "ingest_options must contain 'vector_store' configuration"
-            },
+            detail={"error": "ingest_options must contain 'vector_store' configuration"},
         )
 
     # Credential fields must come from server configuration, not user requests.
@@ -481,16 +455,12 @@ async def rag_ingest(
 
     try:
         # Parse request
-        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(
-            request
-        )
+        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(request)
 
         # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores only
-        if (
-            user_api_key_dict.user_role
-            == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            and not ingest_options.get("vector_store", {}).get("vector_store_id")
-        ):
+        if user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value and not ingest_options.get(
+            "vector_store", {}
+        ).get("vector_store_id"):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -636,6 +606,7 @@ async def rag_query(
         general_settings,
         llm_router,
         proxy_config,
+        select_data_generator,
         version,
     )
 
@@ -692,9 +663,7 @@ async def rag_query(
             proxy_config=proxy_config,
         )
 
-        verbose_proxy_logger.debug(
-            f"RAG Query - model: {model}, retrieval_config: {retrieval_config}"
-        )
+        verbose_proxy_logger.debug(f"RAG Query - model: {model}, retrieval_config: {retrieval_config}")
 
         # Call query
         response = await litellm.aquery(
@@ -707,6 +676,31 @@ async def rag_query(
             **request_data,
         )
 
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=hidden_params.get("litellm_call_id", None) or "",
+            model_id=hidden_params.get("model_id", None) or "",
+            cache_key=hidden_params.get("cache_key", None) or "",
+            api_base=hidden_params.get("api_base", None) or "",
+            version=version,
+            response_cost=hidden_params.get("response_cost", None),
+            request_data=request_data,
+        )
+
+        if isinstance(response, CustomStreamWrapper):
+            return StreamingResponse(
+                select_data_generator(
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                    request=request,
+                ),
+                media_type="text/event-stream",
+                headers=custom_headers,
+            )
+
+        fastapi_response.headers.update(custom_headers)
         return response
 
     except HTTPException:

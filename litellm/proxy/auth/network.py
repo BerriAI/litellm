@@ -22,9 +22,7 @@ class TrustedProxyConfig(BaseModel):
     trusted_proxy_cidrs: list[str] = Field(default_factory=list)
 
 
-def normalize_cidr_ranges(
-    configured_ranges: Any, *, setting_name: str = "trusted_proxy_cidrs"
-) -> list[str]:
+def normalize_cidr_ranges(configured_ranges: Any, *, setting_name: str = "trusted_proxy_cidrs") -> list[str]:
     if not configured_ranges:
         return []
     if isinstance(configured_ranges, str):
@@ -47,9 +45,7 @@ def parse_trusted_proxy_ranges(
         try:
             networks.append(ipaddress.ip_network(cidr, strict=False))
         except ValueError:
-            verbose_proxy_logger.warning(
-                "Invalid CIDR in %s: %s, skipping", setting_name, cidr
-            )
+            verbose_proxy_logger.warning("Invalid CIDR in %s: %s, skipping", setting_name, cidr)
     return networks
 
 
@@ -71,9 +67,7 @@ def _is_valid_ip(value: str) -> bool:
         return False
 
 
-def resolve_client_ip(
-    request: Request, config: TrustedProxyConfig
-) -> tuple[str | None, bool]:
+def resolve_client_ip(request: Request, config: TrustedProxyConfig) -> tuple[str | None, bool]:
     """Resolve the real client IP, trusting X-Forwarded-For only when the direct
     peer is itself a configured trusted proxy. Walks the header right-to-left and
     returns the first hop that is not a trusted proxy, so a forged left-most entry
@@ -90,9 +84,7 @@ def resolve_client_ip(
     return peer, True
 
 
-def resolve_network_context(
-    request: Request, config: TrustedProxyConfig
-) -> NetworkContext:
+def resolve_network_context(request: Request, config: TrustedProxyConfig) -> NetworkContext:
     ip, via_proxy = resolve_client_ip(request, config)
     return NetworkContext(
         client_ip=ip,

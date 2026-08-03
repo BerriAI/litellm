@@ -86,9 +86,7 @@ class BoundedPrometheusSeriesTracker:
             series.pop(label_values, None)
 
     @staticmethod
-    def _remove_metric_child(
-        metric: Any, label_values: tuple[Optional[str], ...]
-    ) -> bool:
+    def _remove_metric_child(metric: Any, label_values: tuple[Optional[str], ...]) -> bool:
         """
         Remove the Prometheus child for ``label_values`` and report whether the
         tracker should commit the matching state change.

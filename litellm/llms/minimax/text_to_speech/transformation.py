@@ -202,12 +202,8 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return MinimaxException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return MinimaxException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_text_to_speech_request(
         self,
@@ -240,9 +236,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
         # Extract audio settings
         sample_rate = params.pop("sample_rate", 32000)  # 16000, 24000, 32000
-        bitrate = params.pop(
-            "bitrate", 128000
-        )  # For MP3: 64000, 128000, 192000, 256000
+        bitrate = params.pop("bitrate", 128000)  # For MP3: 64000, 128000, 192000, 256000
         channel = params.pop("channel", 1)  # 1 for mono, 2 for stereo
 
         # Output format: 'url' or 'hex' (default is 'hex')

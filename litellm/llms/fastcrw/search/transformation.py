@@ -34,9 +34,7 @@ class FastCRWSearchRequest(_FastCRWSearchRequestRequired, total=False):
     """
 
     limit: int  # Optional - maximum number of results to return
-    sources: list[
-        str
-    ]  # Optional - sources to search ('web', 'images'), default ['web']
+    sources: list[str]  # Optional - sources to search ('web', 'images'), default ['web']
     scrapeOptions: dict  # Optional - options for scraping search results
 
 
@@ -65,9 +63,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
             default_api_base=self.FASTCRW_API_BASE,
         )
         if not api_key:
-            raise ValueError(
-                "CRW_API_KEY is not set. Set `CRW_API_KEY` environment variable."
-            )
+            raise ValueError("CRW_API_KEY is not set. Set `CRW_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -129,10 +125,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # By default, request markdown content if not explicitly specified

@@ -91,10 +91,7 @@ def parse_databricks_oauth_config(
     if raw is None:
         return None
     if not isinstance(raw, dict):
-        raise ValueError(
-            f"'{DATABRICKS_OAUTH_PARAM}' must be a mapping of OAuth settings, "
-            f"got {type(raw).__name__}"
-        )
+        raise ValueError(f"'{DATABRICKS_OAUTH_PARAM}' must be a mapping of OAuth settings, got {type(raw).__name__}")
 
     client_id = _resolve_secret(raw.get("client_id"))
     client_secret = _resolve_secret(raw.get("client_secret"))
@@ -110,10 +107,7 @@ def parse_databricks_oauth_config(
         if not value
     ]
     if missing:
-        raise ValueError(
-            f"Databricks App OAuth config is missing required field(s): "
-            f"{', '.join(missing)}"
-        )
+        raise ValueError(f"Databricks App OAuth config is missing required field(s): {', '.join(missing)}")
 
     scope = _resolve_secret(raw.get("scope")) or _DEFAULT_SCOPE
 
@@ -176,13 +170,9 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
     async def _fetch_token(self, config: DatabricksAppOAuthConfig) -> Tuple[str, int]:
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.A2A)
 
-        verbose_logger.debug(
-            "Fetching Databricks App OAuth token from %s", config.token_url
-        )
+        verbose_logger.debug("Fetching Databricks App OAuth token from %s", config.token_url)
 
-        basic_auth = base64.b64encode(
-            f"{config.client_id}:{config.client_secret}".encode()
-        ).decode()
+        basic_auth = base64.b64encode(f"{config.client_id}:{config.client_secret}".encode()).decode()
         try:
             response = await client.post(
                 config.token_url,
@@ -197,34 +187,24 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
             )
         except httpx.HTTPStatusError as exc:
             raise ValueError(
-                "Databricks App OAuth token request failed with status "
-                f"{exc.response.status_code}"
+                f"Databricks App OAuth token request failed with status {exc.response.status_code}"
             ) from exc
         except httpx.HTTPError as exc:
-            raise ValueError(
-                f"Databricks App OAuth token request failed: {exc}"
-            ) from exc
+            raise ValueError(f"Databricks App OAuth token request failed: {exc}") from exc
 
         body = response.json()
         if not isinstance(body, dict):
             raise ValueError(
-                "Databricks App OAuth token response returned non-object JSON "
-                f"(got {type(body).__name__})"
+                f"Databricks App OAuth token response returned non-object JSON (got {type(body).__name__})"
             )
 
         access_token = body.get("access_token")
         if not access_token:
-            raise ValueError(
-                "Databricks App OAuth token response missing 'access_token'"
-            )
+            raise ValueError("Databricks App OAuth token response missing 'access_token'")
 
         raw_expires_in = body.get("expires_in")
         try:
-            expires_in = (
-                int(raw_expires_in)
-                if raw_expires_in is not None
-                else _DEFAULT_TTL_SECONDS
-            )
+            expires_in = int(raw_expires_in) if raw_expires_in is not None else _DEFAULT_TTL_SECONDS
         except (TypeError, ValueError):
             expires_in = _DEFAULT_TTL_SECONDS
 

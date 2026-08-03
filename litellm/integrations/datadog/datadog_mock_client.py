@@ -28,6 +28,4 @@ _config = MockClientConfig(
     patch_sync_client=True,
 )
 
-create_mock_datadog_client, should_use_datadog_mock = create_mock_client_factory(
-    _config
-)
+create_mock_datadog_client, should_use_datadog_mock = create_mock_client_factory(_config)

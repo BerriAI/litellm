@@ -37,21 +37,15 @@ async def make_call(
     if client is None:
         client = litellm.module_level_aclient
 
-    response = await client.post(
-        api_base, headers=headers, data=data, stream=not fake_stream
-    )
+    response = await client.post(api_base, headers=headers, data=data, stream=not fake_stream)
 
     if streaming_decoder is not None:
-        completion_stream: Any = streaming_decoder.aiter_bytes(
-            response.aiter_bytes(chunk_size=1024)
-        )
+        completion_stream: Any = streaming_decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
     elif fake_stream:
         model_response = ModelResponse(**response.json())
         completion_stream = MockResponseIterator(model_response=model_response)
     else:
-        completion_stream = ModelResponseIterator(
-            streaming_response=response.aiter_lines(), sync_stream=False
-        )
+        completion_stream = ModelResponseIterator(streaming_response=response.aiter_lines(), sync_stream=False)
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -78,24 +72,18 @@ def make_sync_call(
     if client is None:
         client = litellm.module_level_client  # Create a new client if none provided
 
-    response = client.post(
-        api_base, headers=headers, data=data, stream=not fake_stream, timeout=timeout
-    )
+    response = client.post(api_base, headers=headers, data=data, stream=not fake_stream, timeout=timeout)
 
     if response.status_code != 200:
         raise OpenAILikeError(status_code=response.status_code, message=response.read())
 
     if streaming_decoder is not None:
-        completion_stream = streaming_decoder.iter_bytes(
-            response.iter_bytes(chunk_size=1024)
-        )
+        completion_stream = streaming_decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
     elif fake_stream:
         model_response = ModelResponse(**response.json())
         completion_stream = MockResponseIterator(model_response=model_response)
     else:
-        completion_stream = ModelResponseIterator(
-            streaming_response=response.iter_lines(), sync_stream=True
-        )
+        completion_stream = ModelResponseIterator(streaming_response=response.iter_lines(), sync_stream=True)
 
     # LOGGING
     logging_obj.post_call(
@@ -184,9 +172,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             client = litellm.module_level_aclient
 
         try:
-            response = await client.post(
-                api_base, headers=headers, data=json.dumps(data), timeout=timeout
-            )
+            response = await client.post(api_base, headers=headers, data=json.dumps(data), timeout=timeout)
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             raise OpenAILikeError(
@@ -241,9 +227,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         ] = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
         fake_stream: bool = False,
     ):
-        custom_endpoint = custom_endpoint or optional_params.pop(
-            "custom_endpoint", None
-        )
+        custom_endpoint = custom_endpoint or optional_params.pop("custom_endpoint", None)
         base_model: Optional[str] = optional_params.pop("base_model", None)
         api_base, headers = self._validate_environment(
             api_base=api_base,
@@ -264,12 +248,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
-            if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
-                provider_config, OpenAIConfig
-            ):
-                messages = provider_config._transform_messages(
-                    messages=messages, model=model
-                )
+            if isinstance(provider_config, OpenAIGPTConfig) or isinstance(provider_config, OpenAIConfig):
+                messages = provider_config._transform_messages(messages=messages, model=model)
 
         data = {
             "model": model,
@@ -343,11 +323,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             ## COMPLETION CALL
             if stream is True:
                 completion_stream = make_sync_call(
-                    client=(
-                        client
-                        if client is not None and isinstance(client, HTTPHandler)
-                        else None
-                    ),
+                    client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                     api_base=api_base,
                     headers=headers,
                     data=json.dumps(data),
@@ -369,9 +345,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 if client is None or not isinstance(client, HTTPHandler):
                     client = HTTPHandler(timeout=timeout)  # type: ignore
                 try:
-                    response = client.post(
-                        url=api_base, headers=headers, data=json.dumps(data)
-                    )
+                    response = client.post(url=api_base, headers=headers, data=json.dumps(data))
                     response.raise_for_status()
 
                 except httpx.HTTPStatusError as e:
@@ -380,9 +354,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                         message=e.response.text,
                     )
                 except httpx.TimeoutException:
-                    raise OpenAILikeError(
-                        status_code=408, message="Timeout error occurred."
-                    )
+                    raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
                 except Exception as e:
                     raise OpenAILikeError(status_code=500, message=str(e))
         return OpenAILikeChatConfig._transform_response(

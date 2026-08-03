@@ -204,7 +204,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
               {Array.from(selectedAgents).map((agentId) => {
                 const agent = agentHubData.find((a) => (a.agent_id || a.name) === agentId);
                 return (
-                  <div key={agentId} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                  <div key={agentId} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
                     <div className="flex-1">
                       <div className="flex items-center space-x-2">
                         <Text className="font-medium">{agent?.name || agentId}</Text>

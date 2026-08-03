@@ -18,9 +18,7 @@ class _ArizeSettings(BaseSettings):
 
     # Standard OTLP headers env var, used as the fallback when no Arize
     # credentials are configured.
-    otlp_traces_headers: str | None = Field(
-        default=None, validation_alias="OTEL_EXPORTER_OTLP_TRACES_HEADERS"
-    )
+    otlp_traces_headers: str | None = Field(default=None, validation_alias="OTEL_EXPORTER_OTLP_TRACES_HEADERS")
 
 
 def arize_preset(
@@ -44,11 +42,7 @@ def arize_preset(
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),
             "resource_attributes": {
                 **base.resource_attributes,
-                **(
-                    {"model_id": arize_cfg.project_name}
-                    if arize_cfg.project_name
-                    else {}
-                ),
+                **({"model_id": arize_cfg.project_name} if arize_cfg.project_name else {}),
             },
         }
     )

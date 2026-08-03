@@ -126,9 +126,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         )
         return normalized_usage
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         return ["n", "size"]
 
     def map_openai_params(
@@ -185,9 +183,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
                 optional_params["width"] = width
                 optional_params["height"] = height
             except ValueError:
-                raise ValueError(
-                    f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024')."
-                )
+                raise ValueError(f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024').")
         else:
             raise ValueError(
                 f"Unsupported size value: '{size}'. "
@@ -210,9 +206,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         try:
             response = raw_response.json()
         except Exception:
-            raise OpenAIError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
         if "usage" in response:
             response["usage"] = self.normalize_mai_image_usage(response.get("usage"))

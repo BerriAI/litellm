@@ -96,9 +96,7 @@ class BaseResponsesAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         return {}
 
     @abstractmethod
@@ -270,9 +268,7 @@ class BaseResponsesAPIConfig(ABC):
         WebSocket path differs from their HTTP path (e.g. Azure uses
         /openai/v1/responses without api-version) should override this.
         """
-        http_url = self.get_complete_url(
-            api_base=api_base, litellm_params=litellm_params
-        )
+        http_url = self.get_complete_url(api_base=api_base, litellm_params=litellm_params)
         return http_url.replace("https://", "wss://").replace("http://", "ws://")
 
     def model_in_websocket_url(self) -> bool:
@@ -359,7 +355,5 @@ class BaseResponsesAPIConfig(ABC):
             return data
         return {
             **data,
-            "input": BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
-                data["input"]
-            ),
+            "input": BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(data["input"]),
         }

@@ -3,6 +3,7 @@ Main compress() function — normalizes input messages, orchestrates BM25/embedd
 scoring, message stubbing, and retrieval tool injection.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 
 from litellm.caching.dual_cache import DualCache
@@ -107,8 +108,7 @@ def _normalize_messages_for_compression(
     """
     if call_type not in _SUPPORTED_CALL_TYPES:
         raise ValueError(
-            f"Unsupported call_type={call_type!r} for compression. "
-            f"Expected one of: {sorted(_SUPPORTED_CALL_TYPES)}."
+            f"Unsupported call_type={call_type!r} for compression. Expected one of: {sorted(_SUPPORTED_CALL_TYPES)}."
         )
 
     original_messages: List[Dict[str, Any]] = [dict(m) for m in messages]
@@ -205,33 +205,21 @@ def _extract_anthropic_tool_exchange_spans(
     return spans, None
 
 
-def _get_protected_indices(messages: List[dict]) -> List[int]:
+def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
     """
     Return indices of messages that must never be compressed:
     - All system messages
     - The last user message
     - The last assistant message
+
+    The last user message is what the model is being asked to act on right now,
+    so compressing it replaces the live instruction with a marker. Compression
+    guardrails share this policy; see the Headroom guardrail.
     """
-    protected: List[int] = []
-
-    last_user_idx = None
-    last_assistant_idx = None
-
-    for i, msg in enumerate(messages):
-        role = msg.get("role", "")
-        if role == "system":
-            protected.append(i)
-        elif role == "user":
-            last_user_idx = i
-        elif role == "assistant":
-            last_assistant_idx = i
-
-    if last_user_idx is not None:
-        protected.append(last_user_idx)
-    if last_assistant_idx is not None:
-        protected.append(last_assistant_idx)
-
-    return protected
+    system_indices = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
+    last_user = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
+    last_assistant = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")[-1:]
+    return system_indices + last_user + last_assistant
 
 
 def _combine_scores(
@@ -334,9 +322,7 @@ def _select_kept_indices_for_budget(
     return kept_indices, truncated_overrides
 
 
-def _get_dropped_tool_span_indices(
-    kept_indices: Set[int], tool_exchange_spans: List[Set[int]]
-) -> Set[int]:
+def _get_dropped_tool_span_indices(kept_indices: Set[int], tool_exchange_spans: List[Set[int]]) -> Set[int]:
     dropped_tool_span_indices: Set[int] = set()
     for span in tool_exchange_spans:
         if not any(idx in kept_indices for idx in span):
@@ -435,14 +421,12 @@ def compress(
         combined_scores = bm25_scores
 
     # Protected messages are never compressed
-    protected_indices = _get_protected_indices(normalized_messages)
+    protected_indices = get_protected_indices(normalized_messages)
     kept_indices: Set[int] = set(protected_indices)
 
     tool_exchange_spans: List[Set[int]] = []
     if _is_anthropic_call_type(call_type_str):
-        tool_exchange_spans, tool_sequence_error = (
-            _extract_anthropic_tool_exchange_spans(original_messages)
-        )
+        tool_exchange_spans, tool_sequence_error = _extract_anthropic_tool_exchange_spans(original_messages)
         if tool_sequence_error is not None:
             return CompressedResult(
                 messages=original_messages,
@@ -484,9 +468,7 @@ def compress(
             # Use the truncated version if we made one, otherwise the original
             compressed_messages.append(truncated_overrides.get(i, msg))
         else:
-            key = extract_key(
-                normalized_messages[i], fallback_index=i, used_keys=used_keys
-            )
+            key = extract_key(normalized_messages[i], fallback_index=i, used_keys=used_keys)
             content = _content_to_text(msg.get("content", ""))
             cache[key] = content
             compressed_messages.append(stub_message(msg, key))
@@ -503,11 +485,7 @@ def compress(
         messages=compressed_messages,
         original_tokens=original_tokens,
         compressed_tokens=compressed_tokens,
-        compression_ratio=(
-            round(1 - (compressed_tokens / original_tokens), 4)
-            if original_tokens > 0
-            else 0.0
-        ),
+        compression_ratio=(round(1 - (compressed_tokens / original_tokens), 4) if original_tokens > 0 else 0.0),
         cache=cache,
         tools=tools,
     )

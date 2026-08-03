@@ -25,9 +25,7 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://external.api.recraft.ai"
     IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         https://www.recraft.ai/docs#generate-image
         """
@@ -68,9 +66,7 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = (
-            api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        complete_url: str = api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
 
         complete_url = complete_url.rstrip("/")
         complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"

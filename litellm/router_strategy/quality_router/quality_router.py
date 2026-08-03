@@ -23,6 +23,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
 )
+from litellm.types.utils import StandardLoggingRoutingDecision
 
 from .config import QualityRouterConfig, RoutingPreferences
 
@@ -186,17 +187,10 @@ class QualityRouter(CustomLogger):
                 else:
                     # A Pydantic object of some other shape — coerce via its dict.
                     prefs = RoutingPreferences(
-                        **(
-                            raw_prefs.model_dump()
-                            if hasattr(raw_prefs, "model_dump")
-                            else dict(raw_prefs)
-                        )
+                        **(raw_prefs.model_dump() if hasattr(raw_prefs, "model_dump") else dict(raw_prefs))
                     )
             except Exception as e:
-                raise ValueError(
-                    f"QualityRouter: model '{name}' has invalid "
-                    f"litellm_routing_preferences: {e}"
-                ) from e
+                raise ValueError(f"QualityRouter: model '{name}' has invalid litellm_routing_preferences: {e}") from e
 
             tier_int = int(prefs.quality_tier)
             tier_to_models.setdefault(tier_int, []).append(name)
@@ -305,10 +299,7 @@ class QualityRouter(CustomLogger):
         if self.config.default_model:
             return self.config.default_model
 
-        raise ValueError(
-            f"QualityRouter: no model available for quality tier {tier} and "
-            f"no default_model configured"
-        )
+        raise ValueError(f"QualityRouter: no model available for quality tier {tier} and no default_model configured")
 
     def _stash_decision(
         self,
@@ -338,9 +329,7 @@ class QualityRouter(CustomLogger):
         from litellm.types.router import PreRoutingHookResponse
 
         if messages is None or len(messages) == 0:
-            verbose_router_logger.debug(
-                "QualityRouter: No messages provided, skipping routing"
-            )
+            verbose_router_logger.debug("QualityRouter: No messages provided, skipping routing")
             return None
 
         # Extract last user message and last system prompt — same rules as
@@ -353,9 +342,7 @@ class QualityRouter(CustomLogger):
             content = msg.get("content") or ""
             if isinstance(content, list):
                 text_parts = [
-                    part.get("text", "")
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
+                    part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
                 ]
                 content = " ".join(text_parts).strip()
             if isinstance(content, str) and content:
@@ -365,16 +352,18 @@ class QualityRouter(CustomLogger):
                     system_prompt = content
 
         if user_message is None:
-            verbose_router_logger.debug(
-                "QualityRouter: No user message found, routing to default model"
-            )
+            verbose_router_logger.debug("QualityRouter: No user message found, routing to default model")
             if not self.config.default_model:
-                raise ValueError(
-                    "QualityRouter: no user message and no default_model configured"
-                )
+                raise ValueError("QualityRouter: no user message and no default_model configured")
             return PreRoutingHookResponse(
                 model=self.config.default_model,
                 messages=messages,
+                routing_decision=StandardLoggingRoutingDecision(
+                    router_model_name=self.model_name,
+                    router_type="quality",
+                    routed_model=self.config.default_model,
+                    cause="default_fallback",
+                ),
             )
 
         # Try keyword override first — it short-circuits complexity classification.
@@ -398,20 +387,25 @@ class QualityRouter(CustomLogger):
                     "complexity_tier": None,
                 },
             )
+            routing_decision = StandardLoggingRoutingDecision(
+                router_model_name=self.model_name,
+                router_type="quality",
+                routed_model=routed_model,
+                cause="keyword",
+                matched_keyword=matched_keyword,
+            )
+            keyword_quality_tier = self._model_quality.get(routed_model)
+            if keyword_quality_tier is not None:
+                routing_decision["tier"] = str(keyword_quality_tier)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages,
+                routing_decision=routing_decision,
             )
 
         # No keyword match → complexity classification flow.
-        complexity_tier, score, signals = self._scorer.classify(
-            user_message, system_prompt
-        )
-        complexity_name = (
-            complexity_tier.value
-            if hasattr(complexity_tier, "value")
-            else str(complexity_tier)
-        )
+        complexity_tier, score, signals = self._scorer.classify(user_message, system_prompt)
+        complexity_name = complexity_tier.value if hasattr(complexity_tier, "value") else str(complexity_tier)
 
         quality_tier = self.config.complexity_to_quality.get(complexity_name)
         if quality_tier is None:
@@ -443,4 +437,13 @@ class QualityRouter(CustomLogger):
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages,
+            routing_decision=StandardLoggingRoutingDecision(
+                router_model_name=self.model_name,
+                router_type="quality",
+                routed_model=routed_model,
+                cause="quality_tier",
+                tier=str(int(quality_tier)),
+                score=score,
+                signals=list(signals),
+            ),
         )

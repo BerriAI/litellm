@@ -25,9 +25,7 @@ def cost_calculator(
     )
 
     if not isinstance(image_response, ImageResponse):
-        raise ValueError(
-            f"image_response must be of type ImageResponse got type={type(image_response)}"
-        )
+        raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")
 
     web_search_cost = calculate_image_response_web_search_cost(
         image_response=image_response,

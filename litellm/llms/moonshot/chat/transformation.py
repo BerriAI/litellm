@@ -53,13 +53,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         if is_async:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=True
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=False
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
@@ -149,9 +145,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                 optional_params["temperature"] = 0.3
         return optional_params
 
-    def fill_reasoning_content(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
+    def fill_reasoning_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
         """
         Moonshot reasoning models require `reasoning_content` on every assistant
         message that contains tool_calls (multi-turn tool-calling flows).
@@ -238,11 +232,11 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
         https://platform.moonshot.ai/docs/guide/migrating-from-openai-to-kimi#about-tool_choice
         """
-        messages.append(
+        optional_params.pop("tool_choice")
+        return [
+            *messages,
             {
                 "role": "user",
                 "content": "Please select a tool to handle the current issue.",  # Usually, the Kimi large language model understands the intention to invoke a tool and selects one for invocation
-            }
-        )
-        optional_params.pop("tool_choice")
-        return messages
+            },
+        ]

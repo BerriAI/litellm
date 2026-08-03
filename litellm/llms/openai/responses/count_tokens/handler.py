@@ -45,9 +45,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         try:
             self.validate_request(model, input)
 
-            verbose_logger.debug(
-                f"Processing OpenAI CountTokens request for model: {model}"
-            )
+            verbose_logger.debug(f"Processing OpenAI CountTokens request for model: {model}")
 
             request_body = self.transform_request_to_count_tokens(
                 model=model,
@@ -62,13 +60,9 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
 
             headers = self.get_required_headers(api_key)
 
-            async_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.OPENAI
-            )
+            async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.OPENAI)
 
-            request_timeout = (
-                timeout if timeout is not None else litellm.request_timeout
-            )
+            request_timeout = timeout if timeout is not None else litellm.request_timeout
 
             response = await async_client.post(
                 endpoint_url,

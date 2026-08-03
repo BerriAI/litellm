@@ -54,11 +54,7 @@ def _agentic_loop_settings(kwargs: dict[str, object]) -> tuple[int, int, list[st
     depth = _coerce_int(kwargs.get("_agentic_loop_depth"), 0)
     max_loops = max(_coerce_int(kwargs.get("max_agentic_loops"), 3), 1)
     raw_fingerprints = kwargs.get("_agentic_loop_fingerprints")
-    fingerprints = (
-        [str(fp) for fp in raw_fingerprints]
-        if isinstance(raw_fingerprints, list)
-        else []
-    )
+    fingerprints = [str(fp) for fp in raw_fingerprints] if isinstance(raw_fingerprints, list) else []
     return depth, max_loops, fingerprints
 
 
@@ -78,9 +74,7 @@ def _check_agentic_loop_safety(
 ) -> str:
     fingerprint = _fingerprint_tools(tool_calls)
     if fingerprint in fingerprints:
-        raise ValueError(
-            "Agentic loop detected repeated tool-call fingerprint; aborting rerun"
-        )
+        raise ValueError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
     if depth >= max_loops:
         raise ValueError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
     return fingerprint
@@ -102,11 +96,7 @@ def _add_agentic_loop_metadata(kwargs_for_followup: dict[str, object]) -> None:
     metadata = kwargs_for_followup.get("litellm_metadata")
     metadata = dict(metadata) if isinstance(metadata, dict) else {}
     for key, value in kwargs_for_followup.items():
-        if (
-            key.startswith("_agentic_loop")
-            or key == "max_agentic_loops"
-            or is_interception_internal_key(key)
-        ):
+        if key.startswith("_agentic_loop") or key == "max_agentic_loops" or is_interception_internal_key(key):
             metadata[key] = value
     kwargs_for_followup["litellm_metadata"] = metadata
 
@@ -115,9 +105,7 @@ def _filter_followup_kwargs(source: dict[str, object]) -> dict[str, object]:
     return {
         k: v
         for k, v in source.items()
-        if not is_interception_internal_key(
-            k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
-        )
+        if not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
         and k not in _FOLLOWUP_INTERNAL_PARAMS
     }
 
@@ -149,16 +137,12 @@ async def _execute_chat_completion_agentic_plan(
     optional_params_for_followup = {**optional_params, **patch.optional_params}
     if patch.tools is not None:
         optional_params_for_followup["tools"] = patch.tools
-        if "tool_choice" not in patch.optional_params:
-            optional_params_for_followup.pop("tool_choice", None)
+    if "tool_choice" not in patch.optional_params:
+        optional_params_for_followup.pop("tool_choice", None)
 
     kwargs_for_followup = _filter_followup_kwargs(kwargs)
     kwargs_for_followup.update(
-        {
-            k: v
-            for k, v in _filter_followup_kwargs(patch.kwargs).items()
-            if k not in optional_params_for_followup
-        }
+        {k: v for k, v in _filter_followup_kwargs(patch.kwargs).items() if k not in optional_params_for_followup}
     )
     kwargs_for_followup["_agentic_loop_depth"] = depth + 1
     kwargs_for_followup["max_agentic_loops"] = max_loops
@@ -174,10 +158,8 @@ async def _execute_chat_completion_agentic_plan(
         )
         if _post_hook_overridden(callback):
             try:
-                response_followup = (
-                    await callback.async_post_agentic_loop_response_hook(
-                        response=response_followup, plan=plan, kwargs=kwargs
-                    )
+                response_followup = await callback.async_post_agentic_loop_response_hook(
+                    response=response_followup, plan=plan, kwargs=kwargs
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -197,8 +179,7 @@ async def _execute_chat_completion_agentic_plan(
         except Exception as e:
             _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
             verbose_logger.exception(
-                "LiteLLM.AgenticHookError: Exception in "
-                "async_agentic_loop_cleanup_hook [call_id=%s model=%s]: %s",
+                "LiteLLM.AgenticHookError: Exception in async_agentic_loop_cleanup_hook [call_id=%s model=%s]: %s",
                 _call_id,
                 model,
                 str(e),
@@ -218,19 +199,18 @@ async def maybe_run_chat_completion_agentic_loop(
 ) -> ModelResponse | CustomStreamWrapper | None:
     import litellm
 
-    callbacks = litellm.callbacks + (
-        getattr(logging_obj, "dynamic_success_callbacks", None) or []
-    )
+    callbacks = litellm.callbacks + (getattr(logging_obj, "dynamic_success_callbacks", None) or [])
     depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
     tools = optional_params.get("tools", [])
 
     for callback in callbacks:
         if not isinstance(callback, CustomLogger):
             continue
+
         if not _gate_overridden(callback):
             continue
 
-        gate_kwargs = {
+        hook_kwargs = {
             **kwargs,
             "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
             "custom_llm_provider": custom_llm_provider,
@@ -243,7 +223,7 @@ async def maybe_run_chat_completion_agentic_loop(
                 tools=tools,
                 stream=stream,
                 custom_llm_provider=custom_llm_provider,
-                kwargs=gate_kwargs,
+                kwargs=hook_kwargs,
             )
         except Exception as e:
             verbose_logger.exception(
@@ -264,11 +244,6 @@ async def maybe_run_chat_completion_agentic_loop(
         )
 
         try:
-            plan_kwargs = {
-                **kwargs,
-                "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
-                "custom_llm_provider": custom_llm_provider,
-            }
             if not _build_plan_overridden(callback):
                 return await callback.async_run_agentic_loop(
                     tools=tool_calls,
@@ -279,7 +254,7 @@ async def maybe_run_chat_completion_agentic_loop(
                     anthropic_messages_optional_request_params=optional_params,
                     logging_obj=logging_obj,
                     stream=stream,
-                    kwargs=plan_kwargs,
+                    kwargs=hook_kwargs,
                 )
 
             plan = await callback.async_build_agentic_loop_plan(
@@ -291,7 +266,7 @@ async def maybe_run_chat_completion_agentic_loop(
                 anthropic_messages_optional_request_params=optional_params,
                 logging_obj=logging_obj,
                 stream=stream,
-                kwargs=plan_kwargs,
+                kwargs=hook_kwargs,
             )
 
             if plan.response_override is not None:
@@ -320,11 +295,7 @@ async def maybe_run_chat_completion_agentic_loop(
                 str(e),
             )
 
-    if (
-        kwargs.get("_code_interpreter_interception_converted_stream")
-        and not depth
-        and hasattr(response, "choices")
-    ):
+    if kwargs.get("_code_interpreter_interception_converted_stream") and not depth and hasattr(response, "choices"):
         return cast(
             "ModelResponse | CustomStreamWrapper",
             _wrap_response_as_fake_stream(response),

@@ -66,6 +66,13 @@ class OvalixGuardrail(CustomGuardrail):
     Monolith backend.
     """
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         tracker_api_base: Optional[str] = None,
@@ -75,19 +82,11 @@ class OvalixGuardrail(CustomGuardrail):
         post_checkpoint_id: Optional[str] = None,
         **kwargs: Any,
     ):
-        self._tracker_api_base = tracker_api_base or os.environ.get(
-            "OVALIX_TRACKER_API_BASE"
-        )
-        self._tracker_api_key = tracker_api_key or os.environ.get(
-            "OVALIX_TRACKER_API_KEY"
-        )
+        self._tracker_api_base = tracker_api_base or os.environ.get("OVALIX_TRACKER_API_BASE")
+        self._tracker_api_key = tracker_api_key or os.environ.get("OVALIX_TRACKER_API_KEY")
         self._application_id = application_id or os.environ.get("OVALIX_APPLICATION_ID")
-        self._pre_checkpoint_id = pre_checkpoint_id or os.environ.get(
-            "OVALIX_PRE_CHECKPOINT_ID"
-        )
-        self._post_checkpoint_id = post_checkpoint_id or os.environ.get(
-            "OVALIX_POST_CHECKPOINT_ID"
-        )
+        self._pre_checkpoint_id = pre_checkpoint_id or os.environ.get("OVALIX_PRE_CHECKPOINT_ID")
+        self._post_checkpoint_id = post_checkpoint_id or os.environ.get("OVALIX_POST_CHECKPOINT_ID")
 
         if "supported_event_hooks" not in kwargs:
             kwargs["supported_event_hooks"] = []
@@ -102,9 +101,7 @@ class OvalixGuardrail(CustomGuardrail):
             encoding="utf-8",
         )
 
-        self._async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self._async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         super().__init__(**kwargs)
         verbose_proxy_logger.debug(
@@ -115,58 +112,32 @@ class OvalixGuardrail(CustomGuardrail):
             self._post_checkpoint_id,
         )
 
-    def _validate_config(
-        self, supported_event_hooks: List[GuardrailEventHooks]
-    ) -> None:
+    def _validate_config(self, supported_event_hooks: List[GuardrailEventHooks]) -> None:
         """Ensure required secrets and checkpoint IDs are set; auto-add hooks when IDs are present."""
         errors: List[str] = []
 
         if not self._tracker_api_base:
-            errors.append(
-                "Tracker API base, set OVALIX_TRACKER_API_BASE or pass tracker_api_base"
-            )
+            errors.append("Tracker API base, set OVALIX_TRACKER_API_BASE or pass tracker_api_base")
         if not self._tracker_api_key:
-            errors.append(
-                "Tracker API key, set OVALIX_TRACKER_API_KEY or pass tracker_api_key"
-            )
+            errors.append("Tracker API key, set OVALIX_TRACKER_API_KEY or pass tracker_api_key")
         if not self._application_id:
-            errors.append(
-                "Application ID, set OVALIX_APPLICATION_ID or pass application_id"
-            )
-        if (
-            not self._pre_checkpoint_id
-            and GuardrailEventHooks.pre_call in supported_event_hooks
-        ):
-            errors.append(
-                "Pre-checkpoint ID, set OVALIX_PRE_CHECKPOINT_ID or pass pre_checkpoint_id"
-            )
-        if (
-            not self._post_checkpoint_id
-            and GuardrailEventHooks.post_call in supported_event_hooks
-        ):
-            errors.append(
-                "Post-checkpoint ID, set OVALIX_POST_CHECKPOINT_ID or pass post_checkpoint_id"
-            )
+            errors.append("Application ID, set OVALIX_APPLICATION_ID or pass application_id")
+        if not self._pre_checkpoint_id and GuardrailEventHooks.pre_call in supported_event_hooks:
+            errors.append("Pre-checkpoint ID, set OVALIX_PRE_CHECKPOINT_ID or pass pre_checkpoint_id")
+        if not self._post_checkpoint_id and GuardrailEventHooks.post_call in supported_event_hooks:
+            errors.append("Post-checkpoint ID, set OVALIX_POST_CHECKPOINT_ID or pass post_checkpoint_id")
         if not self._pre_checkpoint_id and not self._post_checkpoint_id:
             errors.append(
                 "Pre-checkpoint ID or Post-checkpoint ID, set OVALIX_PRE_CHECKPOINT_ID or OVALIX_POST_CHECKPOINT_ID or pass pre_checkpoint_id or post_checkpoint_id"
             )
 
         if errors:
-            raise OvalixGuardrailMissingSecrets(
-                "Missing Ovalix guardrail configuration errors: " + ". ".join(errors)
-            )
+            raise OvalixGuardrailMissingSecrets("Missing Ovalix guardrail configuration errors: " + ". ".join(errors))
 
         # auto-add hooks when checkpoint IDs are present
-        if (
-            self._pre_checkpoint_id
-            and GuardrailEventHooks.pre_call not in supported_event_hooks
-        ):
+        if self._pre_checkpoint_id and GuardrailEventHooks.pre_call not in supported_event_hooks:
             supported_event_hooks.append(GuardrailEventHooks.pre_call)
-        if (
-            self._post_checkpoint_id
-            and GuardrailEventHooks.post_call not in supported_event_hooks
-        ):
+        if self._post_checkpoint_id and GuardrailEventHooks.post_call not in supported_event_hooks:
             supported_event_hooks.append(GuardrailEventHooks.post_call)
 
     def _get_actor(self, data: dict) -> str:
@@ -276,13 +247,9 @@ class OvalixGuardrail(CustomGuardrail):
         is_first_response = True
         for llm_response in reversed(texts):
             try:
-                resp = await self._call_checkpoint(
-                    llm_response, checkpoint_id, actor, session_id
-                )
+                resp = await self._call_checkpoint(llm_response, checkpoint_id, actor, session_id)
             except Exception as e:
-                verbose_proxy_logger.exception(
-                    "Ovalix apply_guardrail checkpoint call failed: %s", e
-                )
+                verbose_proxy_logger.exception("Ovalix apply_guardrail checkpoint call failed: %s", e)
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
                     message=f"Ovalix guardrail error: {e!s}",
@@ -290,18 +257,13 @@ class OvalixGuardrail(CustomGuardrail):
                 ) from e
 
             action_type = (resp.get("action_type") or "").lower()
-            blocking_message = (
-                self._get_trackers_corrected_message(resp)
-                or BLOCKED_BY_OVALIX_FALLBACK_MESSAGE
-            )
+            blocking_message = self._get_trackers_corrected_message(resp) or BLOCKED_BY_OVALIX_FALLBACK_MESSAGE
             if action_type == BLOCKED_ACTION_TYPE and is_first_response:
                 self._block_current_message(blocking_message)
             elif action_type == BLOCKED_ACTION_TYPE:
                 post_guardrail_texts.insert(0, blocking_message)
             else:
-                corrected_text = (
-                    self._get_trackers_corrected_message(resp) or llm_response
-                )
+                corrected_text = self._get_trackers_corrected_message(resp) or llm_response
                 post_guardrail_texts.insert(0, corrected_text)
             is_first_response = False
         return post_guardrail_texts

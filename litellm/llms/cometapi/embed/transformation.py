@@ -39,9 +39,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for the CometAPI embedding endpoint.
         """
-        api_base = (
-            "https://api.cometapi.com/v1" if api_base is None else api_base.rstrip("/")
-        )
+        api_base = "https://api.cometapi.com/v1" if api_base is None else api_base.rstrip("/")
         complete_url = f"{api_base}/embeddings"
         return complete_url
 
@@ -152,6 +150,4 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the appropriate error class for CometAPI exceptions.
         """
-        return CometAPIException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+        return CometAPIException(message=error_message, status_code=status_code, headers=headers)

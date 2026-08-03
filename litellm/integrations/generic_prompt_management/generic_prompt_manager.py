@@ -74,9 +74,7 @@ class GenericPromptManager(CustomPromptManagement):
         self.api_key = api_key
         self.timeout = timeout
         self.prompt_id = prompt_id
-        self.additional_provider_specific_query_params = (
-            additional_provider_specific_query_params
-        )
+        self.additional_provider_specific_query_params = additional_provider_specific_query_params
         self._prompt_cache: Dict[str, PromptManagementClient] = {}
 
     @property
@@ -94,9 +92,7 @@ class GenericPromptManager(CustomPromptManagement):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _fetch_prompt_from_api(
-        self, prompt_id: Optional[str], prompt_spec: Optional[PromptSpec]
-    ) -> Dict[str, Any]:
+    def _fetch_prompt_from_api(self, prompt_id: Optional[str], prompt_spec: Optional[PromptSpec]) -> Dict[str, Any]:
         """
         Fetch a prompt from the API.
 
@@ -147,8 +143,7 @@ class GenericPromptManager(CustomPromptManagement):
             "prompt_id": prompt_id,
             **(
                 prompt_spec.litellm_params.provider_specific_query_params
-                if prompt_spec
-                and prompt_spec.litellm_params.provider_specific_query_params
+                if prompt_spec and prompt_spec.litellm_params.provider_specific_query_params
                 else {}
             ),
         }
@@ -204,9 +199,7 @@ class GenericPromptManager(CustomPromptManagement):
             prompt_id=prompt_id,
             prompt_template=api_response.get("prompt_template", []),
             prompt_template_model=api_response.get("prompt_template_model"),
-            prompt_template_optional_params=api_response.get(
-                "prompt_template_optional_params"
-            ),
+            prompt_template_optional_params=api_response.get("prompt_template_optional_params"),
             completed_messages=None,
         )
 
@@ -223,8 +216,7 @@ class GenericPromptManager(CustomPromptManagement):
         in the _compile_prompt_helper method.
         """
         if prompt_id is not None or (
-            prompt_spec is not None
-            and prompt_spec.litellm_params.provider_specific_query_params is not None
+            prompt_spec is not None and prompt_spec.litellm_params.provider_specific_query_params is not None
         ):
             return True
         return False
@@ -299,9 +291,7 @@ class GenericPromptManager(CustomPromptManagement):
             api_response = self._fetch_prompt_from_api(prompt_id, prompt_spec)
 
             # Parse the response
-            prompt_client = self._parse_api_response(
-                prompt_id, prompt_spec, api_response
-            )
+            prompt_client = self._parse_api_response(prompt_id, prompt_spec, api_response)
 
             # Cache the result
             self._prompt_cache[cache_key] = prompt_client
@@ -339,14 +329,10 @@ class GenericPromptManager(CustomPromptManagement):
         try:
             # Fetch from API
 
-            api_response = await self.async_fetch_prompt_from_api(
-                prompt_id=prompt_id, prompt_spec=prompt_spec
-            )
+            api_response = await self.async_fetch_prompt_from_api(prompt_id=prompt_id, prompt_spec=prompt_spec)
 
             # Parse the response
-            prompt_client = self._parse_api_response(
-                prompt_id, prompt_spec, api_response
-            )
+            prompt_client = self._parse_api_response(prompt_id, prompt_spec, api_response)
 
             # Cache the result
             self._prompt_cache[cache_key] = prompt_client
@@ -358,9 +344,7 @@ class GenericPromptManager(CustomPromptManagement):
             return prompt_client
 
         except Exception as e:
-            raise ValueError(
-                f"Error compiling prompt '{prompt_id}': {e}, prompt_spec: {prompt_spec}"
-            )
+            raise ValueError(f"Error compiling prompt '{prompt_id}': {e}, prompt_spec: {prompt_spec}")
 
     def _apply_variables(
         self,
@@ -383,15 +367,11 @@ class GenericPromptManager(CustomPromptManagement):
         updated_messages: List[AllMessageValues] = []
         for message in prompt_client["prompt_template"]:
             updated_message = dict(message)  # type: ignore
-            if "content" in updated_message and isinstance(
-                updated_message["content"], str
-            ):
+            if "content" in updated_message and isinstance(updated_message["content"], str):
                 content = updated_message["content"]
                 for key, value in variables.items():
                     content = content.replace(f"{{{key}}}", str(value))
-                    content = content.replace(
-                        f"{{{{{key}}}}}", str(value)
-                    )  # Also support {{key}}
+                    content = content.replace(f"{{{{{key}}}}}", str(value))  # Also support {{key}}
                 updated_message["content"] = content
             updated_messages.append(updated_message)  # type: ignore
 
@@ -399,9 +379,7 @@ class GenericPromptManager(CustomPromptManagement):
             prompt_id=prompt_client["prompt_id"],
             prompt_template=updated_messages,
             prompt_template_model=prompt_client["prompt_template_model"],
-            prompt_template_optional_params=prompt_client[
-                "prompt_template_optional_params"
-            ],
+            prompt_template_optional_params=prompt_client["prompt_template_optional_params"],
             completed_messages=None,
         )
 
@@ -439,8 +417,7 @@ class GenericPromptManager(CustomPromptManagement):
             prompt_label=prompt_label,
             prompt_version=prompt_version,
             ignore_prompt_manager_model=(
-                ignore_prompt_manager_model
-                or prompt_spec.litellm_params.ignore_prompt_manager_model
+                ignore_prompt_manager_model or prompt_spec.litellm_params.ignore_prompt_manager_model
                 if prompt_spec
                 else False
             ),
@@ -481,8 +458,7 @@ class GenericPromptManager(CustomPromptManagement):
             prompt_label=prompt_label,
             prompt_version=prompt_version,
             ignore_prompt_manager_model=(
-                ignore_prompt_manager_model
-                or prompt_spec.litellm_params.ignore_prompt_manager_model
+                ignore_prompt_manager_model or prompt_spec.litellm_params.ignore_prompt_manager_model
                 if prompt_spec
                 else False
             ),

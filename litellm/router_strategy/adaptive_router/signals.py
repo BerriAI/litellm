@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from litellm.router_strategy.adaptive_router.config import (
     LOOP_REPEAT_THRESHOLD,
@@ -74,26 +74,26 @@ class SessionState:
     loop_count: int = 0
     exhaustion_count: int = 0
 
-    last_user_content: Optional[str] = None
-    last_assistant_content: Optional[str] = None
-    tool_call_history: List[str] = field(default_factory=list)
-    pending_tool_calls: Dict[str, str] = field(default_factory=dict)
+    last_user_content: str | None = None
+    last_assistant_content: str | None = None
+    tool_call_history: list[str] = field(default_factory=list)
+    pending_tool_calls: dict[str, str] = field(default_factory=dict)
 
     turn_count: int = 0
     last_processed_turn: int = -1
     clean_credit_awarded: bool = False
-    terminal_status: Optional[int] = None
+    terminal_status: int | None = None
 
 
 @dataclass
 class Turn:
     """One turn of input. Caller assembles this from the request/response."""
 
-    user_content: Optional[str] = None
-    assistant_content: Optional[str] = None
-    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
-    tool_results: List[Dict[str, Any]] = field(default_factory=list)
-    response_status: Optional[int] = None
+    user_content: str | None = None
+    assistant_content: str | None = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    tool_results: list[dict[str, Any]] = field(default_factory=list)
+    response_status: int | None = None
 
 
 # ---- Detection helpers ----------------------------------------------------
@@ -101,13 +101,13 @@ class Turn:
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
-def _tokens(text: Optional[str]) -> Set[str]:
+def _tokens(text: str | None) -> set[str]:
     if not text:
         return set()
     return {t.lower() for t in _TOKEN_RE.findall(text)}
 
 
-def _jaccard(a: Set[str], b: Set[str]) -> float:
+def _jaccard(a: set[str], b: set[str]) -> float:
     union = a | b
     if not union:
         return 0.0
@@ -115,9 +115,7 @@ def _jaccard(a: Set[str], b: Set[str]) -> float:
 
 
 _DISENGAGEMENT_PATTERNS = [
-    re.compile(
-        r"\b(forget it|never mind|give up|talk to (?:a )?human|cancel)\b", re.IGNORECASE
-    ),
+    re.compile(r"\b(forget it|never mind|give up|talk to (?:a )?human|cancel)\b", re.IGNORECASE),
     re.compile(r"\b(this (?:isn'?t|is not) working|stop|abort)\b", re.IGNORECASE),
     re.compile(r"\bi'?ll do it (?:myself|manually)\b", re.IGNORECASE),
 ]
@@ -132,7 +130,7 @@ _SATISFACTION_PATTERNS = [
 ]
 
 
-def _detect_misalignment(prev_user: Optional[str], curr_user: Optional[str]) -> bool:
+def _detect_misalignment(prev_user: str | None, curr_user: str | None) -> bool:
     """Fires when consecutive user messages share *some* topic (jaccard > 0)
     but are sufficiently different (jaccard < threshold) — i.e. user is
     rephrasing, not changing topic, not repeating."""
@@ -142,7 +140,7 @@ def _detect_misalignment(prev_user: Optional[str], curr_user: Optional[str]) -> 
     return 0.0 < j < MISALIGNMENT_JACCARD_THRESHOLD
 
 
-def _detect_stagnation(prev_asst: Optional[str], curr_asst: Optional[str]) -> bool:
+def _detect_stagnation(prev_asst: str | None, curr_asst: str | None) -> bool:
     """Fires when consecutive assistant messages are near-duplicates."""
     if not prev_asst or not curr_asst:
         return False
@@ -150,19 +148,19 @@ def _detect_stagnation(prev_asst: Optional[str], curr_asst: Optional[str]) -> bo
     return j >= STAGNATION_JACCARD_NEAR_DUP
 
 
-def _detect_disengagement(curr_user: Optional[str]) -> bool:
+def _detect_disengagement(curr_user: str | None) -> bool:
     if not curr_user:
         return False
     return any(p.search(curr_user) for p in _DISENGAGEMENT_PATTERNS)
 
 
-def _detect_satisfaction(curr_user: Optional[str]) -> bool:
+def _detect_satisfaction(curr_user: str | None) -> bool:
     if not curr_user:
         return False
     return any(p.search(curr_user) for p in _SATISFACTION_PATTERNS)
 
 
-def _detect_failure(tool_results: List[Dict[str, Any]]) -> bool:
+def _detect_failure(tool_results: list[dict[str, Any]]) -> bool:
     """Any tool result explicitly flagged as an error.
 
     We do NOT treat empty content as failure — many tools legitimately return
@@ -175,7 +173,7 @@ def _detect_failure(tool_results: List[Dict[str, Any]]) -> bool:
     return False
 
 
-def _signature(call: Dict[str, Any]) -> str:
+def _signature(call: dict[str, Any]) -> str:
     """Stable signature for loop detection: name + sorted JSON-ish args."""
     name = call.get("name") or call.get("function", {}).get("name", "")
     call_args = call.get("arguments")
@@ -186,7 +184,7 @@ def _signature(call: Dict[str, Any]) -> str:
     return f"{name}({call_args})"
 
 
-def _detect_loop(history: List[str], new_calls: List[Dict[str, Any]]) -> bool:
+def _detect_loop(history: list[str], new_calls: list[dict[str, Any]]) -> bool:
     """Fires if any new call's signature appears >= LOOP_REPEAT_THRESHOLD-1 times
     in recent history (so this call would be the Nth)."""
     if not new_calls:
@@ -211,9 +209,7 @@ _EXHAUSTION_KEYWORDS = (
 )
 
 
-def _detect_exhaustion(
-    status: Optional[int], tool_results: List[Dict[str, Any]]
-) -> bool:
+def _detect_exhaustion(status: int | None, tool_results: list[dict[str, Any]]) -> bool:
     if status is not None and status in _EXHAUSTION_STATUSES:
         return True
     for r in tool_results:
@@ -223,42 +219,53 @@ def _detect_exhaustion(
     return False
 
 
-# ---- Public entrypoint ----------------------------------------------------
+def detect_user_feedback(
+    previous_user_content: str | None,
+    current_user_content: str | None,
+    tool_results: list[dict[str, Any]],
+    allow_satisfaction: bool,
+) -> SignalDelta:
+    return SignalDelta(
+        misalignment=int(_detect_misalignment(previous_user_content, current_user_content)),
+        disengagement=int(_detect_disengagement(current_user_content)),
+        satisfaction=int(allow_satisfaction and _detect_satisfaction(current_user_content)),
+        failure=int(_detect_failure(tool_results)),
+    )
 
 
-def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
-    """
-    Detect signals on this turn, mutate state, return the delta.
+def detect_response_signals(
+    previous_assistant_content: str | None,
+    current_assistant_content: str | None,
+    tool_call_history: list[str],
+    tool_calls: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]],
+    response_status: int | None,
+) -> SignalDelta:
+    return SignalDelta(
+        stagnation=int(
+            _detect_stagnation(
+                previous_assistant_content,
+                current_assistant_content,
+            )
+        ),
+        loop=int(_detect_loop(tool_call_history, tool_calls)),
+        exhaustion=int(_detect_exhaustion(response_status, tool_results)),
+    )
 
-    O(1) per turn (no full-history rescan). Only inspects last_*, recent tool history
-    (which is bounded at TOOL_CALL_HISTORY_MAX), and the new turn payload.
-    """
-    delta = SignalDelta()
 
-    if _detect_misalignment(state.last_user_content, turn.user_content):
-        delta.misalignment = 1
-    if _detect_stagnation(state.last_assistant_content, turn.assistant_content):
-        delta.stagnation = 1
-    if _detect_disengagement(turn.user_content):
-        delta.disengagement = 1
-    if _detect_satisfaction(turn.user_content):
-        # Gate: only award satisfaction credit once per session, and only
-        # after MIN_TURNS_FOR_CLEAN_CREDIT turns of context. Early "thanks"
-        # on turn 1-2 is noise, not a validated quality signal.
-        current_turn_index = state.turn_count + 1
-        if (
-            not state.clean_credit_awarded
-            and current_turn_index >= MIN_TURNS_FOR_CLEAN_CREDIT
-        ):
-            delta.satisfaction = 1
-            state.clean_credit_awarded = True
-    if _detect_failure(turn.tool_results):
-        delta.failure = 1
-    if _detect_loop(state.tool_call_history, turn.tool_calls):
-        delta.loop = 1
-    if _detect_exhaustion(turn.response_status, turn.tool_results):
-        delta.exhaustion = 1
+def merge_signal_deltas(*deltas: SignalDelta) -> SignalDelta:
+    return SignalDelta(
+        misalignment=sum(delta.misalignment for delta in deltas),
+        stagnation=sum(delta.stagnation for delta in deltas),
+        disengagement=sum(delta.disengagement for delta in deltas),
+        satisfaction=sum(delta.satisfaction for delta in deltas),
+        failure=sum(delta.failure for delta in deltas),
+        loop=sum(delta.loop for delta in deltas),
+        exhaustion=sum(delta.exhaustion for delta in deltas),
+    )
 
+
+def apply_signal_delta(state: SessionState, delta: SignalDelta) -> None:
     state.misalignment_count += delta.misalignment
     state.stagnation_count += delta.stagnation
     state.disengagement_count += delta.disengagement
@@ -267,6 +274,8 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
     state.loop_count += delta.loop
     state.exhaustion_count += delta.exhaustion
 
+
+def advance_session_state(state: SessionState, turn: Turn) -> None:
     if turn.user_content:
         state.last_user_content = turn.user_content
     if turn.assistant_content:
@@ -282,5 +291,39 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
 
     state.turn_count += 1
     state.last_processed_turn = state.turn_count
+
+
+# ---- Public entrypoint ----------------------------------------------------
+
+
+def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
+    """
+    Detect signals on this turn, mutate state, return the delta.
+
+    O(1) per turn (no full-history rescan). Only inspects last_*, recent tool history
+    (which is bounded at TOOL_CALL_HISTORY_MAX), and the new turn payload.
+    """
+    feedback_delta = detect_user_feedback(
+        state.last_user_content,
+        turn.user_content,
+        turn.tool_results,
+        allow_satisfaction=(not state.clean_credit_awarded and state.turn_count + 1 >= MIN_TURNS_FOR_CLEAN_CREDIT),
+    )
+    response_delta = detect_response_signals(
+        state.last_assistant_content,
+        turn.assistant_content,
+        state.tool_call_history,
+        turn.tool_calls,
+        turn.tool_results,
+        turn.response_status,
+    )
+    delta = merge_signal_deltas(
+        feedback_delta,
+        response_delta,
+    )
+    apply_signal_delta(state, delta)
+    if delta.satisfaction:
+        state.clean_credit_awarded = True
+    advance_session_state(state, turn)
 
     return delta

@@ -77,12 +77,29 @@ export const teamListCall = async (
     }
 
     const data = await response.json();
-    console.log("/v2/team/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list teams:", error);
     throw error;
   }
+};
+
+export const teamsTableKeys = createQueryKeys("teamsTable");
+
+export const useTeamsTable = (
+  page: number,
+  pageSize: number,
+  options: TeamListCallOptions = {},
+): UseQueryResult<TeamsResponse> => {
+  const { accessToken } = useAuthorized();
+
+  return useQuery<TeamsResponse>({
+    queryKey: teamsTableKeys.list({ page, limit: pageSize, ...options }),
+    queryFn: async () => await teamListCall(accessToken!, page, pageSize, options),
+    enabled: Boolean(accessToken),
+    staleTime: 30000,
+    placeholderData: keepPreviousData,
+  });
 };
 
 const teamKeys = createQueryKeys("teams");
@@ -92,6 +109,31 @@ export const useTeams = (): UseQueryResult<Team[]> => {
     queryKey: teamKeys.list({}),
     queryFn: async () => await fetchTeams(accessToken!, userId, userRole, null),
     enabled: Boolean(accessToken),
+  });
+};
+
+const ALL_TEAMS_PAGE_SIZE = 100;
+
+const fetchAllTeamsPaged = async (accessToken: string): Promise<Team[]> => {
+  const firstPage: TeamsResponse = await teamListCall(accessToken, 1, ALL_TEAMS_PAGE_SIZE);
+  const totalPages = firstPage.total_pages ?? 1;
+  if (totalPages <= 1) return firstPage.teams;
+
+  const remainingPages: TeamsResponse[] = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, i) => teamListCall(accessToken, i + 2, ALL_TEAMS_PAGE_SIZE)),
+  );
+  return [firstPage, ...remainingPages].flatMap((page) => page.teams);
+};
+
+export const useAllTeams = (): UseQueryResult<Team[]> => {
+  const { accessToken } = useAuthorized();
+  return useQuery<Team[]>({
+    queryKey: teamKeys.list({
+      filters: { scope: "all", pageSize: ALL_TEAMS_PAGE_SIZE, accessToken: accessToken ?? "" },
+    }),
+    queryFn: async () => await fetchAllTeamsPaged(accessToken!),
+    enabled: Boolean(accessToken),
+    staleTime: 30000,
   });
 };
 
@@ -200,7 +242,6 @@ const deletedTeamListCall = async (
     }
 
     const data = await response.json();
-    console.log("/team/list?status=deleted API Response:", data);
 
     // Extract teams array from response if it's wrapped in a response object
     // Otherwise return the data directly if it's already an array

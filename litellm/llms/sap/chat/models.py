@@ -90,16 +90,12 @@ class SAPMessage(BaseModel):
     role: Literal["system", "developer"] = "system"
     content: str
 
-    _content_validator = field_validator("content", mode="before")(
-        validate_different_content
-    )
+    _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
 class SAPUserMessage(BaseModel):
     role: Literal["user"] = "user"
-    content: Union[
-        str, TextContent, ImageContent, list[Union[TextContent, ImageContent]]
-    ]
+    content: Union[str, TextContent, ImageContent, list[Union[TextContent, ImageContent]]]
 
 
 class SAPAssistantMessage(BaseModel):
@@ -108,9 +104,7 @@ class SAPAssistantMessage(BaseModel):
     refusal: str = ""
     tool_calls: list[MessageToolCall] = []
 
-    _content_validator = field_validator("content", mode="before")(
-        validate_different_content
-    )
+    _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
 class SAPToolChatMessage(BaseModel):
@@ -118,9 +112,7 @@ class SAPToolChatMessage(BaseModel):
     tool_call_id: str
     content: str
 
-    _content_validator = field_validator("content", mode="before")(
-        validate_different_content
-    )
+    _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
 ChatMessage = Union[SAPMessage, SAPUserMessage, SAPAssistantMessage, SAPToolChatMessage]
@@ -184,9 +176,7 @@ class DocumentGroundingConfig(BaseModel):
 
 
 class GroundingModuleConfig(BaseModel):
-    type_: Literal["document_grounding_service"] = Field(
-        default="document_grounding_service", alias="type"
-    )
+    type_: Literal["document_grounding_service"] = Field(default="document_grounding_service", alias="type")
     config: DocumentGroundingConfig
 
 
@@ -329,9 +319,7 @@ class DPIStandardEntity(BaseModel):
     """
 
     type_: SAPMaskingProfileEntity = Field(..., alias="type")
-    replacement_strategy: Optional[
-        Union[DPIMethodConstant, DPIMethodFabricatedData]
-    ] = None
+    replacement_strategy: Optional[Union[DPIMethodConstant, DPIMethodFabricatedData]] = None
 
 
 class MaskGroundingInput(BaseModel):
@@ -361,9 +349,7 @@ class MaskingProviderConfig(BaseModel):
         mask_grounding_input: A flag indicating whether to mask input to the grounding module.
     """
 
-    type_: Literal["sap_data_privacy_integration"] = Field(
-        default="sap_data_privacy_integration", alias="type"
-    )
+    type_: Literal["sap_data_privacy_integration"] = Field(default="sap_data_privacy_integration", alias="type")
     method: Literal["anonymization", "pseudonymization"]
     entities: list[Union[DPIStandardEntity, DPICustomEntity]]
     allowlist: Optional[list[str]] = None
@@ -382,9 +368,7 @@ class MaskingModuleConfig(BaseModel):
     """
 
     providers: Optional[list[MaskingProviderConfig]] = Field(min_length=1, default=None)
-    masking_providers: Optional[list[MaskingProviderConfig]] = Field(
-        min_length=1, default=None
-    )
+    masking_providers: Optional[list[MaskingProviderConfig]] = Field(min_length=1, default=None)
 
     @model_validator(mode="after")
     def enforce_exactly_one_provider_list(self):
@@ -392,9 +376,7 @@ class MaskingModuleConfig(BaseModel):
         has_masking_providers = self.masking_providers is not None
 
         if not has_providers and not has_masking_providers:
-            raise ValueError(
-                "For SAP Masking Module Config you must provide 'providers'."
-            )
+            raise ValueError("For SAP Masking Module Config you must provide 'providers'.")
         if has_providers and has_masking_providers:
             raise ValueError(
                 "For SAP Masking Module Config you must set exactly one of: 'providers' or 'masking_providers', not both."
@@ -556,16 +538,12 @@ class LlamaGuard38bFilterConfig(BaseModel):
 
 
 class AzureContentSafetyInputFilterConfig(BaseModel):
-    type_: Literal["azure_content_safety"] = Field(
-        default="azure_content_safety", alias="type"
-    )
+    type_: Literal["azure_content_safety"] = Field(default="azure_content_safety", alias="type")
     config: Optional[AzureContentSafetyInput] = None
 
 
 class AzureContentSafetyOutputFilterConfig(BaseModel):
-    type_: Literal["azure_content_safety"] = Field(
-        default="azure_content_safety", alias="type"
-    )
+    type_: Literal["azure_content_safety"] = Field(default="azure_content_safety", alias="type")
     config: Optional[AzureContentSafetyOutput] = None
 
 
@@ -585,9 +563,7 @@ class InputFiltering(BaseModel):
         filters: List of ContentFilter objects to be applied to input content.
     """
 
-    filters: list[
-        Union[AzureContentSafetyInputFilterConfig, LlamaGuard38bFilterConfig]
-    ] = Field(min_length=1)
+    filters: list[Union[AzureContentSafetyInputFilterConfig, LlamaGuard38bFilterConfig]] = Field(min_length=1)
 
 
 class OutputFiltering(BaseModel):
@@ -599,9 +575,7 @@ class OutputFiltering(BaseModel):
         stream_options: Module-specific streaming options.
     """
 
-    filters: list[
-        Union[AzureContentSafetyOutputFilterConfig, LlamaGuard38bFilterConfig]
-    ] = Field(min_length=1)
+    filters: list[Union[AzureContentSafetyOutputFilterConfig, LlamaGuard38bFilterConfig]] = Field(min_length=1)
     stream_options: Optional[FilteringStreamOptions] = None
 
 
@@ -677,9 +651,7 @@ class SAPDocumentTranslationInput(BaseModel):
         config: Configuration object for the translation module.
     """
 
-    type_: Literal["sap_document_translation"] = Field(
-        default="sap_document_translation", alias="type"
-    )
+    type_: Literal["sap_document_translation"] = Field(default="sap_document_translation", alias="type")
     translate_messages_history: Optional[bool] = None
     config: InputTranslationConfig
 
@@ -694,9 +666,7 @@ class SAPDocumentTranslationOutput(BaseModel):
         config: Configuration object for the translation module.
     """
 
-    type_: Literal["sap_document_translation"] = Field(
-        default="sap_document_translation", alias="type"
-    )
+    type_: Literal["sap_document_translation"] = Field(default="sap_document_translation", alias="type")
     config: OutputTranslationConfig
 
 
@@ -716,9 +686,7 @@ class TranslationModuleConfig(BaseModel):
     @model_validator(mode="after")
     def enforce_min_properties(self) -> "TranslationModuleConfig":
         if self.input is None and self.output is None:
-            raise ValueError(
-                "TranslationModuleConfig requires at least one of 'input' or 'output'."
-            )
+            raise ValueError("TranslationModuleConfig requires at least one of 'input' or 'output'.")
         return self
 
 

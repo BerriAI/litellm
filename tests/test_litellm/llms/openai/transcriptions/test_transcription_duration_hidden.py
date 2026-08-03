@@ -13,7 +13,52 @@ from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
-from litellm.types.utils import TranscriptionResponse
+from litellm.types.utils import (
+    TranscriptionResponse,
+    TranscriptionUsageDurationObject,
+)
+
+
+class TestDiarizedJsonUsageParsing:
+    """gpt-4o-transcribe / diarized_json returns a fractional `usage.seconds`."""
+
+    def test_fractional_duration_seconds_does_not_raise(self):
+        """
+        A diarized_json response carries usage={"type": "duration", "seconds": <float>}.
+        OpenAI specs `seconds` as a float, so a fractional value must parse cleanly
+        instead of raising and getting retried until the upstream rate-limits.
+        """
+        response_object = {
+            "text": "speaker_1: Olá",
+            "task": "transcribe",
+            "duration": 295.8,
+            "segments": [
+                {
+                    "id": "seg_001",
+                    "speaker": "speaker_1",
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "Olá",
+                    "type": "transcript.text.segment",
+                }
+            ],
+            "usage": {"type": "duration", "seconds": 295.8},
+        }
+
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=TranscriptionResponse(),
+            response_type="audio_transcription",
+        )
+
+        assert isinstance(result.usage, TranscriptionUsageDurationObject)
+        assert result.usage.seconds == 295.8
+
+    def test_usage_duration_object_accepts_float_seconds(self):
+        assert (
+            TranscriptionUsageDurationObject(type="duration", seconds=295.8).seconds
+            == 295.8
+        )
 
 
 class TestTranscriptionDurationNotInResponseBody:

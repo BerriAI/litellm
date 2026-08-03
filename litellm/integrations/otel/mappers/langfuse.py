@@ -27,7 +27,6 @@ from litellm.integrations.otel.model.payloads import (
 
 
 class LangfuseMapper:
-
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         "langfuse.observation.type": lambda d: "generation",
         "langfuse.observation.model.name": lambda d: d.request_model or None,
@@ -59,13 +58,9 @@ class LangfuseMapper:
         ),
         "langfuse.observation.input": lambda d: serialize_messages(d.messages_in),
         "langfuse.observation.output": lambda d: serialize_messages(output_messages(d)),
-        "langfuse.observation.usage_details": lambda d: json_if(
-            collect(LangfuseMapper._USAGE_FIELDS, d.usage)
-        ),
+        "langfuse.observation.usage_details": lambda d: json_if(collect(LangfuseMapper._USAGE_FIELDS, d.usage)),
         "langfuse.observation.cost_details": lambda d: (
-            json.dumps({"total": d.response_cost})
-            if d.response_cost is not None
-            else None
+            json.dumps({"total": d.response_cost}) if d.response_cost is not None else None
         ),
     }
 

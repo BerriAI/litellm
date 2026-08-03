@@ -29,9 +29,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
-    allowed_models: Optional[List[str]] = (
-        None  # per-member model scope; empty = inherit team models
-    )
+    allowed_models: Optional[List[str]] = None  # per-member model scope; empty = inherit team models
 
     model_config = ConfigDict(protected_namespaces=())
 

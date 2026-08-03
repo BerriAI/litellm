@@ -92,9 +92,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             base_llm_http_handler: The BaseLLMHTTPHandler instance from main.py
         """
         # Get AWS region from kwargs or environment
-        aws_region_name = kwargs.get(
-            "aws_region_name"
-        ) or self._get_aws_region_name_for_polly(optional_params=optional_params)
+        aws_region_name = kwargs.get("aws_region_name") or self._get_aws_region_name_for_polly(
+            optional_params=optional_params
+        )
 
         # Convert voice to string if it's a dict
         voice_str: Optional[str] = None
@@ -263,9 +263,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
-            raise ImportError(
-                "Missing boto3 to call AWS Polly. Run 'pip install boto3'."
-            )
+            raise ImportError("Missing boto3 to call AWS Polly. Run 'pip install boto3'.")
 
         # Get AWS region
         aws_region_name = litellm_params.get("aws_region_name", self.DEFAULT_REGION)

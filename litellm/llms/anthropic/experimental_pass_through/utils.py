@@ -7,10 +7,7 @@ from litellm.types.utils import ModelInfo
 
 def is_reasoning_auto_summary_enabled() -> bool:
     """Check whether the default 'summary: detailed' injection is enabled (opt-in)."""
-    return (
-        litellm.reasoning_auto_summary
-        or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
-    )
+    return litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
 
 
 def normalize_reasoning_effort_value(
@@ -34,9 +31,7 @@ def normalize_reasoning_effort_value(
 
     model_info: Optional[ModelInfo] = None
     try:
-        model_info = get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
+        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         model_info = None
 

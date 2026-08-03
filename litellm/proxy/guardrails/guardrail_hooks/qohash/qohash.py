@@ -26,9 +26,7 @@ class QostodianNexus(GenericGuardrailAPI):
         api_base: Optional[str] = None,
         **kwargs,
     ):
-        api_base = api_base or os.environ.get(
-            "QOSTODIAN_NEXUS_API_BASE", "http://nexus:8800"
-        )
+        api_base = api_base or os.environ.get("QOSTODIAN_NEXUS_API_BASE", "http://nexus:8800")
 
         kwargs["guardrail_name"] = kwargs.get("guardrail_name", GUARDRAIL_NAME)
 
@@ -41,9 +39,7 @@ class QostodianNexus(GenericGuardrailAPI):
         ]
 
         existing = kwargs.get("extra_headers") or []
-        kwargs["extra_headers"] = nexus_headers + [
-            h for h in existing if h not in nexus_headers
-        ]
+        kwargs["extra_headers"] = nexus_headers + [h for h in existing if h not in nexus_headers]
 
         super().__init__(
             api_base=api_base,

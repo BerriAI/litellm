@@ -1,5 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse } from "../../../key_team_helpers/key_list";
@@ -128,6 +128,45 @@ describe("TopKeyView", () => {
     expect(chartViewButton).toHaveClass("bg-blue-100");
   });
 
+  it("renders cyan bars with truncated aliases in chart view and opens the key info modal on bar click", async () => {
+    const mockKeyInfo = { key: "info" };
+    const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
+    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
+    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          {
+            api_key: "key-123",
+            key_alias: "A Very Long Key Alias",
+            spend: 100,
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Chart View" }));
+
+    const bars = container.querySelectorAll("path.recharts-rectangle");
+    expect(bars).toHaveLength(1);
+    expect(bars[0].getAttribute("fill")).toBe("var(--color-cyan-500, #06b6d4)");
+    expect(screen.getAllByText("A Very Lon...").length).toBeGreaterThan(0);
+
+    fireEvent.click(bars[0]);
+
+    await waitFor(() => {
+      expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "key-123");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Key Info View for key-123")).toBeInTheDocument();
+  });
+
   it("should switch to table view when table view button is clicked", async () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
@@ -171,7 +210,9 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    expect(screen.getByText(/sk-1234\.\.\./)).toBeInTheDocument();
+    const keyId = screen.getByText("sk-1234567890abcdef");
+    expect(keyId).toBeInTheDocument();
+    expect(keyId).toHaveClass("truncate");
   });
 
   it("should display dash for missing key alias", () => {
@@ -206,7 +247,7 @@ describe("TopKeyView", () => {
     expect(screen.getByText("$123.46")).toBeInTheDocument();
   });
 
-  it("should display less than 0.01 spend as <$0.01", () => {
+  it("should display sub-cent spend as < $0.01", () => {
     render(
       <TopKeyView
         {...baseProps}
@@ -214,15 +255,15 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            spend: 0.005,
+            spend: 0.004,
           },
         ]}
       />,
     );
-    expect(screen.getByText("<$0.01")).toBeInTheDocument();
+    expect(screen.getByText("< $0.01")).toBeInTheDocument();
   });
 
-  it("should display zero spend correctly", () => {
+  it("should display zero spend as a dash", () => {
     render(
       <TopKeyView
         {...baseProps}
@@ -235,7 +276,8 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    expect(screen.getByText("$0.00")).toBeInTheDocument();
+    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
   it("should display dash for empty tags", () => {
@@ -376,7 +418,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -410,7 +452,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -447,7 +489,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -483,7 +525,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -522,7 +564,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -552,7 +594,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
+    const keyIdButton = screen.getByText("key-123").closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }

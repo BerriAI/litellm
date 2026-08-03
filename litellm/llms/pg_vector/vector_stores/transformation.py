@@ -27,9 +27,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
     - api_key: API key for authentication with the PG vector service
     """
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """
         Validate environment and set headers for PG vector service authentication
         """
@@ -83,9 +81,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         litellm_params: dict,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-        encoded_vector_store_id = encode_url_path_segment(
-            vector_store_id, field_name="vector_store_id"
-        )
+        encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url = f"{api_base}/{encoded_vector_store_id}/search"
         _, request_body = super().transform_search_vector_store_request(
             vector_store_id=vector_store_id,

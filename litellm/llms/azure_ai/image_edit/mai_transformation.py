@@ -77,13 +77,10 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
                 tuple(map(int, size.lower().split("x", 1)))
                 return
             except ValueError:
-                raise ValueError(
-                    f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024')."
-                )
+                raise ValueError(f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024').")
 
         raise ValueError(
-            f"Unsupported size value: '{size}'. "
-            f"Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string."
+            f"Unsupported size value: '{size}'. Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string."
         )
 
     def validate_environment(
@@ -118,11 +115,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
                 "Azure AI API base is required. Set AZURE_AI_API_BASE environment variable or pass api_base parameter."
             )
 
-        api_version = (
-            litellm_params.get("api_version")
-            or get_secret_str("AZURE_AI_API_VERSION")
-            or "preview"
-        )
+        api_version = litellm_params.get("api_version") or get_secret_str("AZURE_AI_API_VERSION") or "preview"
 
         return AzureFoundryMAIImageGenerationConfig.get_mai_image_edit_url(
             api_base=api_base,
@@ -145,11 +138,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         if prompt is not None:
             request_params["prompt"] = prompt
 
-        data_without_files = {
-            key: value
-            for key, value in request_params.items()
-            if key not in ["image", "mask"]
-        }
+        data_without_files = {key: value for key, value in request_params.items() if key not in ["image", "mask"]}
         files_list: List[Tuple[str, Any]] = []
 
         if image is not None:
@@ -174,16 +163,10 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         try:
             response = raw_response.json()
         except Exception:
-            raise OpenAIError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
         if "usage" in response:
-            response["usage"] = (
-                AzureFoundryMAIImageGenerationConfig.normalize_mai_image_usage(
-                    response.get("usage")
-                )
-            )
+            response["usage"] = AzureFoundryMAIImageGenerationConfig.normalize_mai_image_usage(response.get("usage"))
 
         logging_obj.post_call(
             input="",

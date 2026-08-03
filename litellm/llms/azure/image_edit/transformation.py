@@ -65,9 +65,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         params = GenericLiteLLMParams(**(litellm_params or {}))
         if api_key is not None and params.api_key is None:
             params.api_key = api_key
-        return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=params
-        )
+        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=params)
 
     def get_complete_url(
         self,
@@ -128,7 +126,5 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
         return str(final_url)
 
-    def finalize_image_edit_request_data(
-        self, data: dict, resolved_request_url: str
-    ) -> dict:
+    def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:
         return self.azure_deployment_image_edit_form_data(data, resolved_request_url)

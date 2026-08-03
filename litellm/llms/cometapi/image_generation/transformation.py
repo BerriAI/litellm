@@ -24,9 +24,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://api.cometapi.com"
     IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         https://api.cometapi.com/v1/images/generations
         """
@@ -94,11 +92,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("COMETAPI_KEY")
-            or get_secret_str("COMETAPI_API_KEY")
-        )
+        final_api_key: Optional[str] = api_key or get_secret_str("COMETAPI_KEY") or get_secret_str("COMETAPI_API_KEY")
         if not final_api_key:
             raise ValueError("COMETAPI_KEY or COMETAPI_API_KEY is not set")
 

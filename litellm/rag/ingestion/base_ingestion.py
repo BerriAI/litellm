@@ -60,9 +60,7 @@ class BaseRAGIngestion(ABC):
             ingest_options.get("chunking_strategy") or {"type": "auto"},
         )
         self.embedding_config = ingest_options.get("embedding")
-        self.vector_store_config: Dict[str, Any] = cast(
-            Dict[str, Any], ingest_options.get("vector_store") or {}
-        )
+        self.vector_store_config: Dict[str, Any] = cast(Dict[str, Any], ingest_options.get("vector_store") or {})
         self.ingest_name = ingest_options.get("name")
 
         # Load credentials from litellm_credential_name if provided in vector_store config
@@ -82,9 +80,7 @@ class BaseRAGIngestion(ABC):
 
         credential_name = self.vector_store_config.get("litellm_credential_name")
         if credential_name and litellm.credential_list:
-            credential_values = CredentialAccessor.get_credential_values(
-                credential_name
-            )
+            credential_values = CredentialAccessor.get_credential_values(credential_name)
             if not credential_values:
                 return
             for key, value in credential_values.items():
@@ -129,9 +125,7 @@ class BaseRAGIngestion(ABC):
             response.raise_for_status()
             file_content = response.content
             filename = file_url.split("/")[-1] or "document"
-            content_type = response.headers.get(
-                "content-type", "application/octet-stream"
-            )
+            content_type = response.headers.get("content-type", "application/octet-stream")
             return filename, file_content, content_type, None
 
         if file_id:
@@ -184,7 +178,9 @@ class BaseRAGIngestion(ABC):
         # Extract text from pages
         if hasattr(ocr_response, "pages") and ocr_response.pages:  # type: ignore
             return "\n\n".join(
-                page.markdown for page in ocr_response.pages if hasattr(page, "markdown")  # type: ignore
+                page.markdown
+                for page in ocr_response.pages
+                if hasattr(page, "markdown")  # type: ignore
             )
 
         return None

@@ -17,9 +17,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     budget_id: Optional[str] = None
     spend: Optional[float] = 0.0
     total_spend: Optional[float] = 0.0
-    litellm_budget_table: Optional[
-        Union[LiteLLM_BudgetTableFull, LiteLLM_BudgetTable]
-    ] = None
+    litellm_budget_table: Optional[Union[LiteLLM_BudgetTableFull, LiteLLM_BudgetTable]] = None
 
     def safe_get_team_member_rpm_limit(self) -> Optional[int]:
         if self.litellm_budget_table is not None:

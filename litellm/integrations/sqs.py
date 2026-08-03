@@ -69,9 +69,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         **kwargs,
     ) -> None:
         try:
-            verbose_logger.debug(
-                f"in init sqs logger - sqs_callback_params {litellm.aws_sqs_callback_params}"
-            )
+            verbose_logger.debug(f"in init sqs logger - sqs_callback_params {litellm.aws_sqs_callback_params}")
 
             self.async_httpx_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback,
@@ -103,9 +101,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
 
-            verbose_logger.debug(
-                f"sqs flush interval: {sqs_flush_interval}, sqs batch size: {sqs_batch_size}"
-            )
+            verbose_logger.debug(f"sqs flush interval: {sqs_flush_interval}, sqs batch size: {sqs_batch_size}")
 
             CustomBatchLogger.__init__(
                 self,
@@ -150,109 +146,66 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             if isinstance(value, str) and value.startswith("os.environ/"):
                 litellm.aws_sqs_callback_params[key] = litellm.get_secret(value)
 
-        self.sqs_queue_url = (
-            litellm.aws_sqs_callback_params.get("sqs_queue_url") or sqs_queue_url
-        )
-        self.sqs_region_name = (
-            litellm.aws_sqs_callback_params.get("sqs_region_name") or sqs_region_name
-        )
-        self.sqs_api_version = (
-            litellm.aws_sqs_callback_params.get("sqs_api_version") or sqs_api_version
-        )
-        self.sqs_use_ssl = (
-            litellm.aws_sqs_callback_params.get("sqs_use_ssl", True) or sqs_use_ssl
-        )
-        self.sqs_verify = (
-            litellm.aws_sqs_callback_params.get("sqs_verify") or sqs_verify
-        )
-        self.sqs_endpoint_url = (
-            litellm.aws_sqs_callback_params.get("sqs_endpoint_url") or sqs_endpoint_url
-        )
+        self.sqs_queue_url = litellm.aws_sqs_callback_params.get("sqs_queue_url") or sqs_queue_url
+        self.sqs_region_name = litellm.aws_sqs_callback_params.get("sqs_region_name") or sqs_region_name
+        self.sqs_api_version = litellm.aws_sqs_callback_params.get("sqs_api_version") or sqs_api_version
+        self.sqs_use_ssl = litellm.aws_sqs_callback_params.get("sqs_use_ssl", True) or sqs_use_ssl
+        self.sqs_verify = litellm.aws_sqs_callback_params.get("sqs_verify") or sqs_verify
+        self.sqs_endpoint_url = litellm.aws_sqs_callback_params.get("sqs_endpoint_url") or sqs_endpoint_url
         self.sqs_aws_access_key_id = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_access_key_id")
-            or sqs_aws_access_key_id
+            litellm.aws_sqs_callback_params.get("sqs_aws_access_key_id") or sqs_aws_access_key_id
         )
 
         self.sqs_aws_secret_access_key = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_secret_access_key")
-            or sqs_aws_secret_access_key
+            litellm.aws_sqs_callback_params.get("sqs_aws_secret_access_key") or sqs_aws_secret_access_key
         )
 
         self.sqs_aws_session_token = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_session_token")
-            or sqs_aws_session_token
+            litellm.aws_sqs_callback_params.get("sqs_aws_session_token") or sqs_aws_session_token
         )
 
-        self.sqs_aws_session_name = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_session_name")
-            or sqs_aws_session_name
-        )
+        self.sqs_aws_session_name = litellm.aws_sqs_callback_params.get("sqs_aws_session_name") or sqs_aws_session_name
 
-        self.sqs_aws_profile_name = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_profile_name")
-            or sqs_aws_profile_name
-        )
+        self.sqs_aws_profile_name = litellm.aws_sqs_callback_params.get("sqs_aws_profile_name") or sqs_aws_profile_name
 
-        self.sqs_aws_role_name = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_role_name")
-            or sqs_aws_role_name
-        )
+        self.sqs_aws_role_name = litellm.aws_sqs_callback_params.get("sqs_aws_role_name") or sqs_aws_role_name
 
         self.sqs_aws_web_identity_token = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_web_identity_token")
-            or sqs_aws_web_identity_token
+            litellm.aws_sqs_callback_params.get("sqs_aws_web_identity_token") or sqs_aws_web_identity_token
         )
 
-        self.sqs_aws_sts_endpoint = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_sts_endpoint")
-            or sqs_aws_sts_endpoint
-        )
+        self.sqs_aws_sts_endpoint = litellm.aws_sqs_callback_params.get("sqs_aws_sts_endpoint") or sqs_aws_sts_endpoint
         self.sqs_strip_base64_files = (
-            litellm.aws_sqs_callback_params.get("sqs_strip_base64_files", False)
-            or sqs_strip_base64_files
+            litellm.aws_sqs_callback_params.get("sqs_strip_base64_files", False) or sqs_strip_base64_files
         )
 
         self.sqs_aws_use_application_level_encryption = (
-            litellm.aws_sqs_callback_params.get(
-                "sqs_aws_use_application_level_encryption", False
-            )
+            litellm.aws_sqs_callback_params.get("sqs_aws_use_application_level_encryption", False)
             or sqs_aws_use_application_level_encryption
         )
         self.sqs_app_encryption_key_b64 = (
-            litellm.aws_sqs_callback_params.get("sqs_app_encryption_key_b64")
-            or sqs_app_encryption_key_b64
+            litellm.aws_sqs_callback_params.get("sqs_app_encryption_key_b64") or sqs_app_encryption_key_b64
         )
         self.sqs_app_encryption_aad = (
-            litellm.aws_sqs_callback_params.get("sqs_app_encryption_aad")
-            or sqs_app_encryption_aad
+            litellm.aws_sqs_callback_params.get("sqs_app_encryption_aad") or sqs_app_encryption_aad
         )
         self.app_crypto: Optional["AppCrypto"] = None
         if self.sqs_aws_use_application_level_encryption:
             from litellm.litellm_core_utils.app_crypto import AppCrypto
 
             if not self.sqs_app_encryption_key_b64:
-                raise ValueError(
-                    "sqs_app_encryption_key_b64 is required when encryption is enabled."
-                )
+                raise ValueError("sqs_app_encryption_key_b64 is required when encryption is enabled.")
             key = base64.b64decode(self.sqs_app_encryption_key_b64)
             self.app_crypto = AppCrypto(key)
             verbose_logger.debug("SQSLogger: Application-level encryption enabled.")
-        self.sqs_config = (
-            litellm.aws_sqs_callback_params.get("sqs_config") or sqs_config
-        )
+        self.sqs_config = litellm.aws_sqs_callback_params.get("sqs_config") or sqs_config
 
-    async def async_log_success_event(
-        self, kwargs, response_obj, start_time, end_time
-    ) -> None:
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         try:
-            verbose_logger.debug(
-                "SQS Logging - Enters logging function for model %s", kwargs
-            )
+            verbose_logger.debug("SQS Logging - Enters logging function for model %s", kwargs)
             standard_logging_payload = kwargs.get("standard_logging_object")
             if self.sqs_strip_base64_files:
-                standard_logging_payload = await self._strip_base64_from_messages(
-                    standard_logging_payload
-                )
+                standard_logging_payload = await self._strip_base64_from_messages(standard_logging_payload)
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_payload is None")
 
@@ -271,9 +224,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_payload is None")
             if self.sqs_strip_base64_files:
-                standard_logging_payload = await self._strip_base64_from_messages(
-                    standard_logging_payload
-                )
+                standard_logging_payload = await self._strip_base64_from_messages(standard_logging_payload)
 
             self.log_queue.append(standard_logging_payload)
             verbose_logger.debug(
@@ -283,9 +234,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
-            )
+            verbose_logger.exception(f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}")
             pass
 
     async def async_send_batch(self) -> None:
@@ -324,28 +273,21 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
 
             json_data = json.loads(safe_dumps(payload))
             if self.app_crypto:
-                aad_bytes = (
-                    self.sqs_app_encryption_aad.encode("utf-8")
-                    if self.sqs_app_encryption_aad
-                    else None
-                )
+                aad_bytes = self.sqs_app_encryption_aad.encode("utf-8") if self.sqs_app_encryption_aad else None
                 encrypted = self.app_crypto.encrypt_json(json_data, aad=aad_bytes)
                 json_string = json.dumps({"__encrypted__": True, "payload": encrypted})
             else:
                 json_string = safe_dumps(payload)
 
-            body = (
-                f"Action={SQS_SEND_MESSAGE_ACTION}&Version={SQS_API_VERSION}&MessageBody="
-                + quote(json_string, safe="")
+            body = f"Action={SQS_SEND_MESSAGE_ACTION}&Version={SQS_API_VERSION}&MessageBody=" + quote(
+                json_string, safe=""
             )
 
             headers = {
                 "Content-Type": "application/x-www-form-urlencoded",
             }
 
-            req = requests.Request(
-                "POST", self.sqs_queue_url, data=body, headers=headers
-            )
+            req = requests.Request("POST", self.sqs_queue_url, data=body, headers=headers)
             prepped = req.prepare()
 
             aws_request = AWSRequest(
@@ -377,13 +319,9 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
 
             # Create a minimal standard logging payload
-            standard_logging_object: StandardLoggingPayload = (
-                create_dummy_standard_logging_payload()
-            )
+            standard_logging_object: StandardLoggingPayload = create_dummy_standard_logging_payload()
             # Attempt to send a single message
             await self.async_send_message(standard_logging_object)
             return IntegrationHealthCheckStatus(status="healthy", error_message=None)
         except Exception as e:
-            return IntegrationHealthCheckStatus(
-                status="unhealthy", error_message=str(e)
-            )
+            return IntegrationHealthCheckStatus(status="unhealthy", error_message=str(e))

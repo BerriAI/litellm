@@ -36,9 +36,7 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
             Complete URL for the FLUX 2 image generation endpoint
         """
         if api_base is None:
-            raise ValueError(
-                "api_base is required for Azure AI FLUX 2 image generation"
-            )
+            raise ValueError("api_base is required for Azure AI FLUX 2 image generation")
 
         api_base = api_base.rstrip("/")
         api_version = api_version or "preview"

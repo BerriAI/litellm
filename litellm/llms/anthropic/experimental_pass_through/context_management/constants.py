@@ -40,6 +40,4 @@ COMPACT_DEFAULT_INSTRUCTIONS = (
 # Appended to the default prompt when ``tools`` are present and the caller
 # did not supply custom ``instructions``. Matches the guidance in the
 # Anthropic docs under "Compaction might fail when tools are defined".
-COMPACT_NO_TOOL_CALLS_SUFFIX = (
-    " Do not call any tools while writing this summary; respond with text only."
-)
+COMPACT_NO_TOOL_CALLS_SUFFIX = " Do not call any tools while writing this summary; respond with text only."

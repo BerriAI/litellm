@@ -104,16 +104,12 @@ class A2ACompletionBridgeTransformation:
         # ``extra_body.metadata`` so the configured keys remain authoritative
         # and an A2A caller cannot overwrite server-set run metadata.
         existing_metadata = extra_body.get("metadata")
-        existing_dict: Dict[str, Any] = (
-            existing_metadata if isinstance(existing_metadata, dict) else {}
-        )
+        existing_dict: Dict[str, Any] = existing_metadata if isinstance(existing_metadata, dict) else {}
         merged_metadata: Dict[str, Any] = {**forward_metadata, **existing_dict}
         extra_body = {**extra_body, "metadata": merged_metadata}
         completion_params["extra_body"] = extra_body
 
-        verbose_logger.debug(
-            f"A2A -> completion forward metadata keys={list(forward_metadata.keys())}"
-        )
+        verbose_logger.debug(f"A2A -> completion forward metadata keys={list(forward_metadata.keys())}")
 
     @staticmethod
     def a2a_message_to_openai_messages(
@@ -149,9 +145,7 @@ class A2ACompletionBridgeTransformation:
         # once at run level via extra_body.metadata (LangGraph POST /runs/wait shape).
         openai_message: Dict[str, Any] = {"role": openai_role, "content": content}
 
-        verbose_logger.debug(
-            f"A2A -> OpenAI transform: role={role} -> {openai_role}, content_length={len(content)}"
-        )
+        verbose_logger.debug(f"A2A -> OpenAI transform: role={role} -> {openai_role}, content_length={len(content)}")
 
         return [openai_message]
 

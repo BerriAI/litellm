@@ -1,18 +1,20 @@
 """LLM-as-a-Judge guardrail: uses an LLM to score responses against weighted criteria."""
 
 import json
+import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union, cast
 
 import litellm
 from fastapi import HTTPException
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
+    from litellm import Router
     from litellm.types.guardrails import Guardrail, LitellmParams
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import StandardLoggingEvalInformation
@@ -28,6 +30,38 @@ Return ONLY valid JSON in this exact format:
 }"""
 
 _VALID_ON_FAILURE = frozenset({"block", "log"})
+
+
+def _default_router_provider() -> "Router | None":
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except ImportError:
+        return None
+
+    return llm_router
+
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+
+def _parse_judge_verdict(raw: str) -> Dict[str, Any]:
+    """Parse the judge's JSON verdict, tolerating markdown fences and surrounding prose."""
+    text = raw.strip()
+    fenced = _JSON_FENCE_RE.search(text)
+    if fenced is not None:
+        text = fenced.group(1).strip()
+    parsed: object
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("judge response is not a JSON object")
+    return cast(Dict[str, Any], parsed)  # cast-ok: narrowed to dict by the isinstance guard above
 
 
 def _extract_text_from_content(content: Any) -> str:
@@ -68,11 +102,10 @@ def _build_judge_prompt(
     response_text: str,
 ) -> str:
     criteria_block = "\n".join(
-        f'- {c.get("name", "")} (weight {c.get("weight", 0)}%): {c.get("description", "")}'
-        for c in criteria
+        f"- {c.get('name', '')} (weight {c.get('weight', 0)}%): {c.get('description', '')}" for c in criteria
     )
     conversation = "\n".join(
-        f'{m.get("role", "user").upper()}: {_extract_text_from_content(m.get("content", ""))}'
+        f"{m.get('role', 'user').upper()}: {_extract_text_from_content(m.get('content', ''))}"
         for m in messages
         if m.get("content") is not None
     )
@@ -93,31 +126,21 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         criteria: List[Dict[str, Any]],
         overall_threshold: float = 80.0,
         on_failure: Literal["block", "log"] = "block",
-        event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks]]
-        ] = None,
+        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = None,
         default_on: bool = False,
+        router_provider: "Callable[[], Router | None] | None" = None,
         **kwargs: Any,
     ) -> None:
-        _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = (
-            None
-        )
+        _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = None
         if event_hook is not None:
             if isinstance(event_hook, list):
-                _event_hook = [
-                    GuardrailEventHooks(h) if isinstance(h, str) else h
-                    for h in event_hook
-                ]
+                _event_hook = [GuardrailEventHooks(h) if isinstance(h, str) else h for h in event_hook]
             else:
-                _event_hook = (
-                    GuardrailEventHooks(event_hook)
-                    if isinstance(event_hook, str)
-                    else event_hook
-                )
+                _event_hook = GuardrailEventHooks(event_hook) if isinstance(event_hook, str) else event_hook
 
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=[GuardrailEventHooks.post_call],
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             event_hook=_event_hook or GuardrailEventHooks.post_call,
             default_on=default_on,
             **kwargs,
@@ -126,6 +149,11 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         self.criteria = criteria
         self.overall_threshold = overall_threshold
         self.on_failure = on_failure
+        self._router_provider = router_provider or _default_router_provider
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [GuardrailEventHooks.post_call]
 
     async def _run_judge(
         self,
@@ -139,14 +167,27 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 "content": _build_judge_prompt(self.criteria, messages, response_text),
             },
         ]
-        response = await litellm.acompletion(
-            model=self.judge_model,
-            messages=judge_messages,
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
+        router = self._router_provider()
+        if router is not None and (
+            self.judge_model in router.model_group_alias or router.get_model_list(model_name=self.judge_model)
+        ):
+            response = await router.acompletion(
+                model=self.judge_model,
+                messages=judge_messages,
+                response_format={"type": "json_object"},
+                temperature=0,
+                num_retries=0,
+                fallbacks=[],
+            )
+        else:
+            response = await litellm.acompletion(
+                model=self.judge_model,
+                messages=judge_messages,
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
         raw = response.choices[0].message.content or "{}"  # type: ignore[union-attr]
-        return json.loads(raw)
+        return _parse_judge_verdict(raw)
 
     async def apply_guardrail(
         self,
@@ -174,20 +215,14 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             try:
                 judge_result = await self._run_judge(messages, response_text)
             except Exception as judge_err:
-                verbose_logger.warning(
-                    f"llm_as_a_judge guardrail: judge call failed, failing open. Error: {judge_err}"
-                )
+                verbose_logger.warning(f"llm_as_a_judge guardrail: judge call failed, failing open. Error: {judge_err}")
                 status = "guardrail_failed_to_respond"
                 return inputs
 
             try:
-                overall_score = max(
-                    0.0, min(100.0, float(judge_result.get("overall_score", 100)))
-                )
+                overall_score = max(0.0, min(100.0, float(judge_result.get("overall_score", 100))))
             except (TypeError, ValueError):
-                verbose_logger.warning(
-                    "llm_as_a_judge: invalid overall_score from judge, failing open"
-                )
+                verbose_logger.warning("llm_as_a_judge: invalid overall_score from judge, failing open")
                 return inputs
 
             passed = overall_score >= self.overall_threshold
@@ -251,9 +286,7 @@ def initialize_guardrail(
 
     judge_model = _get_litellm_param(litellm_params, guardrail, "judge_model")
     if not judge_model:
-        raise ValueError(
-            "llm_as_a_judge guardrail requires judge_model in litellm_params"
-        )
+        raise ValueError("llm_as_a_judge guardrail requires judge_model in litellm_params")
 
     criteria = _get_litellm_param(litellm_params, guardrail, "criteria") or []
     if not criteria:
@@ -261,19 +294,13 @@ def initialize_guardrail(
 
     weight_total = sum(float(c.get("weight", 0)) for c in criteria)
     if abs(weight_total - 100) > 0.5:
-        raise ValueError(
-            f"llm_as_a_judge criterion weights must sum to 100 (got {weight_total})"
-        )
+        raise ValueError(f"llm_as_a_judge criterion weights must sum to 100 (got {weight_total})")
 
     on_failure = _get_litellm_param(litellm_params, guardrail, "on_failure", "block")
     if on_failure not in _VALID_ON_FAILURE:
-        raise ValueError(
-            f"llm_as_a_judge on_failure must be 'block' or 'log', got '{on_failure}'"
-        )
+        raise ValueError(f"llm_as_a_judge on_failure must be 'block' or 'log', got '{on_failure}'")
 
-    overall_threshold = float(
-        _get_litellm_param(litellm_params, guardrail, "overall_threshold", 80.0)
-    )
+    overall_threshold = float(_get_litellm_param(litellm_params, guardrail, "overall_threshold", 80.0))
 
     mode = _get_litellm_param(litellm_params, guardrail, "mode")
     event_hook: Optional[GuardrailEventHooks] = None
@@ -287,15 +314,19 @@ def initialize_guardrail(
         overall_threshold=overall_threshold,
         on_failure=on_failure,
         event_hook=event_hook,
-        default_on=bool(
-            _get_litellm_param(litellm_params, guardrail, "default_on", False)
-        ),
+        default_on=bool(_get_litellm_param(litellm_params, guardrail, "default_on", False)),
     )
     litellm.logging_callback_manager.add_litellm_callback(instance)
     return instance
 
 
+guardrail_class_registry = {
+    SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: LLMAsAJudgeGuardrail,
+}
+
+
 __all__ = [
     "LLMAsAJudgeGuardrail",
+    "guardrail_class_registry",
     "initialize_guardrail",
 ]

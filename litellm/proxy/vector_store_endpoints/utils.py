@@ -48,10 +48,7 @@ def assert_proxy_admin_for_vector_store_index_management(
         return
     raise HTTPException(
         status_code=403,
-        detail=(
-            f"Only proxy admins can {operation} vector store indexes. "
-            "Contact your LiteLLM administrator."
-        ),
+        detail=(f"Only proxy admins can {operation} vector store indexes. Contact your LiteLLM administrator."),
     )
 
 
@@ -171,26 +168,17 @@ async def can_user_access_vector_store(
 
     key_object_permission = user_api_key_dict.object_permission
     if key_object_permission is None:
-        key_object_permission = await _get_object_permission_for_id(
-            user_api_key_dict.object_permission_id
-        )
+        key_object_permission = await _get_object_permission_for_id(user_api_key_dict.object_permission_id)
     if _object_permission_allows_vector_store(key_object_permission, vector_store_id):
         return True
 
-    team_object_permission: Optional[LiteLLM_ObjectPermissionTable] = (
-        user_api_key_dict.team_object_permission
-    )
+    team_object_permission: Optional[LiteLLM_ObjectPermissionTable] = user_api_key_dict.team_object_permission
     if team_object_permission is None:
-        team_object_permission = await _get_object_permission_for_id(
-            user_api_key_dict.team_object_permission_id
-        )
+        team_object_permission = await _get_object_permission_for_id(user_api_key_dict.team_object_permission_id)
     if _object_permission_allows_vector_store(team_object_permission, vector_store_id):
         return True
 
-    if (
-        user_api_key_dict.team_id is not None
-        and user_api_key_dict.team_id == vector_store_team_id
-    ):
+    if user_api_key_dict.team_id is not None and user_api_key_dict.team_id == vector_store_team_id:
         return True
 
     return False
@@ -247,9 +235,7 @@ async def get_litellm_managed_vector_store(
         )
         if not rows:
             return None
-        return _normalize_litellm_params(
-            LiteLLM_ManagedVectorStore(**rows[0].model_dump())
-        )
+        return _normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to resolve vector store id=%s from shared cache: %s",
@@ -282,9 +268,7 @@ async def assert_user_can_access_vector_store_id(
 
     Unknown ids are treated as provider-native ids and are not rejected here.
     """
-    vector_store = await get_litellm_managed_vector_store(
-        vector_store_id=vector_store_id
-    )
+    vector_store = await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
     if vector_store is not None:
         await assert_user_can_access_vector_store(
             vector_store=vector_store,
@@ -348,10 +332,7 @@ def check_vector_store_permission(
 
             if index_config.get("index_name") == index_name:
                 index_permissions = index_config.get("index_permissions", [])
-                if (
-                    isinstance(index_permissions, list)
-                    and permission in index_permissions
-                ):
+                if isinstance(index_permissions, list) and permission in index_permissions:
                     return True
 
     return False
@@ -379,15 +360,11 @@ def is_allowed_to_call_vector_store_endpoint(
     key_metadata = user_api_key_dict.metadata
     team_metadata = user_api_key_dict.team_metadata
 
-    provider_config = ProviderConfigManager.get_provider_vector_stores_config(
-        provider=provider
-    )
+    provider_config = ProviderConfigManager.get_provider_vector_stores_config(provider=provider)
     if provider_config is None:
         return None
 
-    provider_vector_store_endpoints = (
-        provider_config.get_vector_store_endpoints_by_type()
-    )
+    provider_vector_store_endpoints = provider_config.get_vector_store_endpoints_by_type()
 
     # Inline import — auth_utils participates in a proxy import cycle.
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
@@ -413,17 +390,13 @@ def is_allowed_to_call_vector_store_endpoint(
     # Determine the permission type based on the request
     permission_type = None
     for endpoint in provider_vector_store_endpoints["read"]:
-        if request.method == endpoint[0] and _does_endpoint_match(
-            endpoint[1], request_route
-        ):
+        if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
             permission_type = "read"
             break
 
     if permission_type is None:
         for endpoint in provider_vector_store_endpoints["write"]:
-            if request.method == endpoint[0] and _does_endpoint_match(
-                endpoint[1], request_route
-            ):
+            if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
                 permission_type = "write"
                 break
 
@@ -469,15 +442,11 @@ def is_allowed_to_call_vector_store_files_endpoint(
     key_metadata = user_api_key_dict.metadata
     team_metadata = user_api_key_dict.team_metadata
 
-    provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
-        provider=provider
-    )
+    provider_config = ProviderConfigManager.get_provider_vector_store_files_config(provider=provider)
     if provider_config is None:
         return None
 
-    provider_vector_store_endpoints = (
-        provider_config.get_vector_store_file_endpoints_by_type()
-    )
+    provider_vector_store_endpoints = provider_config.get_vector_store_file_endpoints_by_type()
 
     # Inline import — auth_utils participates in a proxy import cycle.
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
@@ -486,17 +455,13 @@ def is_allowed_to_call_vector_store_files_endpoint(
 
     permission_type: Optional[str] = None
     for endpoint in provider_vector_store_endpoints.get("read", ()):
-        if request.method == endpoint[0] and _does_endpoint_match(
-            endpoint[1], request_route
-        ):
+        if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
             permission_type = "read"
             break
 
     if permission_type is None:
         for endpoint in provider_vector_store_endpoints.get("write", ()):
-            if request.method == endpoint[0] and _does_endpoint_match(
-                endpoint[1], request_route
-            ):
+            if request.method == endpoint[0] and _does_endpoint_match(endpoint[1], request_route):
                 permission_type = "write"
                 break
 

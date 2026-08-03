@@ -60,9 +60,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         api_base = litellm_params.get("api_base")
 
         # Convert chat messages to Responses API input format
-        input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-            messages
-        )
+        input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
         # Use system param if instructions not extracted from messages
         if instructions is None and system is not None:
@@ -91,9 +89,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except OpenAIError as e:
-            verbose_logger.warning(
-                f"OpenAI CountTokens API error: status={e.status_code}, message={e.message}"
-            )
+            verbose_logger.warning(f"OpenAI CountTokens API error: status={e.status_code}, message={e.message}")
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

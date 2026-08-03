@@ -47,9 +47,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return api_base or ""
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         """
         Get the supported OpenAI params for the `whisper-1` models
         """
@@ -109,17 +107,13 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         data = {"model": model, "file": audio_file, **optional_params}
 
         if "response_format" not in data:
-            data["response_format"] = (
-                "verbose_json"  # ensures 'duration' is received - used for cost calculation
-            )
+            data["response_format"] = "verbose_json"  # ensures 'duration' is received - used for cost calculation
 
         return AudioTranscriptionRequestData(
             data=data,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
         return OpenAIError(
             status_code=status_code,
             message=error_message,
@@ -138,10 +132,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 raise
             return TranscriptionResponse(text=raw_response.text)
 
-        if any(
-            key in raw_response_json
-            for key in TranscriptionResponse.model_fields.keys()
-        ):
+        if any(key in raw_response_json for key in TranscriptionResponse.model_fields.keys()):
             return TranscriptionResponse(**raw_response_json)
         else:
             raise ValueError(

@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
 
 import httpx
 from typing_extensions import TypedDict
@@ -35,7 +35,7 @@ class HuggingFaceRerankResponseItem(TypedDict):
 
     index: int
     score: float
-    text: Optional[str]  # Optional, included when return_text=True
+    text: str | None  # Optional, included when return_text=True
 
 
 class HuggingFaceRerankResponse(TypedDict):
@@ -50,7 +50,7 @@ HuggingFaceRerankResponseList = List[HuggingFaceRerankResponseItem]
 
 
 class HuggingFaceRerankConfig(BaseRerankConfig):
-    def get_api_base(self, model: str, api_base: Optional[str]) -> str:
+    def get_api_base(self, model: str, api_base: str | None) -> str:
         if api_base is not None:
             return api_base
         elif os.getenv("HF_API_BASE") is not None:
@@ -62,9 +62,9 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         """
         Get the complete URL for the API call, including the /rerank suffix if necessary.
@@ -89,17 +89,18 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: Optional[dict],
+        non_default_params: dict | None,
         model: str,
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         optional_rerank_params = {}
         if non_default_params is not None:
@@ -121,9 +122,9 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         # Get API credentials
         api_key, api_base = self.get_api_credentials(api_key=api_key, api_base=api_base)
@@ -146,14 +147,12 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Union[OptionalRerankParams, dict],
         headers: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> dict:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for HuggingFace rerank")
         if "texts" not in optional_rerank_params:
-            raise ValueError(
-                "Cohere 'documents' param is required for HuggingFace rerank"
-            )
+            raise ValueError("Cohere 'documents' param is required for HuggingFace rerank")
         # Ensure return_text is a boolean value
         # HuggingFace API expects return_text parameter, corresponding to our return_documents parameter
         request_body = {
@@ -172,7 +171,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LoggingClass,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -209,25 +208,15 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             estimated_input_tokens = token_counter(model=model, text=input_text)
         except Exception:
             # Fallback to reasonable estimates if token counting fails
-            estimated_output_tokens = (
-                len(raw_response_json) * 10 if raw_response_json else 10
-            )
-            estimated_input_tokens = (
-                len(input_text) * 4 if "input_text" in locals() else 0
-            )
+            estimated_output_tokens = len(raw_response_json) * 10 if raw_response_json else 10
+            estimated_input_tokens = len(input_text) * 4 if "input_text" in locals() else 0
 
         _billed_units = RerankBilledUnits(search_units=1)
-        _tokens = RerankTokens(
-            input_tokens=estimated_input_tokens, output_tokens=estimated_output_tokens
-        )
-        rerank_meta = RerankResponseMeta(
-            api_version={"version": "1.0"}, billed_units=_billed_units, tokens=_tokens
-        )
+        _tokens = RerankTokens(input_tokens=estimated_input_tokens, output_tokens=estimated_output_tokens)
+        rerank_meta = RerankResponseMeta(api_version={"version": "1.0"}, billed_units=_billed_units, tokens=_tokens)
 
         # Check if documents should be returned based on request parameters
-        should_return_documents = request_data.get(
-            "return_text", False
-        ) or request_data.get("return_documents", False)
+        should_return_documents = request_data.get("return_text", False) or request_data.get("return_documents", False)
         original_documents = request_data.get("texts", [])
 
         results = []
@@ -251,9 +240,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
                 if text_content:
                     result["document"] = RerankResponseDocument(text=text_content)
                 # 2. If no text in API response but original documents are available, use those
-                elif original_documents and 0 <= item.get("index", -1) < len(
-                    original_documents
-                ):
+                elif original_documents and 0 <= item.get("index", -1) < len(original_documents):
                     doc = original_documents[item.get("index")]
                     if isinstance(doc, str):
                         result["document"] = RerankResponseDocument(text=doc)
@@ -275,9 +262,9 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
 
     def get_api_credentials(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> Tuple[str | None, str | None]:
         """
         Get API key and base URL from multiple sources.
         Returns tuple of (api_key, api_base).
@@ -287,16 +274,11 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             api_base: API base provided directly to this function, takes precedence over all other sources
         """
         # Get API key from multiple sources
-        final_api_key = (
-            api_key or litellm.huggingface_key or get_secret_str("HUGGINGFACE_API_KEY")
-        )
+        final_api_key = api_key or litellm.huggingface_key or get_secret_str("HUGGINGFACE_API_KEY")
 
         # Get API base from multiple sources
         final_api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret_str("HF_API_BASE")
-            or get_secret_str("HUGGINGFACE_API_BASE")
+            api_base or litellm.api_base or get_secret_str("HF_API_BASE") or get_secret_str("HUGGINGFACE_API_BASE")
         )
 
         return final_api_key, final_api_base

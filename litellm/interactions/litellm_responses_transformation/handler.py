@@ -123,9 +123,7 @@ class LiteLLMResponsesInteractionsHandler:
         input: Optional[InteractionInput],
         optional_params: InteractionsAPIOptionalRequestParams,
         **kwargs,
-    ) -> Union[
-        InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]
-    ]:
+    ) -> Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]]:
         """Async handler for interactions API requests."""
         # Call litellm.aresponses()
         # Note: litellm.aresponses() returns Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]

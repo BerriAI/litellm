@@ -49,9 +49,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = (
-            api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        complete_url: str = api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
 
         complete_url = complete_url.rstrip("/")
         if self.IMAGE_GENERATION_ENDPOINT:
@@ -69,9 +67,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("RUNWAYML_API_SECRET")
-            or get_secret_str("RUNWAYML_API_KEY")
+            api_key or get_secret_str("RUNWAYML_API_SECRET") or get_secret_str("RUNWAYML_API_KEY")
         )
         if not final_api_key:
             raise ValueError("RUNWAYML_API_SECRET or RUNWAYML_API_KEY is not set")
@@ -154,9 +150,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
             TimeoutError: If operation has exceeded timeout
         """
         if time.time() - start_time > timeout_secs:
-            raise TimeoutError(
-                f"RunwayML task polling timed out after {timeout_secs} seconds"
-            )
+            raise TimeoutError(f"RunwayML task polling timed out after {timeout_secs} seconds")
 
     @staticmethod
     def _check_task_status(response_data: Dict[str, Any]) -> str:
@@ -183,9 +177,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         elif status == "FAILED":
             failure_reason = response_data.get("failure", "Unknown error")
             failure_code = response_data.get("failureCode", "unknown")
-            raise ValueError(
-                f"RunwayML image generation failed: {failure_reason} (code: {failure_code})"
-            )
+            raise ValueError(f"RunwayML image generation failed: {failure_reason} (code: {failure_code})")
         elif status == "CANCELLED":
             raise ValueError("RunwayML image generation was cancelled")
         elif status in ["PENDING", "RUNNING", "THROTTLED"]:
@@ -346,9 +338,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         # Get headers for polling (need auth)
         poll_headers = {
             "Authorization": raw_response.request.headers.get("Authorization", ""),
-            "X-Runway-Version": raw_response.request.headers.get(
-                "X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION
-            ),
+            "X-Runway-Version": raw_response.request.headers.get("X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION),
         }
 
         # Poll until task completes
@@ -408,9 +398,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         # Get headers for polling (need auth)
         poll_headers = {
             "Authorization": raw_response.request.headers.get("Authorization", ""),
-            "X-Runway-Version": raw_response.request.headers.get(
-                "X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION
-            ),
+            "X-Runway-Version": raw_response.request.headers.get("X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION),
         }
 
         # Poll until task completes (async)
@@ -424,9 +412,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         # Update response_data with polled result
         response_data = raw_response.json()
 
-        verbose_logger.debug(
-            "RunwayML polling complete (async), transforming to OpenAI format"
-        )
+        verbose_logger.debug("RunwayML polling complete (async), transforming to OpenAI format")
 
         # Transform RunwayML response to OpenAI format
         return self._transform_runwayml_response_to_openai(
@@ -434,9 +420,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
             model_response=model_response,
         )
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for RunwayML image generation
         """

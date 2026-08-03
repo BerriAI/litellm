@@ -26,9 +26,7 @@ from ..utils import OVHCloudException
 
 
 class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         # OVHCloud implements the OpenAI-compatible Whisper interface.
         # We pass through the same optional params as the OpenAI Whisper API.
         return [
@@ -61,11 +59,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = (
-            "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
-            if api_base is None
-            else api_base.rstrip("/")
-        )
+        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
         complete_url = f"{api_base}/audio/transcriptions"
         return complete_url
 

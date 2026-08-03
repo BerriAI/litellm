@@ -56,9 +56,5 @@ class ConfigOverrideSettingsResponse(BaseModel):
     """Response model for config override settings GET endpoints."""
 
     config_type: str = Field(description="The type of config override")
-    values: Dict[str, Any] = Field(
-        description="Current configuration values (sensitive fields decrypted)"
-    )
-    field_schema: Dict[str, Any] = Field(
-        description="Schema information for UI rendering"
-    )
+    values: Dict[str, Any] = Field(description="Current configuration values (sensitive fields decrypted)")
+    field_schema: Dict[str, Any] = Field(description="Schema information for UI rendering")

@@ -75,12 +75,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         user_id_field: str = "user_id",
         **kwargs: Any,
     ):
-        supported_event_hooks = [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.logging_only,
-        ]
-
         super().__init__(
             tenant_id=tenant_id,
             client_id=client_id,
@@ -88,7 +82,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             purview_app_name=purview_app_name,
             user_id_field=user_id_field,
             guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,
         )
         self.guardrail_provider = "microsoft_purview"
@@ -100,6 +94,14 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         return None  # Config model can be added later for UI support
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.logging_only,
+        ]
 
     # ------------------------------------------------------------------
     # Core DLP check
@@ -155,9 +157,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             status = "guardrail_failed_to_respond"
             if block_on_violation:
                 upstream_status = exc.response.status_code
-                client_status = (
-                    502 if upstream_status in (401, 403) else upstream_status
-                )
+                client_status = 502 if upstream_status in (401, 403) else upstream_status
                 headers: Optional[Dict[str, str]] = None
                 retry_after = exc.response.headers.get("retry-after")
                 if retry_after:
@@ -269,20 +269,14 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 msg = chat_choice.message
                 if msg is None:
                     continue
-                raw = (
-                    msg.get("content")
-                    if isinstance(msg, dict)
-                    else getattr(msg, "content", None)
-                )
+                raw = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
                 if isinstance(raw, str) and raw.strip():
                     parts.append(raw)
                 # Include tool-call arguments returned by the model
                 parts.extend(self._extract_tool_call_args_from_message(msg))
         return parts
 
-    def _assemble_responses_api_from_chunks(
-        self, chunks: List[Any]
-    ) -> Tuple[bool, Optional[ResponsesAPIResponse]]:
+    def _assemble_responses_api_from_chunks(self, chunks: List[Any]) -> Tuple[bool, Optional[ResponsesAPIResponse]]:
         """Extract the final ``ResponsesAPIResponse`` from a buffered Responses API stream.
 
         Returns a ``(is_responses_api_stream, assembled)`` tuple so the caller
@@ -304,9 +298,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 final = candidate
         return looks_like_responses_api, final
 
-    def _responses_api_input_to_str(
-        self, data: Dict[str, Any], raise_on_failure: bool = False
-    ) -> Optional[str]:
+    def _responses_api_input_to_str(self, data: Dict[str, Any], raise_on_failure: bool = False) -> Optional[str]:
         """Extract DLP-scannable text from a Responses API request ``input`` field.
 
         ``input`` may be a plain string or a list of input items (messages).  In
@@ -563,15 +555,12 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 status_code=400,
                 detail={
                     "error": (
-                        "Microsoft Purview DLP: Unable to assemble streamed "
-                        "response for scanning; blocking response."
+                        "Microsoft Purview DLP: Unable to assemble streamed response for scanning; blocking response."
                     ),
                 },
             )
 
-        if isinstance(
-            assembled_response, (TextCompletionResponse, ResponsesAPIResponse)
-        ):
+        if isinstance(assembled_response, (TextCompletionResponse, ResponsesAPIResponse)):
             parts = self._completion_response_text_parts(assembled_response)
             if parts:
                 combined = "\n\n---\n\n".join(parts)
@@ -613,9 +602,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     # Logging-only hook — audit without blocking
     # ------------------------------------------------------------------
 
-    def logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> Tuple[dict, Any]:
         """Fire-and-forget async audit logging; returns original (kwargs, result) immediately.
 
         In the proxy's async success path, litellm independently calls both
@@ -638,22 +625,16 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             # the deferral is observable if the framework ever stops dispatching
             # async_logging_hook on a given code path (otherwise audit silently
             # drops).
-            verbose_proxy_logger.debug(
-                "Purview audit: deferring to async_logging_hook (running event loop detected)"
-            )
+            verbose_proxy_logger.debug("Purview audit: deferring to async_logging_hook (running event loop detected)")
             return kwargs, result
         except RuntimeError:
             pass
 
         async def _log_safe() -> None:
             try:
-                await self.async_logging_hook(
-                    kwargs=kwargs, result=result, call_type=call_type
-                )
+                await self.async_logging_hook(kwargs=kwargs, result=result, call_type=call_type)
             except Exception as exc:
-                verbose_proxy_logger.error(
-                    "Purview audit background logging error: %s", exc
-                )
+                verbose_proxy_logger.error("Purview audit background logging error: %s", exc)
 
         def _run_in_new_loop() -> None:
             new_loop = asyncio.new_event_loop()
@@ -669,9 +650,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         return kwargs, result
 
-    async def async_logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> Tuple[dict, Any]:
         """Send both prompt and response to Purview for audit logging.
 
         Errors are logged but never raised — this mode is non-blocking.
@@ -701,9 +680,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             else:
                 messages = kwargs.get("messages")
                 if messages:
-                    prompt_text = self.get_prompt_text_for_dlp(
-                        cast(List[Any], messages)
-                    )
+                    prompt_text = self.get_prompt_text_for_dlp(cast(List[Any], messages))
 
             if prompt_text:
                 await self._check_content(

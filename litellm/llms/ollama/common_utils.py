@@ -7,9 +7,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
 class OllamaError(BaseLLMException):
-    def __init__(
-        self, status_code: int, message: str, headers: Union[dict, httpx.Headers]
-    ):
+    def __init__(self, status_code: int, message: str, headers: Union[dict, httpx.Headers]):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
@@ -27,9 +25,7 @@ def _convert_image(image):
     try:
         from PIL import Image
     except Exception:
-        raise Exception(
-            "ollama image conversion failed please run `pip install Pillow`"
-        )
+        raise Exception("ollama image conversion failed please run `pip install Pillow`")
 
     orig = image
     if image.startswith("data:"):
@@ -101,9 +97,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
 
         passed_api_base = api_base
         base = self.get_server_api_base(api_base)
-        api_key = (
-            self.get_api_key(api_key) if passed_api_base is None or api_key else None
-        )
+        api_key = self.get_api_key(api_key) if passed_api_base is None or api_key else None
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         names: set[str] = set()
@@ -113,11 +107,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
             data = resp.json()
             # Expecting a dict with a 'models' list
             models_list = []
-            if (
-                isinstance(data, dict)
-                and "models" in data
-                and isinstance(data["models"], list)
-            ):
+            if isinstance(data, dict) and "models" in data and isinstance(data["models"], list):
                 models_list = data["models"]
             elif isinstance(data, list):
                 models_list = data
@@ -137,9 +127,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 static = models_by_provider.get("ollama", []) or []
                 return [f"ollama/{m}" for m in static]
             except Exception as e1:
-                verbose_logger.warning(
-                    f"Error retrieving static ollama models as fallback: {e1}"
-                )
+                verbose_logger.warning(f"Error retrieving static ollama models as fallback: {e1}")
                 return []
         # assemble full model names
         result = sorted(names)
@@ -190,9 +178,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model = self._strip_ollama_model_prefix(model)
         passed_api_base = api_base
         api_base = self.get_server_api_base(api_base)
-        api_key = (
-            self.get_api_key(api_key) if passed_api_base is None or api_key else None
-        )
+        api_key = self.get_api_key(api_key) if passed_api_base is None or api_key else None
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
@@ -238,9 +224,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
     ) -> Optional[dict[str, Any]]:
         if self._is_static_ollama_model(model):
             return None
-        return self.get_runtime_model_info(
-            model=model, api_base=api_base, api_key=api_key
-        )
+        return self.get_runtime_model_info(model=model, api_base=api_base, api_key=api_key)
 
     def validate_environment(
         self,

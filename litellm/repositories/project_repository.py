@@ -19,22 +19,17 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
     def model_class(self) -> Type[LiteLLM_ProjectTable]:
         return LiteLLM_ProjectTable
 
-    async def find_by_id(
-        self, project_id: str, id_field: str = "project_id"
-    ) -> Optional[LiteLLM_ProjectTable]:
+    async def find_by_id(self, project_id: str, id_field: str = "project_id") -> Optional[LiteLLM_ProjectTable]:
         return await super().find_by_id(project_id, id_field)
 
     async def find_by_alias(self, project_alias: str) -> Optional[LiteLLM_ProjectTable]:
         """Find a project by alias."""
-        records = await self.table.find_many(where={"project_alias": project_alias})
-        if records:
-            return self._to_model(records[0])
-        return None
+        projects = await self.find_many(where={"project_alias": project_alias})
+        return projects[0] if projects else None
 
     async def find_by_team_id(self, team_id: str) -> List[LiteLLM_ProjectTable]:
         """Find all projects belonging to a team."""
-        records = await self.table.find_many(where={"team_id": team_id})
-        return self._to_model_list(records)
+        return await self.find_many(where={"team_id": team_id})
 
     async def create_project(
         self,
@@ -122,8 +117,6 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
         """Delete a project."""
         return await self.delete(project_id, id_field="project_id")
 
-    async def update_spend(
-        self, project_id: str, spend: float
-    ) -> Optional[LiteLLM_ProjectTable]:
+    async def update_spend(self, project_id: str, spend: float) -> Optional[LiteLLM_ProjectTable]:
         """Update project spend."""
         return await self.update(project_id, {"spend": spend}, id_field="project_id")

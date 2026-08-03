@@ -45,26 +45,26 @@ class SecuritySchemeBase(TypedDict, total=False):
     description: Optional[str]
 
 
-class APIKeySecurityScheme(SecuritySchemeBase):
+class APIKeySecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using an API key."""
 
-    type: Literal["apiKey"]
-    in_: Literal["query", "header", "cookie"]  # using in_ to avoid Python keyword
-    name: str
+    type: Required[Literal["apiKey"]]
+    in_: Required[Literal["query", "header", "cookie"]]  # using in_ to avoid Python keyword
+    name: Required[str]
 
 
-class HTTPAuthSecurityScheme(SecuritySchemeBase):
+class HTTPAuthSecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using HTTP authentication."""
 
-    type: Literal["http"]
-    scheme: str
+    type: Required[Literal["http"]]
+    scheme: Required[str]
     bearerFormat: Optional[str]
 
 
-class MutualTLSSecurityScheme(SecuritySchemeBase):
+class MutualTLSSecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using mTLS authentication."""
 
-    type: Literal["mutualTLS"]
+    type: Required[Literal["mutualTLS"]]
 
 
 class OAuthFlows(TypedDict, total=False):
@@ -76,19 +76,19 @@ class OAuthFlows(TypedDict, total=False):
     password: Optional[Dict[str, Any]]
 
 
-class OAuth2SecurityScheme(SecuritySchemeBase):
+class OAuth2SecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using OAuth 2.0."""
 
-    type: Literal["oauth2"]
-    flows: OAuthFlows
+    type: Required[Literal["oauth2"]]
+    flows: Required[OAuthFlows]
     oauth2MetadataUrl: Optional[str]
 
 
-class OpenIdConnectSecurityScheme(SecuritySchemeBase):
+class OpenIdConnectSecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using OpenID Connect."""
 
-    type: Literal["openIdConnect"]
-    openIdConnectUrl: str
+    type: Required[Literal["openIdConnect"]]
+    openIdConnectUrl: Required[str]
 
 
 # Union of all security schemes
@@ -205,6 +205,12 @@ class PatchAgentRequest(TypedDict, total=False):
 # Request/Response models for CRUD endpoints
 
 
+class AgentKeySummary(BaseModel):
+    token: str
+    key_alias: Optional[str] = None
+    key_name: Optional[str] = None
+
+
 class AgentResponse(BaseModel):
     agent_id: str
     agent_name: str
@@ -218,6 +224,7 @@ class AgentResponse(BaseModel):
     session_rpm_limit: Optional[int] = None
     static_headers: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
+    keys: Optional[List[AgentKeySummary]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None
@@ -354,9 +361,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
             LiteLLMSendMessageResponse with _hidden_params support
         """
         response_dict = response.model_dump(mode="json", exclude_none=True)
-        response_dict = _normalize_a2a_jsonrpc_response(
-            response_dict, request_id=request_id
-        )
+        response_dict = _normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
         return cls(**response_dict)
 
     @classmethod
@@ -375,6 +380,4 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls(
-            **_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
-        )
+        return cls(**_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

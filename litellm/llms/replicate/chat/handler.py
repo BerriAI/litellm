@@ -29,9 +29,7 @@ def handle_prediction_response_streaming(
 
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        time.sleep(
-            REPLICATE_POLLING_DELAY_SECONDS
-        )  # prevent being rate limited by replicate
+        time.sleep(REPLICATE_POLLING_DELAY_SECONDS)  # prevent being rate limited by replicate
         print_verbose(f"replicate: polling endpoint: {prediction_url}")
         response = http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
@@ -43,9 +41,7 @@ def handle_prediction_response_streaming(
                 except Exception:
                     raise ReplicateError(
                         status_code=422,
-                        message="Unable to parse response. Got={}".format(
-                            response_data["output"]
-                        ),
+                        message="Unable to parse response. Got={}".format(response_data["output"]),
                         headers=response.headers,
                     )
                 new_output = output_string[len(previous_output) :]
@@ -80,17 +76,13 @@ async def async_handle_prediction_response_streaming(
 
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        await asyncio.sleep(
-            REPLICATE_POLLING_DELAY_SECONDS
-        )  # prevent being rate limited by replicate
+        await asyncio.sleep(REPLICATE_POLLING_DELAY_SECONDS)  # prevent being rate limited by replicate
         response = await http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()
             status = response_data.get("status", "")
             # Check that "output" exists and is not None or empty
-            output_present = (
-                "output" in response_data and response_data["output"] is not None
-            )
+            output_present = "output" in response_data and response_data["output"] is not None
             if output_present:
                 try:
                     # If output is None or not a list, treat as empty string
@@ -104,9 +96,7 @@ async def async_handle_prediction_response_streaming(
                 except Exception:
                     raise ReplicateError(
                         status_code=422,
-                        message="Unable to parse response. Got={}".format(
-                            response_data.get("output", None)
-                        ),
+                        message="Unable to parse response. Got={}".format(response_data.get("output", None)),
                         headers=response.headers,
                     )
                 new_output = output_string[len(previous_output) :]
@@ -180,9 +170,7 @@ def completion(
             headers=headers,
         )  # type: ignore
     ## COMPLETION CALL
-    model_response.created = int(
-        time.time()
-    )  # for pricing this must remain right before calling api
+    model_response.created = int(time.time())  # for pricing this must remain right before calling api
 
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,
@@ -272,9 +260,7 @@ async def async_completion(
         llm_provider=litellm.LlmProviders.REPLICATE,
         params={"timeout": 600.0},
     )
-    response = await async_handler.post(
-        url=prediction_url, headers=headers, data=json.dumps(input_data)
-    )
+    response = await async_handler.post(url=prediction_url, headers=headers, data=json.dumps(input_data))
     prediction_url = replicate_config.get_prediction_url(response)
 
     if "stream" in optional_params and optional_params["stream"] is True:

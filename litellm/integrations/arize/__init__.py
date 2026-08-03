@@ -13,22 +13,16 @@ from .arize_phoenix_prompt_manager import ArizePhoenixPromptManager
 global_arize_config: Optional[dict] = None
 
 
-def prompt_initializer(
-    litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec"
-) -> "CustomPromptManagement":
+def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
     """
     Initialize a prompt from Arize Phoenix.
     """
-    api_key = getattr(litellm_params, "api_key", None) or os.environ.get(
-        "PHOENIX_API_KEY"
-    )
+    api_key = getattr(litellm_params, "api_key", None) or os.environ.get("PHOENIX_API_KEY")
     api_base = getattr(litellm_params, "api_base", None)
     prompt_id = getattr(litellm_params, "prompt_id", None)
 
     if not api_key or not api_base:
-        raise ValueError(
-            "api_key and api_base are required for Arize Phoenix prompt integration"
-        )
+        raise ValueError("api_key and api_base are required for Arize Phoenix prompt integration")
 
     try:
         arize_prompt_manager = ArizePhoenixPromptManager(
@@ -36,9 +30,7 @@ def prompt_initializer(
                 "api_key": api_key,
                 "api_base": api_base,
                 "prompt_id": prompt_id,
-                **litellm_params.model_dump(
-                    exclude={"api_key", "api_base", "prompt_id"}
-                ),
+                **litellm_params.model_dump(exclude={"api_key", "api_base", "prompt_id"}),
             },
         )
 

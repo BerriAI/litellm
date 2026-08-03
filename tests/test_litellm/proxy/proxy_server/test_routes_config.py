@@ -13,6 +13,7 @@ Routes covered:
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 from .conftest import VOLATILE_KEYS, normalize
@@ -473,6 +474,83 @@ def test_config_list_happy_admin(client, auth_as, mock_prisma, monkeypatch):
     }
 
 
+def test_config_list_exposes_config_reload_interval(client, auth_as, mock_prisma, monkeypatch):
+    """proxy_config_reload_interval_seconds must surface in the admin UI general-settings
+    list as an Integer field defaulting to 30, so operators can tune multi-pod convergence
+    from the dashboard."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/config/list", params={"config_type": "general_settings"})
+    assert response.status_code == 200
+    by_name = {entry["field_name"]: entry for entry in response.json()}
+    assert "proxy_config_reload_interval_seconds" in by_name
+    entry = by_name["proxy_config_reload_interval_seconds"]
+    assert entry["field_type"] == "Integer"
+    assert entry["field_default_value"] == 30
+
+
+def test_config_field_update_accepts_config_reload_interval(client, auth_as, mock_prisma, monkeypatch):
+    """POST /config/field/update accepts proxy_config_reload_interval_seconds and persists
+    it to the DB general_settings row for all pods to pick up."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    table.find_first = AsyncMock(return_value=None)
+    upsert_row = {
+        "param_name": "general_settings",
+        "param_value": {"proxy_config_reload_interval_seconds": 45},
+        "id": "row-1",
+    }
+    table.upsert = AsyncMock(return_value=upsert_row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/field/update",
+            json={
+                "field_name": "proxy_config_reload_interval_seconds",
+                "field_value": 45,
+                "config_type": "general_settings",
+            },
+        )
+    assert response.status_code == 200
+    upserted = table.upsert.call_args.kwargs["data"]["create"]["param_value"]
+    assert json.loads(upserted)["proxy_config_reload_interval_seconds"] == 45
+
+
+def test_config_field_update_rejects_non_positive_config_reload_interval(client, auth_as, mock_prisma, monkeypatch):
+    """A non-positive proxy_config_reload_interval_seconds from the UI is rejected with a 400
+    and never persisted, since APScheduler requires a positive interval."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    table.find_first = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/field/update",
+            json={
+                "field_name": "proxy_config_reload_interval_seconds",
+                "field_value": 0,
+                "config_type": "general_settings",
+            },
+        )
+    assert response.status_code == 400
+    table.upsert.assert_not_called()
+
+
 def test_config_list_non_admin_rejected(client, auth_as, mock_prisma, monkeypatch):
     """Non-admin gets a 400 with the role embedded in the error message."""
     from litellm.proxy import proxy_server as ps
@@ -739,6 +817,222 @@ def test_get_config_callbacks_internal_error(client, auth_as, mock_prisma, monke
         "boom" in str(response.json()).lower()
         or "error" in str(response.json()).lower()
     )
+
+
+_CALLBACK_ENV_FIXTURE = {
+    "LANGFUSE_PUBLIC_KEY": "pk-public-1234567890",
+    "LANGFUSE_SECRET_KEY": "sk-langfuse-super-secret",
+    "LANGFUSE_HOST": "https://cloud.langfuse.com",
+    "DD_API_KEY": "dd-super-secret-api-key",
+    "DD_SITE": "datadoghq.com",
+    "OTEL_HEADERS": "Authorization=Bearer otel-super-secret",
+    "OTEL_ENDPOINT": "https://otlp.example.com",
+    "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T000/B000/SLACK-WEBHOOK-FIXTURE-SECRET",
+}
+
+
+def _install_callbacks_config(monkeypatch, mock_prisma):
+    from litellm.proxy import proxy_server as ps
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": ["langfuse", "datadog", "otel"]},
+            "general_settings": {"alerting": ["slack"]},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+
+def _callback_variables(body: dict, name: str) -> dict:
+    return next(
+        cb["variables"] for cb in body["callbacks"] if cb["name"] == name
+    )
+
+
+def test_get_config_callbacks_redacts_secret_env_vars_for_view_only_admin(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_callbacks_config(monkeypatch, mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
+
+    for secret in (
+        _CALLBACK_ENV_FIXTURE["LANGFUSE_SECRET_KEY"],
+        _CALLBACK_ENV_FIXTURE["DD_API_KEY"],
+        _CALLBACK_ENV_FIXTURE["OTEL_HEADERS"],
+        _CALLBACK_ENV_FIXTURE["LANGFUSE_PUBLIC_KEY"],
+    ):
+        assert secret not in response.text
+
+    langfuse_vars = _callback_variables(body, "langfuse")
+    assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "REDACTED"
+    assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "REDACTED"
+    assert langfuse_vars["LANGFUSE_HOST"] == _CALLBACK_ENV_FIXTURE["LANGFUSE_HOST"]
+
+    datadog_vars = _callback_variables(body, "datadog")
+    assert datadog_vars["DD_API_KEY"] == "REDACTED"
+    assert datadog_vars["DD_SITE"] == _CALLBACK_ENV_FIXTURE["DD_SITE"]
+
+    otel_vars = _callback_variables(body, "otel")
+    assert otel_vars["OTEL_HEADERS"] == "REDACTED"
+    assert otel_vars["OTEL_ENDPOINT"] == _CALLBACK_ENV_FIXTURE["OTEL_ENDPOINT"]
+
+
+def test_get_config_callbacks_full_admin_still_sees_secret_env_vars(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_callbacks_config(monkeypatch, mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
+
+    langfuse_vars = _callback_variables(body, "langfuse")
+    assert langfuse_vars["LANGFUSE_SECRET_KEY"] == _CALLBACK_ENV_FIXTURE["LANGFUSE_SECRET_KEY"]
+    assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == _CALLBACK_ENV_FIXTURE["LANGFUSE_PUBLIC_KEY"]
+
+    datadog_vars = _callback_variables(body, "datadog")
+    assert datadog_vars["DD_API_KEY"] == _CALLBACK_ENV_FIXTURE["DD_API_KEY"]
+
+    otel_vars = _callback_variables(body, "otel")
+    assert otel_vars["OTEL_HEADERS"] == _CALLBACK_ENV_FIXTURE["OTEL_HEADERS"]
+
+
+def test_get_config_callbacks_redacts_slack_webhook_urls_for_view_only_admin(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_callbacks_config(monkeypatch, mock_prisma)
+
+    webhooks = {
+        "spend_reports": "https://hooks.slack.com/services/T000/B000/SPEND-WEBHOOK-SECRET",
+        "budget_alerts": "https://hooks.slack.com/services/T000/B111/BUDGET-WEBHOOK-SECRET",
+    }
+    monkeypatch.setattr(
+        ps.proxy_logging_obj.slack_alerting_instance,
+        "alert_to_webhook_url",
+        webhooks,
+        raising=False,
+    )
+
+    def _slack_block(body):
+        return next(a for a in body["alerts"] if a["name"] == "slack")
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        view_resp = client.get("/get/config/callbacks")
+    assert view_resp.status_code == 200
+    for url in webhooks.values():
+        assert url not in view_resp.text
+    assert _CALLBACK_ENV_FIXTURE["SLACK_WEBHOOK_URL"] not in view_resp.text
+    view_slack = _slack_block(view_resp.json())
+    assert view_slack["alerts_to_webhook"] == {
+        "spend_reports": "REDACTED",
+        "budget_alerts": "REDACTED",
+    }
+    assert view_slack["variables"]["SLACK_WEBHOOK_URL"] == "REDACTED"
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        admin_resp = client.get("/get/config/callbacks")
+    assert admin_resp.status_code == 200
+    admin_slack = _slack_block(admin_resp.json())
+    assert admin_slack["alerts_to_webhook"] == webhooks
+    assert admin_slack["variables"]["SLACK_WEBHOOK_URL"] != "REDACTED"
+
+
+def test_redact_callback_env_vars_helper_handles_none_and_non_secret_keys():
+    from litellm.proxy import proxy_server as ps
+
+    out = ps._redact_callback_env_vars(
+        {
+            "LANGFUSE_SECRET_KEY": "sk-leak",
+            "LANGFUSE_HOST": "https://cloud.langfuse.com",
+            "DD_API_KEY": None,
+            "GALILEO_USERNAME": "galileo-user-1234",
+            "GENERIC_LOGGER_HEADERS": "Authorization=Bearer x",
+            "GCS_PATH_SERVICE_ACCOUNT": "/etc/secrets/gcs.json",
+            "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T/B/token",
+            "SMTP_USERNAME": "smtp-user-1234",
+        }
+    )
+    assert out == {
+        "LANGFUSE_SECRET_KEY": "REDACTED",
+        "LANGFUSE_HOST": "https://cloud.langfuse.com",
+        "DD_API_KEY": None,
+        "GALILEO_USERNAME": "REDACTED",
+        "GENERIC_LOGGER_HEADERS": "REDACTED",
+        "GCS_PATH_SERVICE_ACCOUNT": "REDACTED",
+        "SLACK_WEBHOOK_URL": "REDACTED",
+        "SMTP_USERNAME": "REDACTED",
+    }
+
+
+def test_get_config_callbacks_redacts_email_alerting_vars_for_view_only_admin(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": []},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {
+                "SMTP_HOST": "smtp.resend.com",
+                "SMTP_PORT": "587",
+                "SMTP_USERNAME": "smtp-user-fixture-1234",
+                "SMTP_PASSWORD": "smtp-password-fixture-1234",
+                "SMTP_SENDER_EMAIL": "alerts@example.com",
+                "TEST_EMAIL_ADDRESS": "admin@example.com",
+                "EMAIL_LOGO_URL": "https://example.com/logo.png",
+                "EMAIL_SUPPORT_CONTACT": "support@example.com",
+            },
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    def _email_block(body):
+        return next(a for a in body["alerts"] if a["name"] == "email")
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        view_resp = client.get("/get/config/callbacks")
+    assert view_resp.status_code == 200
+    for secret in ("smtp-user-fixture-1234", "smtp-password-fixture-1234"):
+        assert secret not in view_resp.text
+    view_email = _email_block(view_resp.json())["variables"]
+    assert view_email["SMTP_PASSWORD"] == "REDACTED"
+    assert view_email["SMTP_USERNAME"] == "REDACTED"
+    assert view_email["SMTP_HOST"] == "smtp.resend.com"
+    assert view_email["SMTP_PORT"] == "587"
+    assert view_email["SMTP_SENDER_EMAIL"] == "alerts@example.com"
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        admin_resp = client.get("/get/config/callbacks")
+    assert admin_resp.status_code == 200
+    admin_email = _email_block(admin_resp.json())["variables"]
+    assert admin_email["SMTP_USERNAME"] == "smtp-user-fixture-1234"
+    assert admin_email["SMTP_PASSWORD"] != "REDACTED"
+    assert admin_email["SMTP_HOST"] == "smtp.resend.com"
 
 
 # ---------------------------------------------------------------------------

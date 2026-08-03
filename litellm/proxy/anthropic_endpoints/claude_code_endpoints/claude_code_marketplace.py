@@ -72,25 +72,19 @@ async def get_marketplace():
     try:
         prisma_client = await _get_prisma_client()
 
-        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(
-            where={"enabled": True}
-        )
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
 
         plugin_list = []
         for plugin in plugins:
             try:
                 manifest = json.loads(plugin.manifest_json)
             except json.JSONDecodeError:
-                verbose_proxy_logger.warning(
-                    f"Plugin {plugin.name} has invalid manifest JSON, skipping"
-                )
+                verbose_proxy_logger.warning(f"Plugin {plugin.name} has invalid manifest JSON, skipping")
                 continue
 
             # Source must be specified for URL-based marketplaces
             if "source" not in manifest:
-                verbose_proxy_logger.warning(
-                    f"Plugin {plugin.name} has no source field, skipping"
-                )
+                verbose_proxy_logger.warning(f"Plugin {plugin.name} has no source field, skipping")
                 continue
 
             entry: Dict[str, Any] = {
@@ -135,9 +129,7 @@ async def get_marketplace():
 # Each segment must start with an alphanumeric character and contain only
 # alphanumeric characters, dots, hyphens, and underscores.
 # This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
-_VALID_GIT_SUBDIR_PATH_RE = re.compile(
-    r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$"
-)
+_VALID_GIT_SUBDIR_PATH_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
 
 
 def _validate_plugin_source(source: Dict[str, Any]) -> None:
@@ -147,17 +139,13 @@ def _validate_plugin_source(source: Dict[str, Any]) -> None:
         if "repo" not in source:
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "GitHub source must include 'repo' field (e.g., 'org/repo')"
-                },
+                detail={"error": "GitHub source must include 'repo' field (e.g., 'org/repo')"},
             )
     elif source_type == "url":
         if "url" not in source:
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "URL source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
-                },
+                detail={"error": "URL source must include 'url' field (e.g., 'https://github.com/org/repo.git')"},
             )
     elif source_type == "git-subdir":
         if not source.get("url"):
@@ -170,9 +158,7 @@ def _validate_plugin_source(source: Dict[str, Any]) -> None:
         if not source.get("path"):
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "git-subdir source must include 'path' field (e.g., 'plugins/plugin-name')"
-                },
+                detail={"error": "git-subdir source must include 'path' field (e.g., 'plugins/plugin-name')"},
             )
         if not _VALID_GIT_SUBDIR_PATH_RE.match(source["path"]):
             raise HTTPException(
@@ -237,9 +223,7 @@ async def register_plugin(
         if not re.match(r"^[a-z0-9-]+$", request.name):
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "Plugin name must be kebab-case (lowercase letters, numbers, hyphens)"
-                },
+                detail={"error": "Plugin name must be kebab-case (lowercase letters, numbers, hyphens)"},
             )
 
         # Validate source format
@@ -269,9 +253,7 @@ async def register_plugin(
             manifest["namespace"] = request.namespace
 
         # Check if plugin exists
-        existing = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
-            where={"name": request.name}
-        )
+        existing = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": request.name})
 
         if existing:
             plugin = await ClaudeCodePluginRepository(prisma_client).table.update(
@@ -349,9 +331,7 @@ async def list_plugins(
         prisma_client = await _get_prisma_client()
 
         where = {"enabled": True} if enabled_only else {}
-        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(
-            where=where
-        )
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where=where)
 
         plugin_list = []
         for p in plugins:
@@ -416,9 +396,7 @@ async def get_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
-            where={"name": plugin_name}
-        )
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
 
         if not plugin:
             raise HTTPException(
@@ -472,9 +450,7 @@ async def enable_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
-            where={"name": plugin_name}
-        )
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
@@ -517,9 +493,7 @@ async def disable_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
-            where={"name": plugin_name}
-        )
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
@@ -562,18 +536,14 @@ async def delete_plugin(
     try:
         prisma_client = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
-            where={"name": plugin_name}
-        )
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        await ClaudeCodePluginRepository(prisma_client).table.delete(
-            where={"name": plugin_name}
-        )
+        await ClaudeCodePluginRepository(prisma_client).table.delete(where={"name": plugin_name})
 
         verbose_proxy_logger.info(f"Plugin {plugin_name} deleted")
         return {"status": "success", "message": f"Plugin '{plugin_name}' deleted"}

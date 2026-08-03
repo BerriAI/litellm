@@ -92,26 +92,19 @@ class ExpiredUISessionKeyCleanupManager:
                 tokens=tokens,
                 response=response,
             )
-            verbose_proxy_logger.info(
-                "Deleted %s expired UI session key(s)", deleted_count
-            )
+            verbose_proxy_logger.info("Deleted %s expired UI session key(s)", deleted_count)
             return deleted_count
         except Exception as e:
             if getattr(e, "status_code", None) == 404:
                 verbose_proxy_logger.debug(
-                    "Expired UI session key cleanup skipped because selected keys "
-                    "were already deleted: %s",
+                    "Expired UI session key cleanup skipped because selected keys were already deleted: %s",
                     e,
                 )
                 return 0
             verbose_proxy_logger.error(f"Expired UI session key cleanup failed: {e}")
             return 0
         finally:
-            if (
-                lock_acquired
-                and self.pod_lock_manager
-                and self.pod_lock_manager.redis_cache
-            ):
+            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
                 )

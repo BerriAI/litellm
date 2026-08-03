@@ -22,18 +22,12 @@ class GreenscaleLogger:
             data = {
                 "modelId": kwargs.get("model"),
                 "inputTokenCount": response_json.get("usage", {}).get("prompt_tokens"),
-                "outputTokenCount": response_json.get("usage", {}).get(
-                    "completion_tokens"
-                ),
+                "outputTokenCount": response_json.get("usage", {}).get("completion_tokens"),
             }
-            data["timestamp"] = datetime.now(timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            )
+            data["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             if type(end_time) is datetime and type(start_time) is datetime:
-                data["invocationLatency"] = int(
-                    (end_time - start_time).total_seconds() * 1000
-                )
+                data["invocationLatency"] = int((end_time - start_time).total_seconds() * 1000)
 
             # Add additional metadata keys to tags
             tags = []
@@ -45,9 +39,7 @@ class GreenscaleLogger:
                     elif key == "greenscale_application":
                         data["application"] = value
                     else:
-                        tags.append(
-                            {"key": key.replace("greenscale_", ""), "value": str(value)}
-                        )
+                        tags.append({"key": key.replace("greenscale_", ""), "value": str(value)})
 
             data["tags"] = tags
 
@@ -60,13 +52,9 @@ class GreenscaleLogger:
                 data=json.dumps(data, default=str),
             )
             if response.status_code != 200:
-                print_verbose(
-                    f"Greenscale Logger Error - {response.text}, {response.status_code}"
-                )
+                print_verbose(f"Greenscale Logger Error - {response.text}, {response.status_code}")
             else:
                 print_verbose(f"Greenscale Logger Succeeded - {response.text}")
         except Exception as e:
-            print_verbose(
-                f"Greenscale Logger Error - {e}, Stack trace: {traceback.format_exc()}"
-            )
+            print_verbose(f"Greenscale Logger Error - {e}, Stack trace: {traceback.format_exc()}")
             pass

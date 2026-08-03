@@ -106,9 +106,7 @@ end
                         )
             return False
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error acquiring Redis lock for {cronjob_id}: {e}"
-            )
+            verbose_proxy_logger.error(f"Error acquiring Redis lock for {cronjob_id}: {e}")
             return False
 
     async def release_lock(
@@ -150,9 +148,7 @@ end
                     cronjob_id,
                 )
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error releasing Redis lock for {cronjob_id}: {e}"
-            )
+            verbose_proxy_logger.error(f"Error releasing Redis lock for {cronjob_id}: {e}")
 
     async def _compare_and_delete_lock(self, lock_key: str) -> int:
         """
@@ -165,15 +161,11 @@ end
         if callable(script_register):
             try:
                 if self._release_lock_script is None:
-                    self._release_lock_script = script_register(
-                        self._COMPARE_AND_DELETE_LOCK_SCRIPT
-                    )
+                    self._release_lock_script = script_register(self._COMPARE_AND_DELETE_LOCK_SCRIPT)
                 # acquire_lock stores the pod_id via async_set_cache, which
                 # JSON-encodes the value; compare against the same encoding so
                 # the Lua equality check matches and the lock is released
-                result = await self._release_lock_script(
-                    keys=[lock_key], args=[json.dumps(self.pod_id)]
-                )
+                result = await self._release_lock_script(keys=[lock_key], args=[json.dumps(self.pod_id)])
                 return int(result or 0)
             except Exception:
                 # Lua execution failed (e.g. Redis restart cleared loaded scripts,

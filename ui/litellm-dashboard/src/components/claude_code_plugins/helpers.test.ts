@@ -15,23 +15,34 @@ import {
   isValidUrl,
   parseKeywords,
   formatKeywords,
+  parseSkillSource,
+  isValidSubPath,
 } from "./helpers";
 import { MarketplacePluginEntry, PluginSource } from "./types";
 
 describe("formatInstallCommand", () => {
   it("formats github source with repo", () => {
-    const plugin = { name: "my-plugin", source: { source: "github" as const, repo: "org/repo" } };
-    expect(formatInstallCommand(plugin)).toBe("/plugin marketplace add org/repo");
+    const source: PluginSource = { source: "github", repo: "org/repo" };
+    expect(formatInstallCommand({ name: "my-plugin", source })).toBe("/plugin marketplace add org/repo");
   });
 
   it("formats url source", () => {
-    const plugin = { name: "my-plugin", source: { source: "url" as const, url: "https://example.com/plugin" } };
-    expect(formatInstallCommand(plugin)).toBe("/plugin marketplace add https://example.com/plugin");
+    const source: PluginSource = { source: "url", url: "https://example.com/plugin" };
+    expect(formatInstallCommand({ name: "my-plugin", source })).toBe(
+      "/plugin marketplace add https://example.com/plugin",
+    );
+  });
+
+  it("formats git-subdir source using its url", () => {
+    const source: PluginSource = { source: "git-subdir", url: "https://github.com/org/repo", path: "plugins/x" };
+    expect(formatInstallCommand({ name: "my-plugin", source })).toBe(
+      "/plugin marketplace add https://github.com/org/repo",
+    );
   });
 
   it("falls back to plugin name when no repo or url", () => {
-    const plugin = { name: "my-plugin", source: { source: "github" as const } };
-    expect(formatInstallCommand(plugin)).toBe("/plugin marketplace add my-plugin");
+    const source: PluginSource = { source: "github" };
+    expect(formatInstallCommand({ name: "my-plugin", source })).toBe("/plugin marketplace add my-plugin");
   });
 });
 
@@ -91,6 +102,18 @@ describe("getSourceDisplayText", () => {
     expect(getSourceDisplayText({ source: "url", url: "https://example.com" })).toBe("https://example.com");
   });
 
+  it("shows git-subdir as url @ path for a github subdir", () => {
+    expect(getSourceDisplayText({ source: "git-subdir", url: "https://github.com/org/repo", path: "plugins/x" })).toBe(
+      "https://github.com/org/repo @ plugins/x",
+    );
+  });
+
+  it("shows git-subdir as url @ path for a gitlab subdir", () => {
+    expect(getSourceDisplayText({ source: "git-subdir", url: "https://gitlab.com/org/repo", path: "sub/dir" })).toBe(
+      "https://gitlab.com/org/repo @ sub/dir",
+    );
+  });
+
   it("returns unknown for missing data", () => {
     expect(getSourceDisplayText({ source: "github" })).toBe("Unknown source");
   });
@@ -103,6 +126,18 @@ describe("getSourceLink", () => {
 
   it("returns url for url source", () => {
     expect(getSourceLink({ source: "url", url: "https://example.com" })).toBe("https://example.com");
+  });
+
+  it("returns the repo url for a github git-subdir source", () => {
+    expect(getSourceLink({ source: "git-subdir", url: "https://github.com/org/repo", path: "plugins/x" })).toBe(
+      "https://github.com/org/repo",
+    );
+  });
+
+  it("returns the repo url for a gitlab git-subdir source", () => {
+    expect(getSourceLink({ source: "git-subdir", url: "https://gitlab.com/org/repo", path: "sub/dir" })).toBe(
+      "https://gitlab.com/org/repo",
+    );
   });
 
   it("returns null when no repo or url", () => {
@@ -321,5 +356,218 @@ describe("formatKeywords", () => {
   it("returns empty string for empty/undefined array", () => {
     expect(formatKeywords([])).toBe("");
     expect(formatKeywords(undefined)).toBe("");
+  });
+});
+
+describe("parseSkillSource", () => {
+  it("parses a plain github repo", () => {
+    expect(parseSkillSource("github.com/org/repo")?.parsed).toEqual({ source: "github", repo: "org/repo" });
+  });
+
+  it("strips a .git suffix from the github repo shorthand", () => {
+    expect(parseSkillSource("https://github.com/org/repo.git")?.parsed).toEqual({
+      source: "github",
+      repo: "org/repo",
+    });
+  });
+
+  it("parses a github tree URL into a git-subdir", () => {
+    expect(parseSkillSource("github.com/org/repo/tree/main/plugins/x")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "https://github.com/org/repo",
+      path: "plugins/x",
+    });
+  });
+
+  it("drops a trailing file segment from a github blob URL", () => {
+    expect(parseSkillSource("github.com/org/repo/blob/main/x/SKILL.md")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "https://github.com/org/repo",
+      path: "x",
+    });
+  });
+
+  it("combines a github repo with an explicit subfolder", () => {
+    expect(parseSkillSource("github.com/org/repo", "plugins/x")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "https://github.com/org/repo",
+      path: "plugins/x",
+    });
+  });
+
+  it("treats a gitlab repo as a raw url source", () => {
+    expect(parseSkillSource("gitlab.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://gitlab.com/org/repo",
+    });
+  });
+
+  it("keeps the .git suffix on raw urls", () => {
+    expect(parseSkillSource("https://gitlab.com/org/repo.git")?.parsed).toEqual({
+      source: "url",
+      url: "https://gitlab.com/org/repo.git",
+    });
+  });
+
+  it("combines a gitlab repo with an explicit subfolder", () => {
+    expect(parseSkillSource("gitlab.com/org/repo", "plugins/x")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "https://gitlab.com/org/repo",
+      path: "plugins/x",
+    });
+  });
+
+  it("combines a self-hosted host with an explicit subfolder", () => {
+    expect(parseSkillSource("https://git.acme.com/team/repo", "sub/dir")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "https://git.acme.com/team/repo",
+      path: "sub/dir",
+    });
+  });
+
+  it("lets a github URL-encoded subdir win over an also-provided subfolder", () => {
+    expect(parseSkillSource("github.com/org/repo/tree/main/plugins/x", "ignored/path")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "https://github.com/org/repo",
+      path: "plugins/x",
+    });
+  });
+
+  it("rejects traversal, absolute, and double-slash subfolders", () => {
+    expect(parseSkillSource("gitlab.com/org/repo", "../etc")).toBeNull();
+    expect(parseSkillSource("gitlab.com/org/repo", "/abs")).toBeNull();
+    expect(parseSkillSource("gitlab.com/org/repo", "a//b")).toBeNull();
+  });
+
+  it("returns null for empty and garbage input", () => {
+    expect(parseSkillSource("")).toBeNull();
+    expect(parseSkillSource("   ")).toBeNull();
+    expect(parseSkillSource("not a url")).toBeNull();
+  });
+
+  it("suggests a kebab-friendly name from the last path segment", () => {
+    expect(parseSkillSource("github.com/org/my-awesome-skill")?.suggestedName).toBe("my-awesome-skill");
+    expect(parseSkillSource("github.com/org/repo/tree/main/plugins/cool-skill")?.suggestedName).toBe("cool-skill");
+    expect(parseSkillSource("gitlab.com/org/repo", "plugins/x")?.suggestedName).toBe("x");
+  });
+
+  it("rejects a bad explicit subfolder for a github repo", () => {
+    expect(parseSkillSource("github.com/org/repo", "../etc")).toBeNull();
+    expect(parseSkillSource("github.com/org/repo", "/abs")).toBeNull();
+    expect(parseSkillSource("github.com/org/repo", "a//b")).toBeNull();
+  });
+
+  it("treats a blob URL pointing at a root file as the plain repo", () => {
+    expect(parseSkillSource("github.com/org/repo/blob/main/SKILL.md")?.parsed).toEqual({
+      source: "github",
+      repo: "org/repo",
+    });
+  });
+
+  it("strips query strings and fragments before parsing", () => {
+    expect(parseSkillSource("github.com/org/repo?tab=readme")?.parsed).toEqual({ source: "github", repo: "org/repo" });
+    expect(parseSkillSource("github.com/org/repo#section")?.parsed).toEqual({ source: "github", repo: "org/repo" });
+  });
+
+  it("rejects a tree URL whose folder has a space or percent-encoded segment", () => {
+    expect(parseSkillSource("github.com/org/repo/tree/main/a b")).toBeNull();
+    expect(parseSkillSource("github.com/org/repo/tree/main/a%20b")).toBeNull();
+  });
+
+  it("routes uppercase and www github hosts through the github shorthand", () => {
+    expect(parseSkillSource("GitHub.com/org/repo/tree/main/x")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "https://github.com/org/repo",
+      path: "x",
+    });
+    expect(parseSkillSource("www.github.com/org/repo")?.parsed).toEqual({ source: "github", repo: "org/repo" });
+  });
+
+  it("keeps a dotted folder name as the subdir path", () => {
+    expect(parseSkillSource("github.com/org/repo/blob/main/my.skill")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "https://github.com/org/repo",
+      path: "my.skill",
+    });
+  });
+
+  it("falls back to the repo for a tree URL with a branch but no folder", () => {
+    expect(parseSkillSource("github.com/org/repo/tree/main")?.parsed).toEqual({ source: "github", repo: "org/repo" });
+  });
+
+  it("kebab-cases the suggested name from a mixed-case repo", () => {
+    expect(parseSkillSource("github.com/Org/My_Repo")?.suggestedName).toBe("my-repo");
+  });
+
+  it("rejects a bare host or single-segment raw git url", () => {
+    expect(parseSkillSource("gitlab.com")).toBeNull();
+    expect(parseSkillSource("gitlab.com/org")).toBeNull();
+  });
+});
+
+// Skill sources are served on the unauthenticated public feeds and cloned by clients, so the
+// parser must never publish an insecure, credentialed, internal, or malformed clone URL.
+describe("parseSkillSource — security boundary", () => {
+  it("rejects non-https schemes", () => {
+    for (const url of [
+      "http://gitlab.com/org/repo",
+      "HTTP://gitlab.com/org/repo",
+      "ssh://gitlab.com/org/repo",
+      "git://gitlab.com/org/repo",
+      "ftp://gitlab.com/org/repo",
+      "file:///etc/passwd",
+      "javascript:alert(1)",
+      "data:text/plain,hi",
+      "//gitlab.com/org/repo",
+    ]) {
+      expect(parseSkillSource(url)).toBeNull();
+    }
+  });
+
+  it("rejects URLs with embedded credentials", () => {
+    expect(parseSkillSource("https://user:token@gitlab.com/org/repo")).toBeNull();
+    expect(parseSkillSource("https://user@gitlab.com/org/repo")).toBeNull();
+    // userinfo confusion: the real host is evil.com, not github.com
+    expect(parseSkillSource("https://github.com@evil.com/org/repo")).toBeNull();
+  });
+
+  it("rejects IP-literal hosts (loopback, private, metadata, obfuscated, IPv6)", () => {
+    for (const url of [
+      "https://127.0.0.1/org/repo",
+      "https://10.0.0.5/org/repo",
+      "https://169.254.169.254/org/repo",
+      "https://2130706433/org/repo",
+      "https://[::ffff:127.0.0.1]/org/repo",
+    ]) {
+      expect(parseSkillSource(url)).toBeNull();
+    }
+  });
+
+  it("does not grant GitHub shorthand to a look-alike host", () => {
+    expect(parseSkillSource("https://github.com.evil.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://github.com.evil.com/org/repo",
+    });
+  });
+
+  it("rejects GitHub org/repo segments with illegal characters", () => {
+    expect(parseSkillSource("github.com/o@x/repo")).toBeNull();
+    expect(parseSkillSource("github.com/org/..%2f..%2fx")).toBeNull();
+  });
+});
+
+describe("isValidSubPath", () => {
+  it("accepts relative segment paths", () => {
+    expect(isValidSubPath("plugins/x")).toBe(true);
+    expect(isValidSubPath("sub/dir")).toBe(true);
+    expect(isValidSubPath("a.b-c_d")).toBe(true);
+    expect(isValidSubPath("plugins/x/")).toBe(true);
+  });
+
+  it("rejects empty, traversal, absolute, and double-slash paths", () => {
+    expect(isValidSubPath("")).toBe(false);
+    expect(isValidSubPath("../etc")).toBe(false);
+    expect(isValidSubPath("/abs")).toBe(false);
+    expect(isValidSubPath("a//b")).toBe(false);
   });
 });

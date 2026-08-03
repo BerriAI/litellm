@@ -31,11 +31,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = (
-            "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
-            if api_base is None
-            else api_base.rstrip("/")
-        )
+        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
         complete_url = f"{api_base}/chat/completions"
         return complete_url
 
@@ -55,9 +51,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         return mapped_openai_params
 
     def transform_request(
@@ -69,9 +63,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         extra_body = optional_params.pop("extra_body", {})
-        response = super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
         return response
 
@@ -88,9 +80,7 @@ class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
         try:
             if "error" in chunk:
                 error_chunk = chunk["error"]
-                error_message = "OVHCloud Error: {}".format(
-                    error_chunk.get("message", "Unknown error")
-                )
+                error_message = "OVHCloud Error: {}".format(error_chunk.get("message", "Unknown error"))
                 raise OVHCloudException(
                     message=error_message,
                     status_code=error_chunk.get("code", 400),

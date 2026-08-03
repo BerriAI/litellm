@@ -55,10 +55,7 @@ class LiteLLMSkillsHandler:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            raise ValueError(
-                "Prisma client is not initialized. "
-                "Database connection required for LiteLLM skills."
-            )
+            raise ValueError("Prisma client is not initialized. Database connection required for LiteLLM skills.")
         return prisma_client
 
     @staticmethod
@@ -77,9 +74,7 @@ class LiteLLMSkillsHandler:
             # Stamping a placeholder would let any two such callers see
             # each other's skills via the shared owner. ValueError keeps
             # this module FastAPI-free per the project layering rule.
-            raise ValueError(
-                "Unable to record skill ownership: caller has no identity scope."
-            )
+            raise ValueError("Unable to record skill ownership: caller has no identity scope.")
 
         skill_data: Dict[str, Any] = {
             "skill_id": skill_id,
@@ -105,9 +100,7 @@ class LiteLLMSkillsHandler:
         if data.file_type is not None:
             skill_data["file_type"] = data.file_type
 
-        verbose_logger.debug(
-            f"LiteLLMSkillsHandler: Creating skill {skill_id} with title={data.display_title}"
-        )
+        verbose_logger.debug(f"LiteLLMSkillsHandler: Creating skill {skill_id} with title={data.display_title}")
 
         new_skill = await SkillsRepository(prisma_client).table.create(data=skill_data)
         return _prisma_skill_to_litellm(new_skill)
@@ -120,9 +113,7 @@ class LiteLLMSkillsHandler:
     ) -> List[LiteLLM_SkillsTable]:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
-        verbose_logger.debug(
-            f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}"
-        )
+        verbose_logger.debug(f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}")
 
         find_many_kwargs: Dict[str, Any] = {
             "take": limit,
@@ -135,9 +126,7 @@ class LiteLLMSkillsHandler:
                 return []
             find_many_kwargs["where"] = {"created_by": {"in": owner_scopes}}
 
-        skills = await SkillsRepository(prisma_client).table.find_many(
-            **find_many_kwargs
-        )
+        skills = await SkillsRepository(prisma_client).table.find_many(**find_many_kwargs)
         return [_prisma_skill_to_litellm(s) for s in skills]
 
     @staticmethod
@@ -152,12 +141,8 @@ class LiteLLMSkillsHandler:
             return cached
 
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
-        skill = await SkillsRepository(prisma_client).table.find_unique(
-            where={"skill_id": skill_id}
-        )
-        _SKILL_CACHE.set_cache(
-            skill_id, skill if skill is not None else _NEGATIVE_SKILL_SENTINEL
-        )
+        skill = await SkillsRepository(prisma_client).table.find_unique(where={"skill_id": skill_id})
+        _SKILL_CACHE.set_cache(skill_id, skill if skill is not None else _NEGATIVE_SKILL_SENTINEL)
         return skill
 
     @staticmethod
@@ -170,9 +155,7 @@ class LiteLLMSkillsHandler:
         skill = await LiteLLMSkillsHandler._load_skill(skill_id)
         # Same "not found" message for both "missing" and "cross-tenant"
         # so callers can't enumerate skill IDs they don't own.
-        if skill is None or not user_can_access_resource_owner(
-            getattr(skill, "created_by", None), user_api_key_dict
-        ):
+        if skill is None or not user_can_access_resource_owner(getattr(skill, "created_by", None), user_api_key_dict):
             raise ValueError(f"Skill not found: {skill_id}")
 
         return _prisma_skill_to_litellm(skill)
@@ -186,9 +169,7 @@ class LiteLLMSkillsHandler:
         verbose_logger.debug(f"LiteLLMSkillsHandler: Deleting skill {skill_id}")
 
         skill = await LiteLLMSkillsHandler._load_skill(skill_id)
-        if skill is None or not user_can_access_resource_owner(
-            getattr(skill, "created_by", None), user_api_key_dict
-        ):
+        if skill is None or not user_can_access_resource_owner(getattr(skill, "created_by", None), user_api_key_dict):
             raise ValueError(f"Skill not found: {skill_id}")
 
         await SkillsRepository(prisma_client).table.delete(where={"skill_id": skill_id})
@@ -204,13 +185,9 @@ class LiteLLMSkillsHandler:
         """Skills-injection-hook helper: returns None instead of raising on
         not-found / not-authorized so the hook can silently skip."""
         try:
-            return await LiteLLMSkillsHandler.get_skill(
-                skill_id, user_api_key_dict=user_api_key_dict
-            )
+            return await LiteLLMSkillsHandler.get_skill(skill_id, user_api_key_dict=user_api_key_dict)
         except ValueError:
             return None
         except Exception as e:
-            verbose_logger.warning(
-                f"LiteLLMSkillsHandler: Error fetching skill {skill_id}: {e}"
-            )
+            verbose_logger.warning(f"LiteLLMSkillsHandler: Error fetching skill {skill_id}: {e}")
             return None

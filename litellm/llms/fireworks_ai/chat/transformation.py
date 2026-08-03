@@ -48,7 +48,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from ..common_utils import FireworksAIException
+from ..common_utils import FireworksAIMixin, FireworksAIException
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -60,9 +60,7 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
     """
     choices = [c for c in (payload.get("choices") or []) if isinstance(c, dict)]
     top_level = {
-        f"fireworks_{field}": payload[field]
-        for field in ("perf_metrics", "prompt_token_ids")
-        if field in payload
+        f"fireworks_{field}": payload[field] for field in ("perf_metrics", "prompt_token_ids") if field in payload
     }
     per_choice = {
         f"fireworks_{dest}": [c[field] for c in choices if field in c]
@@ -72,7 +70,7 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
     return {**top_level, **per_choice}
 
 
-class FireworksAIConfig(OpenAIGPTConfig):
+class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     """
     Reference: https://docs.fireworks.ai/api-reference/post-chatcompletions
 
@@ -116,6 +114,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
         prompt_truncate_len: Optional[int] = None,
         context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None,
     ) -> None:
+        OpenAIGPTConfig.__init__(
+            self,
+            frequency_penalty=frequency_penalty,
+            max_tokens=max_tokens,
+            n=n,
+            stop=stop,
+            temperature=temperature,
+            top_p=top_p,
+            response_format=response_format,
+        )
         locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
@@ -124,6 +132,32 @@ class FireworksAIConfig(OpenAIGPTConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        api_key = self._get_api_key(api_key)
+        if api_key is None:
+            raise ValueError("FIREWORKS_API_KEY is not set")
+
+        validated_headers = OpenAIGPTConfig.validate_environment(
+            self,
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        return self._add_session_affinity_header(validated_headers, litellm_params)
 
     def get_supported_openai_params(self, model: str):
         # Base parameters supported by all models
@@ -204,14 +238,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model=model)
-        is_tools_set = any(
-            param == "tools" and value is not None
-            for param, value in non_default_params.items()
-        )
-        if (
-            non_default_params.get("thinking") is not None
-            and non_default_params.get("reasoning_effort") is not None
-        ):
+        is_tools_set = any(param == "tools" and value is not None for param, value in non_default_params.items())
+        if non_default_params.get("thinking") is not None and non_default_params.get("reasoning_effort") is not None:
             raise litellm.BadRequestError(
                 message=(
                     "Fireworks AI chat completions does not support specifying both "
@@ -230,9 +258,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
                     # pass through the value of tool choice
                     optional_params["tool_choice"] = value
             elif param == "response_format":
-                if (
-                    is_tools_set
-                ):  # fireworks ai doesn't support tools and response_format together
+                if is_tools_set:  # fireworks ai doesn't support tools and response_format together
                     optional_params = self._add_response_format_to_tools(
                         optional_params=optional_params,
                         value=value,
@@ -256,9 +282,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         return optional_params
 
-    def _transform_tools(
-        self, tools: List[OpenAIChatCompletionToolParam]
-    ) -> List[OpenAIChatCompletionToolParam]:
+    def _transform_tools(self, tools: List[OpenAIChatCompletionToolParam]) -> List[OpenAIChatCompletionToolParam]:
         for tool in tools:
             if tool.get("type") != "function":
                 continue
@@ -279,9 +303,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             filter_value_from_dict,
         )
 
-        supports_vision_value = self._get_model_cost_capability_exact(
-            model=model, capability="supports_vision"
-        )
+        supports_vision_value = self._get_model_cost_capability_exact(model=model, capability="supports_vision")
         for message in messages:
             if message["role"] == "user":
                 _message_content = message.get("content")
@@ -301,10 +323,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
                                 model=model,
                                 llm_provider="fireworks_ai",
                             )
-                        if (
-                            content.get("type") == "image_url"
-                            and supports_vision_value is False
-                        ):
+                        if content.get("type") == "image_url" and supports_vision_value is False:
                             raise litellm.BadRequestError(
                                 message=(
                                     f"Fireworks AI model {model} does not support "
@@ -338,11 +357,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         model_cost = litellm.model_cost
         signature = (id(model_cost), get_model_cost_mutation_generation())
         cached = cls._fireworks_index_cache
-        if (
-            cached is not None
-            and cached[0] == signature[0]
-            and cached[1] == signature[1]
-        ):
+        if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
             return cached[2]
 
         index: List[Tuple[str, dict]] = []
@@ -384,9 +399,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             short_name = short_name[len("accounts/fireworks/models/") :]
         return short_name
 
-    def _get_model_cost_capability_exact(
-        self, model: str, capability: str
-    ) -> Optional[bool]:
+    def _get_model_cost_capability_exact(self, model: str, capability: str) -> Optional[bool]:
         short_name = self._short_model_name(model)
         candidate_keys = (
             model,
@@ -400,9 +413,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return None
 
     def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
-        exact = self._get_model_cost_capability_exact(
-            model=model, capability=capability
-        )
+        exact = self._get_model_cost_capability_exact(model=model, capability=capability)
         if exact is not None:
             return exact
 
@@ -418,8 +429,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         matches = [
             (key_short, cast(Optional[bool], model_info.get(capability)))
             for key_short, model_info in self._get_fireworks_index()
-            if model_info.get(capability) is not None
-            and self._matches_on_hyphen_boundary(short_name, key_short)
+            if model_info.get(capability) is not None and self._matches_on_hyphen_boundary(short_name, key_short)
         ]
         if not matches:
             return None
@@ -429,15 +439,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
         supports_function_calling_value = self._get_model_cost_capability(
             model=model, capability="supports_function_calling"
         )
-        supports_reasoning_value = self._get_model_cost_capability(
-            model=model, capability="supports_reasoning"
-        )
-        supports_vision_value = self._get_model_cost_capability(
-            model=model, capability="supports_vision"
-        )
-        supports_pdf_input_value = self._get_model_cost_capability(
-            model=model, capability="supports_pdf_input"
-        )
+        supports_reasoning_value = self._get_model_cost_capability(model=model, capability="supports_reasoning")
+        supports_vision_value = self._get_model_cost_capability(model=model, capability="supports_vision")
+        supports_pdf_input_value = self._get_model_cost_capability(model=model, capability="supports_pdf_input")
 
         provider_specific_model_info: ProviderSpecificModelInfo = {
             "supports_function_calling": True,
@@ -445,23 +449,17 @@ class FireworksAIConfig(OpenAIGPTConfig):
         }
 
         if supports_function_calling_value is not None:
-            provider_specific_model_info["supports_function_calling"] = (
-                supports_function_calling_value
-            )
+            provider_specific_model_info["supports_function_calling"] = supports_function_calling_value
 
         # Only include supports_reasoning if True
         if supports_reasoning_value:
-            provider_specific_model_info["supports_reasoning"] = (
-                supports_reasoning_value
-            )
+            provider_specific_model_info["supports_reasoning"] = supports_reasoning_value
 
         if supports_vision_value is not None:
             provider_specific_model_info["supports_vision"] = supports_vision_value
 
         if supports_pdf_input_value is not None:
-            provider_specific_model_info["supports_pdf_input"] = (
-                supports_pdf_input_value
-            )
+            provider_specific_model_info["supports_pdf_input"] = supports_pdf_input_value
 
         return provider_specific_model_info
 
@@ -478,9 +476,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 model = f"accounts/fireworks/routers/{model}"
             else:
                 model = f"accounts/fireworks/models/{model}"
-        messages = self._transform_messages_helper(
-            messages=messages, model=model, litellm_params=litellm_params
-        )
+        messages = self._transform_messages_helper(messages=messages, model=model, litellm_params=litellm_params)
         if "tools" in optional_params and optional_params["tools"] is not None:
             tools = self._transform_tools(tools=optional_params["tools"])
             optional_params["tools"] = tools
@@ -511,19 +507,13 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         Relevant Issue: https://github.com/BerriAI/litellm/issues/7209#issuecomment-2813208780
         """
-        if (
-            tool_calls is not None
-            and message.content is not None
-            and message.tool_calls is None
-        ):
+        if tool_calls is not None and message.content is not None and message.tool_calls is None:
             try:
                 function = Function(**json.loads(message.content))
                 if function.name != RESPONSE_FORMAT_TOOL_NAME and function.name in [
                     tool["function"]["name"] for tool in tool_calls
                 ]:
-                    tool_call = ChatCompletionMessageToolCall(
-                        function=function, id=str(uuid.uuid4()), type="function"
-                    )
+                    tool_call = ChatCompletionMessageToolCall(function=function, id=str(uuid.uuid4()), type="function")
                     message.tool_calls = [tool_call]
 
                     message.content = None
@@ -560,9 +550,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise FireworksAIException(
-                message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), raw_response.text
-                ),
+                message="Unable to get json response - {}, Original Response: {}".format(str(e), raw_response.text),
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
@@ -578,11 +566,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         ## FIREWORKS AI sends tool calls in the content field instead of tool_calls
         for choice in response.choices:
-            cast(Choices, choice).message = (
-                self._handle_message_content_with_tool_calls(
-                    message=cast(Choices, choice).message,
-                    tool_calls=optional_params.get("tools", None),
-                )
+            cast(Choices, choice).message = self._handle_message_content_with_tool_calls(
+                message=cast(Choices, choice).message,
+                tool_calls=optional_params.get("tools", None),
             )
 
         response._hidden_params = {
@@ -607,11 +593,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = (
-            api_base
-            or get_secret_str("FIREWORKS_API_BASE")
-            or "https://api.fireworks.ai/inference/v1"
-        )  # type: ignore
+        api_base = api_base or get_secret_str("FIREWORKS_API_BASE") or "https://api.fireworks.ai/inference/v1"  # type: ignore
         dynamic_api_key = api_key or (
             get_secret_str("FIREWORKS_API_KEY")
             or get_secret_str("FIREWORKS_AI_API_KEY")
@@ -621,9 +603,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
-        api_base, api_key = self._get_openai_compatible_provider_info(
-            api_base=api_base, api_key=api_key
-        )
+        api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
         if api_base is None or api_key is None:
             raise ValueError(
                 "FIREWORKS_API_BASE or FIREWORKS_API_KEY is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."

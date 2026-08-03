@@ -62,9 +62,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
     Configuration for DashScope image generation (qwen-image-2.0, qwen-image-2.0-pro).
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         return ["n", "size"]
 
     def map_openai_params(
@@ -97,9 +95,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        return (
-            api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
-        )
+        return api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
 
     def validate_environment(
         self,
