@@ -109,6 +109,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     data: modelInfo = [],
     isLoading: modelsLoading,
     isError: modelsError,
+    refetch: refetchModels,
   } = useQuery({
     queryKey: ["availableModels", "autoRouter", accessToken],
     queryFn: () => fetchAvailableModels(accessToken),
@@ -356,6 +357,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             </AntdSelect>
             {showValidationErrors && !selectedPreset && (
               <div className="text-xs mt-1 text-red-500">Please select a template</div>
+            )}
+            {modelsError && (
+              <div className="text-xs mt-1 text-red-500">
+                Could not load available models.{" "}
+                <button type="button" className="underline" onClick={() => refetchModels()}>
+                  Retry
+                </button>
+              </div>
             )}
           </div>
 

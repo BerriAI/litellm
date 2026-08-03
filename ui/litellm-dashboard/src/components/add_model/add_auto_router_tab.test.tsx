@@ -184,6 +184,22 @@ describe("AddAutoRouterTab", () => {
     expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
   });
 
+  // A failed fetch must not strand the caller: Retry re-runs the same query, and a caller who
+  // only hit a transient error can recover without closing and reopening the whole modal.
+  it("recovers presets once Retry re-fetches successfully", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(ALL_FAMILY_MODELS);
+
+    renderWithProviders(<Harness />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
+    expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2);
+  });
+
   // The headline behavior: selecting a preset must pre-fill the tier config so the created
   // router carries the preset's models. Real tier validation runs here (getMissingTiersError is
   // not stubbed), so if selection stopped pre-filling, the empty tiers would either block the
