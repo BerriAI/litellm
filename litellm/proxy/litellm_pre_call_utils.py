@@ -1470,7 +1470,7 @@ async def add_litellm_data_to_request(
     _logging_safe_headers = redact_credential_headers(
         _headers, configured_names=configured_credential_header_names(general_settings)
     )
-    verbose_proxy_logger.debug(f"Request Headers: {_headers}")
+    verbose_proxy_logger.debug(f"Request Headers: {_logging_safe_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
     if forward_llm_auth and "x-api-key" in _headers:
