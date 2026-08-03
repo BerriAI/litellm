@@ -366,7 +366,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if cached_client:
                 if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
                     return cached_client
-            http_client: Optional[Union[httpx.Client, httpx.AsyncClient]] = (
+            http_client: httpx.Client | httpx.AsyncClient | None = (
                 OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
                 if is_async
                 else OpenAIChatCompletion._get_sync_http_client()
