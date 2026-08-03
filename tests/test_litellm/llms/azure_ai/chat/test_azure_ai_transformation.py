@@ -262,3 +262,54 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
         assert "copilot_mcp_server_name" not in tool
     assert result["tools"][0]["type"] == "function"
     assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+def test_transform_messages_strips_non_spec_thinking_and_provider_fields():
+    """
+    Regression for #33961: routing Claude Code through azure_ai to a strict
+    OpenAI-compatible backend (Fireworks, additionalProperties=false) fails with
+    "Extra inputs are not permitted, field: 'messages[2].thinking_blocks'".
+
+    The AnthropicAdapter attaches non-spec output-only fields (thinking_blocks,
+    reasoning_content, tool_calls[].function.provider_specific_fields) to the
+    outbound assistant message. _transform_messages must strip them.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "sure",
+            "reasoning_content": "let me think",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "hmm", "signature": "sig"}
+            ],
+            "provider_specific_fields": {"foo": "bar"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "abc"},
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "thanks"},
+    ]
+
+    result = config._transform_messages(messages=messages, model="fw-glm-5.2")
+
+    assistant = result[1]
+    assert "thinking_blocks" not in assistant
+    assert "reasoning_content" not in assistant
+    assert "provider_specific_fields" not in assistant
+    assert assistant["content"] == "sure"
+
+    tool_call_function = assistant["tool_calls"][0]["function"]
+    assert "provider_specific_fields" not in tool_call_function
+    assert tool_call_function["name"] == "get_weather"
+    assert assistant["tool_calls"][0]["id"] == "call_1"
