@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import { setToken } from "@/utils/mcpTokenStore";
-import CreateMCPServer from "./create_mcp_server";
+import CreateMCPServer from "./CreateMCPServer";
 import { selectAntOption } from "./testUtils";
 
 vi.mock("@/components/networking", () => ({
