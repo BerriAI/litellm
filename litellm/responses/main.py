@@ -154,9 +154,9 @@ async def aresponses_api_with_mcp(
     user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -422,9 +422,9 @@ async def aresponses(
     safety_identifier: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -733,9 +733,9 @@ def _responses_try_dispatch_mcp_gateway(
     top_p: float | None,
     truncation: Literal["auto", "disabled"] | None,
     user: str | None,
-    extra_headers: dict[str, Any] | None,
-    extra_query: dict[str, Any] | None,
-    extra_body: dict[str, Any] | None,
+    extra_headers: dict[str, object] | None,
+    extra_query: dict[str, object] | None,
+    extra_body: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
     kwargs: dict[str, Any],
@@ -809,9 +809,9 @@ def _responses_try_dispatch_emulated_file_search(
     safety_identifier: str | None,
     text_format: type[BaseModel] | dict | None,
     allowed_openai_params: list[str] | None,
-    extra_headers: dict[str, Any] | None,
-    extra_query: dict[str, Any] | None,
-    extra_body: dict[str, Any] | None,
+    extra_headers: dict[str, object] | None,
+    extra_query: dict[str, object] | None,
+    extra_body: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
     kwargs: dict[str, Any],
@@ -897,9 +897,9 @@ def responses(
     safety_identifier: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     allowed_openai_params: list[str] | None = None,
@@ -1154,9 +1154,9 @@ async def adelete_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -1215,14 +1215,14 @@ def delete_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> DeleteResponseResult | Coroutine[Any, Any, DeleteResponseResult]:
+) -> DeleteResponseResult | Coroutine[object, object, DeleteResponseResult]:
     """
     Synchronous version of the DELETE Responses API
 
@@ -1305,9 +1305,9 @@ async def aget_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -1380,14 +1380,14 @@ def get_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ResponsesAPIResponse | Coroutine[Any, Any, ResponsesAPIResponse]:
+) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse]:
     """
     Fetch a response by its ID.
 
@@ -1487,7 +1487,7 @@ async def alist_input_items(
     include: list[str] | None = None,
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -1543,11 +1543,11 @@ def list_input_items(
     include: list[str] | None = None,
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> dict | Coroutine[Any, Any, dict]:
+) -> dict | Coroutine[object, object, dict]:
     """List input items for a response"""
     local_vars = locals()
     try:
@@ -1618,9 +1618,9 @@ async def acancel_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -1679,14 +1679,14 @@ def cancel_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ResponsesAPIResponse | Coroutine[Any, Any, ResponsesAPIResponse]:
+) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse]:
     """
     Synchronous version of the POST Responses API
 
@@ -1772,9 +1772,9 @@ async def acompact_responses(
     previous_response_id: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -1850,14 +1850,14 @@ def compact_responses(
     previous_response_id: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ResponsesAPIResponse | Coroutine[Any, Any, ResponsesAPIResponse]:
+) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse]:
     """
     Synchronous version of the POST Compact Responses API
 
