@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 
 
 def cost_per_web_search_request(usage: Usage, model_info: "ModelInfo") -> float:
-    search_costs = model_info.get("search_context_cost_per_query") or {}
-    cost_per_search = search_costs.get("search_context_size_medium", 0.0)
+    search_costs = model_info.get("search_context_cost_per_query")
+    cost_per_search = search_costs.get("search_context_size_medium", 0.0) if search_costs else 0.0
     server_tool_use = getattr(usage, "server_tool_use", None)
     if server_tool_use is None:
         return 0.0

@@ -269,9 +269,10 @@ class GroqChatConfig(OpenAILikeChatConfig):
             )
         if self._is_compound_model(model):
             return optional_params
-        if not any(tool.get("type") == "browser_search" for tool in optional_params.get("tools") or []):
+        if not any(tool.get("type") == "browser_search" for tool in optional_params.get("tools") or ()):
             optional_params = self._add_tools_to_optional_params(
-                optional_params=optional_params, tools=[{"type": "browser_search"}]
+                optional_params=optional_params,
+                tools=[{"type": "browser_search"}],  # mutable-ok: request tools must be json dicts in a list
             )
 
         return optional_params
