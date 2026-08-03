@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from copy import deepcopy
-from typing import List, cast
+from typing import Callable, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,7 +15,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms.vertex_ai import UsageMetadata
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
 
@@ -1522,6 +1522,40 @@ def test_vertex_ai_usage_metadata_missing_token_count():
     assert (
         result.completion_tokens_details.audio_tokens == 0
     )  # Default value for missing tokenCount
+
+
+@pytest.mark.parametrize(
+    "handler",
+    (
+        VertexGeminiConfig._handle_blocked_response,
+        VertexGeminiConfig._handle_content_policy_violation,
+    ),
+)
+def test_vertex_ai_filtered_response_preserves_complete_usage(
+    handler: Callable[
+        [VertexGeminiConfig, ModelResponse, GenerateContentResponseBody],
+        ModelResponse,
+    ],
+):
+    completion_response = GenerateContentResponseBody(
+        usageMetadata=UsageMetadata(
+            promptTokenCount=100,
+            toolUsePromptTokenCount=7,
+            candidatesTokenCount=13,
+            thoughtsTokenCount=17,
+            totalTokenCount=137,
+        )
+    )
+
+    result = handler(VertexGeminiConfig(), ModelResponse(), completion_response)
+
+    assert result.choices[0].finish_reason == "content_filter"
+    assert result.usage.prompt_tokens == 107
+    assert result.usage.completion_tokens == 30
+    assert result.usage.total_tokens == 137
+    assert result.usage.prompt_tokens_details.tool_use_tokens == 7
+    assert result.usage.completion_tokens_details.reasoning_tokens == 17
+    assert result.usage.prompt_tokens + result.usage.completion_tokens == 137
 
 
 def test_vertex_ai_process_candidates_with_grounding_metadata():

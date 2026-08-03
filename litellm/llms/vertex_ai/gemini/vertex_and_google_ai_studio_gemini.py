@@ -1668,12 +1668,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         model_response.choices = [choice]
 
-        ## GET USAGE ##
-        usage = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
-            completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
-        )
+        usage = self._calculate_usage(completion_response)
 
         setattr(model_response, "usage", usage)
 
@@ -1702,12 +1697,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         model_response.choices = [choice]
 
-        ## GET USAGE ##
-        usage = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
-            completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
-        )
+        usage = self._calculate_usage(completion_response)
 
         setattr(model_response, "usage", usage)
 
