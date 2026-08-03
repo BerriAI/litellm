@@ -152,7 +152,11 @@ async def run_async_fallback(
             kwargs.pop("_fallback_root_model_group", None)
             kwargs.pop("_remaining_fallback_model_groups", None)
             kwargs.pop("_fallback_continuation_state", None)
-            kwargs.setdefault("metadata", {})["_fallback_continuation_state"] = _FallbackContinuationState(
+            metadata = kwargs.setdefault(
+                "metadata",
+                {},  # mutable-ok: request metadata is intentionally mutable
+            )
+            metadata["_fallback_continuation_state"] = _FallbackContinuationState(
                 litellm_router=litellm_router,
                 root_model_group=original_model_group,
                 remaining_model_groups=tuple(fallback_model_group[fallback_index + 1 :]),
