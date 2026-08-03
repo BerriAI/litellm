@@ -6,16 +6,18 @@ from .base import GuardrailConfigModel
 
 
 class DataFogGuardrailOptionalParams(BaseModel):
-    datafog_entity_types: Optional[list[str]] = Field(
-        default=None,
-        description=(
-            "Entity types to detect. Defaults to the high-precision set: "
-            "EMAIL, PHONE, CREDIT_CARD, SSN. Additional types (IP_ADDRESS, "
-            "DOB, ZIP, and DE_* locale entities) are opt-in because they "
-            "are noisy in technical text."
-        ),
+    datafog_entity_types: Optional[list[str]] = (  # mutable-ok: dynamic JSON payload
+        Field(  # mutable-ok: dynamic JSON payload
+            default=None,
+            description=(
+                "Entity types to detect. Defaults to the high-precision set: "
+                "EMAIL, PHONE, CREDIT_CARD, SSN. Additional types (IP_ADDRESS, "
+                "DOB, ZIP, and DE_* locale entities) are opt-in because they "
+                "are noisy in technical text."
+            ),
+        )
     )
-    datafog_locales: Optional[list[str]] = Field(
+    datafog_locales: Optional[list[str]] = Field(  # mutable-ok: dynamic JSON payload
         default=None,
         description=(
             'Locale packs to enable for country-specific entities, e.g. ["de"] for German VAT IDs, IBANs, and tax IDs.'

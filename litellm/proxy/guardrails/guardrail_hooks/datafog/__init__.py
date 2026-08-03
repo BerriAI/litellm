@@ -51,11 +51,11 @@ def initialize_guardrail(
     return datafog_guardrail
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry = {  # mutable-ok: dynamic JSON payload
     SupportedGuardrailIntegrations.DATAFOG.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry = {  # mutable-ok: dynamic JSON payload
     SupportedGuardrailIntegrations.DATAFOG.value: DataFogGuardrail,
 }
