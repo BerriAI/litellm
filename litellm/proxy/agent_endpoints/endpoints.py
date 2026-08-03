@@ -12,7 +12,7 @@ import asyncio
 import os
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing_extensions import Required
@@ -45,6 +45,9 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import AgentScope
 
 
 def _proxy_base_url(http_request: Request) -> str:
@@ -197,6 +200,30 @@ async def _check_agent_url_health(
         }
 
 
+def _agents_visible_to(scope: "AgentScope") -> list[AgentResponse]:
+    """
+    Narrow the registry to the agents a caller may see, denying when its grants are unreadable.
+    """
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        RestrictedAgents,
+        UnresolvableAgents,
+        UnrestrictedAgents,
+    )
+
+    all_agents = global_agent_registry.get_agent_list()
+    match scope:
+        case UnrestrictedAgents():
+            return all_agents
+        case RestrictedAgents(allowed_agent_ids):
+            return [agent for agent in all_agents if agent.agent_id in allowed_agent_ids]
+        case UnresolvableAgents(reason):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Agent permissions are currently unreadable, refusing to list agents: {reason}",
+            )
+
+
 @router.get(
     "/v1/agents",
     tags=["[beta] A2A Agents"],
@@ -246,16 +273,9 @@ async def get_agents(
         ):
             returned_agents = global_agent_registry.get_agent_list()
         else:
-            # Get allowed agents from object_permission (key/team level)
-            allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
-
-            # If no restrictions (empty list), return all agents
-            if len(allowed_agent_ids) == 0:
-                returned_agents = global_agent_registry.get_agent_list()
-            else:
-                # Filter agents by allowed IDs
-                all_agents = global_agent_registry.get_agent_list()
-                returned_agents = [agent for agent in all_agents if agent.agent_id in allowed_agent_ids]
+            returned_agents = _agents_visible_to(
+                await AgentRequestHandler.resolve_agent_scope(user_api_key_auth=user_api_key_dict)
+            )
 
         # Fetch current spend from DB for all returned agents
         from litellm.proxy.proxy_server import prisma_client
@@ -1044,16 +1064,17 @@ async def get_agent_daily_activity(
     # intersect their explicit `agent_ids` filter with the same allowlist.
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
+        RestrictedAgents,
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
     where_condition: dict[str, object] = {}
     if not _user_has_admin_view(user_api_key_dict):
-        permitted_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
-        # `get_allowed_agents` returns an empty list when the caller's key
-        # and team carry no agent restrictions. For activity scoping that's
-        # not "see everything" — fall back to the agents the caller
-        # created so they cannot enumerate other tenants' agents.
+        scope = await AgentRequestHandler.resolve_agent_scope(user_api_key_auth=user_api_key_dict)
+        permitted_agent_ids = list(scope.agent_ids) if isinstance(scope, RestrictedAgents) else []
+        # An unrestricted caller is not "see everything" for activity scoping;
+        # fall back to the agents the caller created so they cannot
+        # enumerate other tenants' agents.
         # Guard against `user_id is None`: a literal None in Prisma
         # `where={"created_by": None}` resolves to ``created_by IS NULL``
         # and would expose every ownerless agent's rows.

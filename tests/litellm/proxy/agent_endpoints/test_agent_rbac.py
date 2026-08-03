@@ -11,6 +11,9 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    UnrestrictedAgents,
+)
 
 
 def _make_internal_user(user_id: str = "user-1") -> UserAPIKeyAuth:
@@ -64,8 +67,8 @@ async def test_get_agents_allowed_when_not_disabled():
             MagicMock(get_agent_list=MagicMock(return_value=[])),
         ):
             with patch(
-                "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
-                new=AsyncMock(return_value=[]),
+                "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_scope",
+                new=AsyncMock(return_value=UnrestrictedAgents()),
             ):
                 result = await get_agents(request=request_mock, user_api_key_dict=user)
     assert result == []

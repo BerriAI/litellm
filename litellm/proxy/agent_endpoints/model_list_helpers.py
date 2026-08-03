@@ -25,9 +25,11 @@ async def append_agents_to_model_group(
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
             AgentRequestHandler,
+            RestrictedAgents,
         )
 
-        allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
+        scope = await AgentRequestHandler.resolve_agent_scope(user_api_key_auth=user_api_key_dict)
+        allowed_agent_ids = scope.agent_ids if isinstance(scope, RestrictedAgents) else frozenset()
 
         for agent_id in allowed_agent_ids:
             agent = global_agent_registry.get_agent_by_id(agent_id)
@@ -59,9 +61,11 @@ async def append_agents_to_model_info(
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
             AgentRequestHandler,
+            RestrictedAgents,
         )
 
-        allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
+        scope = await AgentRequestHandler.resolve_agent_scope(user_api_key_auth=user_api_key_dict)
+        allowed_agent_ids = scope.agent_ids if isinstance(scope, RestrictedAgents) else frozenset()
 
         for agent_id in allowed_agent_ids:
             agent = global_agent_registry.get_agent_by_id(agent_id)

@@ -19,6 +19,9 @@ from litellm.proxy.agent_endpoints.model_list_helpers import (
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.agents import AgentResponse
+from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    RestrictedAgents,
+)
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -37,15 +40,15 @@ async def test_append_agents_to_model_group():
     )
 
     # Mock AgentRequestHandler at its source location
-    mock_get_allowed_agents = AsyncMock(return_value=["test-agent-id"])
+    mock_resolve_agent_scope = AsyncMock(return_value=RestrictedAgents(frozenset({"test-agent-id"})))
 
     # Mock global_agent_registry
     mock_registry = Mock()
     mock_registry.get_agent_by_id = Mock(return_value=mock_agent)
 
     with patch(
-        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
-        mock_get_allowed_agents,
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_scope",
+        mock_resolve_agent_scope,
     ):
         with patch(
             "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
@@ -80,15 +83,15 @@ async def test_append_agents_to_model_info():
     )
 
     # Mock AgentRequestHandler at its source location
-    mock_get_allowed_agents = AsyncMock(return_value=["agent-123"])
+    mock_resolve_agent_scope = AsyncMock(return_value=RestrictedAgents(frozenset({"agent-123"})))
 
     # Mock global_agent_registry
     mock_registry = Mock()
     mock_registry.get_agent_by_id = Mock(return_value=mock_agent)
 
     with patch(
-        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
-        mock_get_allowed_agents,
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_scope",
+        mock_resolve_agent_scope,
     ):
         with patch(
             "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
