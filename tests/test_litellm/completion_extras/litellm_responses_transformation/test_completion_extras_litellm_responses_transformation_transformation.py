@@ -2962,3 +2962,79 @@ async def test_acompletion_bridge_normalizes_stream_options_on_the_wire(
         assert "stream_options" not in request_body
     else:
         assert request_body["stream_options"] == expected_wire_stream_options
+
+
+def test_assistant_history_output_text_items_include_annotations():
+    """
+    Regression test for issue #35213: assistant history replayed through the
+    chat -> responses bridge produced ``output_text`` blocks without the
+    ``annotations`` key, which strict Responses backends reject with
+    "Required property 'annotations' is missing".
+    """
+    from openai.types.responses.response_output_text_param import ResponseOutputTextParam
+    from pydantic import TypeAdapter
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "plain string answer"},
+        {"role": "user", "content": "second question"},
+        {"role": "assistant", "content": [{"type": "text", "text": "list text answer"}]},
+        {"role": "user", "content": "third question"},
+        {"role": "assistant", "content": [{"type": "output_text", "text": "passthrough answer"}]},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    output_text_blocks = [
+        block
+        for item in input_items
+        if item.get("role") == "assistant"
+        for block in item["content"]
+        if block.get("type") == "output_text"
+    ]
+    assert len(output_text_blocks) == 3
+    assert [block["text"] for block in output_text_blocks] == [
+        "plain string answer",
+        "list text answer",
+        "passthrough answer",
+    ]
+    output_text_adapter = TypeAdapter(ResponseOutputTextParam)
+    for block in output_text_blocks:
+        assert block["annotations"] == []
+        output_text_adapter.validate_python(block)
+
+
+def test_assistant_history_output_text_preserves_existing_annotations():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    annotations = [
+        {
+            "type": "url_citation",
+            "url": "https://example.com",
+            "title": "example",
+            "start_index": 0,
+            "end_index": 5,
+        }
+    ]
+    handler = LiteLLMResponsesTransformationHandler()
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "cited", "annotations": annotations}],
+            },
+        ]
+    )
+
+    assistant_item = next(item for item in input_items if item.get("role") == "assistant")
+    assert assistant_item["content"][0]["annotations"] == annotations
