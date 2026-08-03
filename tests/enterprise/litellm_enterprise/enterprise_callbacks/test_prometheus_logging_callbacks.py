@@ -1177,39 +1177,28 @@ def test_deployment_state_management(prometheus_logger):
 
 
 def test_increment_deployment_cooled_down(prometheus_logger):
-    import inspect
-
-    method_sig = inspect.signature(prometheus_logger.increment_deployment_cooled_down)
-    expected_label_count = len([p for p in method_sig.parameters.keys() if p != "self"])
-
     mock_chain = MagicMock()
-
-    def validating_labels(*label_values, **label_kwargs):
-        """Validate label count matches metric definition"""
-        total = len(label_values) + len(label_kwargs)
-        if total != expected_label_count:
-            raise ValueError(
-                f"Incorrect label count: expected {expected_label_count}, got {total}"
-            )
-        return mock_chain
-
     prometheus_logger.litellm_deployment_cooled_down = MagicMock()
-    prometheus_logger.litellm_deployment_cooled_down.labels = MagicMock(
-        side_effect=validating_labels
+    prometheus_logger.litellm_deployment_cooled_down.labels.return_value = mock_chain
+    prometheus_logger.get_labels_for_metric = MagicMock(
+        return_value=["litellm_model_name", "model_id", "api_base", "api_provider"]
     )
 
     prometheus_logger.increment_deployment_cooled_down(
-        litellm_model_name="gpt-5-mini",
+        litellm_model_name="test-model",
         model_id="model-123",
-        api_base="https://api.openai.com",
+        api_base="https://api.example.com",
         api_provider="openai",
         exception_status="429",
     )
 
     prometheus_logger.litellm_deployment_cooled_down.labels.assert_called_once_with(
-        "gpt-5-mini", "model-123", "https://api.openai.com", "openai", "429"
+        litellm_model_name="test-model",
+        model_id="model-123",
+        api_base="https://api.example.com",
+        api_provider="openai",
     )
-    mock_chain.inc.assert_called_once()
+    mock_chain.inc.assert_called_once_with(1.0)
 
 
 @pytest.mark.parametrize("enable_end_user_cost_tracking_prometheus_only", [True, False])
