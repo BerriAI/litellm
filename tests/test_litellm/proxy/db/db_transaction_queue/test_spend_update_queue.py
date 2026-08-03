@@ -296,3 +296,27 @@ async def test_queue_size_reduction_with_large_volume(monkeypatch, spend_queue):
     )
     assert aggregated["user_list_transactions"]["user1"] == 200 * 0.5
     assert aggregated["key_list_transactions"]["key1"] == 300 * 1.0
+
+
+@pytest.mark.asyncio
+async def test_project_entity_aggregation(spend_queue):
+    await spend_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.PROJECT,
+            "entity_id": "project-1",
+            "response_cost": 0.5,
+        }
+    )
+    await spend_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.PROJECT,
+            "entity_id": "project-1",
+            "response_cost": 0.25,
+        }
+    )
+
+    aggregated = (
+        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    )
+
+    assert aggregated["project_list_transactions"]["project-1"] == 0.75

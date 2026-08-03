@@ -2542,3 +2542,46 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
 
     assert received == [{"content": "hi"}]
     streaming_logging_obj.async_post_call_streaming_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_counter_skipped_for_project_scoped_key():
+    """Project-scoped keys are governed by the project budget, so no team
+    member budget counter should be reserved for them."""
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        _get_team_member_budget_counter,
+    )
+
+    membership = LiteLLM_TeamMembership(
+        user_id="member-user",
+        team_id="member-team",
+        spend=0.03,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.01),
+    )
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=membership)
+    team_object = LiteLLM_TeamTable(team_id="member-team")
+    user_object = LiteLLM_UserTable(user_id="member-user")
+
+    counter = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(
+            token="hashed", user_id="member-user", team_id="member-team"
+        ),
+        team_object=team_object,
+        user_object=user_object,
+        user_api_key_cache=cache,
+    )
+    assert counter is not None
+
+    counter = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(
+            token="hashed",
+            user_id="member-user",
+            team_id="member-team",
+            project_id="project-1",
+        ),
+        team_object=team_object,
+        user_object=user_object,
+        user_api_key_cache=cache,
+    )
+    assert counter is None
