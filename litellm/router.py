@@ -10256,10 +10256,18 @@ class Router:
         The Responses payload is normalized to chat messages via the shared
         LiteLLMCompletionResponsesConfig transform so the same token_counter path covers
         both API surfaces and `instructions` tokens are included in the count.
+
+        Embeddings also arrive as `input`, but as a `list[str]` batch rather than Responses
+        input items. Those are counted as text, since the Responses transform expects
+        object-shaped items and raises on plain strings.
         """
         if messages is not None:
             return litellm.token_counter(messages=messages)
         if input is not None:
+            if isinstance(input, list) and all(isinstance(item, str) for item in input):
+                text_batch = cast(list[str], input)  # cast-ok: the isinstance guard narrows every item to str
+                return litellm.token_counter(text=text_batch)
+
             from openai.types.responses.response_create_params import ResponseInputParam
 
             from litellm.responses.litellm_completion_transformation.transformation import (
