@@ -1,9 +1,9 @@
 """Regression tests for Bedrock Converse ``toolSpec.strict`` forwarding.
 
-Bedrock Converse routes Claude Opus 4.7/4.8 and Claude Sonnet 4 through an
-Anthropic-compatible validator that rejects ``toolSpec.strict`` even though
-Anthropic's native API accepts ``strict`` as a top-level tool field. See
-BerriAI/litellm#31582.
+Bedrock Converse routes several Claude model families through a validator that
+rejects ``toolSpec.strict`` (and can hang on large strict MCP tool sets via
+compiled-grammar limits) even though Anthropic's native API accepts ``strict``.
+See BerriAI/litellm#31582 (Opus), #31943 (Sonnet 4), #34388 (Haiku 4.5 / Sonnet 4.6).
 """
 
 import pytest
@@ -48,12 +48,20 @@ _STRICT_TOOL = [
         "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
         "bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0",
         "bedrock/apac.anthropic.claude-sonnet-4-20250514-v1:0",
+        # Haiku 4.5 / Sonnet 4.6: grammar-size hang / strict rejection (#34388)
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/us.anthropic.claude-sonnet-4-6",
+        "anthropic.claude-sonnet-4-6",
+        "bedrock/global.anthropic.claude-sonnet-4-6",
+        "bedrock/eu.anthropic.claude-sonnet-4-6",
     ],
 )
 def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     model_id: str,
 ) -> None:
-    """Opus 4.7/4.8 and Sonnet 4 reject toolSpec.strict and additionalProperties."""
+    """Models with bedrock_converse_supports_strict_tools:false drop strict fields."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
     assert (
@@ -68,13 +76,12 @@ def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     "model_id",
     [
         "anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "bedrock/us.anthropic.claude-sonnet-4-6",
         "bedrock/us.anthropic.claude-opus-4-6",
         "bedrock/us.anthropic.claude-opus-4-5",
     ],
 )
 def test_bedrock_tools_pt_strict_kept_for_other_anthropic(model_id: str) -> None:
-    """Sonnet 4.5/4.6 and Opus <=4.6 accept toolSpec.strict — keep forwarding it."""
+    """Sonnet 4.5 and Opus <=4.6 still accept toolSpec.strict — keep forwarding it."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     assert (
         result[0]["toolSpec"]["strict"] is True
@@ -129,6 +136,17 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         )
         is False
     )
+    # #34388 Haiku 4.5 / Sonnet 4.6
+    assert (
+        bedrock_converse_supports_strict_tools(
+            "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        is False
+    )
+    assert (
+        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-sonnet-4-6")
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -143,6 +161,12 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         "us.anthropic.claude-sonnet-4-20250514-v1:0",
         "eu.anthropic.claude-sonnet-4-20250514-v1:0",
         "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+        # #34388
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-sonnet-4-6",
+        "us.anthropic.claude-sonnet-4-6",
+        "global.anthropic.claude-sonnet-4-6",
     ],
 )
 def test_strict_tools_flag_set_in_model_cost_map(cost_map_key: str) -> None:
