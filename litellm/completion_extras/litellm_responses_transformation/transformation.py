@@ -169,6 +169,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if not isinstance(tool_choice, dict):
             return tool_choice
         choice_type: Final = tool_choice.get("type")
+        if isinstance(choice_type, str) and choice_type in ("auto", "none", "required"):
+            return choice_type
         if choice_type not in ("function", "custom"):
             return tool_choice
         if isinstance(tool_choice.get("name"), str) and tool_choice.get("name"):
