@@ -545,9 +545,6 @@ class ModelResponseIterator:
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
 
-        # Anthropic content blocks can be interleaved. Keep response-format
-        # tracking per block so a json_tool_call cannot hide a real tool's
-        # argument deltas in another block.
         self._is_response_format_tool_by_content_block_index: Dict[int, bool] = {}
         # Track if we've converted any response_format tools (affects finish_reason)
         self.converted_response_format_tool: bool = False

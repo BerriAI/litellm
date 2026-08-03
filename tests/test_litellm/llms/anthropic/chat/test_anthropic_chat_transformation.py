@@ -149,10 +149,110 @@ def test_response_format_with_user_tools_allows_investigation_before_final_outpu
         litellm_params={},
         headers={},
     )
+    assert optional_params["tool_choice"] == {"type": "any"}
+
+
+def test_response_format_tool_result_forces_final_output_tool():
+    config = AnthropicConfig()
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {"name": "query_logs"},
+            {"name": RESPONSE_FORMAT_TOOL_NAME},
+        ],
+        "thinking": None,
+    }
+
+    config.transform_request(
+        model="claude-sonnet-5",
+        messages=[
+            {"role": "user", "content": "Investigate the logs."},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "tool_query",
+                        "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "tool_query", "content": "done"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
     assert optional_params["tool_choice"] == {
         "name": RESPONSE_FORMAT_TOOL_NAME,
         "type": "tool",
     }
+
+
+def test_response_format_does_not_force_tool_after_caller_tool_result():
+    config = AnthropicConfig()
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {"name": "query_logs"},
+            {"name": RESPONSE_FORMAT_TOOL_NAME},
+        ],
+        "tool_choice": {"type": "any"},
+    }
+
+    config.transform_request(
+        model="claude-sonnet-5",
+        messages=[
+            {"role": "user", "content": "Investigate the logs."},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "tool_query",
+                        "function": {"name": "query_logs"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "tool_query", "content": "logs"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert optional_params["tool_choice"] == {"type": "any"}
+
+
+def test_response_format_does_not_force_tool_when_thinking_is_enabled():
+    config = AnthropicConfig()
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {"name": "query_logs"},
+            {"name": RESPONSE_FORMAT_TOOL_NAME},
+        ],
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+    }
+
+    config.transform_request(
+        model="claude-sonnet-5",
+        messages=[
+            {"role": "user", "content": "Investigate the logs."},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "Checking logs"}],
+                "tool_calls": [
+                    {
+                        "id": "tool_json",
+                        "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "tool_json", "content": "done"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert "tool_choice" not in optional_params
 
 
 def test_calculate_usage():

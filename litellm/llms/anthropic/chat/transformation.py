@@ -1462,11 +1462,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
                         continue
-                    # When response_format is combined with caller tools, let
-                    # the model choose between the real tools and the
-                    # internal json_tool_call. Forcing the latter locks the
-                    # first turn to the final-output tool; removing
-                    # tool_choice entirely allows an unstructured final text.
                     has_caller_tools = bool(non_default_params.get("tools"))
                     if not is_thinking_enabled and "tool_choice" not in optional_params:
                         if has_caller_tools:
@@ -1812,31 +1807,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
-        # With response_format emulation, allow real caller tools on the
-        # initial turn, then require the internal output tool after a tool
-        # result has been returned. This preserves structured output without
-        # forcing a placeholder before investigation tools can run.
-        if optional_params.get("json_mode") is True:
-            response_format_tool_present = any(
-                tool.get("name") == RESPONSE_FORMAT_TOOL_NAME
-                for tool in (optional_params.get("tools") or [])
-                if isinstance(tool, dict)
-            )
-            has_tool_result = any(
-                message.get("role") == "tool"
-                or any(
-                    isinstance(block, dict) and block.get("type") == "tool_result"
-                    for block in (message.get("content") or [])
-                )
-                for message in (messages or [])
-                if isinstance(message, dict)
-            )
-            if response_format_tool_present and has_tool_result:
-                optional_params["tool_choice"] = {
-                    "name": RESPONSE_FORMAT_TOOL_NAME,
-                    "type": "tool",
-                }
-
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
         #
@@ -1856,6 +1826,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
+
+        if (
+            optional_params.get("json_mode") is True
+            and optional_params.get("thinking") is None
+            and self._last_tool_result_is_response_format_tool(messages)
+        ):
+            optional_params["tool_choice"] = {
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "type": "tool",
+            }
 
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
@@ -1985,6 +1965,62 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
 
         return data
+
+    @staticmethod
+    def _last_tool_result_is_response_format_tool(
+        messages: list[AllMessageValues],
+    ) -> bool:
+        last_regular_user_index = -1
+        last_tool_result_index = -1
+        for index, message in enumerate(messages or []):
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content") or []
+            has_tool_result = message.get("role") == "tool" or any(
+                isinstance(block, dict) and block.get("type") == "tool_result"
+                for block in content
+            )
+            if has_tool_result:
+                last_tool_result_index = index
+            elif message.get("role") == "user":
+                last_regular_user_index = index
+
+        if last_tool_result_index <= last_regular_user_index:
+            return False
+
+        tool_names_by_id: dict[str, str] = {}
+        for message in messages[last_regular_user_index + 1 : last_tool_result_index + 1]:
+            if not isinstance(message, dict):
+                continue
+            for tool_call in message.get("tool_calls") or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function") or {}
+                tool_id = tool_call.get("id")
+                tool_name = function.get("name")
+                if tool_id and tool_name:
+                    tool_names_by_id[tool_id] = tool_name
+            for block in message.get("content") or []:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                tool_id = block.get("id")
+                tool_name = block.get("name")
+                if tool_id and tool_name:
+                    tool_names_by_id[tool_id] = tool_name
+
+        last_result_name = None
+        result_message = messages[last_tool_result_index]
+        if isinstance(result_message, dict):
+            if result_message.get("role") == "tool":
+                last_result_name = tool_names_by_id.get(result_message.get("tool_call_id"))
+            for block in result_message.get("content") or []:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                last_result_name = block.get("name") or tool_names_by_id.get(
+                    block.get("tool_use_id")
+                )
+
+        return last_result_name == RESPONSE_FORMAT_TOOL_NAME
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data."""
