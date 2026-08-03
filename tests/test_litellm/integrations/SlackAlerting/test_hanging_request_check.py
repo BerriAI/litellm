@@ -124,6 +124,41 @@ class TestAlertingHangingRequestCheck:
         assert cached_data.team_alias == ""
 
     @pytest.mark.asyncio
+    async def test_add_request_populates_alias_from_top_level_metadata(
+        self, hanging_request_checker
+    ):
+        """
+        At proxy pre-call time, ``litellm_params`` is not yet populated and the
+        key/team alias lives at the top level of the request. The hanging-request
+        entry must still capture the alias so the alert can attribute the hang.
+
+        Regression test for empty Key Alias / Team Alias (#34708).
+        """
+        request_data = {
+            "litellm_call_id": "precall_request_001",
+            "model": "gpt-4",
+            # no top-level "litellm_params" at pre-call time
+            "metadata": {
+                "user_api_key_alias": "precall_key",
+                "user_api_key_team_alias": "precall_team",
+            },
+        }
+
+        await hanging_request_checker.add_request_to_hanging_request_check(
+            request_data
+        )
+
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="precall_request_001"
+            )
+        )
+
+        assert cached_data is not None
+        assert cached_data.key_alias == "precall_key"
+        assert cached_data.team_alias == "precall_team"
+
+    @pytest.mark.asyncio
     async def test_send_hanging_request_alert(self, hanging_request_checker):
         """
         Test sending a hanging request alert.
