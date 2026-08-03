@@ -40,7 +40,7 @@ from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import CallTypes, LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders, StandardLoggingUserAPIKeyMetadata
 from litellm.utils import ProviderConfigManager
 
 if TYPE_CHECKING:
@@ -1288,10 +1288,14 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_tool: Final = self._select_search_tool_from_router(llm_router=llm_router)
             search_provider: str | None = None
             search_litellm_params: dict[str, Any] = {}
+            search_tool_name: str | None = None
             if search_tool is not None:
                 await self._authorize_search_tool(search_tool=search_tool, kwargs=kwargs)
                 search_litellm_params = dict(search_tool.get("litellm_params", {}) or {})
                 search_provider = search_litellm_params.get("search_provider")
+                selected_tool_name = search_tool.get("search_tool_name")
+                if isinstance(selected_tool_name, str) and selected_tool_name:
+                    search_tool_name = selected_tool_name
 
             # Fallback to perplexity if no router or no search tools configured
             if not search_provider:
@@ -1304,10 +1308,22 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 "WebSearchInterception: Executing search for '%s' using provider '%s'", query, search_provider
             )
+            user_api_key_auth: Final = self._get_user_api_key_auth_from_kwargs(kwargs)
+            search_metadata: Final = (
+                None
+                if user_api_key_auth is None
+                else self._build_search_request_metadata(
+                    user_api_key_auth=user_api_key_auth,
+                    search_tool_name=search_tool_name,
+                )
+            )
             search_kwargs: Final = {
-                key: value
-                for key, value in search_litellm_params.items()
-                if key != "search_provider" and value is not None
+                **{
+                    key: value
+                    for key, value in search_litellm_params.items()
+                    if key != "search_provider" and value is not None
+                },
+                **({} if search_metadata is None else {"litellm_metadata": search_metadata}),
             }
             result: Final = await litellm.asearch(query=query, search_provider=search_provider, **search_kwargs)
 
@@ -1365,6 +1381,28 @@ class WebSearchInterceptionLogger(CustomLogger):
                 search_tool_name=search_tool_name,
                 team_object=team_object,
             )
+
+    @staticmethod
+    def _build_search_request_metadata(
+        user_api_key_auth: "UserAPIKeyAuth",
+        search_tool_name: str | None,
+    ) -> dict[str, object]:
+        """
+        Spend-tracking metadata for the intercepted search, so its provider cost is logged
+        and billed against the key/user/team that made the originating LLM request instead
+        of being dropped by the proxy's spend hook for lack of an owner.
+        """
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+        user_api_key_metadata: StandardLoggingUserAPIKeyMetadata = (
+            LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_auth)
+        )
+        return {
+            **user_api_key_metadata,
+            **({} if search_tool_name is None else {"model_group": search_tool_name}),
+            "user_api_key": user_api_key_auth.api_key,
+            "user_api_key_auth": user_api_key_auth,
+        }
 
     @staticmethod
     def _get_user_api_key_auth_from_kwargs(kwargs: Mapping[str, object] | None) -> "UserAPIKeyAuth | None":
