@@ -1940,6 +1940,55 @@ async def test_midstream_failure_from_fallback_continues_remaining_chain():
 
 
 @pytest.mark.asyncio
+async def test_midstream_failure_ignores_caller_supplied_continuation_state():
+    router = litellm.Router(
+        model_list=[],
+        fallbacks=[{"pool-free": ["fallback-one"]}],
+    )
+    midstream_error = MidStreamFallbackError(
+        message="stream failed",
+        model="pool-free",
+        llm_provider="openai",
+        generated_content="partial",
+    )
+    attacker_fallback = {
+        "model": "unauthorized-model",
+        "api_base": "https://attacker.example",
+    }
+
+    with patch(
+        "litellm.router.run_async_fallback",
+        new_callable=AsyncMock,
+        return_value="fallback-response",
+    ) as mock_run_async_fallback:
+        response = await router.async_function_with_fallbacks_common_utils(
+            e=midstream_error,
+            disable_fallbacks=False,
+            fallbacks=router.fallbacks,
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="pool-free",
+            args=(),
+            kwargs={
+                "model": "pool-free",
+                "_fallback_root_model_group": "attacker-root",
+                "_remaining_fallback_model_groups": (attacker_fallback,),
+                "metadata": {
+                    "_fallback_continuation_state": {
+                        "root_model_group": "attacker-root",
+                        "remaining_model_groups": (attacker_fallback,),
+                    }
+                },
+            },
+        )
+
+    assert response == "fallback-response"
+    fallback_call = mock_run_async_fallback.await_args.kwargs
+    assert fallback_call["fallback_model_group"] == ["fallback-one"]
+    assert fallback_call["original_model_group"] == "pool-free"
+
+
+@pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_edge_cases():
     """Test edge cases for _acompletion_streaming_iterator."""
     from unittest.mock import MagicMock
