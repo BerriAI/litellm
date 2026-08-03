@@ -5,8 +5,8 @@ Helper util for handling databricks-specific cost calculation
 
 from typing import Tuple
 
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
-from litellm.utils import get_model_info
 
 
 def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
@@ -39,14 +39,5 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         base_model = "databricks-gte-large-en"
     elif model.startswith("databricks/llama-2-70b-chat") or model.startswith("llama-2-70b-chat"):
         base_model = "databricks-llama-2-70b-chat"
-    ## GET MODEL INFO
-    model_info = get_model_info(model=base_model, custom_llm_provider="databricks")
 
-    ## CALCULATE INPUT COST
-
-    prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
-
-    ## CALCULATE OUTPUT COST
-    completion_cost = usage["completion_tokens"] * model_info["output_cost_per_token"]
-
-    return prompt_cost, completion_cost
+    return generic_cost_per_token(model=base_model, usage=usage, custom_llm_provider="databricks")

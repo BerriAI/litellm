@@ -49,3 +49,41 @@ def test_databricks_pricing_integrity():
                     )
 
     assert not errors, "\n" + "\n".join(errors)
+
+
+def test_databricks_cost_per_token_honors_cached_tokens():
+    """
+    Regression for the hand-rolled databricks cost calculator that multiplied every prompt
+    token by input_cost_per_token and ignored prompt_tokens_details.cached_tokens. After
+    delegating to generic_cost_per_token, cached tokens must bill at cache_read_input_token_cost
+    (mirrors deepseek / xai / fireworks). A cache-priced databricks model is registered for the
+    test since no bundled databricks entry publishes cache rates yet.
+    """
+    import litellm
+    from litellm.llms.databricks.cost_calculator import cost_per_token
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    litellm.register_model(
+        {
+            "databricks/test-cache-model": {
+                "litellm_provider": "databricks",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "cache_read_input_token_cost": 1e-7,
+                "mode": "chat",
+            }
+        }
+    )
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=200,
+        total_tokens=1200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800),
+    )
+
+    prompt_cost, completion_cost = cost_per_token("databricks/test-cache-model", usage)
+
+    # non-cached 200 * 1e-6 + cached 800 * 1e-7 = 0.0002 + 0.00008 = 0.00028
+    assert abs(prompt_cost - 0.00028) < 1e-12
+    assert abs(completion_cost - 200 * 2e-6) < 1e-12
