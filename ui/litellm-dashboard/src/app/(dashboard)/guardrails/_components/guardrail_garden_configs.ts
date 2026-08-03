@@ -252,6 +252,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  agentguards: {
+    provider: "Agentguards",
+    guardrailNameSuggestion: "AgentGuards",
+    mode: "pre_call",
+    defaultOn: false,
+  },
   pangea: {
     provider: "Pangea",
     guardrailNameSuggestion: "Pangea Guardrail",

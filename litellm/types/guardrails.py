@@ -109,6 +109,7 @@ class SupportedGuardrailIntegrations(Enum):
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
     MCP_SECURITY = "mcp_security"
+    AGENTGUARDS = "agentguards"
     ONYX = "onyx"
     PROMPTGUARD = "promptguard"
     XECGUARD = "xecguard"

@@ -167,6 +167,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
   "RepelloAI Argus": `${asset_logos_folder}repelloai.png`,
   Straiker: `${asset_logos_folder}straiker.svg`,
+  AgentGuards: `${asset_logos_folder}agentguards.jpg`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {
