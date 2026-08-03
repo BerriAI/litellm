@@ -661,7 +661,7 @@ async def rag_query(
         )
 
         resolved_vector_store = await _update_request_data_with_litellm_managed_vector_store_registry(
-            data={},
+            data={},  # mutable-ok: resolver populates this dict in place
             vector_store_id=retrieval_config["vector_store_id"],
             user_api_key_dict=user_api_key_dict,
         )
