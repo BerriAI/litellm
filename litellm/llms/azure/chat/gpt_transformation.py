@@ -239,7 +239,7 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        messages = list(hoist_images_from_tool_messages(messages))
+        messages = hoist_images_from_tool_messages(messages)
         messages = convert_to_azure_openai_messages(messages)
         return {
             "model": model,

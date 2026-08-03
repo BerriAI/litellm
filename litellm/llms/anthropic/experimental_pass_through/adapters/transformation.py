@@ -433,11 +433,13 @@ class LiteLLMAnthropicMessagesAdapter:
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                         elif c.get("type") == "image":
-                                            image_part = self._tool_result_image_part(cast(dict, c.get("source", {})))
+                                            image_part = self._tool_result_image_part(c.get("source"))
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
                                                 tool_call_id=content.get("tool_use_id", ""),
-                                                content=[image_part] if image_part else "",
+                                                content=[image_part]  # mutable-ok: content must be a json list
+                                                if image_part
+                                                else "",
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
@@ -459,9 +461,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                                     )
                                                 )
                                             elif c.get("type") == "image":
-                                                image_part = self._tool_result_image_part(
-                                                    cast(dict, c.get("source", {}))
-                                                )
+                                                image_part = self._tool_result_image_part(c.get("source"))
                                                 if image_part:
                                                     combined_content_parts.append(image_part)
                                     # Create a single tool message with combined content
@@ -1123,7 +1123,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return None
 
-    def _tool_result_image_part(self, image_source: Mapping[str, str]) -> ChatCompletionImageObject | None:
+    def _tool_result_image_part(self, image_source: object) -> ChatCompletionImageObject | None:
+        if not isinstance(image_source, dict):
+            return None
         openai_image_url = self._translate_anthropic_image_to_openai(image_source)
         if not openai_image_url:
             return None

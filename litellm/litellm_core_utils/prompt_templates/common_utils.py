@@ -6,7 +6,7 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from itertools import groupby
 from os import PathLike
 from pathlib import Path
@@ -1600,22 +1600,31 @@ def _split_images_from_tool_message(
     )
     if not image_parts:
         return message, ()
-    remaining_parts = [part for part in content if not _is_image_url_part(part)]
-    rewritten = {**message, "content": remaining_parts if remaining_parts else TOOL_RESULT_IMAGE_PLACEHOLDER}
+    remaining_parts = [  # mutable-ok: tool message content must stay a json list
+        part for part in content if not _is_image_url_part(part)
+    ]
+    new_content = remaining_parts if remaining_parts else TOOL_RESULT_IMAGE_PLACEHOLDER
+    rewritten = {**message, "content": new_content}  # mutable-ok: chat messages are plain json dicts
     return cast(AllMessageValues, rewritten), image_parts  # cast-ok: dict spread keeps keys like cache_control
 
 
-def _hoist_images_in_tool_message_run(run: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
-    split_results = [_split_images_from_tool_message(message) for message in run]
-    hoisted_images = [image for _, images in split_results for image in images]
-    rewritten_messages = [message for message, _ in split_results]
+def _hoist_images_in_tool_message_run(
+    run: Iterable[AllMessageValues],
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    split_results = tuple(_split_images_from_tool_message(message) for message in run)
+    hoisted_images = [  # mutable-ok: user message content must be a json list
+        image for _, images in split_results for image in images
+    ]
+    rewritten_messages = [message for message, _ in split_results]  # mutable-ok: pipelines mutate message lists
     if not hoisted_images:
         return rewritten_messages
-    hoisted_user_message = ChatCompletionUserMessage(role="user", content=hoisted_images)
-    return rewritten_messages + [hoisted_user_message]
+    rewritten_messages.append(ChatCompletionUserMessage(role="user", content=hoisted_images))
+    return rewritten_messages
 
 
-def hoist_images_from_tool_messages(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+def hoist_images_from_tool_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
     """
     Move image content out of role:"tool" messages into a user message inserted
     after the run of consecutive tool messages it belongs to.
@@ -1630,10 +1639,10 @@ def hoist_images_from_tool_messages(messages: Sequence[AllMessageValues]) -> Seq
     """
     if not any(_tool_message_carries_image(message) for message in messages):
         return messages
-    return [
+    return [  # mutable-ok: pipelines mutate message lists
         rewritten_message
         for is_tool_run, run in groupby(messages, key=lambda message: message.get("role") == "tool")
-        for rewritten_message in (_hoist_images_in_tool_message_run(list(run)) if is_tool_run else run)
+        for rewritten_message in (_hoist_images_in_tool_message_run(run) if is_tool_run else run)
     ]
 
 

@@ -46,8 +46,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _translate_anthropic_image_source_to_url(source: dict) -> str | None:
+    def _translate_anthropic_image_source_to_url(source: object) -> str | None:
         """Convert Anthropic image source to a URL string."""
+        if not isinstance(source, dict):
+            return None
         source_type = source.get("type")
         if source_type == "base64":
             media_type = source.get("media_type", "image/jpeg")
@@ -110,21 +112,22 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
                                 ]
                                 output_text = "\n".join(parts)
-                                image_candidates = [
-                                    self._translate_anthropic_image_source_to_url(
-                                        cast(dict, c.get("source", {}))  # cast-ok: same pattern as user image branch
-                                    )
+                                image_candidates = tuple(
+                                    self._translate_anthropic_image_source_to_url(c.get("source"))
                                     for c in inner
                                     if isinstance(c, dict) and c.get("type") == "image"
-                                ]
-                                image_urls = [url for url in image_candidates if url]
+                                )
+                                image_urls = tuple(url for url in image_candidates if url)
                                 if image_urls:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
                                         if output_text
                                         else TOOL_RESULT_IMAGE_PLACEHOLDER
                                     )
-                                    user_parts.extend({"type": "input_image", "image_url": url} for url in image_urls)
+                                    user_parts.extend(
+                                        {"type": "input_image", "image_url": url}  # mutable-ok: json content part
+                                        for url in image_urls
+                                    )
                             else:
                                 output_text = str(inner)
                             # tool_result is a top-level item, not inside the message

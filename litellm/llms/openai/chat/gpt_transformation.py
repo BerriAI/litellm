@@ -345,7 +345,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
     ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
-        messages = list(hoist_images_from_tool_messages(messages))
+        messages = hoist_images_from_tool_messages(messages)
 
         async def _async_transform():
             for message in messages:
