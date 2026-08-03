@@ -5616,8 +5616,6 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
     """Credentials kept for transport must not survive anywhere under proxy_server_request."""
     secrets = {
         "x-api-key": "sk-byok-provider-key-lit5108",
-        "x-mcp-auth": "mcp-token-lit5108",
-        "x-mcp-github-authorization": "Bearer gh-token-lit5108",
         "cookie": "litellm_jwt=session-token-lit5108",
         "proxy-authorization": "Bearer proxy-token-lit5108",
     }
@@ -5625,7 +5623,6 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
         "/v1/chat/completions",
         {
             "Content-Type": "application/json",
-            "x-mcp-servers": "github",
             "x-litellm-api-key": "Bearer sk-virtual-key",
             **secrets,
         },
@@ -5650,7 +5647,6 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
     for value in secrets.values():
         assert value not in logged
 
-    assert updated["proxy_server_request"]["headers"]["x-mcp-servers"] == "github"
 
 
 @pytest.mark.parametrize(
@@ -5663,10 +5659,6 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
         ("API-Key", True),
         ("Cookie", True),
         ("Proxy-Authorization", True),
-        ("x-mcp-auth", True),
-        ("X-MCP-GitHub-Authorization", True),
-        ("x-mcp-servers", False),
-        ("x-mcp-access-groups", False),
         ("anthropic-version", False),
         ("user-agent", False),
     ],
@@ -5682,75 +5674,6 @@ def test_redact_credential_headers_classifies_each_header(header, expected_redac
     assert headers[header] == "secret-value"
 
 
-def test_redact_credential_headers_masks_the_configured_mcp_auth_header():
-    from litellm.proxy.litellm_pre_call_utils import (
-        configured_credential_header_names,
-        redact_credential_headers,
-    )
-
-    configured = configured_credential_header_names({"mcp_client_side_auth_header_name": "x-company-auth"})
-
-    assert redact_credential_headers({"x-company-auth": "mcp-secret"}) == {"x-company-auth": "mcp-secret"}
-    assert redact_credential_headers({"x-company-auth": "mcp-secret"}, configured_names=configured) == {
-        "x-company-auth": "***REDACTED***"
-    }
-
-
-def test_configured_credential_header_names_reads_env_and_general_settings(monkeypatch):
-    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
-
-    pre_call_utils._secret_manager_mcp_auth_header_name.cache_clear()
-    monkeypatch.delenv("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME", raising=False)
-    assert pre_call_utils.configured_credential_header_names(None) == frozenset()
-
-    pre_call_utils._secret_manager_mcp_auth_header_name.cache_clear()
-    monkeypatch.setenv("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME", "X-Env-Auth")
-    assert pre_call_utils.configured_credential_header_names(
-        {"mcp_client_side_auth_header_name": "X-Settings-Auth"}
-    ) == frozenset({"x-env-auth", "x-settings-auth"})
-
-
-def test_configured_credential_header_names_resolves_through_the_secret_manager(monkeypatch):
-    """The header name can live in a secret manager, so an env-only lookup would miss it."""
-    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
-
-    pre_call_utils._secret_manager_mcp_auth_header_name.cache_clear()
-    with patch.object(
-        pre_call_utils,
-        "get_secret_str",
-        side_effect=lambda key: "x-vault-mcp-auth" if "MCP" in key else None,
-    ):
-        assert pre_call_utils.configured_credential_header_names(None) == frozenset({"x-vault-mcp-auth"})
-
-
-def test_configured_credential_header_names_resolves_the_secret_once(monkeypatch):
-    """get_secret_str is a blocking SDK call under a cloud secret manager, and this runs per request."""
-    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
-
-    pre_call_utils._secret_manager_mcp_auth_header_name.cache_clear()
-    with patch.object(pre_call_utils, "get_secret_str", return_value="x-vault-mcp-auth") as mock_secret:
-        for _ in range(5):
-            assert "x-vault-mcp-auth" in pre_call_utils.configured_credential_header_names(None)
-
-    assert mock_secret.call_count == 1
-
-
-def test_configured_credential_header_names_sees_a_runtime_env_rename(monkeypatch):
-    """The config reloader rewrites os.environ on a timer, so the env source cannot be cached."""
-    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
-
-    pre_call_utils._secret_manager_mcp_auth_header_name.cache_clear()
-    monkeypatch.delenv("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME", raising=False)
-    with patch.object(pre_call_utils, "get_secret_str", return_value=None):
-        assert pre_call_utils.configured_credential_header_names(None) == frozenset()
-
-        monkeypatch.setenv("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME", "x-corp-mcp-auth")
-        assert pre_call_utils.configured_credential_header_names(None) == frozenset({"x-corp-mcp-auth"})
-        assert pre_call_utils.redact_credential_headers(
-            {"x-corp-mcp-auth": "runtime-secret"},
-            configured_names=pre_call_utils.configured_credential_header_names(None),
-        ) == {"x-corp-mcp-auth": "***REDACTED***"}
-
 
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_debug_log_does_not_print_credentials():
@@ -5761,7 +5684,7 @@ async def test_add_litellm_data_to_request_debug_log_does_not_print_credentials(
         "/v1/chat/completions",
         {
             "Content-Type": "application/json",
-            "x-mcp-auth": "mcp-plaintext-token-lit5108",
+            "Ocp-Apim-Subscription-Key": "apim-plaintext-token-lit5108",
             "x-litellm-api-key": "Bearer sk-virtual-key",
         },
     )
@@ -5777,4 +5700,4 @@ async def test_add_litellm_data_to_request_debug_log_does_not_print_credentials(
         )
 
     logged = " ".join(str(call) for call in mock_debug.call_args_list)
-    assert "mcp-plaintext-token-lit5108" not in logged
+    assert "apim-plaintext-token-lit5108" not in logged

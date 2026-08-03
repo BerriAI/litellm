@@ -1,12 +1,10 @@
 import asyncio
 import copy
 import json
-import os
 import re
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
@@ -53,11 +51,7 @@ _REDACTED_HEADER_VALUE = "***REDACTED***"
 _CREDENTIAL_HEADER_NAMES = SpecialHeaders.litellm_credential_header_names() | frozenset(
     {"cookie", "proxy-authorization"}
 )
-_MCP_HEADER_PREFIX = "x-mcp-"
 _TRANSPORT_ONLY_CREDENTIAL_KEYS = frozenset({"provider_specific_header", "headers", "api_key"})
-_NON_CREDENTIAL_MCP_HEADERS = frozenset(
-    {SpecialHeaders.mcp_servers.value.lower(), SpecialHeaders.mcp_access_groups.value.lower()}
-)
 
 # Matches any header of the form x-<something>-session-id (case-insensitive).
 # Excludes the two explicit litellm headers which are handled with higher priority.
@@ -104,7 +98,7 @@ def _sanitize_for_log(value: Any) -> str:
 
 
 from litellm.router import Router
-from litellm.secret_managers.main import get_secret_bool, get_secret_str
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -724,55 +718,12 @@ def clean_headers(
     return clean_headers
 
 
-@lru_cache(maxsize=1)
-def _secret_manager_mcp_auth_header_name() -> frozenset[str]:
-    """Consult the secret manager once for the MCP client-side auth header name.
-
-    get_secret_str issues a blocking SDK call when a secret manager is configured, and
-    the caller runs on every proxied request, so only this source is cached.
-    """
-    secret_name = get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME")
-    return frozenset({secret_name.lower()}) if secret_name else frozenset()
+def _is_credential_header(header: str) -> bool:
+    """Whether `header` carries a caller credential rather than request context."""
+    return header.lower() in _CREDENTIAL_HEADER_NAMES
 
 
-def configured_credential_header_names(general_settings: Mapping[str, Any] | None) -> frozenset[str]:
-    """Credential header names that are only knowable from this deployment's config.
-
-    The MCP client-side auth header can be renamed through either source, so every
-    candidate name is collected instead of resolving their precedence; redacting a name
-    this deployment no longer uses is free, missing the one it does use is not.
-
-    The env var and general_settings are read per call because the config reloader
-    rewrites both at runtime, and MCPRequestHandler resolves the same setting per
-    request; caching them here would keep logging a renamed header in the clear until
-    the process restarted.
-    """
-    live_names = (
-        os.environ.get("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME"),
-        general_settings.get("mcp_client_side_auth_header_name") if general_settings else None,
-    )
-    return _secret_manager_mcp_auth_header_name() | frozenset(
-        name.lower() for name in live_names if isinstance(name, str) and name
-    )
-
-
-def _is_credential_header(header: str, configured_names: frozenset[str]) -> bool:
-    """Whether `header` carries a caller credential rather than request context.
-
-    Covers the fixed credential header names, the per-server MCP auth headers
-    documented as `x-mcp-{server_alias}-{header_name}`, and any header name this
-    deployment configured as the MCP client-side auth header.
-    """
-    header_lower = header.lower()
-    if header_lower in _CREDENTIAL_HEADER_NAMES or header_lower in configured_names:
-        return True
-    return header_lower.startswith(_MCP_HEADER_PREFIX) and header_lower not in _NON_CREDENTIAL_MCP_HEADERS
-
-
-def redact_credential_headers(
-    headers: Mapping[str, str],
-    configured_names: frozenset[str] = frozenset(),
-) -> Mapping[str, str]:
+def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     """Return a copy of `headers` with credential-bearing values masked.
 
     `clean_headers` deliberately preserves some credential headers so they can be
@@ -786,7 +737,7 @@ def redact_credential_headers(
     the stored copy and the logging callbacks JSON-serialize it.
     """
     return {
-        header: (_REDACTED_HEADER_VALUE if _is_credential_header(header, configured_names) else value)
+        header: (_REDACTED_HEADER_VALUE if _is_credential_header(header) else value)
         for header, value in headers.items()
     }
 
@@ -1487,9 +1438,7 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    _logging_safe_headers = redact_credential_headers(
-        _headers, configured_names=configured_credential_header_names(general_settings)
-    )
+    _logging_safe_headers = redact_credential_headers(_headers)
     verbose_proxy_logger.debug(f"Request Headers: {_logging_safe_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
