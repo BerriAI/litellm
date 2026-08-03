@@ -50,7 +50,7 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         - usage: LiteLLM Usage block, containing anthropic caching information
 
     Returns:
-        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+        tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     base_model = _resolve_databricks_base_model(model)
     return generic_cost_per_token(model=base_model, usage=usage, custom_llm_provider="databricks")
