@@ -340,6 +340,81 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_config_guardrails(mock
 
 
 @pytest.mark.asyncio
+async def test_list_guardrails_v2_without_db_returns_config_guardrails(
+    mocker, mock_in_memory_handler
+):
+    """
+    #35256: on a no-DB deployment (prisma_client is None) the v2 list must still
+    return config-defined guardrails from the in-memory registry instead of 500ing.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    admin_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    response = await list_guardrails_v2(user_api_key_dict=admin_auth)
+
+    assert len(response.guardrails) == 1
+    assert response.guardrails[0].guardrail_id == "test-config-guardrail"
+    assert response.guardrails[0].guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_without_db_returns_config_guardrail(
+    mocker, mock_in_memory_handler
+):
+    """
+    #35256: /guardrails/{id}/info must consult the in-memory registry even when
+    prisma_client is None instead of raising 500, so config guardrails are viewable
+    on no-DB deployments.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await get_guardrail_info("test-config-guardrail")
+
+    assert response.guardrail_id == "test-config-guardrail"
+    assert response.guardrail_name == "Test Config Guardrail"
+    assert response.guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v1_carries_in_memory_ids(mocker, mock_in_memory_handler):
+    """
+    #35256: the v1 list (UI fallback) must stamp each config guardrail with the
+    in-memory guardrail_id (matched by name) so the UI opens /guardrails/<id>/info
+    rather than /guardrails/undefined/info.
+    """
+    from litellm.proxy.guardrails.guardrail_endpoints import list_guardrails
+
+    mock_proxy_config = mocker.Mock()
+    mock_proxy_config.config = {
+        "guardrails": [
+            {
+                "guardrail_name": "Test Config Guardrail",
+                "litellm_params": {"guardrail": "bedrock", "mode": "pre_call"},
+                "guardrail_info": {"description": "x"},
+            }
+        ]
+    }
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await list_guardrails()
+
+    assert len(response.guardrails) == 1
+    assert response.guardrails[0].guardrail_id == "test-config-guardrail"
+
+
+@pytest.mark.asyncio
 async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
     """Test getting guardrail info from DB"""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
