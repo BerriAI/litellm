@@ -844,8 +844,8 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
-                verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {e!s}")
-                error_message = f"Tool call blocked: PII entity '{getattr(e, 'entity_type', 'unknown')}' detected by guardrail '{getattr(e, 'guardrail_name', 'unknown')}'. {e!s}"
+                verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {e}")
+                error_message = f"Tool call blocked: PII entity '{getattr(e, 'entity_type', 'unknown')}' detected by guardrail '{getattr(e, 'guardrail_name', 'unknown')}'. {e}"
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,
@@ -860,9 +860,9 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
-                verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {e!s}")
+                verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {e}")
                 error_message = (
-                    f"Tool call blocked: Guardrail '{getattr(e, 'guardrail_name', 'unknown')}' violation. {e!s}"
+                    f"Tool call blocked: Guardrail '{getattr(e, 'guardrail_name', 'unknown')}' violation. {e}"
                 )
                 tool_results.append(
                     {
@@ -878,7 +878,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
-                verbose_logger.error(f"HTTPException in MCP tool call: {e!s}")
+                verbose_logger.error(f"HTTPException in MCP tool call: {e}")
                 error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"
                 tool_results.append(
                     {
@@ -898,7 +898,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,
-                        "result": f"Error executing tool: {e!s}",
+                        "result": f"Error executing tool: {e}",
                         "name": tool_name,
                     }
                 )

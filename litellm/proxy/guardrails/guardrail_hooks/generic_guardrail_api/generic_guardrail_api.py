@@ -357,7 +357,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 **({"http_status_code": http_status_code} if http_status_code else {}),
             )
         verbose_proxy_logger.error("Generic Guardrail API: failed to make request: %s", str(error))
-        raise Exception(f"Generic Guardrail API failed: {error!s}")
+        raise Exception(f"Generic Guardrail API failed: {error}")
 
     @log_guardrail_information
     async def apply_guardrail(

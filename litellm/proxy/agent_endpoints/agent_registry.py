@@ -271,7 +271,7 @@ class AgentRegistry:
                     created_agent_dict["object_permission"] = created_agent.object_permission.dict()
             return AgentResponse(**created_agent_dict)  # type: ignore
         except Exception as e:
-            raise Exception(f"Error adding agent to DB: {e!s}")
+            raise Exception(f"Error adding agent to DB: {e}")
 
     async def delete_agent_from_db(self, agent_id: str, prisma_client: PrismaClient) -> Mapping[str, object]:
         """
@@ -281,7 +281,7 @@ class AgentRegistry:
             deleted_agent = await agents_table(prisma_client).delete(where={"agent_id": agent_id})
             return dict(deleted_agent)
         except Exception as e:
-            raise Exception(f"Error deleting agent from DB: {e!s}")
+            raise Exception(f"Error deleting agent from DB: {e}")
 
     async def patch_agent_in_db(
         self,
@@ -363,7 +363,7 @@ class AgentRegistry:
                     patched_agent_dict["object_permission"] = patched_agent.object_permission.dict()
             return AgentResponse(**patched_agent_dict)  # type: ignore
         except Exception as e:
-            raise Exception(f"Error patching agent in DB: {e!s}")
+            raise Exception(f"Error patching agent in DB: {e}")
 
     async def update_agent_in_db(
         self,
@@ -450,7 +450,7 @@ class AgentRegistry:
                     updated_agent_dict["object_permission"] = updated_agent.object_permission.dict()
             return AgentResponse(**updated_agent_dict)  # type: ignore
         except Exception as e:
-            raise Exception(f"Error updating agent in DB: {e!s}")
+            raise Exception(f"Error updating agent in DB: {e}")
 
     @staticmethod
     async def get_all_agents_from_db(
@@ -478,7 +478,7 @@ class AgentRegistry:
 
             return agents
         except Exception as e:
-            raise Exception(f"Error getting agents from DB: {e!s}")
+            raise Exception(f"Error getting agents from DB: {e}")
 
     def get_agent_by_id(
         self,
@@ -494,7 +494,7 @@ class AgentRegistry:
 
             return None
         except Exception as e:
-            raise Exception(f"Error getting agent from DB: {e!s}")
+            raise Exception(f"Error getting agent from DB: {e}")
 
     def get_agent_by_name(self, agent_name: str) -> AgentResponse | None:
         """
@@ -507,7 +507,7 @@ class AgentRegistry:
 
             return None
         except Exception as e:
-            raise Exception(f"Error getting agent from DB: {e!s}")
+            raise Exception(f"Error getting agent from DB: {e}")
 
 
 global_agent_registry = AgentRegistry()

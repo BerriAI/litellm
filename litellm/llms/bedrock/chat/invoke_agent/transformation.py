@@ -464,9 +464,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             )
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Bedrock Invoke Agent response: {e!s}")
+            verbose_logger.error(f"Error processing Bedrock Invoke Agent response: {e}")
             raise BedrockError(
-                message=f"Error processing response: {e!s}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 

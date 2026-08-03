@@ -282,7 +282,7 @@ class OllamaConfig(BaseConfig):
                             content=None,
                             tool_calls=[
                                 {
-                                    "id": f"call_{uuid.uuid4()!s}",
+                                    "id": f"call_{uuid.uuid4()}",
                                     "function": {
                                         "name": function_call["name"],
                                         "arguments": json.dumps(function_call["arguments"]),

@@ -425,11 +425,11 @@ async def health_services_endpoint(
             }
 
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -1069,7 +1069,7 @@ async def health_endpoint(
             )
             return _post_process(router_result)
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {e!s}")
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {e}")
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
@@ -1110,7 +1110,7 @@ async def health_check_history_endpoint(
         verbose_proxy_logger.error(f"Error getting health check history: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve health check history: {e!s}"},
+            detail={"error": f"Failed to retrieve health check history: {e}"},
         )
 
 
@@ -1142,7 +1142,7 @@ async def latest_health_checks_endpoint(
         verbose_proxy_logger.error(f"Error getting latest health checks: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve latest health checks: {e!s}"},
+            detail={"error": f"Failed to retrieve latest health checks: {e}"},
         )
 
 
@@ -1185,7 +1185,7 @@ async def shared_health_check_status_endpoint(
         verbose_proxy_logger.error(f"Error getting shared health check status: {e}")
         raise HTTPException(
             status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve shared health check status: {e!s}"},
+            detail={"error": f"Failed to retrieve shared health check status: {e}"},
         )
 
 
@@ -1473,7 +1473,7 @@ async def _get_health_readiness_details(
                 "is_detailed_debug": is_detailed_debug,
             }
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e!s})")
+        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")
 
 
 def _allow_public_health_readiness_details() -> bool:
@@ -1897,10 +1897,8 @@ async def test_model_connection(
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - {e!s}"
-        )
+        verbose_proxy_logger.debug(f"litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to test connection: {e!s}"},
+            detail={"error": f"Failed to test connection: {e}"},
         )

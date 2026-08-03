@@ -133,7 +133,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
             return storage_url
 
         except Exception as e:
-            verbose_logger.exception(f"Error uploading file to Azure Blob Storage: {e!s}")
+            verbose_logger.exception(f"Error uploading file to Azure Blob Storage: {e}")
             raise
 
     async def _upload_file_with_account_key(self, file_content: bytes, full_path: str) -> str:
@@ -247,7 +247,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
                 return await self._download_file_with_azure_ad(file_path)
 
         except Exception as e:
-            verbose_logger.exception(f"Error downloading file from Azure Blob Storage: {e!s}")
+            verbose_logger.exception(f"Error downloading file from Azure Blob Storage: {e}")
             raise
 
     async def _download_file_with_account_key(self, file_path: str) -> bytes:

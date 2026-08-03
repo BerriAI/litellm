@@ -225,7 +225,7 @@ class PredibaseChatCompletion:
                 if isinstance(e, exception):
                     raise e
             raise PredibaseError(
-                status_code=500, message=f"{e!s}"
+                status_code=500, message=f"{e}"
             )  # don't use verbose_logger.exception, if exception is raised
         return predibase_config.transform_response(
             model=model,

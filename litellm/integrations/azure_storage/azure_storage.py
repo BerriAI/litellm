@@ -53,9 +53,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.log_queue: list[StandardLoggingPayload] = []
             super().__init__(**kwargs, flush_lock=self.flush_lock)
         except Exception as e:
-            verbose_logger.exception(
-                f"AzureBlobStorageLogger: Got exception on init AzureBlobStorageLogger client {e!s}"
-            )
+            verbose_logger.exception(f"AzureBlobStorageLogger: Got exception on init AzureBlobStorageLogger client {e}")
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -79,7 +77,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.log_queue.append(standard_logging_payload)
 
         except Exception as e:
-            verbose_logger.exception(f"AzureBlobStorageLogger Layer Error - {e!s}")
+            verbose_logger.exception(f"AzureBlobStorageLogger Layer Error - {e}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -101,7 +99,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
 
             self.log_queue.append(standard_logging_payload)
         except Exception as e:
-            verbose_logger.exception(f"AzureBlobStorageLogger Layer Error - {e!s}")
+            verbose_logger.exception(f"AzureBlobStorageLogger Layer Error - {e}")
 
     async def async_send_batch(self):
         """
@@ -124,7 +122,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 await self.async_upload_payload_to_azure_blob_storage(payload=payload)
 
         except Exception as e:
-            verbose_logger.exception(f"AzureBlobStorageLogger Error sending batch API - {e!s}")
+            verbose_logger.exception(f"AzureBlobStorageLogger Error sending batch API - {e}")
 
     async def async_upload_payload_to_azure_blob_storage(self, payload: StandardLoggingPayload):
         """
@@ -153,7 +151,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 verbose_logger.debug(f"Successfully uploaded log to Azure Blob Storage: {filename}")
 
         except Exception as e:
-            verbose_logger.exception(f"Error uploading to Azure Blob Storage: {e!s}")
+            verbose_logger.exception(f"Error uploading to Azure Blob Storage: {e}")
             raise e
 
     async def _create_file(self, client: AsyncHTTPHandler, base_url: str):
@@ -169,7 +167,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             response.raise_for_status()
             verbose_logger.debug("Successfully created file resource")
         except Exception as e:
-            verbose_logger.exception(f"Error creating file resource: {e!s}")
+            verbose_logger.exception(f"Error creating file resource: {e}")
             raise
 
     async def _append_data(self, client: AsyncHTTPHandler, base_url: str, json_payload: str):
@@ -189,7 +187,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             response.raise_for_status()
             verbose_logger.debug("Successfully appended data")
         except Exception as e:
-            verbose_logger.exception(f"Error appending data: {e!s}")
+            verbose_logger.exception(f"Error appending data: {e}")
             raise
 
     async def _flush_data(self, client: AsyncHTTPHandler, base_url: str, position: int):
@@ -205,7 +203,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             response.raise_for_status()
             verbose_logger.debug("Successfully flushed data")
         except Exception as e:
-            verbose_logger.exception(f"Error flushing data: {e!s}")
+            verbose_logger.exception(f"Error flushing data: {e}")
             raise
 
     ####### Helper methods to managing Authentication to Azure Storage #######
@@ -345,4 +343,4 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             verbose_logger.debug(f"Successfully uploaded and wrote to {today}/{file_name}")
 
         except Exception as e:
-            verbose_logger.exception(f"Error occurred: {e!s}")
+            verbose_logger.exception(f"Error occurred: {e}")

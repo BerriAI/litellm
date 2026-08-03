@@ -48,7 +48,7 @@ class LicenseCheck:
             else:
                 self.public_key = None
         except Exception as e:
-            verbose_proxy_logger.error(f"Error reading public key: {e!s}")
+            verbose_proxy_logger.error(f"Error reading public key: {e}")
 
     def _verify(self, license_str: str) -> bool:
         verbose_proxy_logger.debug(
@@ -84,7 +84,7 @@ class LicenseCheck:
             return premium
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License={license_str} via api. - {e!s}"
+                f"litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License={license_str} via api. - {e}"
             )
             return False
 
@@ -187,6 +187,6 @@ class LicenseCheck:
 
         except Exception as e:
             verbose_proxy_logger.debug(
-                f"litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - {e!s}"
+                f"litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - {e}"
             )
             return False

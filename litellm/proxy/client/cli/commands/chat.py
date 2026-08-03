@@ -386,5 +386,5 @@ def _stream_response(
             console.print(f"[red]{e.response.text}[/red]")
         return None
     except Exception as e:
-        console.print(f"\n[red]Error: {e!s}[/red]")
+        console.print(f"\n[red]Error: {e}[/red]")
         return None

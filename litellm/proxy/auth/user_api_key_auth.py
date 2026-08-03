@@ -1481,7 +1481,7 @@ async def _user_api_key_auth_builder(
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
-                verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e!s}")
+                verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e}")
 
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
@@ -1729,7 +1729,7 @@ async def _user_api_key_auth_builder(
                         )
                 except Exception as e:
                     verbose_logger.debug(
-                        f"litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {e!s}"
+                        f"litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {e}"
                     )
                     user_obj = None
 
@@ -2754,7 +2754,7 @@ async def _lookup_end_user_and_apply_budget(
     except Exception as e:
         if isinstance(e, litellm.BudgetExceededError):
             raise e
-        verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e!s}")
+        verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e}")
     return valid_token, end_user_object
 
 

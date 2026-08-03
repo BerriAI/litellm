@@ -715,7 +715,7 @@ def _get_provider_for_cost_calc(
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
     except Exception as e:
         verbose_logger.debug(
-            f"litellm.cost_calculator.py::_get_provider_for_cost_calc() - Error inferring custom_llm_provider - {e!s}"
+            f"litellm.cost_calculator.py::_get_provider_for_cost_calc() - Error inferring custom_llm_provider - {e}"
         )
         return None
 
@@ -1092,7 +1092,7 @@ def _store_cost_breakdown_in_logging_obj(
         )
 
     except Exception as breakdown_error:
-        verbose_logger.debug(f"Error storing cost breakdown: {breakdown_error!s}")
+        verbose_logger.debug(f"Error storing cost breakdown: {breakdown_error}")
         # Don't fail the main cost calculation if breakdown storage fails
 
 
@@ -1315,7 +1315,7 @@ def completion_cost(
                         )  # strip the llm provider from the model name -> for image gen cost calculation
                     except Exception as e:
                         verbose_logger.debug(
-                            f"litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {e!s}"
+                            f"litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {e}"
                         )
                 if CostCalculatorUtils._call_type_has_image_response(call_type) and isinstance(
                     completion_response, ImageResponse
@@ -1662,7 +1662,7 @@ def completion_cost(
                 return _final_cost
             except Exception as e:
                 verbose_logger.debug(
-                    f"litellm.cost_calculator.py::completion_cost() - Error calculating cost for model={model} - {e!s}"
+                    f"litellm.cost_calculator.py::completion_cost() - Error calculating cost for model={model} - {e}"
                 )
                 if idx == len(potential_model_names) - 1:
                     raise e

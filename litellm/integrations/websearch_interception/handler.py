@@ -224,7 +224,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         content.append({"type": "text", "text": search_result_text})
 
         response: dict[str, object] = {
-            "id": f"msg_{uuid.uuid4()!s}",
+            "id": f"msg_{uuid.uuid4()}",
             "type": "message",
             "role": "assistant",
             "model": model,
@@ -1038,8 +1038,8 @@ class WebSearchInterceptionLogger(CustomLogger):
     @staticmethod
     def _extract_search_text(result: object) -> str:
         if isinstance(result, Exception):
-            verbose_logger.error(f"WebSearchInterception: Responses search failed with error: {result!s}")
-            return f"Search failed: {result!s}"
+            verbose_logger.error(f"WebSearchInterception: Responses search failed with error: {result}")
+            return f"Search failed: {result}"
         if isinstance(result, tuple) and len(result) == 2:
             text_value, _ = result
             return text_value if isinstance(text_value, str) else str(text_value)
@@ -1194,8 +1194,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         structured_results: list[SearchResponse | None] = []
         for i, result in enumerate(search_results):
             if isinstance(result, Exception):
-                verbose_logger.error(f"WebSearchInterception: Search {i} failed with error: {result!s}")
-                final_search_results.append(f"Search failed: {result!s}")
+                verbose_logger.error(f"WebSearchInterception: Search {i} failed with error: {result}")
+                final_search_results.append(f"Search failed: {result}")
                 structured_results.append(None)
             elif isinstance(result, tuple) and len(result) == 2:
                 text_value, structured_value = result
@@ -1308,7 +1308,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             return search_result_text, result
         except Exception as e:
-            verbose_logger.error(f"WebSearchInterception: Search failed for '{query}': {e!s}")
+            verbose_logger.error(f"WebSearchInterception: Search failed for '{query}': {e}")
             raise
 
     async def _authorize_search_tool(
@@ -1486,8 +1486,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         final_search_results: list[str] = []
         for i, result in enumerate(search_results):
             if isinstance(result, Exception):
-                verbose_logger.error(f"WebSearchInterception: Search {i} failed with error: {result!s}")
-                final_search_results.append(f"Search failed: {result!s}")
+                verbose_logger.error(f"WebSearchInterception: Search {i} failed with error: {result}")
+                final_search_results.append(f"Search failed: {result}")
             elif isinstance(result, tuple) and len(result) == 2:
                 text_value, _ = result
                 final_search_results.append(cast(str, text_value) if isinstance(text_value, str) else str(text_value))

@@ -501,9 +501,9 @@ def get_llm_provider(
         if isinstance(e, litellm.exceptions.BadRequestError):
             raise e
         else:
-            error_str = f"GetLLMProvider Exception - {e!s}\n\noriginal model: {model}"
+            error_str = f"GetLLMProvider Exception - {e}\n\noriginal model: {model}"
             raise litellm.exceptions.BadRequestError(  # type: ignore
-                message=f"GetLLMProvider Exception - {e!s}\n\noriginal model: {model}",
+                message=f"GetLLMProvider Exception - {e}\n\noriginal model: {model}",
                 model=model,
                 response=None,
                 llm_provider="",

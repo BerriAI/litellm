@@ -282,7 +282,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return max_saturation
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error checking saturation for {model}: {e!s}")
+            verbose_proxy_logger.error(f"Error checking saturation for {model}: {e}")
             # Fail open: assume not saturated on error
             return 0.0
 
@@ -640,7 +640,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in dynamic rate limiter: {e!s}, allowing request")
+            verbose_proxy_logger.error(f"Error in dynamic rate limiter: {e}, allowing request")
             # Fail open on unexpected errors
             return None
 
@@ -676,7 +676,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return response
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in dynamic rate limiter v3 post-call hook: {e!s}")
+            verbose_proxy_logger.exception(f"Error in dynamic rate limiter v3 post-call hook: {e}")
             return response
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -791,4 +791,4 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 )
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in dynamic rate limiter success event: {e!s}")
+            verbose_proxy_logger.exception(f"Error in dynamic rate limiter success event: {e}")

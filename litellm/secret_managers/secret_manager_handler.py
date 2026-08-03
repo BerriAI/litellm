@@ -119,7 +119,7 @@ def get_secret_from_manager(
             if secret is None:
                 raise ValueError(f"No secret found in Google Secret Manager for {secret_name}")
         except Exception as e:
-            print_verbose(f"An error occurred - {e!s}")
+            print_verbose(f"An error occurred - {e}")
             raise e
 
     elif key_manager == KeyManagementSystem.HASHICORP_VAULT.value:
@@ -128,7 +128,7 @@ def get_secret_from_manager(
             if secret is None:
                 raise ValueError(f"No secret found in Hashicorp Secret Manager for {secret_name}")
         except Exception as e:
-            print_verbose(f"An error occurred - {e!s}")
+            print_verbose(f"An error occurred - {e}")
             raise e
 
     elif key_manager == KeyManagementSystem.CYBERARK.value:
@@ -137,7 +137,7 @@ def get_secret_from_manager(
             if secret is None:
                 raise ValueError(f"No secret found in CyberArk Secret Manager for {secret_name}")
         except Exception as e:
-            print_verbose(f"An error occurred - {e!s}")
+            print_verbose(f"An error occurred - {e}")
             raise e
 
     elif key_manager == KeyManagementSystem.CUSTOM.value:

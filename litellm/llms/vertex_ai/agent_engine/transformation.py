@@ -270,7 +270,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                 total_tokens=total_tokens,
             )
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {e!s}")
+            verbose_logger.warning(f"Failed to calculate token usage: {e}")
             return None
 
     def transform_response(
@@ -335,9 +335,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Vertex Agent Engine response: {e!s}")
+            verbose_logger.error(f"Error processing Vertex Agent Engine response: {e}")
             raise VertexAgentEngineError(
-                message=f"Error processing response: {e!s}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 

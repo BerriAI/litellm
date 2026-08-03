@@ -590,7 +590,7 @@ class AWSEventStreamDecoder:
 
             return response
         except Exception as e:
-            raise Exception(f"Received streaming error - {e!s}")
+            raise Exception(f"Received streaming error - {e}")
 
     def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream, dict]:
         text = ""

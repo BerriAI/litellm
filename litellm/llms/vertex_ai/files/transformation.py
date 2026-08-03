@@ -1123,5 +1123,5 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             return _openai_batch_output_row(
                 custom_id=custom_id,
                 error_code="transformation_error",
-                error_message=f"Failed to transform response: {e!s}",
+                error_message=f"Failed to transform response: {e}",
             )

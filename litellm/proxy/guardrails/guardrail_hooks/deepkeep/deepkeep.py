@@ -228,7 +228,7 @@ class DeepKeepGuardrail(CustomGuardrail):
                 **({"http_status_code": http_status_code} if http_status_code else {}),
             )
         verbose_proxy_logger.error("DeepKeep guardrail API error: %s", str(error))
-        raise DeepKeepGuardrailAPIError(f"DeepKeep guardrail API failed: {error!s}")
+        raise DeepKeepGuardrailAPIError(f"DeepKeep guardrail API failed: {error}")
 
     @staticmethod
     def _build_return_inputs(

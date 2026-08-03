@@ -653,7 +653,7 @@ async def configure_gc_thresholds_endpoint(
         )
     except Exception as e:
         verbose_proxy_logger.error(f"Failed to set GC thresholds: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to set GC thresholds: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Failed to set GC thresholds: {e}")
 
     # Get current object count to show immediate impact
     current_count = gc.get_count()[0]
@@ -783,4 +783,4 @@ def init_verbose_loggers():
     except Exception as e:
         import logging
 
-        logging.warning(f"Failed to init verbose loggers: {e!s}")
+        logging.warning(f"Failed to init verbose loggers: {e}")

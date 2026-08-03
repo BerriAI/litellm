@@ -480,10 +480,10 @@ async def http_request(
         return _http_success_response(e.response)
     except httpx.RequestError as e:
         verbose_proxy_logger.warning(f"Custom code http_request error: {e}")
-        return _http_error_response(f"Request failed: {e!s}")
+        return _http_error_response(f"Request failed: {e}")
     except Exception as e:
         verbose_proxy_logger.warning(f"Custom code http_request unexpected error: {e}")
-        return _http_error_response(f"Unexpected error: {e!s}")
+        return _http_error_response(f"Unexpected error: {e}")
 
 
 async def _execute_http_request(

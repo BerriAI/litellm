@@ -250,9 +250,7 @@ async def responses_api(
                             f"Stored background response {response.id} in managed objects table with unified_id={response.id}"
                         )
                     except Exception as e:
-                        verbose_proxy_logger.error(
-                            f"Failed to store background response in managed objects table: {e!s}"
-                        )
+                        verbose_proxy_logger.error(f"Failed to store background response in managed objects table: {e}")
 
         return response
     except ModifyResponseException as e:

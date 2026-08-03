@@ -79,7 +79,7 @@ async def handle_elicitation_request(
         verbose_logger.exception("MCP elicitation handler failed: %s", e)
         return ErrorData(
             code=-1,
-            message=f"Elicitation failed: {e!s}",
+            message=f"Elicitation failed: {e}",
         )
 
 

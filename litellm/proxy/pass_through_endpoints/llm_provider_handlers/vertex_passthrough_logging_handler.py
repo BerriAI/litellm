@@ -759,7 +759,7 @@ class VertexPassthroughLoggingHandler:
                     index=0,
                     message={
                         "role": "assistant",
-                        "content": f"Error creating batch prediction job: {e!s}",
+                        "content": f"Error creating batch prediction job: {e}",
                         "tool_calls": None,
                         "function_call": None,
                         "provider_specific_fields": {
