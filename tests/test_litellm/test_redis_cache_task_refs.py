@@ -58,14 +58,75 @@ def failing_client() -> MagicMock:
     has to come from the redis operation instead.
     """
     client = MagicMock()
-    for op in ("get", "set", "mget", "sadd", "incrbyfloat", "expire", "rpush", "lpop", "scan_iter", "ping"):
+    for op in ("get", "set", "mget", "sadd", "incrbyfloat", "expire", "ttl", "rpush", "lpop", "ping"):
         setattr(client, op, AsyncMock(side_effect=ConnectionError("redis is down")))
+    # scan_iter is not awaited, it is iterated, so it has to fail on the call
+    # itself rather than on an await that never happens.
+    client.scan_iter = MagicMock(side_effect=ConnectionError("redis is down"))
+    client.pipeline = MagicMock(return_value=_pipeline_cm())
     return client
 
 
-# Each entry drives one RedisCache method against a client that fails, which is
-# the path to the service-failure hook these methods fire.
-FAILING_CALLS = (
+class _AsyncIter:
+    """`scan_iter` is consumed with `async for`, which a plain AsyncMock is not."""
+
+    def __init__(self, items):
+        self._items = list(items)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._items:
+            raise StopAsyncIteration
+        return self._items.pop(0)
+
+
+def _pipeline_cm() -> MagicMock:
+    """`pipeline(transaction=False)` is entered as an async context manager."""
+    pipe = MagicMock()
+    pipe.execute = AsyncMock(return_value=[])
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=pipe)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+def working_client() -> MagicMock:
+    """An async redis client whose operations all succeed.
+
+    Return values are the benign ones (a cache miss, a zero-length list): the
+    success hook fires either way, and that hook is what these tests are about.
+    """
+    client = MagicMock()
+    client.get = AsyncMock(return_value=None)
+    client.set = AsyncMock(return_value=True)
+    client.mget = AsyncMock(return_value=[None, None])
+    client.sadd = AsyncMock(return_value=1)
+    client.incrbyfloat = AsyncMock(return_value=1.0)
+    client.expire = AsyncMock(return_value=True)
+    client.ttl = AsyncMock(return_value=60)
+    client.rpush = AsyncMock(return_value=1)
+    client.lpop = AsyncMock(return_value=None)
+    client.ping = AsyncMock(return_value=True)
+    client.scan_iter = MagicMock(return_value=_AsyncIter([]))
+    client.pipeline = MagicMock(return_value=_pipeline_cm())
+    return client
+
+
+# The pipeline methods delegate the actual redis work to a helper, so that is
+# the seam to drive them from rather than the individual redis commands.
+PIPELINE_HELPERS = {
+    "async_set_cache_pipeline": "_pipeline_helper",
+    "async_increment_pipeline": "_pipeline_increment_helper",
+    "async_rpush_pipeline": "_pipeline_rpush_helper",
+    "async_lpop_pipeline": "_pipeline_lpop_helper",
+}
+
+
+# Every RedisCache method that fires a service-log task, with arguments that
+# get it past its own early-return guards. Both hooks are exercised per method.
+CALLS = (
     ("async_set_cache", ("k", "v")),
     ("async_get_cache", ("k",)),
     ("async_batch_get_cache", (("k1", "k2"),)),
@@ -73,19 +134,49 @@ FAILING_CALLS = (
     ("async_rpush", ("k", ("v",))),
     ("async_lpop", ("k",)),
     ("ping", ()),
+    ("async_scan_iter", ("pattern",)),
+    ("async_set_cache_sadd", ("k", ["v"], None)),
+    ("async_set_cache_pipeline", ([("k", "v")],)),
+    ("async_increment_pipeline", ([{"key": "k", "increment_value": 1.0, "ttl": 60}],)),
+    ("async_rpush_pipeline", ([{"key": "k", "values": ["v"]}],)),
+    ("async_lpop_pipeline", ([{"key": "k", "count": 1}],)),
 )
+CALL_IDS = tuple(n for n, _ in CALLS)
+
+
+@contextlib.contextmanager
+def driven(cache: RedisCache, method_name: str, *, failing: bool):
+    """Point one RedisCache method at a client that either works or breaks.
+
+    The pipeline methods reach redis through a helper rather than through the
+    client's own commands, so for those the helper is the seam.
+    """
+    client = failing_client() if failing else working_client()
+    stack = contextlib.ExitStack()
+    stack.enter_context(patch.object(cache, "init_async_client", return_value=client))
+
+    helper = PIPELINE_HELPERS.get(method_name)
+    if helper is not None:
+        stack.enter_context(
+            patch.object(
+                cache,
+                helper,
+                AsyncMock(side_effect=ConnectionError("redis is down") if failing else None, return_value=[]),
+            )
+        )
+    with stack:
+        yield
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method_name, args", FAILING_CALLS, ids=tuple(n for n, _ in FAILING_CALLS))
+@pytest.mark.parametrize("method_name, args", CALLS, ids=CALL_IDS)
 async def test_failure_path_holds_the_service_log_task(cache: RedisCache, method_name: str, args: tuple) -> None:
-    method = getattr(cache, method_name)
-
-    with patch.object(cache, "init_async_client", return_value=failing_client()):
+    """The service-failure hook is fired from a task that nothing else holds."""
+    with driven(cache, method_name, failing=True):
         # Several of these re-raise after logging and several swallow; either
         # way the scheduled task is what this asserts on.
         with contextlib.suppress(ConnectionError):
-            await method(*args)
+            await getattr(cache, method_name)(*args)
 
         assert cache._service_logging_tasks, (
             f"{method_name} scheduled a service-log task without keeping a "
@@ -97,14 +188,47 @@ async def test_failure_path_holds_the_service_log_task(cache: RedisCache, method
 
 
 @pytest.mark.asyncio
-async def test_success_path_holds_the_service_log_task(cache: RedisCache) -> None:
+@pytest.mark.parametrize("method_name, args", CALLS, ids=CALL_IDS)
+async def test_success_path_holds_the_service_log_task(cache: RedisCache, method_name: str, args: tuple) -> None:
     """The success hook is fired from a task too, and needs the same reference."""
-    client = MagicMock()
-    client.set = AsyncMock(return_value=True)
+    with driven(cache, method_name, failing=False):
+        await getattr(cache, method_name)(*args)
 
-    with patch.object(cache, "init_async_client", return_value=client):
-        await cache.async_set_cache("k", "v")
-        assert cache._service_logging_tasks
+        assert cache._service_logging_tasks, (
+            f"{method_name} scheduled its success-log task without keeping a reference to it"
+        )
+
+    await drain(cache)
+    assert not cache._service_logging_tasks, f"{method_name} left its finished task in the registry"
+
+
+# These wrap init_async_client() in their own try, so a client that cannot even
+# be built is a separate logged path from a redis command that fails.
+CLIENT_INIT_CALLS = (
+    ("async_set_cache", ("k", "v")),
+    ("async_set_cache_sadd", ("k", ["v"], None)),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name, args", CLIENT_INIT_CALLS, ids=tuple(n for n, _ in CLIENT_INIT_CALLS))
+async def test_client_init_failure_holds_the_service_log_task(cache: RedisCache, method_name: str, args: tuple) -> None:
+    with patch.object(cache, "init_async_client", side_effect=ConnectionError("no client")):
+        with contextlib.suppress(ConnectionError):
+            await getattr(cache, method_name)(*args)
+
+        assert cache._service_logging_tasks, f"{method_name} logged the client-init failure from a task it did not keep"
+
+    await drain(cache)
+    assert not cache._service_logging_tasks
+
+
+@pytest.mark.asyncio
+async def test_health_ping_setup_holds_its_task(cache: RedisCache) -> None:
+    """_setup_health_pings fires the async ping from a task of its own."""
+    with patch.object(cache, "ping", AsyncMock(return_value=True)):
+        cache._setup_health_pings()
+        assert cache._service_logging_tasks, "the async health ping task is not kept anywhere"
 
     await drain(cache)
     assert not cache._service_logging_tasks
