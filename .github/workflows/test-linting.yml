@@ -186,7 +186,8 @@ jobs:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
         run: |
           if [ -n "$GITGUARDIAN_API_KEY" ]; then
-            uv tool run --from 'ggshield==1.48.0' ggshield secret scan repo .
+            pip install --no-cache-dir --require-hashes -r .github/scripts/ggshield-requirements.txt
+            ggshield secret scan repo .
           else
             echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
           fi
