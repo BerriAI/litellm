@@ -1,7 +1,8 @@
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
 from typing import Any
 
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
 
 _CLIENT_CALLBACK_METADATA_SLOTS: tuple[str, ...] = ("litellm_metadata", "metadata")
 
@@ -75,14 +76,33 @@ _supported_callback_params = [
     "turn_off_message_logging",
 ]
 
-_request_blocked_callback_params = {
-    "gcs_bucket_name",
-    "gcs_path_service_account",
-    "dd_api_key",
-    "dd_site",
-    "dd_agent_host",
-    "dd_agent_port",
-}
+_request_blocked_callback_params = frozenset(
+    {
+        "gcs_bucket_name",
+        "gcs_path_service_account",
+        "dd_api_key",
+        "dd_site",
+        "dd_agent_host",
+        "dd_agent_port",
+    }
+)
+
+_EMPTY_TRUSTED_CALLBACK_VARS: Mapping[str, str] = MappingProxyType({})
+
+
+def get_trusted_callback_params(kwargs: Mapping[str, Any] | None, *, prefix: str) -> Mapping[str, str]:
+    """
+    Read callback params the proxy itself stamped from admin-configured team/key callback settings.
+
+    Request-body values never reach this field: the proxy strips it from client input before
+    setting it, so callbacks can consume credentials and destinations here without re-validating.
+    """
+    trusted_vars = kwargs.get(TRUSTED_CALLBACK_VARS_FIELD) if kwargs else None
+    if not isinstance(trusted_vars, Mapping):
+        return _EMPTY_TRUSTED_CALLBACK_VARS
+    return MappingProxyType(
+        {key: str(value) for key, value in trusted_vars.items() if isinstance(key, str) and key.startswith(prefix)}
+    )
 
 
 def initialize_standard_callback_dynamic_params(

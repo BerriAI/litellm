@@ -14,6 +14,9 @@ from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_team_handler import (
     DataDogHandler,
 )
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    TRUSTED_CALLBACK_VARS_FIELD,
+)
 from litellm.litellm_core_utils.specialty_caches.dynamic_logging_cache import (
     DynamicLoggingCache,
 )
@@ -260,47 +263,81 @@ class TestStandardCallbackDynamicParamsIncludesDatadog:
         assert "dd_agent_port" in annotations
 
 
+def _build_logging_obj(kwargs: dict):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    with patch("asyncio.create_task"):
+        return Logging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time="2026-01-01",
+            litellm_call_id="test-call-id",
+            function_id="test-func",
+            dynamic_success_callbacks=["datadog"],
+            kwargs=kwargs,
+        )
+
+
+def _dd_loggers(logging_obj) -> list[DataDogLogger]:
+    return [cb for cb in (logging_obj.dynamic_success_callbacks or []) if isinstance(cb, DataDogLogger)]
+
+
 class TestTeamCallbackFlowPassesDDCredentials:
     """
-    Integration test for the full team callback flow.
+    dd_* credentials reach DataDogHandler only from the proxy-stamped trusted field.
 
-    Verifies that DD credentials configured via team callback_vars
-    actually reach DataDogHandler when a request is processed.
-    The dd_* params are in _request_blocked_callback_params (to prevent
-    request-level injection), but team callback_vars are admin-configured
-    and must pass through.
+    Team callback_vars are admin-configured, so they must survive
+    _request_blocked_callback_params; anything the caller put in the request body
+    must not, or a caller could pair its own dd_site with the team's dd_api_key.
     """
 
-    def test_process_dynamic_callbacks_passes_dd_params_from_kwargs(self):
-        """
-        Simulates the Logging.__init__ flow where team callback_vars
-        (dd_api_key, dd_site) are unpacked into kwargs. Verifies that
-        _process_dynamic_callback_list picks them up and passes them
-        to DataDogHandler despite _request_blocked_callback_params.
-        """
-        from litellm.litellm_core_utils.litellm_logging import Logging
+    def test_trusted_callback_vars_reach_datadog_handler(self, datadog_env):
+        trusted_vars = {"dd_api_key": "team-dd-key-123", "dd_site": "us5.datadoghq.com"}
+        logging_obj = _build_logging_obj(
+            {
+                TRUSTED_CALLBACK_VARS_FIELD: trusted_vars,
+                "model": "gpt-4",
+                "litellm_params": {"metadata": {}},
+            }
+        )
 
-        kwargs = {
-            "dd_api_key": "team-dd-key-123",
-            "dd_site": "us5.datadoghq.com",
-            "model": "gpt-4",
-            "litellm_params": {"metadata": {}},
-        }
-
-        with patch("asyncio.create_task"):
-            logging_obj = Logging(
-                model="gpt-4",
-                messages=[{"role": "user", "content": "hi"}],
-                stream=False,
-                call_type="completion",
-                start_time="2026-01-01",
-                litellm_call_id="test-call-id",
-                function_id="test-func",
-                dynamic_success_callbacks=["datadog"],
-                kwargs=kwargs,
-            )
-
-        dd_loggers = [cb for cb in (logging_obj.dynamic_success_callbacks or []) if isinstance(cb, DataDogLogger)]
+        dd_loggers = _dd_loggers(logging_obj)
         assert len(dd_loggers) == 1, "DataDogLogger should be initialized from team callback_vars"
         assert dd_loggers[0].DD_API_KEY == "team-dd-key-123"
         assert "us5.datadoghq.com" in dd_loggers[0].intake_url
+
+    def test_request_kwargs_dd_params_are_ignored(self, datadog_env):
+        """Top-level dd_* in the call kwargs are caller-controlled and must never be honoured."""
+        logging_obj = _build_logging_obj(
+            {
+                "dd_api_key": "caller-dd-key",
+                "dd_site": "attacker.example.com",
+                "dd_agent_host": "attacker.example.com",
+                "model": "gpt-4",
+                "litellm_params": {"metadata": {}},
+            }
+        )
+
+        dd_loggers = _dd_loggers(logging_obj)
+        assert len(dd_loggers) == 1
+        assert dd_loggers[0].DD_API_KEY == "global_api_key"
+        assert "attacker.example.com" not in dd_loggers[0].intake_url
+        assert "us1.datadoghq.com" in dd_loggers[0].intake_url
+
+    def test_caller_cannot_redirect_team_credentials(self, datadog_env):
+        """The exfil shape: caller's dd_site paired with the team's dd_api_key."""
+        logging_obj = _build_logging_obj(
+            {
+                TRUSTED_CALLBACK_VARS_FIELD: {"dd_api_key": "team-dd-key-123"},
+                "dd_site": "attacker.example.com",
+                "model": "gpt-4",
+                "litellm_params": {"metadata": {}},
+            }
+        )
+
+        dd_loggers = _dd_loggers(logging_obj)
+        assert len(dd_loggers) == 1
+        assert dd_loggers[0].DD_API_KEY == "team-dd-key-123"
+        assert "attacker.example.com" not in dd_loggers[0].intake_url

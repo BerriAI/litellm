@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
@@ -166,6 +166,9 @@ from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from .exception_mapping_utils import _get_response_headers
+from .initialize_dynamic_callback_params import (
+    get_trusted_callback_params,
+)
 from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
 )
@@ -362,7 +365,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
-        self._init_kwargs = kwargs
+        self._trusted_callback_vars: Mapping[str, str] = get_trusted_callback_params(kwargs, prefix="")
 
         # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
         # so team-scoped credentials are available for callback initialization)
@@ -461,10 +464,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 _custom_logger_init_args: dict | None = None
                 if callback == "datadog":
                     # dd_* params are blocked from standard_callback_dynamic_params
-                    # (request-level security), but team callback_vars in kwargs
-                    # are admin-configured and trusted.
-                    _source_items = self._init_kwargs.items() if self._init_kwargs else ()
-                    _custom_logger_init_args = {k: v for k, v in _source_items if k.startswith("dd_")}
+                    # (request-level security); only the proxy-stamped team/key
+                    # callback vars are admin-configured and trusted.
+                    _custom_logger_init_args = {
+                        k: v for k, v in self._trusted_callback_vars.items() if k.startswith("dd_")
+                    }
 
                 callback_class = _init_custom_logger_compatible_class(
                     callback,  # type: ignore[arg-type]
