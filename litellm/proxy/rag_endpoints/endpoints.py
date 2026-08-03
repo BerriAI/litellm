@@ -26,9 +26,6 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     get_form_data,
 )
-from litellm.proxy.vector_store_endpoints.endpoints import (
-    _update_request_data_with_litellm_managed_vector_store_registry,
-)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
@@ -658,6 +655,13 @@ async def rag_query(
         await _authorize_nested_vector_store_ids(
             payload=retrieval_config,
             user_api_key_dict=user_api_key_dict,
+        )
+
+        # Deferred import: keeps vector_store_endpoints out of sys.modules at
+        # proxy boot so lazy router registration and the OpenAPI snapshot stub
+        # injection are not skipped for vector store routes.
+        from litellm.proxy.vector_store_endpoints.endpoints import (
+            _update_request_data_with_litellm_managed_vector_store_registry,
         )
 
         resolved_vector_store = await _update_request_data_with_litellm_managed_vector_store_registry(
