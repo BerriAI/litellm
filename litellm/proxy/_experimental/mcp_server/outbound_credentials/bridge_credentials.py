@@ -167,7 +167,8 @@ class NotBridgeEnvelope(BaseModel):
 
 class BridgeEnvelopeAdmitted(BaseModel):
     """A valid envelope: the identity to admit under and the full upstream ``Authorization``
-    value (``token_type access_token``) to forward to the upstream MCP server."""
+    value (``token_type access_token``, with a case-insensitive bearer type canonicalized to
+    ``Bearer``) to forward to the upstream MCP server."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["admitted"] = "admitted"
@@ -191,6 +192,16 @@ def _strip_bearer(value: str) -> str:
     if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1]
     return value
+
+
+def _authorization_scheme(token_type: str) -> str:
+    """Canonicalize the upstream OAuth token type into the scheme to put on the wire.
+
+    RFC 6749 defines ``token_type`` as case insensitive, so an upstream may report ``bearer``,
+    but RFC 6750 spells the HTTP auth scheme ``Bearer`` and strict resource servers reject any
+    other casing with 401 ``invalid_token``. Any non-bearer type is forwarded verbatim.
+    """
+    return "Bearer" if token_type.lower() == "bearer" else token_type
 
 
 def is_bridge_envelope_shaped(authorization_value: str) -> bool:
@@ -239,5 +250,5 @@ def resolve_bridge_envelope(
     if opened.identity.server_id != expected_server_id:
         return BridgeEnvelopeInvalid()
     grant = opened.grant
-    upstream_authorization = f"{grant.token_type} {grant.access_token.get_secret_value()}"
+    upstream_authorization = f"{_authorization_scheme(grant.token_type)} {grant.access_token.get_secret_value()}"
     return BridgeEnvelopeAdmitted(identity=opened.identity, upstream_authorization=SecretStr(upstream_authorization))

@@ -10,6 +10,7 @@ through the consumer; and no path leaks the upstream token in a repr.
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from pydantic import SecretStr
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
@@ -186,6 +187,29 @@ def test_resolve_strips_optional_bearer_scheme_before_detection():
     assert isinstance(prefixed, BridgeEnvelopeAdmitted)
     assert isinstance(lower, BridgeEnvelopeAdmitted)
     assert prefixed.upstream_authorization.get_secret_value() == bare.upstream_authorization.get_secret_value()
+
+
+@pytest.mark.parametrize("upstream_token_type", ["bearer", "BEARER", "Bearer", "beArEr"])
+def test_resolve_canonicalizes_case_insensitive_bearer_token_type_on_egress(upstream_token_type: str):
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    grant = UpstreamTokenGrant(
+        access_token=SecretStr(_ACCESS_TOKEN), token_type=upstream_token_type, expires_in=600
+    )
+    sealed = mint_envelope(_IDENTITY, grant, keys, _NOW)
+    assert isinstance(sealed, SealedEnvelope)
+    result = resolve_bridge_envelope(sealed.token.get_secret_value(), keys, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeEnvelopeAdmitted)
+    assert result.upstream_authorization.get_secret_value() == f"Bearer {_ACCESS_TOKEN}"
+
+
+def test_resolve_forwards_non_bearer_token_type_verbatim():
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    grant = UpstreamTokenGrant(access_token=SecretStr(_ACCESS_TOKEN), token_type="DPoP", expires_in=600)
+    sealed = mint_envelope(_IDENTITY, grant, keys, _NOW)
+    assert isinstance(sealed, SealedEnvelope)
+    result = resolve_bridge_envelope(sealed.token.get_secret_value(), keys, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeEnvelopeAdmitted)
+    assert result.upstream_authorization.get_secret_value() == f"DPoP {_ACCESS_TOKEN}"
 
 
 def test_resolve_expired_envelope_is_invalid_not_admitted():
