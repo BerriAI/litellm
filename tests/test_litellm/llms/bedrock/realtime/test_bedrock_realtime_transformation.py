@@ -618,7 +618,7 @@ class TestBedrockRealtimeResponseTransformation:
         config = BedrockRealtimeConfig()
 
         # Missing IDs still emit a function call (Nova Sonic starts tools with role=TOOL)
-        events, tool_call_id, tool_name = config.transform_tool_use_event(
+        events, tool_call_id, tool_name, item_id, response_id = config.transform_tool_use_event(
             {
                 "toolUse": {
                     "toolUseId": "tool_call_no_ids",
@@ -633,14 +633,16 @@ class TestBedrockRealtimeResponseTransformation:
         assert events[0]["type"] == "response.function_call_arguments.done"
         assert events[0]["call_id"] == "tool_call_no_ids"
         assert events[0]["name"] == "get_weather"
-        assert events[0]["response_id"].startswith("resp_")
-        assert events[0]["item_id"].startswith("item_")
+        assert response_id.startswith("resp_")
+        assert item_id.startswith("item_")
+        assert events[0]["response_id"] == response_id
+        assert events[0]["item_id"] == item_id
         assert json.loads(events[0]["arguments"]) == {"location": "Seattle"}
         assert tool_call_id == "tool_call_no_ids"
         assert tool_name == "get_weather"
 
         # JSON string content is parsed and converted to a function call event
-        events, tool_call_id, tool_name = config.transform_tool_use_event(
+        events, tool_call_id, tool_name, item_id, response_id = config.transform_tool_use_event(
             {
                 "toolUse": {
                     "toolUseId": "tool_call_123",
@@ -655,12 +657,14 @@ class TestBedrockRealtimeResponseTransformation:
         assert events[0]["type"] == "response.function_call_arguments.done"
         assert events[0]["call_id"] == "tool_call_123"
         assert events[0]["name"] == "get_weather"
+        assert response_id == "resp_123"
+        assert item_id == "item_123"
         assert events[0]["response_id"] == "resp_123"
         assert events[0]["item_id"] == "item_123"
         assert json.loads(events[0]["arguments"]) == {"location": "San Francisco"}
 
         # Invalid JSON content falls back to empty arguments
-        events, _, _ = config.transform_tool_use_event(
+        events, _, _, _, _ = config.transform_tool_use_event(
             {
                 "toolUse": {
                     "toolUseId": "tool_call_124",
@@ -673,6 +677,74 @@ class TestBedrockRealtimeResponseTransformation:
         )
         assert len(events) == 1
         assert json.loads(events[0]["arguments"]) == {}
+
+    def test_transform_realtime_response_persists_minted_tool_ids(self):
+        """TOOL-first turns must write minted response/item ids into session state"""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        tool_use_message = {
+            "event": {
+                "toolUse": {
+                    "toolUseId": "tool_call_state",
+                    "toolName": "get_weather",
+                    "content": json.dumps({"location": "Seattle"}),
+                }
+            }
+        }
+
+        result = config.transform_realtime_response(
+            json.dumps(tool_use_message),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": None,
+                "current_response_id": None,
+                "current_conversation_id": "conv_123",
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": "text",
+            },
+        )
+
+        assert len(result["response"]) == 1
+        function_call = result["response"][0]
+        assert function_call["type"] == "response.function_call_arguments.done"
+        assert result["current_response_id"] is not None
+        assert result["current_output_item_id"] is not None
+        assert result["current_response_id"].startswith("resp_")
+        assert result["current_output_item_id"].startswith("item_")
+        assert function_call["response_id"] == result["current_response_id"]
+        assert function_call["item_id"] == result["current_output_item_id"]
+        assert json.loads(function_call["arguments"]) == {"location": "Seattle"}
+
+        # A follow-up contentEnd must reuse the same persisted ids
+        content_end_message = {
+            "event": {
+                "contentEnd": {
+                    "stopReason": "TOOL_USE",
+                    "type": "TOOL",
+                }
+            }
+        }
+        follow_up = config.transform_realtime_response(
+            json.dumps(content_end_message),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": result["session_configuration_request"],
+                "current_output_item_id": result["current_output_item_id"],
+                "current_response_id": result["current_response_id"],
+                "current_conversation_id": result["current_conversation_id"],
+                "current_delta_chunks": result["current_delta_chunks"],
+                "current_item_chunks": result["current_item_chunks"],
+                "current_delta_type": result["current_delta_type"],
+            },
+        )
+        assert follow_up["current_response_id"] == result["current_response_id"]
+        assert follow_up["current_output_item_id"] == result["current_output_item_id"]
 
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""

@@ -1011,7 +1011,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         event: dict,
         current_output_item_id: str | None,
         current_response_id: str | None,
-    ) -> tuple[list[OpenAIRealtimeEvents], str, str]:
+    ) -> tuple[list[OpenAIRealtimeEvents], str, str, str, str]:
         """
         Transform Bedrock toolUse event to OpenAI format.
 
@@ -1021,7 +1021,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             current_response_id: Current response ID
 
         Returns:
-            Tuple of (events, tool_call_id, tool_name) for tracking
+            Tuple of (events, tool_call_id, tool_name, output_item_id, response_id)
+            so the caller can persist any minted IDs into session state
         """
         verbose_logger.debug("Handling toolUse")
         tool_use = event["toolUse"]
@@ -1057,6 +1058,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             [cast(OpenAIRealtimeEvents, function_call_event)],
             tool_call_id,
             tool_name,
+            item_id,
+            response_id,
         )
 
     def transform_conversation_item_create_tool_result_event(self, json_message: dict) -> list[str]:
@@ -1223,11 +1226,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 returned_messages.extend(done_events)
 
         elif "toolUse" in event:
-            events, tool_call_id, tool_name = self.transform_tool_use_event(
-                event, current_output_item_id, current_response_id
-            )
+            (
+                events,
+                tool_call_id,
+                tool_name,
+                current_output_item_id,
+                current_response_id,
+            ) = self.transform_tool_use_event(event, current_output_item_id, current_response_id)
             returned_messages.extend(events)
-            # Store tool call info for potential use
             verbose_logger.debug(f"Tool use event: {tool_name} (ID: {tool_call_id})")
 
         elif "promptEnd" in event or "completionEnd" in event:
