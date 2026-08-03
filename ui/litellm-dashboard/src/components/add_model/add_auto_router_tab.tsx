@@ -122,7 +122,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     label: model_group,
   }));
 
-  const availableModelSet = new Set(modelInfo.map((m) => m.model_group));
+  const availableModelSet = React.useMemo(() => new Set(modelInfo.map((m) => m.model_group)), [modelInfo]);
   const presets = React.useMemo(() => getAllPresets(), []);
 
   // A preset's models can only be trusted against a successfully loaded list. Selection and the
@@ -182,6 +182,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const submitRecommendedRouter = (name: string) => {
+    if (!selectedPreset) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend("Please select a template, or choose Custom Configuration");
+      return;
+    }
+
     const {
       tiers,
       classifier_type: classifierType,
@@ -348,6 +354,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 );
               })}
             </AntdSelect>
+            {showValidationErrors && !selectedPreset && (
+              <div className="text-xs mt-1 text-red-500">Please select a template</div>
+            )}
           </div>
 
           <Form.Item

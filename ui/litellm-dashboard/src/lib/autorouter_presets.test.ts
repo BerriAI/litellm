@@ -7,7 +7,7 @@ import {
 } from "./autorouter_presets";
 
 describe("autorouter_presets", () => {
-  it("loads exactly the two model-family presets (sample_spec excluded)", () => {
+  it("loads exactly the two model-family presets", () => {
     const presets = getAllPresets();
     expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "OpenAI Family"]);
     // Every preset carries all four fields the UI relies on; a JSON typo dropping one fails here.
@@ -20,8 +20,6 @@ describe("autorouter_presets", () => {
   it("resolves a preset by its stable JSON key, not its display label", () => {
     expect(getPresetByKey("anthropic_family")?.label).toBe("Anthropic Family");
     expect(getPresetByKey("does_not_exist")).toBeUndefined();
-    // sample_spec is filtered out, so it is not resolvable by key either.
-    expect(getPresetByKey("sample_spec")).toBeUndefined();
   });
 
   it("keeps every preset a plain heuristic complexity router (no adaptive/quality settings)", () => {

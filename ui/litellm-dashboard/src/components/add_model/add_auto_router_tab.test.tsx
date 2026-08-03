@@ -246,7 +246,26 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "raced-router");
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
-    // No preset was applied, so the tiers are empty and tier validation blocks the submit.
+    // No preset was applied and none was picked, so the template check blocks the submit.
+    expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
+  // The Template field carries a required marker but, until now, nothing actually validated it:
+  // submit fell through to the unrelated missing-tiers error instead. This pins a Template-specific
+  // block so a future regression (e.g. dropping this check) surfaces as a wrong error message, not
+  // silence.
+  it("blocks the submit and shows an inline error when no template is chosen", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+    renderWithProviders(<Harness />);
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "no-template-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    expect(await screen.findByText("Please select a template")).toBeInTheDocument();
+    expect(NotificationManager.fromBackend).toHaveBeenCalledWith(
+      "Please select a template, or choose Custom Configuration",
+    );
     expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
@@ -319,6 +338,8 @@ describe("AddAutoRouterTab", () => {
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
     );
 
+    openTemplateDropdown();
+    fireEvent.click(optionByLabel("Custom Configuration")!);
     await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
     await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
@@ -335,6 +356,8 @@ describe("AddAutoRouterTab", () => {
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
     );
 
+    openTemplateDropdown();
+    fireEvent.click(optionByLabel("Custom Configuration")!);
     await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 

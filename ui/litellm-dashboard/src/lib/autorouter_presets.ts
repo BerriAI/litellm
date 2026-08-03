@@ -13,12 +13,10 @@ export interface AutoRouterPreset {
 // The bundled JSON is a developer-authored, build-time asset, so it is trusted at the import
 // boundary rather than re-validated at runtime (resolveJsonModule widens its string literals,
 // hence this one cast). autorouter_presets.test.ts pins the parsed shape, so a JSON typo fails
-// CI. "sample_spec" documents the shape and is not a selectable preset.
+// CI.
 const RAW = presetsRaw as Record<string, Omit<AutoRouterPreset, "key">>;
 
-const PRESETS: AutoRouterPreset[] = Object.entries(RAW)
-  .filter(([key]) => key !== "sample_spec")
-  .map(([key, preset]) => ({ key, ...preset }));
+const PRESETS: AutoRouterPreset[] = Object.entries(RAW).map(([key, preset]) => ({ key, ...preset }));
 
 export const getAllPresets = (): AutoRouterPreset[] => PRESETS;
 
