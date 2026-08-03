@@ -279,3 +279,54 @@ def test_load_agents_from_config_with_an_empty_list_clears_the_remembered_agents
 
     registry.load_agents_from_db_and_config(db_agents=None)
     assert registry.get_agent_list() == [], "a removed config agent must not come back on the next rebuild"
+
+
+def test_config_agent_id_survives_a_static_header_secret_rotation():
+    """
+    A config agent's id must not move when a value inside the entry changes.
+
+    The id used to be a sha256 of the whole config entry with `os.environ/...`
+    placeholders already resolved, so rotating an upstream token minted a brand new
+    agent id: every permission granted on the old id stopped matching and the keys
+    that had been secured lost access while unrestricted keys kept theirs.
+    """
+    registry_before = AgentRegistry()
+    registry_before.load_agents_from_config(
+        [
+            {
+                "agent_name": "rotating-agent",
+                "agent_card_params": _sample_agent_card_params(),
+                "static_headers": {"x-upstream-token": "token-v1"},
+            }
+        ]
+    )
+
+    registry_after = AgentRegistry()
+    registry_after.load_agents_from_config(
+        [
+            {
+                "agent_name": "rotating-agent",
+                "agent_card_params": _sample_agent_card_params(),
+                "static_headers": {"x-upstream-token": "token-v2"},
+            }
+        ]
+    )
+
+    agent_before = registry_before.get_agent_by_name("rotating-agent")
+    agent_after = registry_after.get_agent_by_name("rotating-agent")
+    assert agent_before is not None and agent_after is not None
+    assert agent_before.agent_id == agent_after.agent_id
+
+
+def test_config_agents_with_different_names_get_different_ids():
+    """Distinct config agents must stay distinguishable for permission grants."""
+    registry = AgentRegistry()
+    registry.load_agents_from_config(
+        [
+            {"agent_name": "agent-alpha", "agent_card_params": _sample_agent_card_params()},
+            {"agent_name": "agent-beta", "agent_card_params": _sample_agent_card_params()},
+        ]
+    )
+
+    agent_ids = {agent.agent_id for agent in registry.get_agent_list()}
+    assert len(agent_ids) == 2

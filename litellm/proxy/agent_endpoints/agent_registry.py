@@ -1,5 +1,4 @@
 import hashlib
-import json
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Protocol, TypedDict
@@ -114,8 +113,15 @@ class AgentRegistry:
                 public_agent_list.append(agent)
         return public_agent_list
 
-    def _create_agent_id(self, agent_config: AgentConfig) -> str:
-        return hashlib.sha256(json.dumps(agent_config, sort_keys=True).encode()).hexdigest()
+    def _create_agent_id(self, agent_name: str) -> str:
+        """
+        Derive a config agent's id from its name, which is unique across the registry.
+
+        Hashing the whole config entry instead would fold every mutable value into the
+        identity, so rotating a secret in ``static_headers`` would mint a new agent id
+        and silently invalidate the permissions granted on the old one.
+        """
+        return hashlib.sha256(agent_name.encode()).hexdigest()
 
     def load_agents_from_config(self, agent_config: Sequence[AgentConfig] | None = None):
         """
@@ -139,14 +145,14 @@ class AgentRegistry:
 
             agent_name = agent_config_item.get("agent_name")
             agent_card_params = agent_config_item.get("agent_card_params")
-            if not all([agent_name, agent_card_params]):
+            if not agent_name or not agent_card_params:
                 continue
 
             if any(agent.agent_name == agent_name for agent in self.agent_list):
                 continue
 
             # create a stable hash id for config item
-            config_hash = self._create_agent_id(agent_config_item)
+            config_hash = self._create_agent_id(agent_name)
 
             self.register_agent(agent_config=AgentResponse(agent_id=config_hash, **agent_config_item))  # type: ignore
 
