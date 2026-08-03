@@ -57,10 +57,17 @@ def test_parse_defaults_revision_when_the_column_is_null():
 
 @pytest.mark.parametrize(
     "param_value",
-    [None, "not-a-dict", {}, {"interval_hours": "6"}, {"interval_hours": None}],
+    [None, "not-a-dict", '{"interval_hours": "6"}', {}, {"interval_hours": "6"}, {"interval_hours": None}],
 )
 def test_parse_tolerates_unusable_param_values(param_value):
     assert parse_reload_schedule(_row(param_value=param_value)).interval_hours is None
+
+
+def test_parse_reads_an_interval_still_encoded_as_json_text():
+    """The interval is written with safe_dumps, so a raw row read can return it either
+    decoded or as a string; reading a string as no schedule would silently stop the
+    reloads an admin configured"""
+    assert parse_reload_schedule(_row(param_value='{"interval_hours": 6}')).interval_hours == 6
 
 
 def test_parse_ignores_legacy_json_force_reload():

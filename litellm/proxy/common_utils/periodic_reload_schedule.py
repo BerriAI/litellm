@@ -91,7 +91,12 @@ def utc_now() -> datetime:
 
 
 def _parse_interval_hours(param_value: object) -> int | None:
+    """``param_value`` is written as serialized JSON, and a raw row read can hand it back
+    either decoded or still as a string depending on the driver, so accept both rather than
+    reading a string as no schedule at all. Mirrors ``ConfigRepository.get_param``"""
     try:
+        if isinstance(param_value, str):
+            return _IntervalConfig.model_validate_json(param_value).interval_hours
         return _IntervalConfig.model_validate(param_value).interval_hours
     except ValidationError:
         return None
