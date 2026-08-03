@@ -82,10 +82,20 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         if generate_content_config_dict:
             self._normalize_response_schema(generate_content_config_dict, model)
 
-        # Build the request in Google GenAI format that Vertex AI expects
+        vertex_contents = (
+            [
+                ({**content, "role": "user"} if "role" not in content else content)
+                if isinstance(content, dict)
+                else content
+                for content in contents
+            ]
+            if isinstance(contents, list)
+            else contents
+        )
+
         result = {
             "model": model,
-            "contents": contents,
+            "contents": vertex_contents,
         }
 
         # Add tools if provided
