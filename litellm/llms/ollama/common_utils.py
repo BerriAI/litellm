@@ -119,7 +119,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 if isinstance(nm, str):
                     names.add(nm if nm.startswith("ollama/") else f"ollama/{nm}")
         except Exception as e:
-            verbose_logger.warning(f"Error retrieving ollama tag endpoint: {e}")
+            verbose_logger.warning("Error retrieving ollama tag endpoint: %s", e)
             # If tags endpoint fails, fall back to static list
             try:
                 from litellm import models_by_provider
@@ -127,7 +127,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 static = models_by_provider.get("ollama", []) or []
                 return [f"ollama/{m}" for m in static]
             except Exception as e1:
-                verbose_logger.warning(f"Error retrieving static ollama models as fallback: {e1}")
+                verbose_logger.warning("Error retrieving static ollama models as fallback: %s", e1)
                 return []
         # assemble full model names
         result = sorted(names)

@@ -538,5 +538,5 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 )
                 # raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:
-            verbose_proxy_logger.error(f"Unable to parse ollama chunk - {chunk}")
+            verbose_proxy_logger.error("Unable to parse ollama chunk - %s", chunk)
             raise e

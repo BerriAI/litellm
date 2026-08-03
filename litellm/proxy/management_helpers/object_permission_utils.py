@@ -166,7 +166,7 @@ async def handle_update_object_permission_common(
         },
     )
 
-    verbose_proxy_logger.debug(f"created_object_permission_row: {created_object_permission_row}")
+    verbose_proxy_logger.debug("created_object_permission_row: %s", created_object_permission_row)
 
     return created_object_permission_row.object_permission_id
 
@@ -572,8 +572,8 @@ async def validate_key_mcp_servers_against_team(
         }
         if stale_identifiers:
             verbose_proxy_logger.warning(
-                "validate_key_mcp_servers_against_team: ignoring stale MCP server "
-                f"identifiers (no longer in registry or DB): {sorted(stale_identifiers)}"
+                "validate_key_mcp_servers_against_team: ignoring stale MCP server identifiers (no longer in registry or DB): %s",
+                sorted(stale_identifiers),
             )
         _rewrite_object_permission_mcp_identifiers(
             object_permission=object_permission,

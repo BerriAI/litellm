@@ -100,7 +100,7 @@ class LoggingWorker:
                         timeout=self.timeout,
                     )
                 except Exception as e:
-                    verbose_logger.exception(f"LoggingWorker error: {e}")
+                    verbose_logger.exception("LoggingWorker error: %s", e)
                 finally:
                     self._queue.task_done()
         finally:
@@ -297,7 +297,7 @@ class LoggingWorker:
             if extracted_tasks:
                 await self._process_extracted_tasks(extracted_tasks)
         except Exception as e:
-            verbose_logger.exception(f"LoggingWorker error during aggressive clear: {e}")
+            verbose_logger.exception("LoggingWorker error during aggressive clear: %s", e)
         finally:
             # Always reset the flag even if an error occurs
             self._aggressive_clear_in_progress = False
@@ -383,7 +383,7 @@ class LoggingWorker:
         for _ in range(MAX_ITERATIONS_TO_CLEAR_QUEUE):
             # Check if we've exceeded the maximum time
             if asyncio.get_event_loop().time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
-                verbose_logger.warning(f"clear_queue exceeded max_time of {MAX_TIME_TO_CLEAR_QUEUE}s, stopping early")
+                verbose_logger.warning("clear_queue exceeded max_time of %ss, stopping early", MAX_TIME_TO_CLEAR_QUEUE)
                 break
 
             try:

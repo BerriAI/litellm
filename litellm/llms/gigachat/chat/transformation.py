@@ -268,7 +268,7 @@ class GigaChatConfig(BaseConfig):
                 api_base=self._current_api_base,
             )
         except Exception as e:
-            verbose_logger.error(f"Failed to upload image: {e}")
+            verbose_logger.error("Failed to upload image: %s", e)
             return None
 
     def transform_request(

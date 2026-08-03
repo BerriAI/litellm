@@ -993,7 +993,7 @@ async def get_daily_activity(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching daily activity: {e}")
+        verbose_proxy_logger.exception("Error fetching daily activity: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},
@@ -1082,7 +1082,7 @@ async def get_daily_activity_aggregated(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching aggregated daily activity: {e}")
+        verbose_proxy_logger.exception("Error fetching aggregated daily activity: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},

@@ -141,7 +141,11 @@ class DBSpendUpdateWriter:
 
         try:
             verbose_proxy_logger.debug(
-                f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id}"
+                "Enters prisma db call, response_cost: %s, token: %s; user_id: %s; team_id: %s",
+                response_cost,
+                token,
+                user_id,
+                team_id,
             )
             if ProxyUpdateSpend.disable_spend_updates() is True:
                 return
@@ -706,7 +710,7 @@ class DBSpendUpdateWriter:
             if isinstance(request_tags, str):
                 tags = safe_json_loads(request_tags, default=[])
                 if not tags:
-                    verbose_proxy_logger.debug(f"Failed to parse request_tags JSON: {request_tags}")
+                    verbose_proxy_logger.debug("Failed to parse request_tags JSON: %s", request_tags)
                     return
             elif isinstance(request_tags, list):
                 tags = request_tags
@@ -1098,7 +1102,7 @@ class DBSpendUpdateWriter:
 
         ### UPDATE USER TABLE ###
         user_list_transactions = db_spend_update_transactions["user_list_transactions"]
-        verbose_proxy_logger.debug(f"User Spend transactions: {user_list_transactions}")
+        verbose_proxy_logger.debug("User Spend transactions: %s", user_list_transactions)
         if user_list_transactions is not None and len(user_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1130,7 +1134,7 @@ class DBSpendUpdateWriter:
 
         ### UPDATE END-USER TABLE ###
         end_user_list_transactions = db_spend_update_transactions["end_user_list_transactions"]
-        verbose_proxy_logger.debug(f"End-User Spend transactions: {end_user_list_transactions}")
+        verbose_proxy_logger.debug("End-User Spend transactions: %s", end_user_list_transactions)
         if end_user_list_transactions is not None and len(end_user_list_transactions.keys()) > 0:
             await ProxyUpdateSpend.update_end_user_spend(
                 n_retry_times=n_retry_times,
@@ -1140,7 +1144,7 @@ class DBSpendUpdateWriter:
             )
         ### UPDATE KEY TABLE ###
         key_list_transactions = db_spend_update_transactions["key_list_transactions"]
-        verbose_proxy_logger.debug(f"KEY Spend transactions: {key_list_transactions}")
+        verbose_proxy_logger.debug("KEY Spend transactions: %s", key_list_transactions)
         if key_list_transactions is not None and len(key_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1173,7 +1177,7 @@ class DBSpendUpdateWriter:
 
         ### UPDATE TEAM TABLE ###
         team_list_transactions = db_spend_update_transactions["team_list_transactions"]
-        verbose_proxy_logger.debug(f"Team Spend transactions: {team_list_transactions}")
+        verbose_proxy_logger.debug("Team Spend transactions: %s", team_list_transactions)
         if team_list_transactions is not None and len(team_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1182,7 +1186,9 @@ class DBSpendUpdateWriter:
                         async with transaction.batch_() as batcher:
                             # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
                             for team_id, response_cost in sorted(team_list_transactions.items()):
-                                verbose_proxy_logger.debug(f"Updating spend for team id={team_id} by {response_cost}")
+                                verbose_proxy_logger.debug(
+                                    "Updating spend for team id=%s by %s", team_id, response_cost
+                                )
                                 batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"team_id": team_id},
                                     data={"spend": {"increment": response_cost}},
@@ -1204,7 +1210,7 @@ class DBSpendUpdateWriter:
 
         ### UPDATE TEAM Membership TABLE with spend ###
         team_member_list_transactions = db_spend_update_transactions["team_member_list_transactions"]
-        verbose_proxy_logger.debug(f"Team Membership Spend transactions: {team_member_list_transactions}")
+        verbose_proxy_logger.debug("Team Membership Spend transactions: %s", team_member_list_transactions)
         if team_member_list_transactions is not None and len(team_member_list_transactions.keys()) > 0:
             # Track which team memberships will be updated for cache invalidation
             team_memberships_to_invalidate: list[tuple[str, str]] = []
@@ -1258,12 +1264,12 @@ class DBSpendUpdateWriter:
                         cache_key = f"team_membership:{user_id}:{team_id}"
                         await user_api_key_cache.async_delete_cache(key=cache_key)
                         verbose_proxy_logger.debug(
-                            f"Invalidated team membership cache for user_id={user_id}, team_id={team_id}"
+                            "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
                         )
 
         ### UPDATE ORG TABLE ###
         org_list_transactions = db_spend_update_transactions["org_list_transactions"]
-        verbose_proxy_logger.debug(f"Org Spend transactions: {org_list_transactions}")
+        verbose_proxy_logger.debug("Org Spend transactions: %s", org_list_transactions)
         if org_list_transactions is not None and len(org_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1346,7 +1352,7 @@ class DBSpendUpdateWriter:
         """
         from litellm.proxy.utils import _raise_failed_update_spend_exception
 
-        verbose_proxy_logger.debug(f"{entity_name} Spend transactions: {transactions}")
+        verbose_proxy_logger.debug("%s Spend transactions: %s", entity_name, transactions)
         if transactions is not None and len(transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1356,7 +1362,11 @@ class DBSpendUpdateWriter:
                             # Sort by entity_id for consistent lock ordering across pods to prevent deadlocks.
                             for entity_id, response_cost in sorted(transactions.items()):
                                 verbose_proxy_logger.debug(
-                                    f"Updating spend for {entity_name} {where_field}={entity_id} by {response_cost}"
+                                    "Updating spend for %s %s=%s by %s",
+                                    entity_name,
+                                    where_field,
+                                    entity_id,
+                                    response_cost,
                                 )
                                 getattr(batcher, table_accessor).update_many(
                                     where={where_field: entity_id},
@@ -1485,7 +1495,7 @@ class DBSpendUpdateWriter:
         from litellm.proxy.utils import _raise_failed_update_spend_exception
 
         verbose_proxy_logger.debug(
-            f"Daily {entity_type.capitalize()} Spend transactions: {len(daily_spend_transactions)}"
+            "Daily %s Spend transactions: %s", entity_type.capitalize(), len(daily_spend_transactions)
         )
         BATCH_SIZE = 100
         start_time = time.time()
@@ -1519,7 +1529,7 @@ class DBSpendUpdateWriter:
 
                         if len(transactions_to_process) == 0:
                             verbose_proxy_logger.debug(
-                                f"No new transactions to process for daily {entity_type} spend update"
+                                "No new transactions to process for daily %s spend update", entity_type
                             )
                             return
 
@@ -1829,14 +1839,15 @@ class DBSpendUpdateWriter:
             raise ValueError(f"Invalid type: {type}")
         if not all(key in payload for key in expected_keys):
             verbose_proxy_logger.debug(
-                f"Missing expected keys: {expected_keys}, in payload, skipping from daily_user_spend_transactions"
+                "Missing expected keys: %s, in payload, skipping from daily_user_spend_transactions", expected_keys
             )
             return None
 
         any_expected_keys = ["model", "mcp_namespaced_tool_name"]
         if not any(key in payload for key in any_expected_keys):
             verbose_proxy_logger.debug(
-                f"Missing any expected keys: {any_expected_keys}, in payload, skipping from daily_user_spend_transactions"
+                "Missing any expected keys: %s, in payload, skipping from daily_user_spend_transactions",
+                any_expected_keys,
             )
             return None
         elif "mcp_namespaced_tool_name" in payload:
@@ -1848,7 +1859,7 @@ class DBSpendUpdateWriter:
             return None
 
         request_status = prisma_client.get_request_status(payload)
-        verbose_proxy_logger.debug(f"Logged request status: {request_status}")
+        verbose_proxy_logger.debug("Logged request status: %s", request_status)
         _metadata: SpendLogsMetadata = json.loads(payload["metadata"])
         usage_obj = _metadata.get("usage_object", {}) or {}
         if isinstance(payload["startTime"], datetime):
@@ -1858,7 +1869,7 @@ class DBSpendUpdateWriter:
             date = payload["startTime"].split("T")[0]
         else:
             verbose_proxy_logger.debug(
-                f"Invalid start time: {payload['startTime']}, skipping from daily_user_spend_transactions"
+                "Invalid start time: %s, skipping from daily_user_spend_transactions", payload["startTime"]
             )
             return None
         try:

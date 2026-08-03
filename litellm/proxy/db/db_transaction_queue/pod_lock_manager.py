@@ -106,7 +106,7 @@ end
                         )
             return False
         except Exception as e:
-            verbose_proxy_logger.error(f"Error acquiring Redis lock for {cronjob_id}: {e}")
+            verbose_proxy_logger.error("Error acquiring Redis lock for %s: %s", cronjob_id, e)
             return False
 
     async def release_lock(
@@ -148,7 +148,7 @@ end
                     cronjob_id,
                 )
         except Exception as e:
-            verbose_proxy_logger.error(f"Error releasing Redis lock for {cronjob_id}: {e}")
+            verbose_proxy_logger.error("Error releasing Redis lock for %s: %s", cronjob_id, e)
 
     async def _compare_and_delete_lock(self, lock_key: str) -> int:
         """

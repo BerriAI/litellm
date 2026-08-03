@@ -355,7 +355,7 @@ async def patch_model(
         return updated_model
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error in patch_model: {e}")
+        verbose_proxy_logger.exception("Error in patch_model: %s", e)
 
         if isinstance(e, (HTTPException, ProxyException)):
             raise e
@@ -462,7 +462,7 @@ async def _set_model_blocked_status(
         return updated_model
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error in model {action}: {e}")
+        verbose_proxy_logger.exception("Error in model %s: %s", action, e)
 
         if isinstance(e, (HTTPException, ProxyException)):
             raise e
@@ -1223,7 +1223,7 @@ async def delete_model(
             )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to delete model. Due to error - {e}")
+        verbose_proxy_logger.exception("Failed to delete model. Due to error - %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
@@ -1389,7 +1389,7 @@ async def add_new_model(
                         passed_model_info=model_params.model_info,
                     )
             except Exception as e:
-                verbose_proxy_logger.exception(f"Exception in add_new_model: {e}")
+                verbose_proxy_logger.exception("Exception in add_new_model: %s", e)
 
         else:
             raise HTTPException(
@@ -1429,7 +1429,7 @@ async def add_new_model(
         return model_response
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.add_new_model(): Exception occured - {e}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_new_model(): Exception occured - %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
@@ -1582,7 +1582,7 @@ async def update_model(
 
             return model_response
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.update_model(): Exception occured - {e}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occured - %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
@@ -1665,7 +1665,7 @@ async def update_public_model_groups(
         litellm.public_model_groups = request.model_groups
 
         verbose_proxy_logger.debug(
-            f"Updated public model groups to: {request.model_groups} by user: {user_api_key_dict.user_id}"
+            "Updated public model groups to: %s by user: %s", request.model_groups, user_api_key_dict.user_id
         )
 
         return {
@@ -1675,7 +1675,7 @@ async def update_public_model_groups(
         }
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating public model groups: {e}")
+        verbose_proxy_logger.exception("Error updating public model groups: %s", e)
 
         if isinstance(e, HTTPException):
             raise e
@@ -1733,7 +1733,7 @@ async def update_useful_links(
         litellm.public_model_groups_links = request.useful_links
 
         verbose_proxy_logger.debug(
-            f"Updated useful links to: {request.useful_links} by user: {user_api_key_dict.user_id}"
+            "Updated useful links to: %s by user: %s", request.useful_links, user_api_key_dict.user_id
         )
 
         return {
@@ -1743,7 +1743,7 @@ async def update_useful_links(
         }
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating public model groups: {e}")
+        verbose_proxy_logger.exception("Error updating public model groups: %s", e)
 
         if isinstance(e, HTTPException):
             raise e
@@ -1966,9 +1966,9 @@ async def clear_cache() -> frozenset[str] | None:
         )
 
         verbose_proxy_logger.debug(
-            f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models"
+            "Cleared %s DB models, preserved %s config models", len(db_model_ids), len(config_models)
         )
         return still_desired_ids
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to clear cache and reload models. Due to error - {e}")
+        verbose_proxy_logger.exception("Failed to clear cache and reload models. Due to error - %s", e)
         return None

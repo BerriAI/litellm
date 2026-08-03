@@ -92,7 +92,7 @@ class PrometheusServicesLogger:
 
         metrics = DEFAULT_SERVICE_CONFIGS.get(service, {}).get("metrics", [])
         if not metrics:
-            verbose_logger.debug(f"No metrics found for service {service}")
+            verbose_logger.debug("No metrics found for service %s", service)
             return DEFAULT_METRICS
         return metrics
 

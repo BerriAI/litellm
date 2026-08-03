@@ -195,5 +195,5 @@ class BedrockAgentCoreA2ATransformation:
                     event = json.loads(data_str)
                     yield event
                 except json.JSONDecodeError:
-                    verbose_logger.debug(f"BedrockAgentCore A2A: Skipping non-JSON SSE line: {data_str[:100]}")
+                    verbose_logger.debug("BedrockAgentCore A2A: Skipping non-JSON SSE line: %s", data_str[:100])
                     continue

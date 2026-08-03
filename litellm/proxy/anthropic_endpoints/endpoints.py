@@ -189,7 +189,7 @@ async def anthropic_response(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.anthropic_response(): Exception occured - {e}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.anthropic_response(): Exception occured - %s", e)
 
         # Extract model_id from request metadata (same as success path)
         litellm_metadata = data.get("litellm_metadata", {}) or {}
@@ -301,7 +301,7 @@ async def count_tokens(
             detail=detail,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {e}")
+        verbose_proxy_logger.exception("litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - %s", e)
         raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
 
 

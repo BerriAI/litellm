@@ -190,7 +190,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
                 # Log the exception for debugging but don't raise it
                 # The caller will fall back to default prompt factory
                 try:
-                    verbose_logger.debug(f"Failed to apply HuggingFace template for model {hf_model}: {e}")
+                    verbose_logger.debug("Failed to apply HuggingFace template for model %s: %s", hf_model, e)
                 except Exception:
                     # If logging fails, silently continue - don't break the flow
                     pass

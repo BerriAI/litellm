@@ -535,7 +535,7 @@ class ResponsesAPIRequestUtils:
                 response_id=decoded_response_id,
             )
         except Exception as e:
-            verbose_logger.debug(f"Error decoding response_id '{response_id}': {e}")
+            verbose_logger.debug("Error decoding response_id '%s': %s", response_id, e)
             return DecodedResponseId(
                 custom_llm_provider=None,
                 model_id=None,
@@ -648,7 +648,7 @@ class ResponsesAPIRequestUtils:
                 response_id=original_container_id,
             )
         except Exception as e:
-            verbose_logger.debug(f"Error decoding container_id '{container_id}': {e}")
+            verbose_logger.debug("Error decoding container_id '%s': %s", container_id, e)
             return DecodedResponseId(
                 custom_llm_provider=None,
                 model_id=None,

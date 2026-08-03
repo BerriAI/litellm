@@ -130,7 +130,7 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
             except json.JSONDecodeError:
                 # Handle or log any unparseable data at the end
-                verbose_logger.error(f"Warning: Unparseable JSON data remained: {accumulated_json}")
+                verbose_logger.error("Warning: Unparseable JSON data remained: %s", accumulated_json)
                 yield None
 
     async def aiter_bytes(
@@ -168,10 +168,10 @@ class AWSEventStreamDecoder:
                     # If it's not valid JSON yet, continue to the next event
                     continue
                 except UnicodeDecodeError as e:
-                    verbose_logger.warning(f"UnicodeDecodeError: {e}. Attempting to combine with next event.")
+                    verbose_logger.warning("UnicodeDecodeError: %s. Attempting to combine with next event.", e)
                     continue
                 except Exception as e:
-                    verbose_logger.error(f"Error parsing message: {e}. Attempting to combine with next event.")
+                    verbose_logger.error("Error parsing message: %s. Attempting to combine with next event.", e)
                     continue
 
         # Handle any remaining data after the iterator is exhausted
@@ -184,10 +184,10 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
             except json.JSONDecodeError:
                 # Handle or log any unparseable data at the end
-                verbose_logger.error(f"Warning: Unparseable JSON data remained: {accumulated_json}")
+                verbose_logger.error("Warning: Unparseable JSON data remained: %s", accumulated_json)
                 yield None
             except Exception as e:
-                verbose_logger.error(f"Final error parsing accumulated JSON: {e}")
+                verbose_logger.error("Final error parsing accumulated JSON: %s", e)
 
     def _parse_message_from_event(self, event) -> str | None:
         response_stream_shape = get_sagemaker_response_stream_shape()

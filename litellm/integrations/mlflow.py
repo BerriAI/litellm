@@ -99,7 +99,7 @@ class MlflowLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.debug(f"MLflow Logging Error - {e}", stack_info=True)
+            verbose_logger.debug("MLflow Logging Error - %s", e, stack_info=True)
 
     def _handle_stream_event(self, kwargs, response_obj, start_time, end_time):
         """

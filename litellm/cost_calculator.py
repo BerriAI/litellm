@@ -273,7 +273,7 @@ def _get_additional_costs(
                 completion_tokens=completion_tokens,
             )
     except Exception as e:
-        verbose_logger.debug(f"Error calculating additional costs: {e}")
+        verbose_logger.debug("Error calculating additional costs: %s", e)
 
     return None
 
@@ -715,7 +715,7 @@ def _get_provider_for_cost_calc(
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
     except Exception as e:
         verbose_logger.debug(
-            f"litellm.cost_calculator.py::_get_provider_for_cost_calc() - Error inferring custom_llm_provider - {e}"
+            "litellm.cost_calculator.py::_get_provider_for_cost_calc() - Error inferring custom_llm_provider - %s", e
         )
         return None
 
@@ -896,7 +896,7 @@ def _get_usage_object(
     elif isinstance(usage_obj, BaseModel):
         return Usage(**usage_obj.model_dump())
     else:
-        verbose_logger.debug(f"Unknown usage object type: {type(usage_obj)}, usage_obj: {usage_obj}")
+        verbose_logger.debug("Unknown usage object type: %s, usage_obj: %s", type(usage_obj), usage_obj)
         return None
 
 
@@ -994,16 +994,17 @@ def _apply_cost_margin(
     if custom_llm_provider and custom_llm_provider in litellm.cost_margin_config:
         margin_config = litellm.cost_margin_config[custom_llm_provider]
         if verbose_logger.isEnabledFor(logging.DEBUG):
-            verbose_logger.debug(f"Found provider-specific margin config for {custom_llm_provider}: {margin_config}")
+            verbose_logger.debug("Found provider-specific margin config for %s: %s", custom_llm_provider, margin_config)
     elif "global" in litellm.cost_margin_config:
         margin_config = litellm.cost_margin_config["global"]
         if verbose_logger.isEnabledFor(logging.DEBUG):
-            verbose_logger.debug(f"Using global margin config: {margin_config}")
+            verbose_logger.debug("Using global margin config: %s", margin_config)
     else:
         if verbose_logger.isEnabledFor(logging.DEBUG):
             verbose_logger.debug(
-                f"No margin config found. Provider: {custom_llm_provider}, "
-                f"Available configs: {list(litellm.cost_margin_config.keys())}"
+                "No margin config found. Provider: %s, Available configs: %s",
+                custom_llm_provider,
+                list(litellm.cost_margin_config.keys()),
             )
 
     if margin_config is not None:
@@ -1092,7 +1093,7 @@ def _store_cost_breakdown_in_logging_obj(
         )
 
     except Exception as breakdown_error:
-        verbose_logger.debug(f"Error storing cost breakdown: {breakdown_error}")
+        verbose_logger.debug("Error storing cost breakdown: %s", breakdown_error)
         # Don't fail the main cost calculation if breakdown storage fails
 
 
@@ -1219,7 +1220,7 @@ def completion_cost(
         for idx, model in enumerate(potential_model_names):
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
-                    verbose_logger.debug(f"selected model name for cost calculation: {model}")
+                    verbose_logger.debug("selected model name for cost calculation: %s", model)
 
                 if completion_response is not None and (
                     isinstance(completion_response, BaseModel) or isinstance(completion_response, dict)
@@ -1315,7 +1316,8 @@ def completion_cost(
                         )  # strip the llm provider from the model name -> for image gen cost calculation
                     except Exception as e:
                         verbose_logger.debug(
-                            f"litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {e}"
+                            "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - %s",
+                            e,
                         )
                 if CostCalculatorUtils._call_type_has_image_response(call_type) and isinstance(
                     completion_response, ImageResponse
@@ -1662,7 +1664,7 @@ def completion_cost(
                 return _final_cost
             except Exception as e:
                 verbose_logger.debug(
-                    f"litellm.cost_calculator.py::completion_cost() - Error calculating cost for model={model} - {e}"
+                    "litellm.cost_calculator.py::completion_cost() - Error calculating cost for model=%s - %s", model, e
                 )
                 if idx == len(potential_model_names) - 1:
                     raise e
@@ -1878,7 +1880,7 @@ def vector_store_search_cost(
     )
 
     if config is None:
-        verbose_logger.debug(f"Vector store search is not supported for {custom_llm_provider}")
+        verbose_logger.debug("Vector store search is not supported for %s", custom_llm_provider)
         return 0.0, 0.0
 
     return config.calculate_vector_store_cost(
@@ -1966,7 +1968,7 @@ def default_image_cost_calculator(
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
 
-    verbose_logger.debug(f"Looking up cost for models: {model_name_with_quality}, {base_model_name}")
+    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
 
     model_without_provider = f"{size_str}/{model.split('/')[-1]}"
     model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
@@ -2036,7 +2038,7 @@ def default_video_cost_calculator(
             model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
             base_model_name = f"{custom_llm_provider}/{model_name_without_custom_llm_provider}"
 
-        verbose_logger.debug(f"Looking up cost for video model: {base_model_name}")
+        verbose_logger.debug("Looking up cost for video model: %s", base_model_name)
 
         model_without_provider = model.split("/")[-1]
 
@@ -2072,7 +2074,8 @@ def default_video_cost_calculator(
 
     # If no cost information found, return 0
     verbose_logger.info(
-        f"No cost information found for video model {model}. Please add pricing to model_prices_and_context_window.json"
+        "No cost information found for video model %s. Please add pricing to model_prices_and_context_window.json",
+        model,
     )
     return 0.0
 

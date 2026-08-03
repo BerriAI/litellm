@@ -386,7 +386,8 @@ class CacheSettingsManager:
                 verbose_proxy_logger.info("Cache settings initialized from database")
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.management_endpoints.cache_settings_endpoints.py::CacheSettingsManager::init_cache_settings_in_db - {e}"
+                "litellm.proxy.management_endpoints.cache_settings_endpoints.py::CacheSettingsManager::init_cache_settings_in_db - %s",
+                e,
             )
 
     @staticmethod
@@ -480,7 +481,7 @@ async def get_cache_settings(
             redis_type_descriptions=REDIS_TYPE_DESCRIPTIONS,
         )
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching cache settings: {e}")
+        verbose_proxy_logger.error("Error fetching cache settings: %s", e)
         raise HTTPException(status_code=500, detail=f"Error fetching cache settings: {e}")
 
 
@@ -539,7 +540,7 @@ async def test_cache_connection(
         return CacheTestResponse(**result)
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error testing cache connection: {e}")
+        verbose_proxy_logger.error("Error testing cache connection: %s", e)
         return CacheTestResponse(
             status="failed",
             message=f"Cache connection test failed: {e}",
@@ -652,5 +653,5 @@ async def update_cache_settings(
             "settings": _redact_credentials(cache_settings),
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating cache settings: {e}")
+        verbose_proxy_logger.error("Error updating cache settings: %s", e)
         raise HTTPException(status_code=500, detail=f"Error updating cache settings: {e}")

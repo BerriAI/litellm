@@ -143,8 +143,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         if limit_reached:
             verbose_logger.warning(
-                f"AnthropicCacheControlHook: Reached the Anthropic limit of "
-                f"{MAX_CACHE_CONTROL_BLOCKS} cache_control blocks. Skipping further injection."
+                "AnthropicCacheControlHook: Reached the Anthropic limit of %s cache_control blocks. Skipping further injection.",
+                MAX_CACHE_CONTROL_BLOCKS,
             )
 
         return messages
@@ -174,8 +174,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 return [targetted_index]
 
             verbose_logger.warning(
-                f"AnthropicCacheControlHook: Provided index {original_index} is out of bounds for message list of length {len(messages)}. "
-                f"Targeted index was {targetted_index}. Skipping cache control injection for this point."
+                "AnthropicCacheControlHook: Provided index %s is out of bounds for message list of length %s. Targeted index was %s. Skipping cache control injection for this point.",
+                original_index,
+                len(messages),
+                targetted_index,
             )
             return []
 

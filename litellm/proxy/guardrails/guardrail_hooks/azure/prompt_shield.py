@@ -58,7 +58,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             **kwargs,
         )
 
-        verbose_proxy_logger.debug(f"Initialized Azure Prompt Shield Guardrail: {guardrail_name}")
+        verbose_proxy_logger.debug("Initialized Azure Prompt Shield Guardrail: %s", guardrail_name)
 
     async def async_make_request(self, user_prompt: str) -> "AzurePromptShieldGuardrailResponse":
         """
@@ -127,7 +127,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         user_prompt = self.get_user_prompt(new_messages)
 
         if user_prompt:
-            verbose_proxy_logger.debug(f"Azure Prompt Shield: User prompt: {user_prompt}")
+            verbose_proxy_logger.debug("Azure Prompt Shield: User prompt: %s", user_prompt)
             await self.async_make_request(
                 user_prompt=user_prompt,
             )

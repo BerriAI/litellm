@@ -229,7 +229,7 @@ class AzureAIAgentsConfig(BaseConfig):
         if "instructions" in optional_params:
             payload["instructions"] = optional_params["instructions"]
 
-        verbose_logger.debug(f"Azure AI Agents request payload: {payload}")
+        verbose_logger.debug("Azure AI Agents request payload: %s", payload)
         return payload
 
     def validate_environment(
