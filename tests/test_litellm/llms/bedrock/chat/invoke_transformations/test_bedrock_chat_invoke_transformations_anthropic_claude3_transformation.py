@@ -545,3 +545,68 @@ def test_output_format_removed_from_bedrock_invoke_request():
     assert (
         "output_format" not in result
     ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+
+
+class TestBedrockInvokeCacheControlSanitization:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/34248."""
+
+    def _transform(self, model: str) -> dict:
+        config = AmazonAnthropicClaudeConfig()
+        cache_control = {"type": "ephemeral", "ttl": "1h", "scope": "global"}
+        messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are helpful.", "cache_control": dict(cache_control)}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello", "cache_control": dict(cache_control)}],
+            },
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                "cache_control": dict(cache_control),
+            }
+        ]
+        return config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params={"max_tokens": 100, "tools": tools},
+            litellm_params={},
+            headers={},
+        )
+
+    def _cache_control_blocks(self, request: dict) -> list:
+        return [
+            request["system"][0]["cache_control"],
+            request["messages"][0]["content"][0]["cache_control"],
+            request["tools"][0]["cache_control"],
+        ]
+
+    def test_ttl_stripped_for_non_extended_ttl_model(self):
+        """Bedrock rejects ttl for models without extended-TTL caching, so it is stripped while type is kept."""
+        request = self._transform("us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+        for cache_control in self._cache_control_blocks(request):
+            assert cache_control == {"type": "ephemeral"}
+
+    def test_ttl_preserved_for_extended_ttl_model(self):
+        """Claude 4.5+ on Bedrock supports the extended 1h TTL, so ttl survives the transform."""
+        request = self._transform("anthropic.claude-sonnet-4-5-20250929-v1:0")
+        for cache_control in self._cache_control_blocks(request):
+            assert cache_control == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_scope_stripped_for_both_model_classes(self):
+        """Bedrock never accepts scope in cache_control, regardless of model."""
+        for model in (
+            "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        ):
+            request = self._transform(model)
+            for cache_control in self._cache_control_blocks(request):
+                assert "scope" not in cache_control

@@ -40,6 +40,7 @@ from litellm.llms.bedrock.common_utils import (
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
     remove_custom_field_from_tools,
+    remove_ttl_from_cache_control,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -136,59 +137,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
 
     def _remove_ttl_from_cache_control(self, anthropic_messages_request: dict, model: str | None = None) -> None:
-        """
-        Remove unsupported fields from cache_control for Bedrock.
-
-        Bedrock only supports `type` and `ttl` in cache_control. It does NOT support:
-        - `scope` (e.g., "global") - always removed
-        - `ttl` - removed for older models; Claude 4.5+ supports "5m" and "1h"
-
-        Processes `tools`, `system`, and `messages` content blocks.
-
-        Args:
-            anthropic_messages_request: The request dictionary to modify in-place
-            model: The model name to check if it supports ttl
-        """
-        is_claude_4_5 = False
-        if model:
-            is_claude_4_5 = self._is_claude_4_5_on_bedrock(model)
-
-        def _sanitize_cache_control(cache_control: dict) -> None:
-            if not isinstance(cache_control, dict):
-                return
-            # Bedrock doesn't support scope (e.g., "global" for cross-request caching)
-            cache_control.pop("scope", None)
-            # Remove ttl for models that don't support it
-            if "ttl" in cache_control:
-                ttl = cache_control["ttl"]
-                if is_claude_4_5 and ttl in ["5m", "1h"]:
-                    return
-                cache_control.pop("ttl", None)
-
-        def _process_content_list(content: list) -> None:
-            for item in content:
-                if isinstance(item, dict) and "cache_control" in item:
-                    _sanitize_cache_control(item["cache_control"])
-
-        # Process tools
-        if "tools" in anthropic_messages_request:
-            for tool in anthropic_messages_request["tools"]:
-                if isinstance(tool, dict) and "cache_control" in tool:
-                    _sanitize_cache_control(tool["cache_control"])
-
-        # Process system (list of content blocks)
-        if "system" in anthropic_messages_request:
-            system = anthropic_messages_request["system"]
-            if isinstance(system, list):
-                _process_content_list(system)
-
-        # Process messages
-        if "messages" in anthropic_messages_request:
-            for message in anthropic_messages_request["messages"]:
-                if isinstance(message, dict) and "content" in message:
-                    content = message["content"]
-                    if isinstance(content, list):
-                        _process_content_list(content)
+        """Delegates to the shared helper, also used by the chat completions invoke path."""
+        remove_ttl_from_cache_control(anthropic_request=anthropic_messages_request, model=model)
 
     def _supports_extended_thinking_on_bedrock(self, model: str) -> bool:
         """

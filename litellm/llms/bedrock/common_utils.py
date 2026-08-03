@@ -704,6 +704,58 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     )
 
 
+def remove_ttl_from_cache_control(
+    anthropic_request: dict,  # mutable-ok: sanitizes the built request body in place
+    model: str | None = None,
+) -> None:
+    """
+    Remove cache_control fields Bedrock rejects with ``"Extra inputs are not
+    permitted"``: `scope` always, and `ttl` on models without extended-TTL caching.
+
+    Ref: https://github.com/BerriAI/litellm/issues/34248
+    """
+    is_claude_4_5 = False
+    if model:
+        is_claude_4_5 = is_claude_4_5_on_bedrock(model)
+
+    def _sanitize_cache_control(cache_control: dict) -> None:
+        if not isinstance(cache_control, dict):
+            return
+        # Bedrock doesn't support scope (e.g., "global" for cross-request caching)
+        cache_control.pop("scope", None)
+        # Remove ttl for models that don't support it
+        if "ttl" in cache_control:
+            ttl = cache_control["ttl"]
+            if is_claude_4_5 and ttl in ["5m", "1h"]:
+                return
+            cache_control.pop("ttl", None)
+
+    def _process_content_list(content: list) -> None:
+        for item in content:
+            if isinstance(item, dict) and "cache_control" in item:
+                _sanitize_cache_control(item["cache_control"])
+
+    # Process tools
+    if "tools" in anthropic_request:
+        for tool in anthropic_request["tools"]:
+            if isinstance(tool, dict) and "cache_control" in tool:
+                _sanitize_cache_control(tool["cache_control"])
+
+    # Process system (list of content blocks)
+    if "system" in anthropic_request:
+        system = anthropic_request["system"]
+        if isinstance(system, list):
+            _process_content_list(system)
+
+    # Process messages
+    if "messages" in anthropic_request:
+        for message in anthropic_request["messages"]:
+            if isinstance(message, dict) and "content" in message:
+                content = message["content"]
+                if isinstance(content, list):
+                    _process_content_list(content)
+
+
 _BEDROCK_MODEL_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
 
 
