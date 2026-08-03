@@ -52,23 +52,23 @@ class TestModelsForGroup:
 
 
 class TestMostExpensive:
-    def test_picks_by_output_rate(self):
-        assert (
-            _most_expensive([Baseline("anthropic/claude-haiku-4-5"), Baseline("anthropic/claude-opus-4-5")]).model
-            == "anthropic/claude-opus-4-5"
-        )
+    """Ranking runs through the router, because what a deployment costs is the
+    router's answer to give: it merges configured prices over the built-in map."""
 
-    def test_ignores_models_with_no_per_token_price(self):
+    def test_picks_by_output_rate(self, parent):
+        picked = _most_expensive(parent, [Baseline("anthropic/claude-haiku-4-5"), Baseline("anthropic/claude-opus-4-5")])
+        assert picked.model == "anthropic/claude-opus-4-5"
+
+    def test_ignores_models_with_no_per_token_price(self, parent):
         """A free model as baseline would report the whole real spend as a loss."""
-        assert _most_expensive(
-            [Baseline("not-a-real-model-anywhere"), Baseline("anthropic/claude-haiku-4-5")]
-        ).model == "anthropic/claude-haiku-4-5"
+        picked = _most_expensive(parent, [Baseline("not-a-real-model-anywhere"), Baseline("anthropic/claude-haiku-4-5")])
+        assert picked.model == "anthropic/claude-haiku-4-5"
 
-    def test_returns_none_when_nothing_can_be_priced(self):
-        assert _most_expensive([Baseline("not-a-real-model-anywhere")]) is None
+    def test_returns_none_when_nothing_can_be_priced(self, parent):
+        assert _most_expensive(parent, [Baseline("not-a-real-model-anywhere")]) is None
 
-    def test_returns_none_for_an_empty_candidate_set(self):
-        assert _most_expensive([]) is None
+    def test_returns_none_for_an_empty_candidate_set(self, parent):
+        assert _most_expensive(parent, []) is None
 
 
 class TestResolveBaseline:
