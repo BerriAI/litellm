@@ -9,23 +9,23 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 import asyncio
 import json
 import os
-from litellm._uuid import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.datadog.datadog_mock_client import (
-    should_use_datadog_mock,
-    create_mock_datadog_client,
-)
 from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_base_url_from_env,
     get_datadog_service,
     get_datadog_tags,
-    get_datadog_base_url_from_env,
+)
+from litellm.integrations.datadog.datadog_mock_client import (
+    create_mock_datadog_client,
+    should_use_datadog_mock,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -80,7 +80,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
-            self.log_queue: List[LLMObsPayload] = []
+            self.log_queue: list[LLMObsPayload] = []
 
             #########################################################
             # Handle datadog_llm_observability_params set as litellm.datadog_llm_observability_params
@@ -89,7 +89,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             kwargs.update(dict_datadog_llm_obs_params)
             CustomBatchLogger.__init__(self, **kwargs, flush_lock=self.flush_lock)
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
+            verbose_logger.exception(f"DataDogLLMObs: Error initializing - {e!s}")
             raise e
 
     def _configure_dd_agent(self, dd_agent_host: str):
@@ -118,17 +118,17 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         self.intake_url = f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
 
-    def _get_datadog_llm_obs_params(self) -> Dict:
+    def _get_datadog_llm_obs_params(self) -> dict:
         """
         Get the datadog_llm_observability_params from litellm.datadog_llm_observability_params
 
         These are params specific to initializing the DataDogLLMObsLogger e.g. turn_off_message_logging
         """
-        dict_datadog_llm_obs_params: Dict = {}
+        dict_datadog_llm_obs_params: dict = {}
         if litellm.datadog_llm_observability_params is not None:
             if isinstance(litellm.datadog_llm_observability_params, DatadogLLMObsInitParams):
                 dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump()
-            elif isinstance(litellm.datadog_llm_observability_params, Dict):
+            elif isinstance(litellm.datadog_llm_observability_params, dict):
                 # only allow params that are of DatadogLLMObsInitParams
                 dict_datadog_llm_obs_params = DatadogLLMObsInitParams(
                     **litellm.datadog_llm_observability_params
@@ -145,7 +145,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 await self.async_send_batch()
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error logging success event - {str(e)}")
+            verbose_logger.exception(f"DataDogLLMObs: Error logging success event - {e!s}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -157,7 +157,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 await self.async_send_batch()
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error logging failure event - {str(e)}")
+            verbose_logger.exception(f"DataDogLLMObs: Error logging failure event - {e!s}")
 
     async def async_send_batch(self):
         try:
@@ -214,10 +214,10 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         except httpx.HTTPStatusError as e:
             verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {e.response.text}")
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {str(e)}")
+            verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {e!s}")
 
-    def create_llm_obs_payload(self, kwargs: Dict, start_time: datetime, end_time: datetime) -> LLMObsPayload:
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+    def create_llm_obs_payload(self, kwargs: dict, start_time: datetime, end_time: datetime) -> LLMObsPayload:
+        standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
         if standard_logging_payload is None:
             raise Exception("DataDogLLMObs: standard_logging_object is not set")
 
@@ -236,7 +236,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         error_info = self._assemble_error_info(standard_logging_payload)
 
-        metadata_parent_id: Optional[str] = None
+        metadata_parent_id: str | None = None
         if isinstance(metadata, dict):
             metadata_parent_id = metadata.get("parent_id")
 
@@ -276,7 +276,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         return payload
 
-    def _get_apm_trace_id(self) -> Optional[str]:
+    def _get_apm_trace_id(self) -> str | None:
         """Retrieve the current APM trace ID if available."""
         try:
             current_span_fn = getattr(tracer, "current_span", None)
@@ -290,16 +290,16 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             pass
         return None
 
-    def _assemble_error_info(self, standard_logging_payload: StandardLoggingPayload) -> Optional[DDLLMObsError]:
+    def _assemble_error_info(self, standard_logging_payload: StandardLoggingPayload) -> DDLLMObsError | None:
         """
         Assemble error information for failure cases according to DD LLM Obs API spec
         """
         # Handle error information for failure cases according to DD LLM Obs API spec
-        error_info: Optional[DDLLMObsError] = None
+        error_info: DDLLMObsError | None = None
 
         if standard_logging_payload.get("status") == "failure":
             # Try to get structured error information first
-            error_information: Optional[StandardLoggingPayloadErrorInformation] = standard_logging_payload.get(
+            error_information: StandardLoggingPayloadErrorInformation | None = standard_logging_payload.get(
                 "error_information"
             )
 
@@ -321,9 +321,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         For non streaming calls, CompletionStartTime is time we get the response back
         """
-        start_time: Optional[float] = standard_logging_payload.get("startTime")
-        completion_start_time: Optional[float] = standard_logging_payload.get("completionStartTime")
-        end_time: Optional[float] = standard_logging_payload.get("endTime")
+        start_time: float | None = standard_logging_payload.get("startTime")
+        completion_start_time: float | None = standard_logging_payload.get("completionStartTime")
+        end_time: float | None = standard_logging_payload.get("endTime")
 
         if completion_start_time is not None and start_time is not None:
             return completion_start_time - start_time
@@ -333,8 +333,8 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             return 0.0
 
     def _get_response_messages(
-        self, standard_logging_payload: StandardLoggingPayload, call_type: Optional[str]
-    ) -> List[Any]:
+        self, standard_logging_payload: StandardLoggingPayload, call_type: str | None
+    ) -> list[Any]:
         """
         Get the messages from the response object
 
@@ -382,7 +382,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         return []
 
     def _get_datadog_span_kind(
-        self, call_type: Optional[str], parent_id: Optional[str] = None
+        self, call_type: str | None, parent_id: str | None = None
     ) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
         """
         Map liteLLM call_type to appropriate DataDog LLM Observability span kind.
@@ -484,7 +484,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         # Default fallback for unknown or passthrough operations
         return "llm"
 
-    def _ensure_string_content(self, messages: Optional[Union[str, List[Any], Dict[Any, Any]]]) -> List[Any]:
+    def _ensure_string_content(self, messages: str | list[Any] | dict[Any, Any] | None) -> list[Any]:
         if messages is None:
             return []
         if isinstance(messages, str):
@@ -495,11 +495,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             return [str(messages.get("content", ""))]
         return []
 
-    def _get_dd_llm_obs_payload_metadata(self, standard_logging_payload: StandardLoggingPayload) -> Dict[str, Any]:
+    def _get_dd_llm_obs_payload_metadata(self, standard_logging_payload: StandardLoggingPayload) -> dict[str, Any]:
         """
         Fields to track in DD LLM Observability metadata from litellm standard logging payload
         """
-        _metadata: Dict[str, Any] = {
+        _metadata: dict[str, Any] = {
             "model_name": standard_logging_payload.get("model", "unknown"),
             "model_provider": standard_logging_payload.get("custom_llm_provider", "unknown"),
             "id": standard_logging_payload.get("id", "unknown"),
@@ -549,13 +549,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
 
         # Guardrail overhead latency
-        guardrail_info: Optional[list[StandardLoggingGuardrailInformation]] = standard_logging_payload.get(
+        guardrail_info: list[StandardLoggingGuardrailInformation] | None = standard_logging_payload.get(
             "guardrail_information"
         )
         if guardrail_info is not None:
             total_duration = 0.0
             for info in guardrail_info:
-                _guardrail_duration_seconds: Optional[float] = info.get("duration")
+                _guardrail_duration_seconds: float | None = info.get("duration")
                 if _guardrail_duration_seconds is not None:
                     total_duration += float(_guardrail_duration_seconds)
 
@@ -647,7 +647,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         return spend_metrics
 
-    def _process_input_messages_preserving_tool_calls(self, messages: List[Any]) -> List[Dict[str, Any]]:
+    def _process_input_messages_preserving_tool_calls(self, messages: list[Any]) -> list[dict[str, Any]]:
         """
         Process input messages while preserving tool_calls and tool message types.
 
@@ -671,13 +671,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         return processed
 
     @staticmethod
-    def _tool_calls_kv_pair(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _tool_calls_kv_pair(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Extract tool call information into key-value pairs for Datadog metadata.
 
         Similar to OpenTelemetry's implementation but adapted for Datadog's format.
         """
-        kv_pairs: Dict[str, Any] = {}
+        kv_pairs: dict[str, Any] = {}
         for idx, tool_call in enumerate(tool_calls):
             try:
                 # Extract tool call ID
@@ -707,16 +707,16 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
                             kv_pairs[f"tool_calls.{idx}.function.arguments"] = json.dumps(function_arguments)
             except (KeyError, TypeError, ValueError) as e:
-                verbose_logger.debug(f"DataDogLLMObs: Error processing tool call {idx}: {str(e)}")
+                verbose_logger.debug(f"DataDogLLMObs: Error processing tool call {idx}: {e!s}")
                 continue
 
         return kv_pairs
 
-    def _extract_tool_call_metadata(self, standard_logging_payload: StandardLoggingPayload) -> Dict[str, Any]:
+    def _extract_tool_call_metadata(self, standard_logging_payload: StandardLoggingPayload) -> dict[str, Any]:
         """
         Extract tool call information from both input messages and response for Datadog metadata.
         """
-        tool_call_metadata: Dict[str, Any] = {}
+        tool_call_metadata: dict[str, Any] = {}
 
         try:
             # Extract tool calls from input messages
@@ -747,6 +747,6 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                                     tool_call_metadata[f"output_{key}"] = value
 
         except Exception as e:
-            verbose_logger.debug(f"DataDogLLMObs: Error extracting tool call metadata: {str(e)}")
+            verbose_logger.debug(f"DataDogLLMObs: Error extracting tool call metadata: {e!s}")
 
         return tool_call_metadata

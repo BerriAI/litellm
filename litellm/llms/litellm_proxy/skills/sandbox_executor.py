@@ -7,7 +7,7 @@ Supports Docker, Podman, and Kubernetes backends.
 
 import base64
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_logger
 
@@ -27,7 +27,7 @@ class SkillsSandboxExecutor:
         self,
         timeout: int = 60,
         backend: str = "docker",
-        image: Optional[str] = None,
+        image: str | None = None,
     ):
         """
         Initialize the sandbox executor.
@@ -45,9 +45,9 @@ class SkillsSandboxExecutor:
     def execute(
         self,
         code: str,
-        skill_files: Dict[str, bytes],
-        requirements: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        skill_files: dict[str, bytes],
+        requirements: str | None = None,
+    ) -> dict[str, Any]:
         """
         Execute code with skill files in sandbox.
 
@@ -77,7 +77,7 @@ class SkillsSandboxExecutor:
 
         try:
             # Create sandbox session
-            session_kwargs: Dict[str, Any] = {
+            session_kwargs: dict[str, Any] = {
                 "lang": "python",
                 "verbose": False,
             }
@@ -112,7 +112,7 @@ class SkillsSandboxExecutor:
                 # requirements file inside the sandbox so standard syntax like
                 # `-r`, `-e`, VCS URLs, and inline `#egg=` fragments continue to
                 # work.
-                requirements_filename: Optional[str] = None
+                requirements_filename: str | None = None
                 if requirements:
                     with tempfile.NamedTemporaryFile(
                         mode="w",
@@ -198,8 +198,8 @@ sys.path.insert(0, '/sandbox')
     def _collect_generated_files(
         self,
         session: Any,
-        original_files: Dict[str, bytes],
-    ) -> List[Dict[str, Any]]:
+        original_files: dict[str, bytes],
+    ) -> list[dict[str, Any]]:
         """
         Collect files generated during execution.
 
@@ -213,7 +213,7 @@ sys.path.insert(0, '/sandbox')
         Returns:
             List of generated files with base64 content
         """
-        generated_files: List[Dict[str, Any]] = []
+        generated_files: list[dict[str, Any]] = []
 
         try:
             import tempfile

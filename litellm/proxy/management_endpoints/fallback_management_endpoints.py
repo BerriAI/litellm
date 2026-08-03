@@ -11,7 +11,7 @@ DELETE /fallback/{model} - Delete fallbacks for a specific model
 # pyright: reportMissingImports=false
 
 import json
-from typing import TYPE_CHECKING, Dict, List, Literal
+from typing import TYPE_CHECKING, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -134,7 +134,7 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(fallback_key, [])
+        existing_fallbacks: list[dict[str, list[str]]] = router_settings.get(fallback_key, [])
 
         # Update or add the fallback configuration
         fallback_updated = False
@@ -182,10 +182,10 @@ async def create_fallback(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error creating fallback: {str(e)}", exc_info=True)
+        verbose_proxy_logger.error(f"Error creating fallback: {e!s}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to create fallback: {str(e)}"},
+            detail={"error": f"Failed to create fallback: {e!s}"},
         )
 
 
@@ -239,10 +239,10 @@ async def get_fallback(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting fallback: {str(e)}", exc_info=True)
+        verbose_proxy_logger.error(f"Error getting fallback: {e!s}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to get fallback: {str(e)}"},
+            detail={"error": f"Failed to get fallback: {e!s}"},
         )
 
 
@@ -303,7 +303,7 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(fallback_key, [])
+        existing_fallbacks: list[dict[str, list[str]]] = router_settings.get(fallback_key, [])
 
         # Find and remove the fallback configuration
         fallback_found = False
@@ -350,8 +350,8 @@ async def delete_fallback(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error deleting fallback: {str(e)}", exc_info=True)
+        verbose_proxy_logger.error(f"Error deleting fallback: {e!s}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to delete fallback: {str(e)}"},
+            detail={"error": f"Failed to delete fallback: {e!s}"},
         )

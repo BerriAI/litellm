@@ -20,7 +20,10 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         generator (`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass /
         NamedTuple / ReadOnly TypedDict. Generator expressions and `tuple`/`frozenset`
         calls are not construction and pass. Annotation-internal lists (`Callable[[int],
-        str]`) are exempt. Suppress with `# mutable-ok: <reason>`.
+        str]`) are exempt, as is a value passed directly to a freezing wrapper
+        (`tuple(...)`, `frozenset(...)`, `MappingProxyType(...)`): it is frozen before
+        it can escape, though anything mutable nested inside it still counts.
+        Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
@@ -90,6 +93,7 @@ MUTABLE_CONSTRUCTORS = frozenset((
 # are common methods (e.g. pydantic's `model.dict()`), not collection construction. A
 # qualified `collections.deque(...)` still counts.
 QUALIFIED_CONSTRUCTORS = MUTABLE_CONSTRUCTORS - frozenset(("dict", "list", "set"))
+FREEZING_WRAPPERS = frozenset(("tuple", "frozenset", "MappingProxyType"))
 UNSAFE_GUARDS = frozenset(("TypeGuard", "TypeIs"))
 MIN_REASON_LEN = 3
  
@@ -382,6 +386,34 @@ def _annotation_node_ids(tree: ast.AST) -> frozenset[int]:
     )
 
 
+def _is_freezing_wrapper(func: ast.expr) -> bool:
+    if isinstance(func, ast.Name):
+        return func.id in FREEZING_WRAPPERS
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "MappingProxyType"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "types"
+    )
+
+
+def _frozen_argument_ids(tree: ast.AST) -> frozenset[int]:
+    """ids() of every expression passed directly to a freezing wrapper.
+
+    `MappingProxyType({...})`, `frozenset({...})`, and `tuple([...])` freeze their
+    argument before it can escape, so the literal inside is a one-shot build, not a
+    mutable value anyone can grow later. Only the argument itself is exempt; a
+    mutable collection nested inside it still trips LIT002. Only bare names (plus
+    `types.MappingProxyType`) qualify, so an unrelated method that happens to share
+    a wrapper's name cannot exempt its argument.
+    """
+    return frozenset(
+        id(node.args[0])
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and len(node.args) == 1 and _is_freezing_wrapper(node.func)
+    )
+
+
 def _construction_kind(node: ast.expr) -> str | None:
     """Human label if `node` builds a mutable collection, else None."""
     if isinstance(node, ast.List):
@@ -407,8 +439,9 @@ def _construction_kind(node: ast.expr) -> str | None:
 
 def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
     in_annotation = _annotation_node_ids(tree)
+    frozen_arguments = _frozen_argument_ids(tree)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.expr) or id(node) in in_annotation:
+        if not isinstance(node, ast.expr) or id(node) in in_annotation or id(node) in frozen_arguments:
             continue
         kind = _construction_kind(node)
         if kind is None or node.lineno in comments.mutable_ok_lines:

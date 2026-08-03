@@ -1,15 +1,15 @@
 import hashlib
-from typing import Any, Dict, Optional
+from typing import Any
 
 
-def get_session_id_from_a2a_params(params: Dict[str, Any]) -> Optional[str]:
+def get_session_id_from_a2a_params(params: dict[str, Any]) -> str | None:
     message = params.get("message", {})
     if isinstance(message, dict):
         return message.get("contextId")
     return getattr(message, "contextId", None)
 
 
-def scope_session_to_principal(session_id: str, principal: Optional[str]) -> str:
+def scope_session_to_principal(session_id: str, principal: str | None) -> str:
     """
     Bind a client-supplied A2A contextId to the authenticated principal.
 
@@ -26,10 +26,10 @@ def scope_session_to_principal(session_id: str, principal: Optional[str]) -> str
 
 
 def merge_a2a_session_into_litellm_params(
-    litellm_params: Dict[str, Any],
-    params: Dict[str, Any],
-    principal: Optional[str] = None,
-) -> Dict[str, Any]:
+    litellm_params: dict[str, Any],
+    params: dict[str, Any],
+    principal: str | None = None,
+) -> dict[str, Any]:
     merged = dict(litellm_params)
     session_id = get_session_id_from_a2a_params(params)
     if session_id and "session_id" not in merged:

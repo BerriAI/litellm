@@ -14,9 +14,8 @@ router = APIRouter()
 @router.get("/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)  # if mounted at root path
 async def get_ui_config():
     from litellm.proxy.auth.auth_utils import _has_user_setup_sso
-    from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
-
     from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
 
     auto_redirect_ui_login_to_sso = (
         os.getenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", "false").lower() == "true"

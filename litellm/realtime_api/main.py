@@ -1,7 +1,7 @@
 """Abstraction function for OpenAI's realtime API"""
 
 import os
-from typing import Any, Dict, Optional, cast
+from typing import Any, cast
 
 import litellm
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES, request_timeout
@@ -57,8 +57,8 @@ def _build_litellm_metadata(kwargs: dict) -> dict:
 
 def _get_realtime_http_provider_config(
     custom_llm_provider: str,
-    dynamic_api_base: Optional[str],
-    dynamic_api_key: Optional[str],
+    dynamic_api_base: str | None,
+    dynamic_api_key: str | None,
     litellm_params: GenericLiteLLMParams,
 ) -> tuple[Any, str, str]:
     """
@@ -72,7 +72,7 @@ def _get_realtime_http_provider_config(
         BaseRealtimeHTTPConfig,
     )
 
-    provider_config: Optional[BaseRealtimeHTTPConfig] = None
+    provider_config: BaseRealtimeHTTPConfig | None = None
     if custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_http_config(
             model="",
@@ -97,10 +97,10 @@ def _get_realtime_http_provider_config(
 
 @wrapper_client
 async def acreate_realtime_client_secret(
-    model: Optional[str] = None,
-    session: Optional[Dict[str, Any]] = None,
-    expires_after: Optional[Dict[str, Any]] = None,
-    timeout: Optional[float] = None,
+    model: str | None = None,
+    session: dict[str, Any] | None = None,
+    expires_after: dict[str, Any] | None = None,
+    timeout: float | None = None,
     **kwargs,
 ):
     req = RealtimeClientSecretRequest(
@@ -158,9 +158,9 @@ async def acreate_realtime_client_secret(
 
 @wrapper_client
 async def acreate_realtime_transcription_session(
-    model: Optional[str] = None,
-    transcription_session: Optional[Dict[str, Any]] = None,
-    timeout: Optional[float] = None,
+    model: str | None = None,
+    transcription_session: dict[str, Any] | None = None,
+    timeout: float | None = None,
     **kwargs,
 ):
     """
@@ -232,9 +232,9 @@ async def acreate_realtime_transcription_session(
 async def arealtime_calls(
     openai_ephemeral_key: str,
     sdp_body: bytes,
-    model: Optional[str] = None,
-    session: Optional[Dict[str, Any]] = None,
-    timeout: Optional[float] = None,
+    model: str | None = None,
+    session: dict[str, Any] | None = None,
+    timeout: float | None = None,
     **kwargs,
 ):
     model_name = model or "gpt-4o-realtime-preview"
@@ -285,13 +285,13 @@ async def arealtime_calls(
 async def _arealtime(
     model: str,
     websocket: Any,  # fastapi websocket
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_version: Optional[str] = None,
-    azure_ad_token: Optional[str] = None,
-    client: Optional[Any] = None,
-    timeout: Optional[float] = None,
-    query_params: Optional[RealtimeQueryParams] = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    api_version: str | None = None,
+    azure_ad_token: str | None = None,
+    client: Any | None = None,
+    timeout: float | None = None,
+    query_params: RealtimeQueryParams | None = None,
     **kwargs,
 ):
     """
@@ -299,8 +299,8 @@ async def _arealtime(
 
     For PROXY use only.
     """
-    headers = cast(Optional[dict], kwargs.get("headers"))
-    extra_headers = cast(Optional[dict], kwargs.get("extra_headers"))
+    headers = cast(dict | None, kwargs.get("headers"))
+    extra_headers = cast(dict | None, kwargs.get("extra_headers"))
     if headers is None:
         headers = {}
     if extra_headers is not None:
@@ -334,7 +334,7 @@ async def _arealtime(
         custom_llm_provider=_custom_llm_provider,
     )
 
-    provider_config: Optional[BaseRealtimeConfig] = None
+    provider_config: BaseRealtimeConfig | None = None
     if _custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_config(
             model=model,
@@ -511,11 +511,11 @@ async def _arealtime(
 async def _realtime_health_check(
     model: str,
     custom_llm_provider: str,
-    api_key: Optional[str],
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    realtime_protocol: Optional[str] = None,
-    model_params: Optional[dict] = None,
+    api_key: str | None,
+    api_base: str | None = None,
+    api_version: str | None = None,
+    realtime_protocol: str | None = None,
+    model_params: dict | None = None,
 ):
     """
     Health check for realtime API - tries connection to the realtime API websocket
@@ -535,7 +535,7 @@ async def _realtime_health_check(
     """
     import websockets
 
-    url: Optional[str] = None
+    url: str | None = None
     if custom_llm_provider == "azure":
         url = azure_realtime._construct_url(
             api_base=api_base or "",

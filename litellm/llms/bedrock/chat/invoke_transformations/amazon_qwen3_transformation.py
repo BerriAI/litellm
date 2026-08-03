@@ -6,7 +6,7 @@ Inherits from `AmazonInvokeConfig`
 Qwen3 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
-from typing import Any, List, Optional
+from typing import Any
 
 import httpx
 
@@ -26,19 +26,19 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
     Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
     """
 
-    max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    stop: Optional[List[str]] = None
+    max_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    stop: list[str] | None = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        stop: Optional[List[str]] = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        stop: list[str] | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -46,7 +46,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
                 setattr(self.__class__, key, value)
         AmazonInvokeConfig.__init__(self)
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "temperature",
@@ -81,7 +81,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -111,7 +111,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
 
         return request_body
 
-    def _convert_messages_to_prompt(self, messages: List[AllMessageValues]) -> str:
+    def _convert_messages_to_prompt(self, messages: list[AllMessageValues]) -> str:
         """
         Convert OpenAI messages format to Qwen3 prompt format
         Supports tool calls, multimodal content, and various message types
@@ -164,12 +164,12 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform Qwen3 Bedrock response to OpenAI format
@@ -181,10 +181,8 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
             generated_text = response_data.get("generation", "")
 
             # Clean up the response (remove assistant start token if present)
-            if generated_text.startswith("<|im_start|>assistant\n"):
-                generated_text = generated_text[len("<|im_start|>assistant\n") :]
-            if generated_text.endswith("<|im_end|>"):
-                generated_text = generated_text[: -len("<|im_end|>")]
+            generated_text = generated_text.removeprefix("<|im_start|>assistant\n")
+            generated_text = generated_text.removesuffix("<|im_end|>")
 
             # Set the content in the existing model_response structure
             if hasattr(model_response, "choices") and len(model_response.choices) > 0:

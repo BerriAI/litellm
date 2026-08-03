@@ -1029,6 +1029,9 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     working_server.server_name = "working_server"
     working_server.auth_type = None
     working_server.extra_headers = None
+    working_server.short_prefix = None
+    working_server.tool_name_to_display_name = None
+    working_server.tool_name_to_description = None
 
     failing_server = MagicMock()
     failing_server.name = "failing_server"
@@ -1039,6 +1042,9 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     failing_server.server_name = "failing_server"
     failing_server.auth_type = None
     failing_server.extra_headers = None
+    failing_server.short_prefix = None
+    failing_server.tool_name_to_display_name = None
+    failing_server.tool_name_to_description = None
 
     # Mock global_mcp_server_manager
     mock_manager = MagicMock()
@@ -4507,28 +4513,37 @@ def test_tool_name_matches_case_insensitive():
     except ImportError:
         pytest.skip("MCP server not available")
 
+    server = MCPServer(
+        server_id="srv-per-store",
+        name="per_store",
+        server_name="per_store",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        spec_path="/specs/petstore.yaml",
+    )
+
     # Test case 1: Unprefixed tool name with camelCase in filter list
-    assert _tool_name_matches("addpet", ["addPet", "updatePet"]) is True
-    assert _tool_name_matches("updatepet", ["addPet", "updatePet"]) is True
-    assert _tool_name_matches("deletepet", ["addPet", "updatePet"]) is False
+    assert _tool_name_matches("addpet", ["addPet", "updatePet"], server) is True
+    assert _tool_name_matches("updatepet", ["addPet", "updatePet"], server) is True
+    assert _tool_name_matches("deletepet", ["addPet", "updatePet"], server) is False
 
     # Test case 2: Prefixed tool name with camelCase in filter list
-    assert _tool_name_matches("per_store-addpet", ["addPet", "updatePet"]) is True
-    assert _tool_name_matches("per_store-updatepet", ["addPet", "updatePet"]) is True
-    assert _tool_name_matches("per_store-deletepet", ["addPet", "updatePet"]) is False
+    assert _tool_name_matches("per_store-addpet", ["addPet", "updatePet"], server) is True
+    assert _tool_name_matches("per_store-updatepet", ["addPet", "updatePet"], server) is True
+    assert _tool_name_matches("per_store-deletepet", ["addPet", "updatePet"], server) is False
 
     # Test case 3: Mixed case variations
-    assert _tool_name_matches("findPetsByStatus", ["findpetsbystatus"]) is True
-    assert _tool_name_matches("findpetsbystatus", ["findPetsByStatus"]) is True
-    assert _tool_name_matches("FINDPETSBYSTATUS", ["findPetsByStatus"]) is True
+    assert _tool_name_matches("findPetsByStatus", ["findpetsbystatus"], server) is True
+    assert _tool_name_matches("findpetsbystatus", ["findPetsByStatus"], server) is True
+    assert _tool_name_matches("FINDPETSBYSTATUS", ["findPetsByStatus"], server) is True
 
     # Test case 4: Full prefixed name in filter list (case-insensitive)
-    assert _tool_name_matches("server-addPet", ["server-addpet"]) is True
-    assert _tool_name_matches("server-addpet", ["server-addPet"]) is True
+    assert _tool_name_matches("server-addPet", ["server-addpet"], server) is True
+    assert _tool_name_matches("server-addpet", ["server-addPet"], server) is True
 
     # Test case 5: Ensure non-matching names still don't match
-    assert _tool_name_matches("addpet", ["deletePet", "updatePet"]) is False
-    assert _tool_name_matches("server-addpet", ["deletePet", "updatePet"]) is False
+    assert _tool_name_matches("addpet", ["deletePet", "updatePet"], server) is False
+    assert _tool_name_matches("server-addpet", ["deletePet", "updatePet"], server) is False
 
 
 def test_filter_tools_by_allowed_tools_case_insensitive():
@@ -4581,7 +4596,9 @@ def test_filter_tools_by_allowed_tools_case_insensitive():
     server = MCPServer(
         server_id="test-server",
         name="per_store",
+        server_name="per_store",
         transport=MCPTransport.http,
+        spec_path="/specs/petstore.yaml",
         allowed_tools=["addPet", "updatePet", "findPetsByStatus"],
     )
 
@@ -6122,6 +6139,70 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
 
 
 @pytest.mark.asyncio
+async def test_execute_mcp_tool_strips_a_prefix_that_contains_the_separator():
+    """A server with no alias publishes its UUID server_id as the tool prefix.
+
+    Splitting that wire name at the first separator leaves a truncated UUID tail
+    glued to the tool name, which then travels to the upstream server as the tool
+    to call, into the spend log, and into the server-level allowed_tools check.
+    """
+    from mcp.types import TextContent
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    server_id = "117c814c-1a2b-4c4d-8e8f-0a1b2c3d4e5f"
+    alias_less_server = MCPServer(
+        server_id=server_id,
+        name=server_id,
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="abc123",
+    )
+
+    captured: dict = {}
+
+    async def fake_handle_managed_mcp_tool(**kwargs):
+        captured.update(kwargs)
+        return mcp_module.CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            isError=False,
+        )
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=alias_less_server,
+        ),
+        patch.object(
+            mcp_module,
+            "_handle_managed_mcp_tool",
+            new=fake_handle_managed_mcp_tool,
+        ),
+        patch.object(
+            mcp_module.MCPRequestHandler,
+            "is_tool_allowed",
+            return_value=True,
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=None,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name=f"{server_id}-read_wiki_contents",
+            arguments={"repoName": "acme/wiki"},
+            allowed_mcp_servers=[alias_less_server],
+            start_time=datetime.now(),
+        )
+
+    assert captured["server_name"] == server_id
+    assert captured["name"] == "read_wiki_contents"
+
+
+@pytest.mark.asyncio
 async def test_execute_mcp_tool_rest_server_id_injects_requested_server_credentials():
     """REST server_id must inject the requested server's auth, not a URL-collision peer's."""
     from mcp.types import TextContent
@@ -6426,6 +6507,8 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
     fake_server.mcp_info = None
     fake_server.server_id = "srv-1"
     fake_server.server_name = "openapi-petstore"
+    fake_server.alias = None
+    fake_server.short_prefix = None
 
     fake_tool = MagicMock()
     fake_tool.name = "list_pets"
@@ -6481,7 +6564,13 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requested_server():
-    """A prefixed REST name that resolves to no tool must still dispatch to the server_id."""
+    """A prefixed REST name that resolves to no tool must still dispatch to the server_id.
+
+    The prefix here belongs to a different server, so it is not a prefix boundary on the
+    routed server and the name travels upstream whole. Stripping it would invoke the routed
+    server's similarly named tool instead, which is what the tool_server_mismatch 403 exists
+    to prevent when the prefix does resolve.
+    """
     from mcp.types import TextContent
 
     from litellm.proxy._experimental.mcp_server import server as mcp_module
@@ -6553,7 +6642,7 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
         )
 
     assert captured["server_name"] == "rest_target"
-    assert captured["name"] == "list_things"
+    assert captured["name"] == "known_prefix-list_things"
 
     routed_server = {
         requested_server.name: requested_server,
@@ -7587,22 +7676,28 @@ async def test_aggregate_listing_reports_per_server_outcomes():
     working_server = MagicMock()
     working_server.name = "working_server"
     working_server.alias = "working"
+    working_server.short_prefix = None
     working_server.allowed_tools = None
     working_server.disallowed_tools = None
     working_server.server_id = "working_server"
     working_server.server_name = "working_server"
     working_server.auth_type = None
     working_server.extra_headers = None
+    working_server.tool_name_to_display_name = None
+    working_server.tool_name_to_description = None
 
     broken_server = MagicMock()
     broken_server.name = "broken_server"
     broken_server.alias = "broken"
+    broken_server.short_prefix = None
     broken_server.allowed_tools = None
     broken_server.disallowed_tools = None
     broken_server.server_id = "broken_server"
     broken_server.server_name = "broken_server"
     broken_server.auth_type = None
     broken_server.extra_headers = None
+    broken_server.tool_name_to_display_name = None
+    broken_server.tool_name_to_description = None
 
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["working_server", "broken_server"])
@@ -7924,3 +8019,209 @@ async def test_post_mcp_call_guardrails_propagate_a_block():
                 user_api_key_auth=None,
                 request_data={},
             )
+
+
+class TestListFiltersHonorThePrefixBoundary:
+    """The listing filters compare a published (prefixed) tool name against
+    configured entries, so they have to locate the boundary with the server's
+    registered prefixes. An alias-less server publishes its UUID server_id as
+    the prefix, and that prefix contains the separator, so cutting at the first
+    separator drops every tool on the server from the listing.
+    """
+
+    SERVER_ID = "117c814c-1a2b-4c4d-8e8f-0a1b2c3d4e5f"
+
+    @staticmethod
+    def _alias_less_server(**overrides):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServer
+
+        return MCPServer(
+            server_id=TestListFiltersHonorThePrefixBoundary.SERVER_ID,
+            name=TestListFiltersHonorThePrefixBoundary.SERVER_ID,
+            url="http://127.0.0.1:5115/mcp",
+            transport=MCPTransport.http,
+            **overrides,
+        )
+
+    def _published_tools(self, *bare_names: str):
+        from mcp.types import Tool as MCPTool
+
+        return [
+            MCPTool(name=f"{self.SERVER_ID}-{bare}", description=bare, inputSchema={"type": "object"})
+            for bare in bare_names
+        ]
+
+    def test_bare_allowlist_entry_keeps_the_published_tool(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_allowed_tools,
+        )
+
+        server = self._alias_less_server(allowed_tools=["read_wiki_contents"])
+        tools = self._published_tools("read_wiki_contents", "read_wiki_structure")
+
+        kept = filter_tools_by_allowed_tools(tools, server)
+
+        assert [tool.name for tool in kept] == [f"{self.SERVER_ID}-read_wiki_contents"]
+
+    def test_bare_blocklist_entry_excludes_the_published_tool(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_allowed_tools,
+        )
+
+        server = self._alias_less_server(disallowed_tools=["read_wiki_structure"])
+        tools = self._published_tools("read_wiki_contents", "read_wiki_structure")
+
+        kept = filter_tools_by_allowed_tools(tools, server)
+
+        assert [tool.name for tool in kept] == [f"{self.SERVER_ID}-read_wiki_contents"]
+
+    def test_unrelated_entry_does_not_match(self):
+        from litellm.proxy._experimental.mcp_server.server import _tool_name_matches
+
+        server = self._alias_less_server()
+
+        assert not _tool_name_matches(f"{self.SERVER_ID}-read_wiki_contents", ["read_wiki_structure"], server)
+
+    def test_case_folding_applies_to_openapi_servers_and_not_to_native_ones(self):
+        # Registration rewrites operationIds through sanitize_openapi_tool_name, so
+        # folding recovers a spec-spelled entry on an OpenAPI server. A native server
+        # gets none of it: routing dispatches two names differing only in case as two
+        # tools, so one policy must not decide both.
+        from litellm.proxy._experimental.mcp_server.server import _tool_name_matches
+
+        native = self._alias_less_server()
+        openapi = self._alias_less_server(spec_path="/specs/petstore.yaml")
+
+        assert _tool_name_matches(f"{self.SERVER_ID}-findPetsByStatus", ["findpetsbystatus"], openapi)
+        assert not _tool_name_matches(f"{self.SERVER_ID}-findPetsByStatus", ["findpetsbystatus"], native)
+        assert _tool_name_matches(f"{self.SERVER_ID}-findpetsbystatus", ["findpetsbystatus"], native)
+
+    def test_alias_form_entry_matches_a_tool_published_under_the_short_prefix(self, monkeypatch):
+        # Routing accepts the alias form, so an entry stored before short
+        # prefixes were turned on still governs the tool. Matching only the
+        # published spelling left it advertised while dispatch refused it.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServer
+        from litellm.proxy._experimental.mcp_server.server import _tool_name_matches
+
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+        server = MCPServer(
+            server_id=self.SERVER_ID,
+            name="deepwiki_cfg",
+            alias="deepwiki_cfg",
+            short_prefix="eiG",
+            url="http://127.0.0.1:5115/mcp",
+            transport=MCPTransport.http,
+        )
+
+        assert _tool_name_matches("eiG-read_wiki_contents", ["deepwiki_cfg-read_wiki_contents"], server)
+
+    def test_discovery_hides_exactly_what_dispatch_refuses(self, monkeypatch):
+        """Both halves of one decision, driven through both production paths.
+
+        A spelling the blocklist enforces but the filter misses leaves a blocked
+        tool advertised; the reverse hides a tool that would have been callable.
+        Every spelling routing registers bans, and its upper-cased form bans nothing,
+        because a tool's identity is its exact name; asserting the verdict and not only
+        the agreement is what keeps this from passing on a matcher that answers wrongly
+        but consistently.
+        """
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServer,
+            MCPServerManager,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_allowed_tools,
+        )
+
+        monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
+
+        def _server(**overrides):
+            return MCPServer(
+                server_id=self.SERVER_ID,
+                name="deepwiki_prod",
+                alias="deepwiki",
+                server_name="deepwiki_prod",
+                short_prefix="eiG",
+                url="http://127.0.0.1:5115/mcp",
+                transport=MCPTransport.http,
+                **overrides,
+            )
+
+        manager = MCPServerManager()
+        manager._create_prefixed_tools(
+            [MCPTool(name="read_wiki_contents", description="", inputSchema={"type": "object"})],
+            _server(),
+        )
+        registered = sorted(manager.tool_name_to_mcp_server_name_mapping)
+        assert len(registered) > 1
+
+        published = MCPTool(name="eiG-read_wiki_contents", description="", inputSchema={"type": "object"})
+        for spelling in registered:
+            for entry, expected in ((spelling, True), (spelling.upper(), False)):
+                server = _server(disallowed_tools=[entry])
+
+                refused = not manager.check_allowed_or_banned_tools("read_wiki_contents", server)
+                hidden = filter_tools_by_allowed_tools([published], server) == []
+
+                assert refused == hidden, entry
+                assert refused is expected, entry
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "grants,expected",
+        [
+            (None, True),
+            ([], False),
+            (["read_wiki_contents"], True),
+            (["read_wiki_structure"], False),
+            ([f"{SERVER_ID}-read_wiki_contents"], False),
+            (["READ_WIKI_CONTENTS"], False),
+        ],
+    )
+    async def test_key_team_listing_and_dispatch_agree(self, grants, expected):
+        """The key/team grant question, driven through both production paths.
+
+        Listing and dispatch read one predicate, so a row where the tool is advertised
+        and then refused (or hidden while callable) cannot exist. Asserting the expected
+        verdict as well as the agreement matters: both paths reading one predicate makes
+        equality alone tautological, so a wrong predicate would keep them consistent.
+        Grants are stored bare, so the wire-form and case-variant rows deny; that is
+        deliberately unlike the server-level lists, which honor every spelling.
+        """
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_key_team_permissions,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        server = MCPServer(
+            server_id=self.SERVER_ID,
+            name=self.SERVER_ID,
+            url="http://127.0.0.1:5115/mcp",
+            transport=MCPTransport.http,
+        )
+        published = MCPTool(
+            name=f"{self.SERVER_ID}-read_wiki_contents", description="", inputSchema={"type": "object"}
+        )
+        auth = UserAPIKeyAuth(api_key="sk-test")
+
+        with patch.object(
+            MCPRequestHandler, "get_allowed_tools_for_server", AsyncMock(return_value=grants)
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        ) as mock_manager:
+            mock_manager.get_mcp_server_by_id.return_value = server
+
+            listed = await filter_tools_by_key_team_permissions([published], self.SERVER_ID, auth) != []
+            callable_ = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="read_wiki_contents", server_id=self.SERVER_ID, user_api_key_auth=auth
+            )
+
+        assert listed == callable_, f"grants={grants!r} listed={listed} callable={callable_}"
+        assert listed is expected, f"grants={grants!r} expected={expected} got={listed}"

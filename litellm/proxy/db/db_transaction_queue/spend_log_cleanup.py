@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -31,11 +30,11 @@ class SpendLogCleanup:
     def __init__(
         self,
         general_settings=None,
-        redis_cache: Optional[RedisCache] = None,
-        partition_manager: Optional[SpendLogsPartitionManager] = None,
+        redis_cache: RedisCache | None = None,
+        partition_manager: SpendLogsPartitionManager | None = None,
     ):
         self.batch_size = SPEND_LOG_CLEANUP_BATCH_SIZE
-        self.retention_seconds: Optional[int] = None
+        self.retention_seconds: int | None = None
         self.partition_manager = partition_manager or SpendLogsPartitionManager()
         from litellm.proxy.proxy_server import general_settings as default_settings
 
@@ -69,7 +68,7 @@ class SpendLogCleanup:
             return True
         except ValueError as e:
             verbose_proxy_logger.warning(
-                f"Invalid maximum_spend_logs_retention_period value: {retention_setting}, error: {str(e)}"
+                f"Invalid maximum_spend_logs_retention_period value: {retention_setting}, error: {e!s}"
             )
             return False
 

@@ -403,6 +403,41 @@ describe("RequestLogsPanel", () => {
         expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
       });
     });
+
+    it("clicking a multi-call session's row writes ?session_id= alongside ?log_id=", async () => {
+      const user = userEvent.setup();
+      respondWith([
+        logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-llm-2", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+      ]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => expect(row("req-llm")).not.toBeNull());
+      await user.click(row("req-llm") as HTMLElement);
+
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get("session_id")).toBe("sess-1");
+      expect(params.get("log_id")).toBe("req-llm");
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-session-id", "sess-1"));
+    });
+
+    it("selecting another log while a session view is open keeps the session open", async () => {
+      const user = userEvent.setup();
+      window.history.replaceState(null, "", "/logs/?log_id=req-llm");
+      respondWith([
+        logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-unenriched" }),
+      ]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-session-id", "sess-1"));
+
+      await user.click(screen.getByRole("button", { name: "select-next-log" }));
+
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-unenriched"));
+      expect(new URLSearchParams(window.location.search).get("session_id")).toBe("sess-1");
+      expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
+    });
   });
 
   describe("live tail", () => {

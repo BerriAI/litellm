@@ -18,7 +18,7 @@ import hashlib
 import html as _html_module
 import time
 import uuid
-from typing import Dict, Optional, cast
+from typing import cast
 from urllib.parse import urlencode
 
 import jwt
@@ -40,7 +40,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 # In-memory store for pending authorization codes.
 # Each entry: {code: {api_key, server_id, code_challenge, redirect_uri, user_id, expires_at}}
 # ---------------------------------------------------------------------------
-_byok_auth_codes: Dict[str, dict] = {}
+_byok_auth_codes: dict[str, dict] = {}
 
 # Authorization codes expire after 5 minutes.
 _AUTH_CODE_TTL_SECONDS = 300
@@ -82,7 +82,7 @@ def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": code}, headers=TOKEN_NO_CACHE_HEADERS)
 
 
-def _user_id_from_session_cookie(request: Request) -> Optional[str]:
+def _user_id_from_session_cookie(request: Request) -> str | None:
     """Return user_id from the UI ``token`` cookie (HS256-signed with
     ``master_key``), or None if missing/invalid.
 
@@ -632,13 +632,13 @@ async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
 @router.get("/v1/mcp/oauth/authorize", include_in_schema=False)
 async def byok_authorize_get(
     request: Request,
-    client_id: Optional[str] = None,
-    redirect_uri: Optional[str] = None,
-    response_type: Optional[str] = None,
-    code_challenge: Optional[str] = None,
-    code_challenge_method: Optional[str] = None,
-    state: Optional[str] = None,
-    server_id: Optional[str] = None,
+    client_id: str | None = None,
+    redirect_uri: str | None = None,
+    response_type: str | None = None,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+    state: str | None = None,
+    server_id: str | None = None,
 ) -> HTMLResponse:
     """
     Show the BYOK API-key entry form.
