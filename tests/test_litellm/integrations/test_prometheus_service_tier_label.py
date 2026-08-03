@@ -13,9 +13,9 @@ import datetime
 
 import pytest
 
-from litellm.integrations.prometheus import (
+from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.service_tier_utils import (
     KNOWN_REQUEST_SERVICE_TIERS,
-    PrometheusLogger,
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.types.integrations.prometheus import (
