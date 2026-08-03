@@ -126,8 +126,8 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
 )
 from litellm.router_utils.fallback_event_handlers import (
-    _FallbackContinuationState,
     _check_non_standard_fallback_format,
+    _FallbackContinuationState,
     get_fallback_model_group,
     run_async_fallback,
 )
