@@ -135,7 +135,7 @@ class BaseOpenAILLM:
         return _cached_client
 
     @staticmethod
-    def owns_wrapped_http_client(http_client: Optional[Union[httpx.Client, httpx.AsyncClient]]) -> bool:
+    def owns_wrapped_http_client(http_client: httpx.Client | httpx.AsyncClient | None) -> bool:
         """Whether litellm may close an SDK client built around ``http_client``.
 
         ``_get_async_http_client`` / ``_get_sync_http_client`` hand back
