@@ -57,7 +57,9 @@ def normalize_json_schema_types(
                 # to mark a field nullable (e.g. ["STRING", "NULL"]). Without this
                 # branch those entries fall through to the generic list recursion,
                 # which leaves the bare strings uppercase.
-                normalized_schema[key] = [type_mapping.get(entry, entry) for entry in value]
+                normalized_schema[key] = [  # mutable-ok: a JSON Schema type array must round-trip as a JSON list
+                    type_mapping.get(entry, entry) for entry in value
+                ]
             elif key == "properties" and isinstance(value, dict):
                 # Recursively normalize properties
                 normalized_schema[key] = {
