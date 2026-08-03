@@ -236,6 +236,46 @@ class TestNomaV2Configuration:
         assert "logging_obj" not in payload
         assert request_data["litellm_logging_obj"] == "<Logging object>"
 
+    def test_build_scan_payload_snapshots_live_model_call_details(
+        self, noma_v2_guardrail
+    ):
+        """Regression test: model_call_details is mutated by logging handlers on other
+        threads, so serializing it by reference raises RuntimeError('dictionary changed
+        size during iteration')."""
+
+        class _MutatingOnSerialize:
+            def __init__(self, target: dict) -> None:
+                self._target = target
+
+            def model_dump(self) -> dict:
+                self._target[f"late_key_{len(self._target)}"] = "written_by_logging"
+                return {"serialized": True}
+
+        model_call_details: dict = {
+            "model": "gpt-4.1-mini",
+            "call_type": "acompletion",
+        }
+        model_call_details["standard_callback_dynamic_params"] = _MutatingOnSerialize(
+            model_call_details
+        )
+
+        class _LoggingObj:
+            def __init__(self) -> None:
+                self.model_call_details = model_call_details
+
+        payload = noma_v2_guardrail._build_scan_payload(
+            inputs={"texts": ["hello"]},
+            request_data={"messages": [{"role": "user", "content": "hello"}]},
+            input_type="request",
+            logging_obj=_LoggingObj(),
+            application_id="test-app",
+        )
+
+        sent = payload["request_data"]["litellm_logging_obj"]
+        assert sent["model"] == "gpt-4.1-mini"
+        assert sent["standard_callback_dynamic_params"] == {"serialized": True}
+        assert not any(key.startswith("late_key_") for key in sent)
+
     @pytest.mark.asyncio
     async def test_call_noma_scan_sanitizes_response_model_dump_object(
         self, noma_v2_guardrail
