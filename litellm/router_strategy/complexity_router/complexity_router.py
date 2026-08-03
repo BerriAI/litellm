@@ -245,6 +245,13 @@ def _conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None)
     session id and their failure modes, and it works for callers that send no session
     header at all. A few-shot prompt's synthetic assistant turns read as prior
     conversation, which charges the write and under-claims; that is the safe side.
+
+    So is an unreadable request. No messages says nothing about whether a turn was
+    served, and a surface that carries its turns somewhere this cannot see, or a
+    genuinely single-turn call arriving with none, is treated as continuing: it pays the
+    cache write and under-claims rather than being handed a first turn's larger saving
+    on no evidence. That direction is deliberate in both cases and is the only one that
+    cannot inflate.
     """
     if not messages:
         return True
@@ -1400,7 +1407,6 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
-        conversation_continuing: bool = True,
     ) -> PreRoutingHookResponse | None:
         """
         Pre-routing hook called before the routing decision.
