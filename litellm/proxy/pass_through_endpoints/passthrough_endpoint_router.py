@@ -49,12 +49,14 @@ class PassthroughEndpointRouter:
             custom_llm_provider=custom_llm_provider,
             region_name=region_name,
         )
-        verbose_router_logger.debug(f"Pass-through llm endpoints router, looking for credentials for {credential_name}")
+        verbose_router_logger.debug(
+            "Pass-through llm endpoints router, looking for credentials for %s", credential_name
+        )
         if credential_name in self.credentials:
-            verbose_router_logger.debug(f"Found credentials for {credential_name}")
+            verbose_router_logger.debug("Found credentials for %s", credential_name)
             return self.credentials[credential_name]
         else:
-            verbose_router_logger.debug(f"No credentials found for {credential_name}, looking for env variable")
+            verbose_router_logger.debug("No credentials found for %s, looking for env variable", credential_name)
             _env_variable_name = self._get_default_env_variable_name_passthrough_endpoint(
                 custom_llm_provider=custom_llm_provider,
             )

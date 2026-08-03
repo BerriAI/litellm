@@ -439,7 +439,7 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
                         error_code = int(error_code_raw)
                     except ValueError:
                         verbose_proxy_logger.warning(
-                            f"Error code is a string but not a valid integer: {error_code_raw}"
+                            "Error code is a string but not a valid integer: %s", error_code_raw
                         )
                         # Not a valid integer string, treat as if no valid code was found for this check
 
@@ -447,7 +447,7 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
                 elif error_code_raw is not None:  # Log if original code was present but not valid
-                    verbose_proxy_logger.warning(f"Error has invalid or non-convertible code: {error_code_raw}")
+                    verbose_proxy_logger.warning("Error has invalid or non-convertible code: %s", error_code_raw)
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
@@ -644,7 +644,8 @@ async def create_response(
                     # Should return standard JSON error response instead of SSE format
                     final_status_code = error_code_from_chunk
                     verbose_proxy_logger.debug(
-                        f"Error detected in first stream chunk. Returning JSON error response with status code: {final_status_code}"
+                        "Error detected in first stream chunk. Returning JSON error response with status code: %s",
+                        final_status_code,
                     )
 
                     # Parse error content
@@ -663,7 +664,7 @@ async def create_response(
                         headers=headers,
                     )
             except Exception as e:
-                verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
+                verbose_proxy_logger.debug("Error parsing first chunk value: %s", e)
 
     except _ClientDisconnectedBeforeFirstChunk:
         # Client vanished during the time-to-first-token wait; the upstream
@@ -694,7 +695,7 @@ async def create_response(
         )
     except Exception as e:
         # Unexpected error consuming first chunk.
-        verbose_proxy_logger.exception(f"Error consuming first chunk from generator: {e}")
+        verbose_proxy_logger.exception("Error consuming first chunk from generator: %s", e)
 
         # Preserve status code from HTTPException (e.g., guardrail blocks)
         error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -943,7 +944,7 @@ def _log_llm_api_exception(e: Exception) -> None:
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
         )
         return
-    verbose_proxy_logger.exception(f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {e}")
+    verbose_proxy_logger.exception("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", e)
 
 
 async def _cancel_llm_call_on_client_disconnect(
@@ -1083,7 +1084,7 @@ class ProxyBaseLLMRequestProcessing:
         try:
             return {key: str(value) for key, value in headers.items() if value not in exclude_values}
         except Exception as e:
-            verbose_proxy_logger.error(f"Error setting custom headers: {e}")
+            verbose_proxy_logger.error("Error setting custom headers: %s", e)
             return {}
 
     @staticmethod
@@ -2945,7 +2946,7 @@ class ProxyBaseLLMRequestProcessing:
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.async_data_generator(): Exception occured - {e}"
+                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
             )
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -2955,7 +2956,8 @@ class ProxyBaseLLMRequestProcessing:
             if transformed_exception is not None:
                 e = transformed_exception
             verbose_proxy_logger.debug(
-                f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
+                "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+                e,
             )
 
             if isinstance(e, HTTPException):

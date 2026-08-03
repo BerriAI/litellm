@@ -2688,7 +2688,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         )
                 except json.JSONDecodeError:
                     verbose_logger.debug(
-                        f"litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - {_raw_response}"
+                        "litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - %s",
+                        _raw_response,
                     )
 
                     self.safe_set_attribute(

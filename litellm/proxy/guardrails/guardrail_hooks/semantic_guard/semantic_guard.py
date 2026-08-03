@@ -89,8 +89,11 @@ class SemanticGuardrail(CustomGuardrail):
 
         self.route_count = len(routes)
         verbose_logger.info(
-            f"SemanticGuardrail '{guardrail_name}' initialized with {self.route_count} routes, "
-            f"embedding_model={embedding_model}, threshold={similarity_threshold}"
+            "SemanticGuardrail '%s' initialized with %s routes, embedding_model=%s, threshold=%s",
+            guardrail_name,
+            self.route_count,
+            embedding_model,
+            similarity_threshold,
         )
 
     @classmethod
@@ -219,7 +222,7 @@ def _handle_match(
     }
 
     verbose_logger.warning(
-        f"SemanticGuard match: route={route_name}, score={similarity_score}, action={guardrail.on_flagged_action}"
+        "SemanticGuard match: route=%s, score=%s, action=%s", route_name, similarity_score, guardrail.on_flagged_action
     )
 
     if guardrail.on_flagged_action == "passthrough":

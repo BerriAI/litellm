@@ -689,7 +689,10 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
             )
         except Exception as e:
             verbose_proxy_logger.info(
-                f"Error updating team {team_id} with team member budget {max_budget_in_team} with error: {e}, skipping.."
+                "Error updating team %s with team member budget %s with error: %s, skipping..",
+                team_id,
+                max_budget_in_team,
+                e,
             )
             continue
 
@@ -1209,7 +1212,7 @@ async def update_mcp_semantic_filter_settings(
         if prisma_client is not None:
             await proxy_config._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
     except Exception as e:
-        verbose_proxy_logger.warning(f"Failed to reinitialize MCP semantic filter settings immediately: {e}")
+        verbose_proxy_logger.warning("Failed to reinitialize MCP semantic filter settings immediately: %s", e)
 
     return result
 

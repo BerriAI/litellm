@@ -65,7 +65,7 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
     )
 
     oauth2_config_mappings: dict[str, str] = general_settings.get("oauth2_config_mappings") or {}
-    verbose_proxy_logger.debug(f"Oauth2 config mappings: {oauth2_config_mappings}")
+    verbose_proxy_logger.debug("Oauth2 config mappings: %s", oauth2_config_mappings)
 
     if not oauth2_config_mappings:
         raise ValueError("Oauth2 config mappings not found in general_settings")

@@ -456,7 +456,7 @@ class ComplexityRouter(CustomLogger):
         self._model_tiers: dict[str, tuple[ComplexityTier, ...]] = {}
         self._adaptive_init_attempted = False
 
-        verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
+        verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -746,7 +746,7 @@ class ComplexityRouter(CustomLogger):
             )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the heuristic scorer
             verbose_router_logger.warning(
-                f"ComplexityRouter: LLM classifier failed ({e}), falling back to heuristic scoring"
+                "ComplexityRouter: LLM classifier failed (%s), falling back to heuristic scoring", e
             )
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
@@ -1324,7 +1324,7 @@ class ComplexityRouter(CustomLogger):
             semantic_tier = await self._semantic_tier_override(user_message, request_kwargs)
         except Exception as e:  # noqa: BLE001 -- embedding call can fail many ways (timeout, provider/network/parse error); any failure must fall back to scoring, never fail the request
             verbose_router_logger.warning(
-                f"ComplexityRouter: semantic keyword matching failed ({e}), falling back to complexity scoring"
+                "ComplexityRouter: semantic keyword matching failed (%s), falling back to complexity scoring", e
             )
             return None
         if semantic_tier is None:
@@ -1468,7 +1468,7 @@ class ComplexityRouter(CustomLogger):
                     escalated = routed_model != pinned_model
                     cause: RoutingDecisionCause = "session_affinity_escalation" if escalated else "session_affinity_pin"
                     verbose_router_logger.info(
-                        f"ComplexityRouter: routing decision cause={cause}, routed_model={routed_model}"
+                        "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model
                     )
                     has_original_messages = messages is not None and len(messages) > 0
                     return PreRoutingHookResponse(
@@ -1578,8 +1578,11 @@ class ComplexityRouter(CustomLogger):
                 "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
             )
             verbose_router_logger.info(
-                f"ComplexityRouter: routing decision cause={keyword_cause}, escalated={keyword_escalated}, "
-                f"tier={routed_tier.value}, routed_model={routed_model}"
+                "ComplexityRouter: routing decision cause=%s, escalated=%s, tier=%s, routed_model=%s",
+                keyword_cause,
+                keyword_escalated,
+                routed_tier.value,
+                routed_model,
             )
             return PreRoutingHookResponse(
                 model=routed_model,
@@ -1613,15 +1616,22 @@ class ComplexityRouter(CustomLogger):
                     chosen_key = getattr(self, "_adaptive_chosen_model_key", "adaptive_router_chosen_model")
                     kwargs_metadata[chosen_key] = routed_model
             verbose_router_logger.info(
-                f"ComplexityRouter[adaptive]: routing decision cause={outcome.cause}, "
-                f"tier={tier.value}, score={score_repr}, "
-                f"signals={signals}, routed_model={routed_model}"
+                "ComplexityRouter[adaptive]: routing decision cause=%s, tier=%s, score=%s, signals=%s, routed_model=%s",
+                outcome.cause,
+                tier.value,
+                score_repr,
+                signals,
+                routed_model,
             )
         else:
             routed_model = await self._pick_model_for_tier(tier, messages, resolved_messages, request_kwargs)
             verbose_router_logger.info(
-                f"ComplexityRouter: routing decision cause={outcome.cause}, tier={tier.value}, "
-                f"score={score_repr}, signals={signals}, routed_model={routed_model}"
+                "ComplexityRouter: routing decision cause=%s, tier=%s, score=%s, signals=%s, routed_model=%s",
+                outcome.cause,
+                tier.value,
+                score_repr,
+                signals,
+                routed_model,
             )
 
         classifier_model = (

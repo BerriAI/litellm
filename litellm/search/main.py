@@ -247,7 +247,7 @@ def search(
         if search_provider_config is None:
             raise ValueError(f"Search is not supported for provider: {search_provider}")
 
-        verbose_logger.debug(f"Search call - provider: {search_provider}")
+        verbose_logger.debug("Search call - provider: %s", search_provider)
 
         # Build optional_params from explicit parameters
         optional_params = _build_search_optional_params(
@@ -265,7 +265,7 @@ def search(
             if key not in optional_params:
                 optional_params[key] = value
 
-        verbose_logger.debug(f"Search optional_params: {optional_params}")
+        verbose_logger.debug("Search optional_params: %s", optional_params)
 
         # Validate environment and get headers
         headers = search_provider_config.validate_environment(

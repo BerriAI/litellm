@@ -110,8 +110,9 @@ def create_config_class(provider: SimpleProviderConfig):
                     if param in supported_params:
                         supported_params.remove(param)
                 verbose_logger.debug(
-                    f"Model {model} on provider {provider.slug} does not support "
-                    f"function calling — removed tool-related params from supported params."
+                    "Model %s on provider %s does not support function calling — removed tool-related params from supported params.",
+                    model,
+                    provider.slug,
                 )
 
             _supports_reasoning = supports_reasoning(model=model, custom_llm_provider=provider.slug)

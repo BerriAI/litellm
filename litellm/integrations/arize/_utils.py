@@ -461,7 +461,7 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: type[BaseLLMO
         _set_response_attributes(span=span, response_obj=response_obj_for_attrs)
 
     except Exception as e:
-        verbose_logger.error(f"[Arize/Phoenix] Failed to set OpenInference span attributes: {e}")
+        verbose_logger.error("[Arize/Phoenix] Failed to set OpenInference span attributes: %s", e)
         if hasattr(span, "record_exception"):
             span.record_exception(e)
 

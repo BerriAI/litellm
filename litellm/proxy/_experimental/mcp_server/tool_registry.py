@@ -40,7 +40,7 @@ class MCPToolRegistry:
             input_schema=input_schema,
             handler=handler,
         )
-        verbose_logger.debug(f"Registered tool: {name}")
+        verbose_logger.debug("Registered tool: %s", name)
 
     def get_tool(self, name: str) -> MCPTool | None:
         """
@@ -122,7 +122,7 @@ class MCPToolRegistry:
             handler = get_instance_fn(handler_name, config_file_path)
 
             if handler is None:
-                verbose_logger.warning(f"Warning: Could not find handler {handler_name} for tool {name}")
+                verbose_logger.warning("Warning: Could not find handler %s for tool %s", handler_name, name)
                 continue
 
             # Register the tool

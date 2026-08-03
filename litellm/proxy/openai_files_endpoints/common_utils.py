@@ -983,10 +983,10 @@ async def ensure_batch_response_managed_file_ids(
                 user_api_key_dict=user_api_key_dict,
             )
             setattr(response, file_attr, new_unified_file_id)
-            verbose_proxy_logger.debug(f"Converted batch {file_attr} {raw_file_id!r} to managed ID before DB write")
+            verbose_proxy_logger.debug("Converted batch %s %r to managed ID before DB write", file_attr, raw_file_id)
         except Exception as e:
             verbose_proxy_logger.warning(
-                f"Failed to convert batch {file_attr}={raw_file_id!r} to managed ID before DB write: {e}"
+                "Failed to convert batch %s=%r to managed ID before DB write: %s", file_attr, raw_file_id, e
             )
 
 
@@ -1042,12 +1042,16 @@ async def get_batch_from_database(
         # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
         await resolve_input_file_id_to_unified(response, prisma_client)
 
-        verbose_proxy_logger.debug(f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}")
+        verbose_proxy_logger.debug(
+            "Retrieved batch %s from ManagedObjectTable with status=%s", batch_id, response.status
+        )
 
         return db_batch_object, response
 
     except Exception as e:
-        verbose_proxy_logger.warning(f"Failed to retrieve batch from ManagedObjectTable: {e}, falling back to provider")
+        verbose_proxy_logger.warning(
+            "Failed to retrieve batch from ManagedObjectTable: %s, falling back to provider", e
+        )
         return None, None
 
 
@@ -1103,10 +1107,10 @@ async def update_batch_in_database(
 
         if db_batch_object:
             verbose_proxy_logger.info(
-                f"Updating batch {batch_id} status from {db_batch_object.status} to {response.status}"
+                "Updating batch %s status from %s to %s", batch_id, db_batch_object.status, response.status
             )
         else:
-            verbose_proxy_logger.info(f"Updating batch {batch_id} status to {response.status} after {operation}")
+            verbose_proxy_logger.info("Updating batch %s status to %s after %s", batch_id, response.status, operation)
 
         # Normalize status for database storage
         db_status = response.status if response.status != "completed" else "complete"
@@ -1138,7 +1142,9 @@ async def update_batch_in_database(
             # retry without it so the status update still succeeds.
             err_str = str(col_err).lower()
             if "batch_processed" in err_str and update_data.get("batch_processed") is not None:
-                verbose_proxy_logger.warning(f"batch_processed column not found, retrying update without it: {col_err}")
+                verbose_proxy_logger.warning(
+                    "batch_processed column not found, retrying update without it: %s", col_err
+                )
                 update_data.pop("batch_processed", None)
                 await ManagedObjectRepository(prisma_client).table.update(
                     where={"unified_object_id": batch_id},
@@ -1147,4 +1153,4 @@ async def update_batch_in_database(
             else:
                 raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Failed to update batch status in ManagedObjectTable: {e}")
+        verbose_proxy_logger.error("Failed to update batch status in ManagedObjectTable: %s", e)

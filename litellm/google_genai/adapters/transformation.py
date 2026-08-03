@@ -104,9 +104,10 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                         except json.JSONDecodeError:
                             # This can happen if the stream is abruptly cut off mid-argument string.
                             verbose_logger.warning(
-                                f"Could not parse tool call arguments at end of stream for index {tool_call_index}. "
-                                f"Name: {tool_call_data['name']}. "
-                                f"Partial args: {tool_call_data['arguments']}"
+                                "Could not parse tool call arguments at end of stream for index %s. Name: %s. Partial args: %s",
+                                tool_call_index,
+                                tool_call_data["name"],
+                                tool_call_data["arguments"],
                             )
                     if parts:
                         final_chunk = {
@@ -662,7 +663,7 @@ class GoogleGenAIAdapter:
 
             # Optimization: Skip chunks that have no new data
             if not function_name and not args_chunk:
-                verbose_logger.debug(f"Skipping empty tool call chunk for index: {tool_call_index}")
+                verbose_logger.debug("Skipping empty tool call chunk for index: %s", tool_call_index)
                 continue
 
             if function_name:
