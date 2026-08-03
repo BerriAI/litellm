@@ -248,3 +248,27 @@ def test_azure_ai_claude_1m_context_entries(cost_map: dict):
         "azure_ai/claude-haiku-4-5",
     ]:
         assert cost_map[model]["max_input_tokens"] == 200000, model
+
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_minimax_m2_7_native_entry(cost_map: dict):
+    """The native ``minimax/`` route must expose a MiniMax-M2.7 entry so callers
+    resolve pricing and context without falling back to a generic default. It is a
+    204,800-token text model with always-on reasoning, and its cache read and
+    cache write prices are both published, so both fields are asserted. Root and
+    bundled maps are checked together so they can never drift apart."""
+    entry = cost_map["minimax/MiniMax-M2.7"]
+    assert entry["litellm_provider"] == "minimax"
+    assert entry["mode"] == "chat"
+    assert entry["max_input_tokens"] == 204800
+    assert entry["input_cost_per_token"] == 3e-07
+    assert entry["output_cost_per_token"] == 1.2e-06
+    assert entry["cache_read_input_token_cost"] == 6e-08
+    assert entry["cache_creation_input_token_cost"] == 3.75e-07
+    assert entry["supports_reasoning"] is True
+    # MiniMax-M2.7 accepts text input only, so it must not advertise vision.
+    assert "supports_vision" not in entry
