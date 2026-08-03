@@ -925,7 +925,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       </div>
       {createdKeyValue && (
         <div className="mt-4 text-left max-w-md mx-auto">
-          <CreatedKeyDisplay apiKey={createdKeyValue} />
+          <CreatedKeyDisplay apiKey={createdKeyValue} accessToken={accessToken ?? undefined} />
         </div>
       )}
       {assignedKeyAlias && (
