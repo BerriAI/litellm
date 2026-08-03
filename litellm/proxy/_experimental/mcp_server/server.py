@@ -3598,6 +3598,9 @@ if MCP_AVAILABLE:
 
         # Bind optional sub-identity to authenticated material so shared-key
         # users get independent buckets without enabling cross-key hijacking.
+        # Intentionally ignore the owner header when there is no authenticated
+        # identity: otherwise an unauthenticated client can rotate the header
+        # on every initialize and bypass both session caps (#35383 / Veria).
         if identity is not None and owner_hdr_bytes is not None:
             kind, material = identity
             digest = hashlib.sha256(material + b"\0" + owner_hdr_bytes).hexdigest()
@@ -3612,10 +3615,8 @@ if MCP_AVAILABLE:
             kind, material = identity
             return f"{kind}:{hashlib.sha256(material).hexdigest()}"
 
-        # No authenticated identity: optional header still distinguishes
-        # anonymous callers, then IP, then the anonymous sentinel.
-        if owner_hdr_bytes is not None:
-            return f"hdr:{hashlib.sha256(owner_hdr_bytes).hexdigest()}"
+        # No authenticated identity: fall back to client IP, then anonymous.
+        # Do not honor a client-supplied owner header here.
         if client_ip and isinstance(client_ip, str):
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"

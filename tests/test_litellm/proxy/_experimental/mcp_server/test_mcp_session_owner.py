@@ -108,6 +108,38 @@ async def test_auth_identity_fingerprint_ignores_owner_header_and_ip():
 
 
 @pytest.mark.asyncio
+async def test_owner_fingerprint_ignores_header_when_unauthenticated():
+    """
+    Unauthenticated callers must not open a new owner bucket by rotating
+    x-litellm-mcp-session-owner — that would bypass both session caps.
+    Fall back to IP (or anonymous) instead.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _owner_fingerprint_for,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    anon = UserAPIKeyAuth()
+    fp_hdr_a = _owner_fingerprint_for(
+        anon,
+        client_ip="10.0.0.1",
+        request_headers={"x-litellm-mcp-session-owner": "rotating-a"},
+    )
+    fp_hdr_b = _owner_fingerprint_for(
+        anon,
+        client_ip="10.0.0.1",
+        request_headers={"x-litellm-mcp-session-owner": "rotating-b"},
+    )
+    fp_ip_only = _owner_fingerprint_for(anon, client_ip="10.0.0.1")
+
+    assert fp_hdr_a == fp_hdr_b == fp_ip_only
+    assert fp_ip_only.startswith("ip:")
+    assert not fp_ip_only.startswith("hdr:")
+
+
+@pytest.mark.asyncio
 async def test_max_stateful_sessions_caps_are_positive():
     """Session caps must come from env helpers and stay strictly positive."""
     try:
