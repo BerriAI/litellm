@@ -2770,6 +2770,204 @@ async def test_grounding_output_blocked_raises_400():
 
 
 ###############################################################################
+# #33086: Anthropic tool_result content blocks reach the native pre_call /
+# during_call hooks with their text nested under `content` (a string or a list
+# of `text` blocks), not a top-level `text` key. Before the fix the INPUT scan
+# dropped tool_result text entirely, so PII returned by a tool call bypassed
+# Bedrock scanning; the ANONYMIZE write-back must also mask that text and stay
+# index-aligned with Bedrock's per-block masked outputs.
+###############################################################################
+
+
+def test_input_scans_tool_result_string_content():
+    """A tool_result whose `content` is a plain string must be sent to Bedrock."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "SSN 324-12-3212",
+                }
+            ],
+        }
+    ]
+
+    assert _input_request(messages) == {
+        "source": "INPUT",
+        "content": [{"text": {"text": "SSN 324-12-3212"}}],
+    }
+
+
+def test_input_scans_tool_result_list_content_skipping_non_text():
+    """text blocks nested in a tool_result are scanned; images/documents are skipped."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        {"type": "text", "text": "email a@b.com"},
+                        {"type": "image", "source": {"type": "base64", "data": "xx"}},
+                        {"type": "text", "text": "phone 607-456-7890"},
+                    ],
+                }
+            ],
+        }
+    ]
+
+    assert _input_request(messages) == {
+        "source": "INPUT",
+        "content": [
+            {"text": {"text": "email a@b.com"}},
+            {"text": {"text": "phone 607-456-7890"}},
+        ],
+    }
+
+
+def test_input_scans_tool_result_alongside_plain_text_in_order():
+    """A plain text block and a tool_result in the same message keep document order."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "please review"},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "secret data",
+                },
+            ],
+        }
+    ]
+
+    assert _input_request(messages) == {
+        "source": "INPUT",
+        "content": [
+            {"text": {"text": "please review"}},
+            {"text": {"text": "secret data"}},
+        ],
+    }
+
+
+def test_input_scans_bare_string_content_list_item():
+    """A raw string sitting directly in a content list is still scanned."""
+    messages = [{"role": "user", "content": ["ssn 324-12-3212"]}]
+
+    assert _input_request(messages) == {
+        "source": "INPUT",
+        "content": [{"text": {"text": "ssn 324-12-3212"}}],
+    }
+
+
+def test_input_tool_result_without_text_contributes_nothing():
+    """A tool_result carrying no scannable text (missing content, or only images)
+    is dropped from the scan payload rather than crashing or sending empty text."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1"},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_2",
+                    "content": [{"type": "image", "source": {"data": "xx"}}],
+                },
+            ],
+        }
+    ]
+
+    assert _input_request(messages) == {"source": "INPUT", "content": []}
+
+
+def test_masking_writes_back_into_tool_result_and_keeps_alignment():
+    """Masked outputs return 1:1 in scan order. Because the tool_result text was
+    scanned it owns its masked output, so the write-back masks the tool_result and
+    the following text block stays aligned with its own masked output (before the
+    fix the tool_result was skipped, shifting every later block's mask)."""
+    guardrail = _grounding_guardrail()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "SSN 324-12-3212",
+                },
+                {"type": "text", "text": "and my name is John Smith"},
+            ],
+        }
+    ]
+
+    masked = guardrail._apply_masking_to_messages(
+        messages=messages,
+        masked_texts=["SSN {US_SSN}", "and my name is {NAME}"],
+    )
+
+    assert masked == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "SSN {US_SSN}",
+                },
+                {"type": "text", "text": "and my name is {NAME}"},
+            ],
+        }
+    ]
+
+
+def test_masking_writes_back_into_tool_result_list_blocks():
+    """Each text block nested in a tool_result is masked in order; non-text blocks
+    are left untouched and do not consume a masked output."""
+    guardrail = _grounding_guardrail()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        {"type": "text", "text": "email a@b.com"},
+                        {"type": "image", "source": {"data": "xx"}},
+                        {"type": "text", "text": "phone 607-456-7890"},
+                    ],
+                }
+            ],
+        }
+    ]
+
+    masked = guardrail._apply_masking_to_messages(
+        messages=messages,
+        masked_texts=["email {EMAIL}", "phone {PHONE}"],
+    )
+
+    assert masked == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        {"type": "text", "text": "email {EMAIL}"},
+                        {"type": "image", "source": {"data": "xx"}},
+                        {"type": "text", "text": "phone {PHONE}"},
+                    ],
+                }
+            ],
+        }
+    ]
+
+
+###############################################################################
 # LIT-4186: disable_exception_on_block regression tests
 #
 # Before the fix, a Bedrock block with disable_exception_on_block=True raised
