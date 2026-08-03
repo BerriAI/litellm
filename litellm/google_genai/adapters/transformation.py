@@ -284,7 +284,7 @@ class GoogleGenAIAdapter:
         Returns:
             Dict[str, Any]
         """
-        allowed_fields = GenericLiteLLMParams.model_fields.keys()
+        allowed_fields = frozenset((*GenericLiteLLMParams.model_fields, "model_id"))
         if litellm_params:
             litellm_dict = litellm_params.model_dump(exclude_none=True)
             for key, value in litellm_dict.items():

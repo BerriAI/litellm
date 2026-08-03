@@ -1276,3 +1276,26 @@ def test_inline_data_backward_compatibility_text_only():
         content, str
     ), "Content should be a string for text-only messages (backward compatibility)"
     assert content == "Hello, how are you?"
+
+
+def test_add_generic_litellm_params_forwards_only_explicit_extra_fields():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    from litellm.types.router import GenericLiteLLMParams
+
+    model_id = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/test-profile"
+    litellm_params = GenericLiteLLMParams.model_validate(
+        {
+            "model_id": model_id,
+            "api_base": "https://example.com",
+            "provider_internal_value": "not-forwarded",
+        }
+    )
+
+    result = GoogleGenAIAdapter()._add_generic_litellm_params_to_request(
+        completion_request_dict={},
+        litellm_params=litellm_params,
+    )
+
+    assert result["model_id"] == model_id
+    assert result["api_base"] == "https://example.com"
+    assert "provider_internal_value" not in result
