@@ -11,8 +11,8 @@ from .mai_transformation import AzureFoundryMAIImageEditConfig
 from .transformation import AzureFoundryFluxImageEditConfig
 
 __all__ = [
-    "AzureFoundryFluxImageEditConfig",
     "AzureFoundryFlux2ImageEditConfig",
+    "AzureFoundryFluxImageEditConfig",
     "AzureFoundryMAIImageEditConfig",
 ]
 

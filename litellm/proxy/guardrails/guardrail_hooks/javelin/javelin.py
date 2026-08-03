@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
@@ -26,22 +26,22 @@ if TYPE_CHECKING:
 
 class JavelinGuardrail(CustomGuardrail):
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
         ]
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         default_on: bool = True,
         guardrail_name: str = "trustsafety",
-        javelin_guard_name: Optional[str] = None,
+        javelin_guard_name: str | None = None,
         api_version: str = "v1",
-        metadata: Optional[Dict] = None,
-        config: Optional[Dict] = None,
-        application: Optional[str] = None,
+        metadata: dict | None = None,
+        config: dict | None = None,
+        application: str | None = None,
         **kwargs,
     ):
         f"""
@@ -100,7 +100,7 @@ class JavelinGuardrail(CustomGuardrail):
             headers["x-javelin-application"] = self.application
 
         status: GuardrailStatus = "guardrail_failed_to_respond"
-        javelin_response: Optional[JavelinGuardResponse] = None
+        javelin_response: JavelinGuardResponse | None = None
         exception_str = ""
 
         try:
@@ -129,7 +129,7 @@ class JavelinGuardrail(CustomGuardrail):
             ####################################################
             # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
             ####################################################
-            guardrail_json_response: Union[Exception, str, dict, List[dict]] = {}
+            guardrail_json_response: Exception | str | dict | list[dict] = {}
             if status == "success" and javelin_response is not None:
                 guardrail_json_response = dict(javelin_response)
             else:
@@ -163,9 +163,9 @@ class JavelinGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
-        data: Dict,
+        data: dict,
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, Dict]]:
+    ) -> Exception | str | dict | None:
         """
         Pre-call hook for the Javelin guardrail.
         """
@@ -270,7 +270,7 @@ class JavelinGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         """
         Get the config model for the Javelin guardrail.
         """

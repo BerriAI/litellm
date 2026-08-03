@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
@@ -497,7 +497,7 @@ describe("EntityUsage", () => {
 
   it.each([
     ["Cost", "Tag Spend Overview"],
-    ["Model Activity", "metrics-source:models"],
+    ["Model Activity", "metrics-source:model_groups"],
     ["Key Activity", "metrics-source:api_keys"],
     ["Endpoint Activity", "Endpoint Usage Panel"],
   ])("shows only the %s panel for a non-team entity type", async (tabLabel, marker) => {
@@ -518,7 +518,7 @@ describe("EntityUsage", () => {
 
   it.each([
     ["Cost", "Team Spend Overview"],
-    ["Model Activity", "metrics-source:models"],
+    ["Model Activity", "metrics-source:model_groups"],
     ["Agent Activity", "metrics-source:entities"],
     ["Key Activity", "metrics-source:api_keys"],
     ["Endpoint Activity", "Endpoint Usage Panel"],
@@ -584,15 +584,41 @@ describe("EntityUsage", () => {
     expect(screen.getByText("Request / Token Consumption")).toBeInTheDocument();
   });
 
-  it("should display Top Models title for non-agent entity types", async () => {
+  it("should display Top Public Model Names title for non-agent entity types", async () => {
     render(<EntityUsage {...defaultProps} entityType="tag" />);
 
     await waitFor(() => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    const topModelsElements = screen.getAllByText("Top Models");
-    expect(topModelsElements.length).toBeGreaterThan(0);
+    expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+  });
+
+  it("defaults Model Activity to public model names and toggles to litellm models", async () => {
+    const { container } = render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByText("Model Activity"));
+    });
+
+    const modelActivityPanel = () => selectedPanels(container)[0] as HTMLElement;
+    expect(modelActivityPanel().textContent).toContain("metrics-source:model_groups");
+
+    act(() => {
+      fireEvent.click(within(modelActivityPanel()).getByText("Litellm Model Name"));
+    });
+
+    expect(modelActivityPanel().textContent).toContain("metrics-source:models");
+
+    act(() => {
+      fireEvent.click(within(modelActivityPanel()).getByText("Public Model Name"));
+    });
+
+    expect(modelActivityPanel().textContent).toContain("metrics-source:model_groups");
   });
 
   it("should display Top Agents title for agent entity type", async () => {

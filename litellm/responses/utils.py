@@ -1,13 +1,9 @@
 import base64
 import re
+from collections.abc import Iterable, Mapping
 from typing import (
     Any,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
     Optional,
-    Type,
     Union,
     cast,
     get_type_hints,
@@ -104,16 +100,16 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _check_valid_arg(
-        supported_params: Optional[List[str]],
-        non_default_params: Dict,
-        drop_params: Optional[bool],
-        custom_llm_provider: Optional[str],
+        supported_params: list[str] | None,
+        non_default_params: dict,
+        drop_params: bool | None,
+        custom_llm_provider: str | None,
         model: str,
     ):
         if supported_params is None:
             return
         unsupported_params = {}
-        for k in non_default_params.keys():
+        for k in non_default_params:
             if k not in supported_params:
                 unsupported_params[k] = non_default_params[k]
         if unsupported_params:
@@ -130,9 +126,9 @@ class ResponsesAPIRequestUtils:
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
-        allowed_openai_params: Optional[List[str]] = None,
+        allowed_openai_params: list[str] | None = None,
         drop_params: bool | None = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Get optional parameters for the responses API.
 
@@ -152,7 +148,7 @@ class ResponsesAPIRequestUtils:
 
         should_drop_params = litellm.drop_params or drop_params is True
 
-        non_default_params = cast(Dict, response_api_optional_params)
+        non_default_params = cast(dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
             supported_params=supported_params + (allowed_openai_params or []),
@@ -184,7 +180,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def get_requested_response_api_optional_param(
-        params: Dict[str, Any],
+        params: dict[str, Any],
     ) -> ResponsesAPIOptionalRequestParams:
         """
         Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams.
@@ -236,35 +232,35 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
-        custom_llm_provider: Optional[str],
-        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: str | None,
+        litellm_metadata: dict[str, Any] | None = None,
     ) -> ResponsesAPIResponse: 
         ...
 
     @overload
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
-        responses_api_response: Dict[str, Any],
-        custom_llm_provider: Optional[str],
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]: 
+        responses_api_response: dict[str, Any],
+        custom_llm_provider: str | None,
+        litellm_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: 
         ...
 
     # fmt: on
 
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
-        responses_api_response: Union[ResponsesAPIResponse, Dict[str, Any]],
-        custom_llm_provider: Optional[str],
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ResponsesAPIResponse, Dict[str, Any]]:
+        responses_api_response: ResponsesAPIResponse | dict[str, Any],
+        custom_llm_provider: str | None,
+        litellm_metadata: dict[str, Any] | None = None,
+    ) -> ResponsesAPIResponse | dict[str, Any]:
         """Update the responses_api_response_id with model_id and custom_llm_provider.
 
         Handles both ``ResponsesAPIResponse`` objects and plain dictionaries returned
         by some streaming providers.
         """
         litellm_metadata = litellm_metadata or {}
-        model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
+        model_info: dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
 
         # access the response id based on the object type
@@ -317,7 +313,7 @@ class ResponsesAPIRequestUtils:
         return f"encitem_{encoded}"
 
     @staticmethod
-    def _decode_encrypted_item_id(encoded_id: str) -> Optional[Dict[str, str]]:
+    def _decode_encrypted_item_id(encoded_id: str) -> dict[str, str] | None:
         """Decode a litellm-encoded encrypted-content item ID.
 
         Returns a dict with ``model_id`` and ``item_id`` keys, or ``None`` if
@@ -358,7 +354,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _unwrap_encrypted_content_with_model_id(
         wrapped_content: str,
-    ) -> tuple[Optional[str], str]:
+    ) -> tuple[str | None, str]:
         """Unwrap encrypted_content to extract model_id and original content.
 
         Returns:
@@ -390,9 +386,9 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _update_encrypted_content_item_ids_in_response(
-        response: Union["ResponsesAPIResponse", Dict[str, Any]],
-        model_id: Optional[str],
-    ) -> Union["ResponsesAPIResponse", Dict[str, Any]]:
+        response: Union["ResponsesAPIResponse", dict[str, Any]],
+        model_id: str | None,
+    ) -> Union["ResponsesAPIResponse", dict[str, Any]]:
         """Rewrite item IDs for output items that contain ``encrypted_content``.
 
         Encodes ``model_id`` into the item ID so that follow-up requests can be
@@ -404,7 +400,7 @@ class ResponsesAPIRequestUtils:
         if not model_id:
             return response
 
-        output: Optional[list] = None
+        output: list | None = None
         if isinstance(response, dict):
             output = response.get("output")
         else:
@@ -482,8 +478,8 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _build_responses_api_response_id(
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
         response_id: str,
     ) -> str:
         """Build the responses_api_response_id"""
@@ -555,7 +551,7 @@ class ResponsesAPIRequestUtils:
         )
 
     @staticmethod
-    def get_model_id_from_response_id(response_id: Optional[str]) -> Optional[str]:
+    def get_model_id_from_response_id(response_id: str | None) -> str | None:
         """Get the model_id from the response_id"""
         if response_id is None:
             return None
@@ -584,8 +580,8 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _build_container_id(
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
         container_id: str,
     ) -> str:
         """Build a managed container ID with provider and model info encoded.
@@ -672,8 +668,8 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _encode_container_ids_in_annotations(
         annotations: Any,
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
     ) -> None:
         """Encode ``container_id`` on each annotation (e.g. ``container_file_citation``)."""
         if not annotations or not isinstance(annotations, list):
@@ -688,8 +684,8 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _encode_container_ids_in_message_content(
         content: Any,
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
     ) -> None:
         """Walk message ``content`` parts and encode citation ``container_id`` values."""
         if not content:
@@ -712,8 +708,8 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _encode_container_id_on_output_item(
         item: Any,
-        custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        custom_llm_provider: str | None,
+        model_id: str | None,
     ) -> None:
         """Mutate one output item (dict or object): wrap raw ``container_id`` as LiteLLM-managed.
 
@@ -728,7 +724,7 @@ class ResponsesAPIRequestUtils:
         if item is None:
             return
 
-        def _maybe_encode(container_id: str) -> Optional[str]:
+        def _maybe_encode(container_id: str) -> str | None:
             decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
             if decoded.get("custom_llm_provider") is not None:
                 return None
@@ -874,17 +870,17 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _update_container_ids_in_response(
-        responses_api_response: Union[ResponsesAPIResponse, Dict[str, Any]],
-        custom_llm_provider: Optional[str],
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ResponsesAPIResponse, Dict[str, Any]]:
+        responses_api_response: ResponsesAPIResponse | dict[str, Any],
+        custom_llm_provider: str | None,
+        litellm_metadata: dict[str, Any] | None = None,
+    ) -> ResponsesAPIResponse | dict[str, Any]:
         """Encode container IDs in the response output with provider/model info.
 
         This walks through all output items and encodes any container_id fields
         so that follow-up container API calls can auto-route to the correct provider.
         """
         litellm_metadata = litellm_metadata or {}
-        model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
+        model_info: dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
 
         # Get the output list
@@ -907,7 +903,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def convert_text_format_to_text_param(
-        text_format: Optional[Union[Type["BaseModel"], dict]],
+        text_format: type["BaseModel"] | dict | None,
         text: Optional["ResponseText"] = None,
     ) -> Optional["ResponseText"]:
         """
@@ -941,13 +937,13 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def extract_mcp_headers_from_request(
-        secret_fields: Optional[Dict[str, Any]],
-        tools: Optional[Iterable[Any]],
+        secret_fields: dict[str, Any] | None,
+        tools: Iterable[Any] | None,
     ) -> tuple[
-        Optional[str],
-        Optional[Dict[str, Dict[str, str]]],
-        Optional[Dict[str, str]],
-        Optional[Dict[str, str]],
+        str | None,
+        dict[str, dict[str, str]] | None,
+        dict[str, str] | None,
+        dict[str, str] | None,
     ]:
         """
         Extract MCP auth headers from the request to pass to MCP server.
@@ -960,14 +956,14 @@ class ResponsesAPIRequestUtils:
         )
 
         # Extract headers from secret_fields which contains the original request headers
-        raw_headers_from_request: Optional[Dict[str, str]] = None
+        raw_headers_from_request: dict[str, str] | None = None
         if secret_fields and isinstance(secret_fields, dict):
             raw_headers_from_request = secret_fields.get("raw_headers")
 
         # Extract MCP-specific headers using MCPRequestHandler methods
-        mcp_auth_header: Optional[str] = None
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
-        oauth2_headers: Optional[Dict[str, str]] = None
+        mcp_auth_header: str | None = None
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None = None
+        oauth2_headers: dict[str, str] | None = None
 
         if raw_headers_from_request:
             headers_obj = Headers(raw_headers_from_request)
@@ -1012,7 +1008,7 @@ class ResponsesAPIRequestUtils:
 
 class ResponseAPILoggingUtils:
     @staticmethod
-    def _is_response_api_usage(usage: Union[dict, ResponseAPIUsage]) -> bool:
+    def _is_response_api_usage(usage: dict | ResponseAPIUsage) -> bool:
         """returns True if usage is from OpenAI Response API"""
         if isinstance(usage, ResponseAPIUsage):
             return True
@@ -1022,7 +1018,7 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage_input: Optional[Union[dict, ResponseAPIUsage]],
+        usage_input: dict | ResponseAPIUsage | None,
     ) -> Usage:
         """
         Transforms ResponseAPIUsage or ImageUsage to a Usage object.
@@ -1056,7 +1052,7 @@ class ResponseAPILoggingUtils:
             response_api_usage = usage_input
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if response_api_usage.input_tokens_details:
             if isinstance(response_api_usage.input_tokens_details, dict):
                 prompt_tokens_details = PromptTokensDetailsWrapper(**response_api_usage.input_tokens_details)
@@ -1068,7 +1064,7 @@ class ResponseAPILoggingUtils:
                     image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
                     cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
                 )
-        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+        completion_tokens_details: CompletionTokensDetailsWrapper | None = None
         output_tokens_details = getattr(response_api_usage, "output_tokens_details", None)
         if output_tokens_details:
             completion_tokens_details = CompletionTokensDetailsWrapper(

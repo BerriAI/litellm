@@ -1,17 +1,18 @@
-from typing import TYPE_CHECKING, Optional, Dict, Any
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .gitlab_prompt_manager import GitLabPromptManager
-    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
 
-from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
+    from .gitlab_prompt_manager import GitLabPromptManager
+
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
-from litellm.types.prompts.init_prompts import PromptSpec, PromptLiteLLMParams
-from .gitlab_prompt_manager import GitLabPromptManager, GitLabPromptCache
+from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec, SupportedPromptIntegrations
+
+from .gitlab_prompt_manager import GitLabPromptCache, GitLabPromptManager
 
 # Global instances
-global_gitlab_config: Optional[dict] = None
+global_gitlab_config: dict | None = None
 
 
 def set_global_gitlab_config(config: dict) -> None:
@@ -65,8 +66,8 @@ def _gitlab_prompt_initializer(
     # You can store arbitrary integration-specific config on PromptLiteLLMParams.
     # If your dataclass doesn't have these attributes, add them or put inside
     # `litellm_params.extra` and pull them from there.
-    gitlab_config: Dict[str, Any] = getattr(litellm_params, "gitlab_config", None) or {}
-    git_ref: Optional[str] = getattr(litellm_params, "git_ref", None)
+    gitlab_config: dict[str, Any] = getattr(litellm_params, "gitlab_config", None) or {}
+    git_ref: str | None = getattr(litellm_params, "git_ref", None)
 
     if not gitlab_config:
         raise ValueError("gitlab_config is required for gitlab prompt integration")
@@ -85,8 +86,8 @@ prompt_initializer_registry = {
 
 # Export public API
 __all__ = [
-    "GitLabPromptManager",
     "GitLabPromptCache",
-    "set_global_gitlab_config",
+    "GitLabPromptManager",
     "global_gitlab_config",
+    "set_global_gitlab_config",
 ]

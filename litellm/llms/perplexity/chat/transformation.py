@@ -2,29 +2,27 @@
 Translate from OpenAI's `/v1/chat/completions` to Perplexity's `/v1/chat/completions`
 """
 
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import httpx
+
 import litellm
 from litellm._logging import verbose_logger
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Usage, PromptTokensDetailsWrapper
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.types.utils import ModelResponse
-from litellm.types.llms.openai import ChatCompletionAnnotation
-from litellm.types.llms.openai import ChatCompletionAnnotationURLCitation
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAnnotation, ChatCompletionAnnotationURLCitation
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "perplexity"
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return api_base, dynamic_api_key
@@ -71,12 +69,12 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         # Call the parent transform_response first to handle the standard transformation
         model_response = super().transform_response(

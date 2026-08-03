@@ -6,7 +6,7 @@ If weights are provided, it will return a deployment based on the weights.
 """
 
 import random
-from typing import TYPE_CHECKING, Any, Dict, List, Union
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_router_logger
 
@@ -20,9 +20,9 @@ else:
 
 def simple_shuffle(
     llm_router_instance: LitellmRouter,
-    healthy_deployments: Union[List[Any], Dict[Any, Any]],
+    healthy_deployments: list[Any] | dict[Any, Any],
     model: str,
-) -> Dict:
+) -> dict:
     """
     Returns a random deployment from the list of healthy deployments.
 

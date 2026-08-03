@@ -400,6 +400,114 @@ async def test_get_guardrail_info_not_found(
     assert "not found" in str(exc_info.value.detail)
 
 
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_without_prisma_returns_config_guardrails(
+    mocker, mock_in_memory_handler
+):
+    """
+    A proxy without a DB must still list config-defined guardrails instead of
+    raising 500 'Prisma client not initialized'.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await list_guardrails_v2(user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert len(response.guardrails) == 1
+    config_guardrail = response.guardrails[0]
+    assert config_guardrail.guardrail_id == "test-config-guardrail"
+    assert config_guardrail.guardrail_name == "Test Config Guardrail"
+    assert config_guardrail.guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_without_prisma_non_admin_sees_unrestricted_config_guardrails(
+    mocker, mock_in_memory_handler
+):
+    """
+    A non-admin caller on a no-DB proxy must see config guardrails that carry
+    no team_id restriction; the team lookup must not blow up without a DB.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    non_admin_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal-user-1"
+    )
+    response = await list_guardrails_v2(user_api_key_dict=non_admin_auth)
+
+    assert [g.guardrail_id for g in response.guardrails] == ["test-config-guardrail"]
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_without_prisma_returns_config_guardrail(
+    mocker, mock_in_memory_handler
+):
+    """
+    The info endpoint must serve config-defined guardrails from the in-memory
+    registry when no DB is attached instead of raising 500.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await get_guardrail_info("test-config-guardrail")
+
+    assert response.guardrail_id == "test-config-guardrail"
+    assert response.guardrail_name == "Test Config Guardrail"
+    assert response.guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_without_prisma_404s_unknown_id(
+    mocker, mock_in_memory_handler
+):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    mock_in_memory_handler.get_guardrail_by_id.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_guardrail_info("non-existent-guardrail")
+
+    assert exc_info.value.status_code == 404
+
+
+def test_get_guardrails_list_response_includes_guardrail_id():
+    """
+    The v1 list response is the UI's fallback when v2 fails; without ids every
+    row click requests /guardrails/undefined/info.
+    """
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_guardrails_list_response,
+    )
+
+    response = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_id": "stable-config-id",
+                "guardrail_name": "tooling",
+                "litellm_params": {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "pre_call",
+                },
+            }
+        ]
+    )
+
+    assert response.guardrails[0].guardrail_id == "stable-config-id"
+
+
 def test_get_provider_specific_params():
     """Test getting provider-specific parameters"""
     from litellm.proxy.guardrails.guardrail_endpoints import _get_fields_from_model

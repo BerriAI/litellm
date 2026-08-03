@@ -5,7 +5,6 @@ Helper functions to query prometheus API
 import json
 import time
 from datetime import datetime, timedelta
-from typing import Optional
 
 from litellm import get_secret
 from litellm._logging import verbose_logger
@@ -14,8 +13,8 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 
-PROMETHEUS_URL: Optional[str] = get_secret("PROMETHEUS_URL")  # type: ignore
-PROMETHEUS_SELECTED_INSTANCE: Optional[str] = get_secret("PROMETHEUS_SELECTED_INSTANCE")  # type: ignore
+PROMETHEUS_URL: str | None = get_secret("PROMETHEUS_URL")  # type: ignore
+PROMETHEUS_SELECTED_INSTANCE: str | None = get_secret("PROMETHEUS_SELECTED_INSTANCE")  # type: ignore
 async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
 
@@ -96,7 +95,7 @@ def _quote_promql_string_literal(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-async def get_daily_spend_from_prometheus(api_key: Optional[str]):
+async def get_daily_spend_from_prometheus(api_key: str | None):
     """
     Expected Response Format:
     [

@@ -9,7 +9,6 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Optional
 
 
 def get_cli_token_file_path() -> str:
@@ -19,7 +18,7 @@ def get_cli_token_file_path() -> str:
     return str(config_dir / "token.json")
 
 
-def load_cli_token() -> Optional[dict]:
+def load_cli_token() -> dict | None:
     """Load CLI token data from file"""
     token_file = get_cli_token_file_path()
     if not os.path.exists(token_file):
@@ -28,13 +27,13 @@ def load_cli_token() -> Optional[dict]:
     try:
         with open(token_file, "r") as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return None
 
 
 def get_litellm_gateway_api_key(
-    expected_base_url: Optional[str] = None,
-) -> Optional[str]:
+    expected_base_url: str | None = None,
+) -> str | None:
     """
     Get the stored CLI API key for use with LiteLLM SDK.
 

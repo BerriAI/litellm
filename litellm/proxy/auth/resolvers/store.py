@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -12,14 +13,14 @@ from litellm.proxy.auth.auth_checks import (
     _fetch_key_object_from_db_with_reconnect,
     get_object_permission,
 )
+from litellm.proxy.auth.auth_method import AuthMethod
+from litellm.proxy.auth.network import NetworkContext
 from litellm.proxy.auth.resolvers.exceptions import (
     KeyNotFoundError,
     KeyNotInCacheError,
     NoDatabaseConnectionError,
     PrincipalMissingSourceKeyError,
 )
-from litellm.proxy.auth.auth_method import AuthMethod
-from litellm.proxy.auth.network import NetworkContext
 from litellm.proxy.auth.resolvers.models import (
     CredentialRef,
     EndUserIdentity,
@@ -118,7 +119,7 @@ class IdentityStore:
         if from_db is None:
             raise KeyNotFoundError(hashed_token)
 
-        key = UserAPIKeyAuth(**from_db.model_dump(exclude_none=True))
+        key = UserAPIKeyAuth.model_validate(from_db.model_dump(exclude_none=True))
 
         if key.object_permission_id and not key.object_permission:
             try:

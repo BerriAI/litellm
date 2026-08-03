@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.utils import PrismaClient, invalidate_config_param
+from litellm.proxy.utils import PrismaClient, evict_config_param
 from litellm.repositories.config_repository import ConfigRepository
 
 if TYPE_CHECKING:
@@ -180,7 +180,7 @@ async def write_reload_interval(prisma_client: PrismaClient, param_name: str, in
             "update": {"param_value": param_value},
         },
     )
-    await invalidate_config_param(param_name)
+    await evict_config_param(param_name)
 
 
 async def record_reload_run(prisma_client: PrismaClient, param_name: str, ran_at: datetime) -> None:
@@ -190,7 +190,7 @@ async def record_reload_run(prisma_client: PrismaClient, param_name: str, ran_at
         data={"last_run_at": ran_at},
         where={"param_name": param_name},
     )
-    await invalidate_config_param(param_name)
+    await evict_config_param(param_name)
 
 
 async def record_manual_reload(prisma_client: PrismaClient, param_name: str, ran_at: datetime) -> int:
@@ -207,5 +207,5 @@ async def record_manual_reload(prisma_client: PrismaClient, param_name: str, ran
             "update": {"last_run_at": ran_at, "reload_revision": {"increment": 1}},
         },
     )
-    await invalidate_config_param(param_name)
+    await evict_config_param(param_name)
     return int(row.reload_revision)
