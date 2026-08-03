@@ -16,20 +16,10 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, NamedTuple
 
 from litellm._logging import verbose_router_logger
-from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import Usage
 
 if TYPE_CHECKING:
     from litellm.router import Router
-
-
-# One long cached prompt with a short completion: the shape auto-routed traffic takes,
-# and the shape whose ordering a flat-rate comparison gets wrong.
-_REFERENCE_REQUEST = Usage(
-    prompt_tokens=20_000,
-    completion_tokens=1_000,
-    total_tokens=21_000,
-    prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=19_000, cache_creation_tokens=1_000, text_tokens=0),
-)
 
 
 class Baseline(NamedTuple):
@@ -93,15 +83,15 @@ def _models_in(router: "Router", group_name: str) -> tuple[Baseline, ...]:
     return tuple(c for index in indices if (c := candidate(index)) is not None)
 
 
-def _priced(router: "Router", candidate: Baseline) -> tuple[float, Baseline] | None:
-    """``(cost_of_the_reference_request, candidate)``, or ``None`` when unpriceable.
+def _priced(router: "Router", candidate: Baseline, usage: Usage) -> tuple[float, Baseline] | None:
+    """``(cost_of_this_request, candidate)``, or ``None`` when unpriceable.
 
     "Most expensive" is a property of a request, not of a rate: a deployment dearer per
     output token can be cheaper per cached token, so comparing a chosen pair of rates
-    orders cache-heavy traffic backwards. Costing one reference request through the same
+    orders cache-heavy traffic backwards. Costing the real request through the same
     engine the savings use leaves cache rates, tiered tables and every other billing
-    dimension to that engine. A candidate that prices to nothing there cannot stand in
-    for what the traffic would have cost.
+    dimension to that engine. A candidate that prices to nothing cannot stand in for
+    what the traffic would have cost.
     """
     from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 
@@ -112,7 +102,7 @@ def _priced(router: "Router", candidate: Baseline) -> tuple[float, Baseline] | N
             return None
         prompt_cost, completion_cost = generic_cost_per_token(
             model=model_name or candidate.model,
-            usage=_REFERENCE_REQUEST,
+            usage=usage,
             custom_llm_provider=provider,
             model_info=info,
         )
@@ -126,35 +116,28 @@ def _priced(router: "Router", candidate: Baseline) -> tuple[float, Baseline] | N
     return (cost, candidate)
 
 
-def _most_expensive(router: "Router", candidates: Iterable[Baseline]) -> Baseline | None:
-    """The candidate that would have cost the most on the reference request."""
-    priced = tuple(r for candidate in candidates if (r := _priced(router, candidate)) is not None)
+def _most_expensive(router: "Router", candidates: Iterable[Baseline], usage: Usage) -> Baseline | None:
+    """The candidate that would have cost the most on this request."""
+    priced = tuple(r for candidate in candidates if (r := _priced(router, candidate, usage)) is not None)
     if not priced:
         verbose_router_logger.debug("savings baseline: no priceable candidates; savings driver disabled")
         return None
     return max(priced)[1]
 
 
-def resolve_baseline(configured: str | None, router: "Router", group_names: Iterable[str]) -> Baseline | None:
-    """The baseline for a router whose hardest tier offers ``group_names``.
+def resolve_baseline(router: "Router", candidates: Iterable[str], usage: Usage) -> Baseline | None:
+    """The dearest of ``candidates`` for this request's actual usage.
 
-    A configured override wins and is only qualified, never re-derived.
+    Resolved against the served request rather than a stand-in for one, because which
+    candidate is dearest depends on the token mix: a deployment can be dear per output
+    token and cheap per cached token. That means this runs where the usage is known, on
+    the spend path, not in the pre-routing hook where the request has not happened yet.
 
-    Derived per call rather than cached: the parent router adds and removes deployments
-    while it runs, so a baseline pinned on first use would keep naming a model the
-    router no longer has, and a pricier one added later could never become the baseline.
-    Resolving costs tens of microseconds against a network call.
-
-    Never raises. This is read on the routing path to decorate a request that is about
-    to be served, and a dashboard's counterfactual is not worth failing a live request
-    over; an unresolvable baseline zeroes the savings driver instead.
+    Never raises. A dashboard's counterfactual is not worth failing a spend write over;
+    an unresolvable baseline zeroes the savings driver instead.
     """
     try:
-        if configured:
-            # No pricing key: a configured override names a model, not a deployment,
-            # so it prices under its own name like any other unmatched name.
-            return Baseline(qualified) if (qualified := canonical_model(configured)) else None
-        return _most_expensive(router, (c for name in group_names for c in _models_in(router, name)))
+        return _most_expensive(router, (c for name in candidates for c in _models_in(router, name)), usage)
     except Exception as e:  # noqa: BLE001  # see docstring: routing must not fail for a metric
         verbose_router_logger.warning("savings baseline: could not resolve, savings will read zero (%s)", e)
         return None

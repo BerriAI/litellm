@@ -28,7 +28,6 @@ from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
-from litellm.router_strategy.savings_baseline import Baseline, resolve_baseline
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -469,18 +468,18 @@ class ComplexityRouter(CustomLogger):
         return ()
 
     @property
-    def savings_baseline_model(self) -> Baseline | None:
-        """The model this router's savings are measured against.
+    def savings_baseline_candidates(self) -> tuple[str, ...]:
+        """What this router's savings could be measured against.
 
-        A complexity router's tier ladder already names the model an operator
-        would have had to run to serve the hardest request, so the counterfactual
-        is the priciest model in that tier rather than the priciest model the
-        router can reach; a cheap tier is a choice the router made, not a ceiling
-        it was bounded by.
+        The tier ladder already names what an operator would have had to run to serve
+        the hardest request, so the counterfactual comes from that tier rather than from
+        everything the router can reach; a cheap tier is a choice the router made, not a
+        ceiling it was bounded by. Which of them is dearest is not decided here: that
+        depends on the request's token mix, which does not exist until it has been
+        served, so the candidates travel and the spend path picks between them.
         """
-        return resolve_baseline(
-            self.configured_savings_baseline_model, self.litellm_router_instance, self._hardest_tier_models()
-        )
+        configured = self.configured_savings_baseline_model
+        return (configured,) if configured else self._hardest_tier_models()
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -721,11 +720,9 @@ class ComplexityRouter(CustomLogger):
             cause=cause,
             conversation_continuing=conversation_continuing,
         )
-        baseline = self.savings_baseline_model
-        if baseline is not None:
-            decision["savings_baseline_model"] = baseline.model
-            if baseline.deployment_id is not None:
-                decision["savings_baseline_deployment_id"] = baseline.deployment_id
+        candidates = self.savings_baseline_candidates
+        if candidates:
+            decision["savings_baseline_candidates"] = candidates
         if tier is not None:
             decision["tier"] = tier.value
         if score is not None:

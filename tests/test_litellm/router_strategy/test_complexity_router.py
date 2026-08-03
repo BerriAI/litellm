@@ -5064,11 +5064,14 @@ class TestClassifierTrustBoundary:
         assert "rate the work it approves rather than the reply itself" in system_prompt
 
 
-class TestSavingsBaselineModel:
-    """The counterfactual model a complexity router's savings are measured against."""
+class TestSavingsBaselineCandidates:
+    """What the router offers as the counterfactual. Which of them is dearest depends on
+    the request's token mix, so that is decided on the spend path, not here."""
+
     @staticmethod
     def _router_with_tiers(tiers: dict, **kwargs) -> ComplexityRouter:
         from litellm.router import Router
+
         parent = Router(
             model_list=[
                 {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
@@ -5083,33 +5086,35 @@ class TestSavingsBaselineModel:
             default_model="mid",
             **kwargs,
         )
-    def test_baseline_is_the_reasoning_tier_not_the_priciest_reachable_model(self):
+
+    def test_candidates_are_the_reasoning_tier_not_everything_reachable(self):
         """The ladder names what an operator would have had to run for the hardest
         request; a pricier model sitting in a lower tier is a choice, not a ceiling."""
         router = self._router_with_tiers({"SIMPLE": "top", "MEDIUM": "cheap", "REASONING": "mid"})
-        assert router.savings_baseline_model.model == "anthropic/claude-sonnet-4-5"
-    def test_baseline_is_the_priciest_model_when_the_reasoning_tier_is_a_pool(self):
+        assert router.savings_baseline_candidates == ("mid",)
+
+    def test_a_pooled_tier_offers_every_member(self):
         router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": ["cheap", "top", "mid"]})
-        assert router.savings_baseline_model.model == "anthropic/claude-opus-4-5"
+        assert sorted(router.savings_baseline_candidates) == ["cheap", "mid", "top"]
+
     def test_falls_back_to_the_hardest_configured_tier_when_reasoning_is_absent(self):
         router = self._router_with_tiers({"SIMPLE": "cheap", "COMPLEX": "top"})
-        assert router.savings_baseline_model.model == "anthropic/claude-opus-4-5"
-    def test_a_configured_baseline_wins_and_is_provider_qualified(self):
+        assert router.savings_baseline_candidates == ("top",)
+
+    def test_a_configured_baseline_replaces_the_tier(self):
         router = self._router_with_tiers(
             {"SIMPLE": "cheap", "REASONING": "mid"}, savings_baseline_model="claude-opus-4-5"
         )
-        assert router.savings_baseline_model.model == "anthropic/claude-opus-4-5"
-    def test_an_unpriceable_tier_disables_the_driver_rather_than_inventing_a_baseline(self):
-        router = self._router_with_tiers({"REASONING": "not-a-real-model-anywhere"})
-        assert router.savings_baseline_model is None
-    def test_the_baseline_travels_on_every_pre_routing_response(self):
-        """A response without it silently zeroes the savings driver for that path."""
+        assert router.savings_baseline_candidates == ("claude-opus-4-5",)
+
+    def test_the_candidates_travel_on_every_routing_decision(self):
+        """A decision without them silently zeroes the savings driver for that path."""
         import inspect
+
         from litellm.router_strategy.complexity_router import complexity_router as module
+
         source = inspect.getsource(module.ComplexityRouter._build_routing_decision)
-        assert "self.savings_baseline_model" in source, (
-            "the baseline rides on the routing decision, so every path that builds one carries it"
-        )
+        assert "self.savings_baseline_candidates" in source
 
 
 class TestConversationShapeDiscriminator:

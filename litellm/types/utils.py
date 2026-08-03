@@ -2734,8 +2734,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
-    savings_baseline_model: str
-    savings_baseline_deployment_id: str
+    savings_baseline_candidates: Sequence[str]
     conversation_continuing: bool
 
 
@@ -2756,8 +2755,7 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "classifier_model",
         "escalated",
         "tier_boundaries",
-        "savings_baseline_model",
-        "savings_baseline_deployment_id",
+        "savings_baseline_candidates",
         "conversation_continuing",
     }
 )

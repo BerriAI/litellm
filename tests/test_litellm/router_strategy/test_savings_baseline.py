@@ -1,5 +1,14 @@
 import pytest
 
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+REQUEST = Usage(
+    prompt_tokens=20_000,
+    completion_tokens=1_000,
+    total_tokens=21_000,
+    prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_creation_tokens=0, text_tokens=20_000),
+)
+
 from litellm.router import Router
 from litellm.router_strategy.savings_baseline import (
     Baseline,
@@ -56,27 +65,27 @@ class TestMostExpensive:
     router's answer to give: it merges configured prices over the built-in map."""
 
     def test_picks_by_output_rate(self, parent):
-        picked = _most_expensive(parent, [Baseline("anthropic/claude-haiku-4-5"), Baseline("anthropic/claude-opus-4-5")])
+        picked = _most_expensive(parent, [Baseline("anthropic/claude-haiku-4-5"), Baseline("anthropic/claude-opus-4-5")], REQUEST)
         assert picked.model == "anthropic/claude-opus-4-5"
 
     def test_ignores_models_with_no_per_token_price(self, parent):
         """A free model as baseline would report the whole real spend as a loss."""
-        picked = _most_expensive(parent, [Baseline("not-a-real-model-anywhere"), Baseline("anthropic/claude-haiku-4-5")])
+        picked = _most_expensive(parent, [Baseline("not-a-real-model-anywhere"), Baseline("anthropic/claude-haiku-4-5")], REQUEST)
         assert picked.model == "anthropic/claude-haiku-4-5"
 
     def test_returns_none_when_nothing_can_be_priced(self, parent):
-        assert _most_expensive(parent, [Baseline("not-a-real-model-anywhere")]) is None
+        assert _most_expensive(parent, [Baseline("not-a-real-model-anywhere")], REQUEST) is None
 
     def test_returns_none_for_an_empty_candidate_set(self, parent):
-        assert _most_expensive(parent, []) is None
+        assert _most_expensive(parent, [], REQUEST) is None
 
 
 class TestResolveBaseline:
     def test_a_configured_baseline_wins_over_the_candidates(self, parent):
-        assert resolve_baseline("claude-haiku-4-5", parent, ["top"]).model == "anthropic/claude-haiku-4-5"
+        assert resolve_baseline(parent, ["claude-haiku-4-5"], REQUEST).model == "anthropic/claude-haiku-4-5"
 
     def test_derives_the_priciest_candidate_when_unconfigured(self, parent):
-        assert resolve_baseline(None, parent, ["cheap", "top"]).model == "anthropic/claude-opus-4-5"
+        assert resolve_baseline(parent, ["cheap", "top"], REQUEST).model == "anthropic/claude-opus-4-5"
 
     def test_never_raises_so_a_metric_cannot_fail_a_live_request(self):
         """Read on the routing path while decorating a request that is about to be
@@ -87,10 +96,10 @@ class TestResolveBaseline:
             def model_name_to_deployment_indices(self):
                 raise RuntimeError("router is mid-reload")
 
-        assert resolve_baseline(None, Exploding(), ["anything"]) is None
+        assert resolve_baseline(Exploding(), ["anything"], REQUEST) is None
 
     def test_an_empty_candidate_set_zeroes_the_driver_rather_than_inventing_one(self, parent):
-        assert resolve_baseline(None, parent, []) is None
+        assert resolve_baseline(parent, [], REQUEST) is None
 
 
 class TestDeploymentsPricedByBaseModel:
@@ -142,7 +151,7 @@ class TestDeploymentsPricedByBaseModel:
                 "model_info": {"base_model": "azure/gpt-4.1"},
             },
         )
-        assert resolve_baseline(None, router, ["cheap", "big"]).model == "azure/gpt-4.1"
+        assert resolve_baseline(router, ["cheap", "big"], REQUEST).model == "azure/gpt-4.1"
 
     def test_an_all_azure_pool_still_has_a_baseline(self):
         """Otherwise nothing prices, the driver is disabled and the card reads $0.00."""
@@ -153,7 +162,7 @@ class TestDeploymentsPricedByBaseModel:
                 "model_info": {"base_model": "azure/gpt-4.1"},
             },
         )
-        assert resolve_baseline(None, router, ["big"]).model == "azure/gpt-4.1"
+        assert resolve_baseline(router, ["big"], REQUEST).model == "azure/gpt-4.1"
 
 
 class TestDeploymentPricingOverrides:
@@ -173,7 +182,7 @@ class TestDeploymentPricingOverrides:
         really have cost. Ranking on the public rate picks the wrong counterfactual and
         then prices it at a rate nobody pays."""
         router = self._router({})
-        assert resolve_baseline(None, router, ["cheap", "top"]).model == "anthropic/claude-opus-4-5"
+        assert resolve_baseline(router, ["cheap", "top"], REQUEST).model == "anthropic/claude-opus-4-5"
 
         # haiku configured 1000x above its public rate now outprices opus
         overridden = Router(
@@ -189,4 +198,4 @@ class TestDeploymentPricingOverrides:
                 {"model_name": "top", "litellm_params": {"model": "anthropic/claude-opus-4-5"}},
             ]
         )
-        assert resolve_baseline(None, overridden, ["cheap", "top"]).model == "anthropic/claude-haiku-4-5"
+        assert resolve_baseline(overridden, ["cheap", "top"], REQUEST).model == "anthropic/claude-haiku-4-5"

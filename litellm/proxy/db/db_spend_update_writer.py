@@ -59,6 +59,22 @@ from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
 from litellm.proxy.spend_tracking.savings import compute_savings_spend
+
+
+def _get_llm_router():
+    """The proxy's router, or None outside a running proxy.
+
+    Injected rather than imported where it is used, so the savings computation stays
+    a pure function of its arguments and the caller owns where the router comes from.
+    """
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        return llm_router
+    except Exception:  # noqa: BLE001  # no proxy in scope; savings degrade to zero
+        return None
+
+
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 
 if TYPE_CHECKING:
@@ -1859,6 +1875,7 @@ class DBSpendUpdateWriter:
                 cache_read_input_tokens=cache_read_input_tokens,
                 routing_decision=_metadata.get("routing_decision"),
                 model_id=payload.get("model_id"),
+                llm_router=_get_llm_router(),
                 usage_object=usage_obj,
             )
 
