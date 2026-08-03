@@ -2,7 +2,7 @@
 
 import os
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -34,7 +34,7 @@ class GraySwanGuardrailMissingSecrets(Exception):
 class GraySwanGuardrailAPIError(Exception):
     """Raised when the Gray Swan API returns an error."""
 
-    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
+    def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
 
@@ -63,18 +63,18 @@ class GraySwanGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        guardrail_name: Optional[str] = "grayswan",
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        on_flagged_action: Optional[str] = None,
-        violation_threshold: Optional[float] = None,
-        reasoning_mode: Optional[str] = None,
-        categories: Optional[Dict[str, str]] = None,
-        policy_id: Optional[str] = None,
+        guardrail_name: str | None = "grayswan",
+        api_key: str | None = None,
+        api_base: str | None = None,
+        on_flagged_action: str | None = None,
+        violation_threshold: float | None = None,
+        reasoning_mode: str | None = None,
+        categories: dict[str, str] | None = None,
+        policy_id: str | None = None,
         streaming_end_of_stream_only: bool = False,
         streaming_sampling_rate: int = 5,
-        fail_open: Optional[bool] = True,
-        guardrail_timeout: Optional[float] = 30.0,
+        fail_open: bool | None = True,
+        guardrail_timeout: float | None = 30.0,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -126,7 +126,7 @@ class GraySwanGuardrail(CustomGuardrail):
         )
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
@@ -266,7 +266,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Legacy Test Interface (for backward compatibility)
     # ------------------------------------------------------------------
 
-    async def run_grayswan_guardrail(self, payload: dict) -> Dict[str, Any]:
+    async def run_grayswan_guardrail(self, payload: dict) -> dict[str, Any]:
         """
         Run the GraySwan guardrail on a payload.
 
@@ -286,8 +286,8 @@ class GraySwanGuardrail(CustomGuardrail):
     def _process_grayswan_response(
         self,
         response_json: dict,
-        data: Optional[dict] = None,
-        hook_type: Optional[GuardrailEventHooks] = None,
+        data: dict | None = None,
+        hook_type: GuardrailEventHooks | None = None,
     ) -> None:
         """
         Legacy method for processing GraySwan API responses.
@@ -385,7 +385,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Core GraySwan API interaction
     # ------------------------------------------------------------------
 
-    async def _call_grayswan_api(self, payload: dict) -> Dict[str, Any]:
+    async def _call_grayswan_api(self, payload: dict) -> dict[str, Any]:
         """Call the GraySwan monitoring API."""
         headers = self._prepare_headers()
 
@@ -406,7 +406,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
     def _process_response_internal(
         self,
-        response_json: Dict[str, Any],
+        response_json: dict[str, Any],
         request_data: dict,
         inputs: GenericGuardrailAPIInputs,
         is_output: bool,
@@ -497,7 +497,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _prepare_headers(self) -> Dict[str, str]:
+    def _prepare_headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -508,7 +508,7 @@ class GraySwanGuardrail(CustomGuardrail):
         self,
         request_data: dict,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Optional[dict[str, str]]:
+    ) -> dict[str, str] | None:
         headers = (request_data.get("proxy_server_request") or {}).get("headers")
         if not headers:
             headers = request_data.get("headers")
@@ -534,7 +534,7 @@ class GraySwanGuardrail(CustomGuardrail):
         dynamic_body: dict,
         request_data: dict,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         payload: dict[str, Any] = {"messages": messages}
 
         categories = dynamic_body.get("categories") or self.categories
@@ -613,9 +613,9 @@ class GraySwanGuardrail(CustomGuardrail):
 
         return "\n".join(message_parts)
 
-    def _format_violated_rules(self, violated_rules: List) -> str:
+    def _format_violated_rules(self, violated_rules: list) -> str:
         """Format violated rules list into a readable string."""
-        formatted: List[str] = []
+        formatted: list[str] = []
         for rule in violated_rules:
             if isinstance(rule, dict):
                 # New format: {'rule': 6, 'name': 'Illegal Activities...', 'description': '...'}
@@ -637,7 +637,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
         return ", ".join(formatted)
 
-    def _resolve_threshold(self, value: Optional[float]) -> float:
+    def _resolve_threshold(self, value: float | None) -> float:
         if value is not None:
             return float(value)
         env_val = os.getenv("GRAYSWAN_VIOLATION_THRESHOLD")
@@ -648,7 +648,7 @@ class GraySwanGuardrail(CustomGuardrail):
                 pass
         return 0.5
 
-    def _resolve_reasoning_mode(self, value: Optional[str]) -> Optional[str]:
+    def _resolve_reasoning_mode(self, value: str | None) -> str | None:
         if value and value.lower() in self.SUPPORTED_REASONING_MODES:
             return value.lower()
         env_val = os.getenv("GRAYSWAN_REASONING_MODE")
@@ -662,7 +662,7 @@ class GraySwanGuardrail(CustomGuardrail):
         request_data: dict,
         start_time: float,
         end_time: float,
-        status_code: Optional[int] = None,
+        status_code: int | None = None,
     ) -> None:
         """Log guardrail failure and attach standard logging metadata."""
         try:

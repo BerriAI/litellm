@@ -7,7 +7,8 @@ storage backends (e.g., Azure Blob Storage) and managing associated metadata.
 
 import base64
 import time
-from typing import Any, List, Mapping, cast
+from collections.abc import Mapping
+from typing import Any, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
@@ -34,7 +35,7 @@ class StorageBackendFileService:
     async def upload_file_to_storage_backend(
         file_data: Mapping[str, Any],
         target_storage: str,
-        target_model_names: List[str],
+        target_model_names: list[str],
         purpose: OpenAIFilesPurpose,
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
@@ -153,7 +154,7 @@ class StorageBackendFileService:
     @staticmethod
     def _create_unified_file_id(
         file_type: str,
-        target_model_names: List[str],
+        target_model_names: list[str],
         file_id: str,
     ) -> str:
         """
@@ -183,7 +184,7 @@ class StorageBackendFileService:
     async def _store_in_managed_files(
         file_object: OpenAIFileObject,
         file_data: Mapping[str, Any],
-        target_model_names: List[str],
+        target_model_names: list[str],
         target_storage: str,
         storage_url: str,
         proxy_logging_obj: ProxyLogging,

@@ -423,8 +423,7 @@ def _classify_callback_value(value: object) -> ValueClass:
     if not isinstance(value, str):
         return "not-a-string"
     inner = value
-    if inner.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
-        inner = inner[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
+    inner = inner.removeprefix(_CALLBACK_VAR_ENCRYPTED_PREFIX)
     return classify_value(inner, key="callback")
 
 

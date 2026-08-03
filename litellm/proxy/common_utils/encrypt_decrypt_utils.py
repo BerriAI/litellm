@@ -1,6 +1,6 @@
 import base64
 import os
-from typing import Literal, Optional, cast
+from typing import Literal, cast
 
 from litellm._logging import verbose_proxy_logger
 
@@ -91,7 +91,7 @@ def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     return AESGCM(_derive_key(signing_key)).decrypt(nonce, blob, None).decode("utf-8")
 
 
-def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
+def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
     signing_key = new_encryption_key or _get_salt_key()
 
     try:
@@ -145,7 +145,7 @@ def decrypt_value_helper(
         # if it's not str - do not decrypt it, return the value
         return value
     except Exception as e:
-        error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+        error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {e!s}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
         if exception_type == "debug":
             verbose_proxy_logger.debug(error_message)
             return value if return_original_value else None

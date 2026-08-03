@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from litellm.integrations.opentelemetry import OpenTelemetry
 
@@ -25,7 +25,7 @@ class LevoConfig:
 
     def __init__(
         self,
-        otlp_auth_headers: Optional[str],
+        otlp_auth_headers: str | None,
         protocol: Protocol,
         endpoint: str,
     ):

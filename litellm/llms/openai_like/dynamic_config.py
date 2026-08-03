@@ -2,7 +2,8 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from collections.abc import Coroutine
+from typing import Any, Literal, overload
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -25,20 +26,20 @@ def create_config_class(provider: SimpleProviderConfig):
     class JSONProviderConfig(base_class):  # type: ignore[valid-type,misc]
         @overload
         def _transform_messages(
-            self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-        ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+            self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+        ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
         @overload
         def _transform_messages(
             self,
-            messages: List[AllMessageValues],
+            messages: list[AllMessageValues],
             model: str,
             is_async: Literal[False] = False,
-        ) -> List[AllMessageValues]: ...
+        ) -> list[AllMessageValues]: ...
 
         def _transform_messages(
-            self, messages: List[AllMessageValues], model: str, is_async: bool = False
-        ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+            self, messages: list[AllMessageValues], model: str, is_async: bool = False
+        ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
             """Transform messages based on special_handling config"""
 
             # Handle content list to string conversion if configured
@@ -51,8 +52,8 @@ def create_config_class(provider: SimpleProviderConfig):
                 return super()._transform_messages(messages=messages, model=model, is_async=False)
 
         def _get_openai_compatible_provider_info(
-            self, api_base: Optional[str], api_key: Optional[str]
-        ) -> Tuple[Optional[str], Optional[str]]:
+            self, api_base: str | None, api_key: str | None
+        ) -> tuple[str | None, str | None]:
             """Get API base and key from JSON config"""
 
             # Resolve base URL
@@ -69,12 +70,12 @@ def create_config_class(provider: SimpleProviderConfig):
 
         def get_complete_url(
             self,
-            api_base: Optional[str],
-            api_key: Optional[str],
+            api_base: str | None,
+            api_key: str | None,
             model: str,
             optional_params: dict,
             litellm_params: dict,
-            stream: Optional[bool] = None,
+            stream: bool | None = None,
         ) -> str:
             """Build complete URL for the API endpoint"""
             if not api_base:
@@ -162,7 +163,7 @@ def create_config_class(provider: SimpleProviderConfig):
             return optional_params
 
         @property
-        def custom_llm_provider(self) -> Optional[str]:
+        def custom_llm_provider(self) -> str | None:
             return provider.slug
 
     return JSONProviderConfig
@@ -195,7 +196,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             self,
             headers: dict,
             model: str,
-            litellm_params: Optional[GenericLiteLLMParams],
+            litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
             api_key = litellm_params.api_key or get_secret_str(provider.api_key_env)
@@ -205,7 +206,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
 
         def get_complete_url(
             self,
-            api_base: Optional[str],
+            api_base: str | None,
             litellm_params: dict,
         ) -> str:
             if not api_base:
@@ -223,7 +224,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
         def transform_responses_api_request(
             self,
             model: str,
-            input: Union[str, ResponseInputParam],
+            input: str | ResponseInputParam,
             response_api_optional_request_params: dict,
             litellm_params: GenericLiteLLMParams,
             headers: dict,

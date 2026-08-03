@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 import threading
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 import litellm
@@ -41,15 +41,15 @@ else:
 class VertexBase:
     def __init__(self) -> None:
         super().__init__()
-        self.access_token: Optional[str] = None
-        self.refresh_token: Optional[str] = None
-        self._credentials: Optional[GoogleCredentialsObject] = None
-        self._credentials_project_mapping: Dict[
-            Tuple[Optional[VERTEX_CREDENTIALS_TYPES], Optional[str]],
-            Tuple[GoogleCredentialsObject, Optional[str]],
+        self.access_token: str | None = None
+        self.refresh_token: str | None = None
+        self._credentials: GoogleCredentialsObject | None = None
+        self._credentials_project_mapping: dict[
+            tuple[VERTEX_CREDENTIALS_TYPES | None, str | None],
+            tuple[GoogleCredentialsObject, str | None],
         ] = {}
-        self.project_id: Optional[str] = None
-        self.async_handler: Optional[AsyncHTTPHandler] = None
+        self.project_id: str | None = None
+        self.async_handler: AsyncHTTPHandler | None = None
         # Per-credential-key asyncio.Lock for single-flight async refresh.
         # Prevents thundering herd when token expires under high concurrency.
         # Uses a regular dict (not WeakValueDictionary) so the lock identity is
@@ -59,17 +59,17 @@ class VertexBase:
         # each lock; the entry is pruned when the count reaches zero, so the
         # dict stays bounded even in long-running high-cardinality deployments
         # without depending on any private asyncio internals.
-        self._async_refresh_locks: Dict[tuple, asyncio.Lock] = {}
-        self._async_refresh_lock_refcounts: Dict[tuple, int] = {}
+        self._async_refresh_locks: dict[tuple, asyncio.Lock] = {}
+        self._async_refresh_lock_refcounts: dict[tuple, int] = {}
         # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
-        self._background_refresh_tasks: Dict[tuple, asyncio.Task] = {}
+        self._background_refresh_tasks: dict[tuple, asyncio.Task] = {}
         # Protects the sync get_access_token refresh path.
         # Use RLock so that the reauthentication retry path (which calls
         # back into get_access_token while still holding the lock) can
         # re-acquire it without deadlocking the current thread.
         self._sync_refresh_lock = threading.RLock()
 
-    def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
+    def get_vertex_region(self, vertex_region: str | None, model: str) -> str:
         import litellm
 
         # Try to get supported_regions directly from model_cost
@@ -97,9 +97,9 @@ class VertexBase:
 
     def load_auth(
         self,
-        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        project_id: Optional[str],
-    ) -> Tuple[Any, str]:
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+    ) -> tuple[Any, str]:
         if credentials is not None:
             if isinstance(credentials, str):
                 _is_path = os.path.exists(
@@ -121,12 +121,12 @@ class VertexBase:
                     raise Exception(
                         "Unable to load vertex credentials from environment. "
                         "Ensure the JSON is valid (check for unescaped newlines in private_key). "
-                        "Parse error: {}".format(type(e).__name__)
+                        f"Parse error: {type(e).__name__}"
                     )
             elif isinstance(credentials, dict):
                 json_obj = credentials
             else:
-                raise ValueError("Invalid credentials type: {}".format(type(credentials)))
+                raise ValueError(f"Invalid credentials type: {type(credentials)}")
 
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
@@ -259,7 +259,7 @@ class VertexBase:
     def get_default_vertex_location(self) -> str:
         return "us-central1"
 
-    def get_api_base(self, api_base: Optional[str], vertex_location: Optional[str]) -> str:
+    def get_api_base(self, api_base: str | None, vertex_location: str | None) -> str:
         if api_base:
             return api_base
         return get_vertex_base_url(vertex_location or self.get_default_vertex_location())
@@ -269,9 +269,9 @@ class VertexBase:
         vertex_location: str,
         vertex_project: str,
         partner: VertexPartnerProvider,
-        stream: Optional[bool],
+        stream: bool | None,
         model: str,
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
     ) -> str:
         """Return the base url for the vertex partner models"""
 
@@ -297,12 +297,12 @@ class VertexBase:
 
     def get_complete_vertex_url(
         self,
-        custom_api_base: Optional[str],
-        vertex_location: Optional[str],
-        vertex_project: Optional[str],
+        custom_api_base: str | None,
+        vertex_location: str | None,
+        vertex_project: str | None,
         project_id: str,
         partner: VertexPartnerProvider,
-        stream: Optional[bool],
+        stream: bool | None,
         model: str,
     ) -> str:
         # Use get_vertex_region to handle global-only models
@@ -392,8 +392,8 @@ class VertexBase:
     def _try_get_cached_token(
         self,
         credential_cache_key: tuple,
-        project_id: Optional[str],
-    ) -> Optional[Tuple[str, str]]:
+        project_id: str | None,
+    ) -> tuple[str, str] | None:
         """
         Look up cached credentials and return (token, project_id) if the token
         is FRESH. Returns None if not cached or not fresh.
@@ -415,8 +415,8 @@ class VertexBase:
     def _try_get_usable_cached_token(
         self,
         credential_cache_key: tuple,
-        project_id: Optional[str],
-    ) -> Optional[Tuple[str, str, "TokenState", Any, Optional[str]]]:
+        project_id: str | None,
+    ) -> tuple[str, str, "TokenState", Any, str | None] | None:
         """
         Look up cached credentials and return usable token info for FRESH or
         STALE tokens (both are still valid for outbound requests). STALE
@@ -439,7 +439,7 @@ class VertexBase:
             return None
         return creds.token, resolved_project, token_state, creds, cached_project_id
 
-    def _unpack_cached_credentials(self, credential_cache_key: tuple) -> Tuple[Any, Optional[str]]:
+    def _unpack_cached_credentials(self, credential_cache_key: tuple) -> tuple[Any, str | None]:
         """
         Return (credentials, project_id) from the cache, or (None, None) if
         not cached. Handles both tuple and legacy cache formats.
@@ -472,10 +472,10 @@ class VertexBase:
 
     async def _load_and_cache_credentials(
         self,
-        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        project_id: Optional[str],
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
         credential_cache_key: tuple,
-    ) -> Tuple[Any, Optional[str]]:
+    ) -> tuple[Any, str | None]:
         """Load credentials via load_auth (in thread) and cache the result."""
         try:
             _credentials, credential_project_id = await asyncify(self.load_auth)(
@@ -497,7 +497,7 @@ class VertexBase:
         self,
         credentials: Any,
         credential_cache_key: tuple,
-        credential_project_id: Optional[str],
+        credential_project_id: str | None,
     ) -> None:
         """
         Refresh credentials in the background without blocking the calling request.
@@ -549,7 +549,7 @@ class VertexBase:
         self,
         credentials: Any,
         credential_cache_key: tuple,
-        credential_project_id: Optional[str],
+        credential_project_id: str | None,
     ) -> None:
         """Kick off a single background refresh for ``credential_cache_key``.
 
@@ -574,12 +574,12 @@ class VertexBase:
 
     def _ensure_access_token(
         self,
-        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        project_id: Optional[str],
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Returns auth token and project id
         """
@@ -602,19 +602,19 @@ class VertexBase:
 
     def _check_custom_proxy(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         custom_llm_provider: str,
-        gemini_api_key: Optional[str],
+        gemini_api_key: str | None,
         endpoint: str,
-        stream: Optional[bool],
-        auth_header: Optional[str],
+        stream: bool | None,
+        auth_header: str | None,
         url: str,
-        model: Optional[str] = None,
-        vertex_project: Optional[str] = None,
-        vertex_location: Optional[str] = None,
-        vertex_api_version: Optional[Literal["v1", "v1beta1"]] = None,
+        model: str | None = None,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        vertex_api_version: Literal["v1", "v1beta1"] | None = None,
         use_psc_endpoint_format: bool = False,
-    ) -> Tuple[Optional[str], str]:
+    ) -> tuple[str | None, str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
 
@@ -669,7 +669,7 @@ class VertexBase:
                 elif urlparse(api_base).path in ("", "/"):
                     url = api_base.rstrip("/") + urlparse(url).path
                 else:
-                    url = "{}:{}".format(api_base, endpoint)
+                    url = f"{api_base}:{endpoint}"
             if stream is True:
                 url = url + "?alt=sse"
         return auth_header, url
@@ -677,18 +677,18 @@ class VertexBase:
     def _get_token_and_url(
         self,
         model: str,
-        auth_header: Optional[str],
-        gemini_api_key: Optional[str],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        stream: Optional[bool],
+        auth_header: str | None,
+        gemini_api_key: str | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        stream: bool | None,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-        api_base: Optional[str],
-        should_use_v1beta1_features: Optional[bool] = False,
+        api_base: str | None,
+        should_use_v1beta1_features: bool | None = False,
         mode: all_gemini_url_modes = "chat",
         use_psc_endpoint_format: bool = False,
-    ) -> Tuple[Optional[str], str]:
+    ) -> tuple[str | None, str]:
         """
         Internal function. Returns the token and url for the call.
 
@@ -697,7 +697,7 @@ class VertexBase:
         Returns
             token, url
         """
-        version: Optional[Literal["v1beta1", "v1"]] = None
+        version: Literal["v1beta1", "v1"] | None = None
         if custom_llm_provider == "gemini":
             if not gemini_api_key:
                 raise ValueError(
@@ -743,11 +743,11 @@ class VertexBase:
 
     def _handle_reauthentication(
         self,
-        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        project_id: Optional[str],
-        credential_cache_key: Tuple,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        credential_cache_key: tuple,
         error: Exception,
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Handle reauthentication when credentials refresh fails.
 
@@ -784,18 +784,18 @@ class VertexBase:
         except Exception as retry_error:
             verbose_logger.error(
                 f"Reauthentication retry failed for project_id: {project_id}. "
-                f"Original error: {str(error)}. Retry error: {str(retry_error)}"
+                f"Original error: {error!s}. Retry error: {retry_error!s}"
             )
             # Re-raise the original error for better context
             raise error
 
     async def _handle_reauthentication_async(
         self,
-        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        project_id: Optional[str],
-        credential_cache_key: Tuple,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        credential_cache_key: tuple,
         error: Exception,
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Async reauthentication retry that stays within the per-key async lock.
         """
@@ -829,9 +829,7 @@ class VertexBase:
 
             if _credentials.token is None or not isinstance(_credentials.token, str):
                 raise ValueError(
-                    "Could not resolve credentials token. Got None or non-string token (type={})".format(
-                        type(_credentials.token).__name__
-                    )
+                    f"Could not resolve credentials token. Got None or non-string token (type={type(_credentials.token).__name__})"
                 )
             if project_id is None:
                 raise ValueError("Could not resolve project_id")
@@ -840,16 +838,16 @@ class VertexBase:
         except Exception as retry_error:
             verbose_logger.error(
                 f"Async reauthentication retry failed for project_id: {project_id}. "
-                f"Original error: {str(error)}. Retry error: {str(retry_error)}"
+                f"Original error: {error!s}. Retry error: {retry_error!s}"
             )
             raise error
 
     def get_access_token(
         self,
-        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        project_id: Optional[str],
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
         _retry_reauth: bool = False,
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Get access token and project id
 
@@ -871,7 +869,7 @@ class VertexBase:
         # Convert dict credentials to string for caching
         cache_credentials = json.dumps(credentials) if isinstance(credentials, dict) else credentials
         credential_cache_key = (cache_credentials, project_id)
-        _credentials: Optional[GoogleCredentialsObject] = None
+        _credentials: GoogleCredentialsObject | None = None
 
         verbose_logger.debug(f"Checking cached credentials for project_id: {project_id}")
 
@@ -900,15 +898,13 @@ class VertexBase:
                 _credentials, credential_project_id = self.load_auth(credentials=credentials, project_id=project_id)
             except Exception as e:
                 verbose_logger.exception(
-                    f"Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {str(e)}"
+                    f"Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {e!s}"
                 )
                 raise e
 
             if _credentials is None:
                 raise ValueError(
-                    "Could not resolve credentials - either dynamically or from environment, for project_id: {}".format(
-                        project_id
-                    )
+                    f"Could not resolve credentials - either dynamically or from environment, for project_id: {project_id}"
                 )
             # Cache the project_id and credentials from load_auth result (resolved project_id)
             self._credentials_project_mapping[credential_cache_key] = (
@@ -958,9 +954,7 @@ class VertexBase:
         ## VALIDATION STEP
         if _credentials.token is None or not isinstance(_credentials.token, str):
             raise ValueError(
-                "Could not resolve credentials token. Got None or non-string token (type={})".format(
-                    type(_credentials.token).__name__
-                )
+                f"Could not resolve credentials token. Got None or non-string token (type={type(_credentials.token).__name__})"
             )
 
         if project_id is None:
@@ -970,9 +964,9 @@ class VertexBase:
 
     async def get_access_token_async(
         self,
-        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        project_id: Optional[str],
-    ) -> Tuple[str, str]:
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+    ) -> tuple[str, str]:
         """
         Async version of get_access_token with single-flight refresh coordination.
 
@@ -1085,9 +1079,7 @@ class VertexBase:
                 # Final validation
                 if _credentials.token is None or not isinstance(_credentials.token, str):
                     raise ValueError(
-                        "Could not resolve credentials token. Got None or non-string token (type={})".format(
-                            type(_credentials.token).__name__
-                        )
+                        f"Could not resolve credentials token. Got None or non-string token (type={type(_credentials.token).__name__})"
                     )
                 if project_id is None:
                     raise ValueError("Could not resolve project_id")
@@ -1098,12 +1090,12 @@ class VertexBase:
 
     async def _ensure_access_token_async(
         self,
-        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        project_id: Optional[str],
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Async version of _ensure_access_token
         """
@@ -1115,7 +1107,7 @@ class VertexBase:
                 project_id=project_id,
             )
 
-    def set_headers(self, auth_header: Optional[str], extra_headers: Optional[dict]) -> dict:
+    def set_headers(self, auth_header: str | None, extra_headers: dict | None) -> dict:
         headers = {
             "Content-Type": "application/json",
         }
@@ -1127,7 +1119,7 @@ class VertexBase:
         return headers
 
     @staticmethod
-    def get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
+    def get_vertex_ai_project(litellm_params: dict) -> str | None:
         return (
             litellm_params.pop("vertex_project", None)
             or litellm_params.pop("vertex_ai_project", None)
@@ -1136,7 +1128,7 @@ class VertexBase:
         )
 
     @staticmethod
-    def get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
+    def get_vertex_ai_credentials(litellm_params: dict) -> str | None:
         return (
             litellm_params.pop("vertex_credentials", None)
             or litellm_params.pop("vertex_ai_credentials", None)
@@ -1144,7 +1136,7 @@ class VertexBase:
         )
 
     @staticmethod
-    def get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
+    def get_vertex_ai_location(litellm_params: dict) -> str | None:
         return (
             litellm_params.pop("vertex_location", None)
             or litellm_params.pop("vertex_ai_location", None)
@@ -1154,7 +1146,7 @@ class VertexBase:
         )
 
     @staticmethod
-    def safe_get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
+    def safe_get_vertex_ai_project(litellm_params: dict) -> str | None:
         """
         Safely get Vertex AI project without mutating the litellm_params dict.
 
@@ -1175,7 +1167,7 @@ class VertexBase:
         )
 
     @staticmethod
-    def safe_get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
+    def safe_get_vertex_ai_credentials(litellm_params: dict) -> str | None:
         """
         Safely get Vertex AI credentials without mutating the litellm_params dict.
 
@@ -1195,7 +1187,7 @@ class VertexBase:
         )
 
     @staticmethod
-    def safe_get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
+    def safe_get_vertex_ai_location(litellm_params: dict) -> str | None:
         """
         Safely get Vertex AI location without mutating the litellm_params dict.
 

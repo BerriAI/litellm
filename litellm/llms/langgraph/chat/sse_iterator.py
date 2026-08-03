@@ -6,15 +6,11 @@ Handles Server-Sent Events (SSE) streaming responses from LangGraph.
 
 import json
 import uuid
-from typing import TYPE_CHECKING, Optional
 
 import httpx
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
-
-if TYPE_CHECKING:
-    pass
 
 
 class LangGraphSSEStreamIterator:
@@ -44,7 +40,7 @@ class LangGraphSSEStreamIterator:
         self.async_line_iterator = self.response.aiter_lines()
         return self
 
-    def _parse_sse_line(self, line: str) -> Optional[ModelResponseStream]:
+    def _parse_sse_line(self, line: str) -> ModelResponseStream | None:
         """
         Parse a single SSE line and return a ModelResponse chunk if applicable.
 
@@ -71,7 +67,7 @@ class LangGraphSSEStreamIterator:
 
         return None
 
-    def _process_data(self, data) -> Optional[ModelResponseStream]:
+    def _process_data(self, data) -> ModelResponseStream | None:
         """
         Process parsed data from SSE stream.
 
@@ -101,7 +97,7 @@ class LangGraphSSEStreamIterator:
 
         return None
 
-    def _process_messages_event(self, payload) -> Optional[ModelResponseStream]:
+    def _process_messages_event(self, payload) -> ModelResponseStream | None:
         """
         Process a messages event from the stream.
 
@@ -116,9 +112,7 @@ class LangGraphSSEStreamIterator:
                         content = msg.get("content", "")
 
                         # Only return AI messages with content
-                        if msg_type == "ai" and content:
-                            return self._create_content_chunk(content)
-                        elif msg_type == "AIMessageChunk" and content:
+                        if msg_type == "ai" and content or msg_type == "AIMessageChunk" and content:
                             return self._create_content_chunk(content)
                 elif isinstance(item, dict):
                     msg_type = item.get("type", "")
@@ -128,7 +122,7 @@ class LangGraphSSEStreamIterator:
 
         return None
 
-    def _process_metadata_event(self, payload) -> Optional[ModelResponseStream]:
+    def _process_metadata_event(self, payload) -> ModelResponseStream | None:
         """
         Process a metadata event, which may signal the end of the stream.
         """
@@ -202,7 +196,7 @@ class LangGraphSSEStreamIterator:
         except httpx.StreamClosed:
             raise StopIteration
         except Exception as e:
-            verbose_logger.error(f"Error in LangGraph SSE stream: {str(e)}")
+            verbose_logger.error(f"Error in LangGraph SSE stream: {e!s}")
             raise StopIteration
 
     async def __anext__(self) -> ModelResponseStream:
@@ -230,5 +224,5 @@ class LangGraphSSEStreamIterator:
         except httpx.StreamClosed:
             raise StopAsyncIteration
         except Exception as e:
-            verbose_logger.error(f"Error in LangGraph SSE stream: {str(e)}")
+            verbose_logger.error(f"Error in LangGraph SSE stream: {e!s}")
             raise StopAsyncIteration

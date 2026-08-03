@@ -3,15 +3,14 @@
 
 import os
 from datetime import datetime
-from typing import Dict, Optional
 
 import httpx
 
 import litellm
 from litellm import verbose_logger
 from litellm.integrations.braintrust_mock_client import (
-    should_use_braintrust_mock,
     create_mock_braintrust_client,
+    should_use_braintrust_mock,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
@@ -34,7 +33,7 @@ def get_utc_datetime():
 
 
 class BraintrustLogger(CustomLogger):
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> None:
+    def __init__(self, api_key: str | None = None, api_base: str | None = None) -> None:
         super().__init__()
         self.is_mock_mode = should_use_braintrust_mock()
         if self.is_mock_mode:
@@ -48,11 +47,11 @@ class BraintrustLogger(CustomLogger):
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
         }
-        self._project_id_cache: Dict[str, str] = {}  # Cache mapping project names to IDs
+        self._project_id_cache: dict[str, str] = {}  # Cache mapping project names to IDs
         self.global_braintrust_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.global_braintrust_sync_http_handler = HTTPHandler()
 
-    def validate_environment(self, api_key: Optional[str]):
+    def validate_environment(self, api_key: str | None):
         """
         Expects
         BRAINTRUST_API_KEY
@@ -64,7 +63,7 @@ class BraintrustLogger(CustomLogger):
             missing_keys.append("BRAINTRUST_API_KEY")
 
         if len(missing_keys) > 0:
-            raise Exception("Missing keys={} in environment.".format(missing_keys))
+            raise Exception(f"Missing keys={missing_keys} in environment.")
 
     def get_project_id_sync(self, project_name: str) -> str:
         """
@@ -180,7 +179,7 @@ class BraintrustLogger(CustomLogger):
 
             cost = kwargs.get("response_cost", None)
 
-            metrics: Optional[dict] = None
+            metrics: dict | None = None
             usage_obj = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
                 litellm.utils.get_logging_id(start_time, response_obj)
@@ -305,7 +304,7 @@ class BraintrustLogger(CustomLogger):
 
             cost = kwargs.get("response_cost", None)
 
-            metrics: Optional[dict] = None
+            metrics: dict | None = None
             usage_obj = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
                 litellm.utils.get_logging_id(start_time, response_obj)

@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -7,7 +7,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
 class OllamaError(BaseLLMException):
-    def __init__(self, status_code: int, message: str, headers: Union[dict, httpx.Headers]):
+    def __init__(self, status_code: int, message: str, headers: dict | httpx.Headers):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
@@ -53,7 +53,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
     """
 
     @staticmethod
-    def get_api_key(api_key=None) -> Optional[str]:
+    def get_api_key(api_key=None) -> str | None:
         """Get API key from environment variables or litellm configuration"""
         import os
 
@@ -69,14 +69,14 @@ class OllamaModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> str:
+    def get_api_base(api_base: str | None = None) -> str:
         from litellm.secret_managers.main import get_secret_str
 
         # env var OLLAMA_API_BASE or default
         return api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
 
     @classmethod
-    def get_server_api_base(cls, api_base: Optional[str] = None) -> str:
+    def get_server_api_base(cls, api_base: str | None = None) -> str:
         api_base = cls.get_api_base(api_base).rstrip("/")
         for suffix in (
             "/api/generate",
@@ -90,7 +90,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 return api_base[: -len(suffix)]
         return api_base
 
-    def get_models(self, api_key=None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key=None, api_base: str | None = None) -> list[str]:
         """
         List all models available on the Ollama server via /api/tags endpoint.
         """
@@ -159,7 +159,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         return "tools" in _template.lower()
 
     @staticmethod
-    def _get_max_tokens(ollama_model_info: dict) -> Optional[int]:
+    def _get_max_tokens(ollama_model_info: dict) -> int | None:
         _model_info: dict = ollama_model_info.get("model_info", {})
 
         for key, value in _model_info.items():
@@ -170,8 +170,8 @@ class OllamaModelInfo(BaseLLMModelInfo):
     def get_runtime_model_info(
         self,
         model: str,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
     ) -> dict[str, Any]:
         from litellm import module_level_client
 
@@ -219,9 +219,9 @@ class OllamaModelInfo(BaseLLMModelInfo):
     def get_model_info(
         self,
         model: str,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
+        api_base: str | None = None,
+        api_key: str | None = None,
+    ) -> dict[str, Any] | None:
         if self._is_static_ollama_model(model):
             return None
         return self.get_runtime_model_info(model=model, api_base=api_base, api_key=api_key)

@@ -1,5 +1,3 @@
-from typing import Optional, Union
-
 import litellm
 
 from ..exceptions import UnsupportedParamsError
@@ -7,21 +5,10 @@ from ..types.llms.openai import *
 
 
 def get_optional_params_add_message(
-    role: Optional[str],
-    content: Optional[
-        Union[
-            str,
-            List[
-                Union[
-                    MessageContentTextObject,
-                    MessageContentImageFileObject,
-                    MessageContentImageURLObject,
-                ]
-            ],
-        ]
-    ],
-    attachments: Optional[List[Attachment]],
-    metadata: Optional[dict],
+    role: str | None,
+    content: str | List[MessageContentTextObject | MessageContentImageFileObject | MessageContentImageURLObject] | None,
+    attachments: List[Attachment] | None,
+    metadata: dict | None,
     custom_llm_provider: str,
     **kwargs,
 ):
@@ -56,9 +43,7 @@ def get_optional_params_add_message(
                 elif k not in supported_params:
                     raise litellm.utils.UnsupportedParamsError(
                         status_code=500,
-                        message="k={}, not supported by {}. Supported params={}. To drop it from the call, set `litellm.drop_params = True`.".format(
-                            k, custom_llm_provider, supported_params
-                        ),
+                        message=f"k={k}, not supported by {custom_llm_provider}. Supported params={supported_params}. To drop it from the call, set `litellm.drop_params = True`.",
                     )
             return non_default_params
 
@@ -71,19 +56,19 @@ def get_optional_params_add_message(
             non_default_params=non_default_params, optional_params=optional_params
         )
     for k in passed_params.keys():
-        if k not in default_params.keys():
+        if k not in default_params:
             optional_params[k] = passed_params[k]
     return optional_params
 
 
 def get_optional_params_image_gen(
-    n: Optional[int] = None,
-    quality: Optional[str] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    style: Optional[str] = None,
-    user: Optional[str] = None,
-    custom_llm_provider: Optional[str] = None,
+    n: int | None = None,
+    quality: str | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    style: str | None = None,
+    user: str | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -142,6 +127,6 @@ def get_optional_params_image_gen(
             optional_params["sampleCount"] = int(n)
 
     for k in passed_params.keys():
-        if k not in default_params.keys():
+        if k not in default_params:
             optional_params[k] = passed_params[k]
     return optional_params

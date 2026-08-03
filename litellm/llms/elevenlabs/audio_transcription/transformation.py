@@ -2,8 +2,6 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
-from typing import List, Optional, Union
-
 from httpx import Headers, Response
 
 import litellm
@@ -28,7 +26,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def custom_llm_provider(self) -> str:
         return litellm.LlmProviders.ELEVENLABS.value
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         return ["language", "temperature"]
 
     def map_openai_params(
@@ -48,7 +46,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                     optional_params[k] = v
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return ElevenLabsException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_audio_transcription_request(
@@ -146,16 +144,16 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return response
 
         except Exception as e:
-            raise ValueError(f"Error transforming ElevenLabs response: {str(e)}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming ElevenLabs response: {e!s}\nResponse: {raw_response.text}")
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base is None:
             api_base = get_secret_str("ELEVENLABS_API_BASE") or "https://api.elevenlabs.io"
@@ -170,11 +168,11 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = api_key or get_secret_str("ELEVENLABS_API_KEY")
         if api_key is None:

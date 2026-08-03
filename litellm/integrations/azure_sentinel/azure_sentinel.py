@@ -16,7 +16,6 @@ import asyncio
 import os
 import time
 import traceback
-from typing import List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -35,13 +34,13 @@ class AzureSentinelLogger(CustomBatchLogger):
 
     def __init__(
         self,
-        dcr_immutable_id: Optional[str] = None,
-        stream_name: Optional[str] = None,
-        endpoint: Optional[str] = None,
-        tenant_id: Optional[str] = None,
-        client_id: Optional[str] = None,
-        client_secret: Optional[str] = None,
-        audit_stream_name: Optional[str] = None,
+        dcr_immutable_id: str | None = None,
+        stream_name: str | None = None,
+        endpoint: str | None = None,
+        tenant_id: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        audit_stream_name: str | None = None,
         **kwargs,
     ):
         """
@@ -120,14 +119,14 @@ class AzureSentinelLogger(CustomBatchLogger):
 
         # OAuth2 scope for Azure Monitor
         self.oauth_scope = "https://monitor.azure.com/.default"
-        self.oauth_token: Optional[str] = None
-        self.oauth_token_expires_at: Optional[float] = None
+        self.oauth_token: str | None = None
+        self.oauth_token_expires_at: float | None = None
 
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[StandardLoggingPayload] = []
-        self.audit_log_queue: List[StandardAuditLogPayload] = []
+        self.log_queue: list[StandardLoggingPayload] = []
+        self.audit_log_queue: list[StandardAuditLogPayload] = []
 
     @staticmethod
     def _build_api_endpoint(endpoint: str, dcr_immutable_id: str, stream_name: str) -> str:
@@ -204,8 +203,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Azure Sentinel Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
+            verbose_logger.exception(f"Azure Sentinel Layer Error - {e!s}\n{traceback.format_exc()}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -235,8 +233,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Azure Sentinel Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
+            verbose_logger.exception(f"Azure Sentinel Layer Error - {e!s}\n{traceback.format_exc()}")
 
     async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
         """
@@ -259,8 +256,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                 await self.async_send_audit_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Azure Sentinel Audit Log Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
+            verbose_logger.exception(f"Azure Sentinel Audit Log Layer Error - {e!s}\n{traceback.format_exc()}")
 
     async def async_send_batch(self):
         """
@@ -287,7 +283,7 @@ class AzureSentinelLogger(CustomBatchLogger):
 
     async def _async_send_batch_to_api(
         self,
-        log_queue: List[Union[StandardLoggingPayload, StandardAuditLogPayload]],
+        log_queue: list[StandardLoggingPayload | StandardAuditLogPayload],
         api_endpoint: str,
         log_type: str,
     ) -> None:
@@ -327,7 +323,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             )
 
         except Exception as e:
-            verbose_logger.exception(f"Azure Sentinel Error sending batch API - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Azure Sentinel Error sending batch API - {e!s}\n{traceback.format_exc()}")
         finally:
             log_queue.clear()
 
