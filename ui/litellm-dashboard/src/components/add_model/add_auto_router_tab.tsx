@@ -17,6 +17,7 @@ import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   buildComplexityRouterConfig,
+  getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
 } from "./build_complexity_router_config";
@@ -94,6 +95,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     label: model_group,
   }));
 
+  // Why the submit is unavailable, or null when it is available. The button reads this to disable
+  // itself and to say what is missing, so the two can never give different answers.
+  const submitBlockedReason =
+    getMissingTiersError(complexityRouterConfig.tiers) ?? getKeywordTierRulesError(keywordTierRules);
+
   const submitRecommendedRouter = (name: string) => {
     const {
       tiers,
@@ -119,6 +125,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+      return;
+    }
+
+    const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
+    if (keywordRulesError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(keywordRulesError);
       return;
     }
 
@@ -307,14 +320,17 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   Test Connection
                 </Button>
               }
-              <Button
-                type="primary"
-                onClick={() => {
-                  handleAutoRouterSubmit();
-                }}
-              >
-                Add Auto Router
-              </Button>
+              <Tooltip title={submitBlockedReason}>
+                <Button
+                  type="primary"
+                  disabled={submitBlockedReason !== null}
+                  onClick={() => {
+                    handleAutoRouterSubmit();
+                  }}
+                >
+                  Add Auto Router
+                </Button>
+              </Tooltip>
             </div>
           </div>
         </Form>
