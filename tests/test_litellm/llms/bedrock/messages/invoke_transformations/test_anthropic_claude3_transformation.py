@@ -264,6 +264,169 @@ def test_chunk_parser_usage_transformation():
     assert parsed["usage"]["output_tokens"] == 5
 
 
+def test_chunk_parser_maps_cache_token_counts():
+    """Cache counts only exist in the camelCase invocationMetrics block on the Invoke
+    path; dropping them bills cached traffic as fresh input (issue #34497)."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+
+    parsed = decoder._chunk_parser(
+        {
+            "type": "message_stop",
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 1,
+                "outputTokenCount": 162,
+                "cacheReadInputTokenCount": 421714,
+                "cacheWriteInputTokenCount": 1139,
+            },
+        }
+    )
+
+    assert parsed["usage"] == {
+        "input_tokens": 1,
+        "output_tokens": 162,
+        "cache_read_input_tokens": 421714,
+        "cache_creation_input_tokens": 1139,
+    }
+
+
+def test_chunk_parser_preserves_existing_usage_fields():
+    """Usage already present on the chunk (e.g. the 5m/1h cache split) must survive the
+    invocationMetrics merge."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+
+    parsed = decoder._chunk_parser(
+        {
+            "type": "message_stop",
+            "usage": {
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 1139,
+                    "ephemeral_1h_input_tokens": 0,
+                }
+            },
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 1,
+                "outputTokenCount": 162,
+            },
+        }
+    )
+
+    assert parsed["usage"]["cache_creation"] == {
+        "ephemeral_5m_input_tokens": 1139,
+        "ephemeral_1h_input_tokens": 0,
+    }
+    assert parsed["usage"]["input_tokens"] == 1
+    assert parsed["usage"]["output_tokens"] == 162
+
+
+@pytest.mark.asyncio
+async def test_invoke_stream_cache_metrics_reach_usage_and_cost():
+    """End-to-end Bedrock Invoke streaming: cache counts arrive only in
+    amazon-bedrock-invocationMetrics on the last chunk and must reach the
+    reconstructed usage so cached tokens are not priced as fresh input."""
+    from litellm import completion_cost
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/us.anthropic.claude-sonnet-4-6"
+    )
+
+    raw_chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_bdrk_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-sonnet-4-6",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "hi"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 162},
+        },
+        {
+            "type": "message_stop",
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 1,
+                "outputTokenCount": 162,
+                "cacheReadInputTokenCount": 421714,
+                "cacheWriteInputTokenCount": 1139,
+            },
+        },
+    ]
+
+    async def _stream():  # type: ignore[return-type]
+        for raw_chunk in raw_chunks:
+            yield decoder._chunk_parser(raw_chunk)
+
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=True,
+        call_type="chat",
+        start_time=datetime.now(),
+        litellm_call_id="test_invoke_stream_cache_metrics",
+        function_id="test_invoke_stream_cache_metrics",
+    )
+
+    collected: list[bytes] = []
+    async for sse in cfg.bedrock_sse_wrapper(
+        completion_stream=_stream(),
+        litellm_logging_obj=logging_obj,
+        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
+    ):
+        collected.append(sse)
+
+    built = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+        all_chunks=collected,
+        model="us.anthropic.claude-sonnet-4-6",
+        litellm_logging_obj=Mock(),
+    )
+    assert built.usage is not None
+    assert built.usage.cache_read_input_tokens == 421714
+    assert built.usage.cache_creation_input_tokens == 1139
+    assert built.usage.prompt_tokens == 422854
+    assert built.usage.completion_tokens == 162
+
+    cached_cost = completion_cost(
+        completion_response=built,
+        model="bedrock/us.anthropic.claude-sonnet-4-6",
+        custom_llm_provider="bedrock",
+    )
+    built.usage.cache_read_input_tokens = 0
+    built.usage.cache_creation_input_tokens = 0
+    built.usage.prompt_tokens_details = None
+    fresh_input_cost = completion_cost(
+        completion_response=built,
+        model="bedrock/us.anthropic.claude-sonnet-4-6",
+        custom_llm_provider="bedrock",
+    )
+    assert cached_cost < fresh_input_cost
+
+
 def test_remove_ttl_from_cache_control():
     """Ensure ttl field is removed from cache_control in messages."""
 
