@@ -39,6 +39,7 @@ _SPECIAL_HEADERS_CACHE = frozenset(
 # Excludes the two explicit litellm headers which are handled with higher priority.
 _GENERIC_SESSION_ID_HEADER_RE = re.compile(r"^x-.+-session-id$", re.IGNORECASE)
 _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-id"})
+_CODEX_TURN_METADATA_HEADER = "x-codex-turn-metadata"
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
@@ -343,6 +344,39 @@ def _get_metadata_variable_name(request: Request) -> str:
     return "metadata"
 
 
+def _is_valid_session_id(value: Any) -> bool:
+    return isinstance(value, str) and _SESSION_ID_VALUE_RE.match(value) is not None
+
+
+def _extract_codex_session_id_from_headers(
+    normalized: Dict[str, str],
+) -> Optional[str]:
+    """
+    Extract the Codex session/thread id from ``x-codex-turn-metadata``.
+
+    Codex sends this header as JSON, for example:
+    ``{"session_id": "...", "thread_id": "..."}``.
+    """
+    turn_metadata = normalized.get(_CODEX_TURN_METADATA_HEADER)
+    if not isinstance(turn_metadata, str):
+        return None
+
+    try:
+        parsed_metadata = json.loads(turn_metadata)
+    except (TypeError, ValueError):
+        return None
+
+    if not isinstance(parsed_metadata, dict):
+        return None
+
+    for key in ("session_id", "thread_id"):
+        session_id = parsed_metadata.get(key)
+        if _is_valid_session_id(session_id):
+            return session_id
+
+    return None
+
+
 def _extract_generic_session_id_from_headers(
     normalized: Dict[str, str],
 ) -> Optional[str]:
@@ -361,8 +395,7 @@ def _extract_generic_session_id_from_headers(
         if (
             key not in _EXPLICIT_SESSION_HEADERS
             and _GENERIC_SESSION_ID_HEADER_RE.match(key)
-            and isinstance(value, str)
-            and _SESSION_ID_VALUE_RE.match(value)
+            and _is_valid_session_id(value)
         ):
             return value
     return None
@@ -375,7 +408,8 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     Priority order:
     1. ``x-litellm-trace-id`` (explicit, highest priority)
     2. ``x-litellm-session-id`` (explicit)
-    3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
+    3. Codex ``x-codex-turn-metadata`` JSON header ``session_id`` / ``thread_id``
+    4. Any ``x-<vendor>-session-id`` header whose value looks like a session id
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
 
     Header keys are matched case-insensitively so this works with raw header
@@ -390,6 +424,7 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     return (
         normalized.get("x-litellm-trace-id")
         or normalized.get("x-litellm-session-id")
+        or _extract_codex_session_id_from_headers(normalized)
         or _extract_generic_session_id_from_headers(normalized)
     )
 
