@@ -58,8 +58,7 @@ def normalize_json_schema_types(
                 # branch those entries fall through to the generic list recursion,
                 # which leaves the bare strings uppercase.
                 normalized_schema[key] = [
-                    type_mapping.get(entry, entry) if isinstance(entry, str) else entry
-                    for entry in value
+                    type_mapping.get(entry, entry) if isinstance(entry, str) else entry for entry in value
                 ]
             elif key == "properties" and isinstance(value, dict):
                 # Recursively normalize properties
