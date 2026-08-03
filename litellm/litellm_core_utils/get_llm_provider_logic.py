@@ -11,6 +11,17 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
 
+_OPENAI_CHAT_COMPLETIONS_MODEL_PREFIX = "openai/chat_completions/"
+
+
+def normalize_openai_chat_completions_model(model: str) -> tuple[str, bool]:
+    if not model.startswith(_OPENAI_CHAT_COMPLETIONS_MODEL_PREFIX):
+        return model, False
+    remainder = model[len(_OPENAI_CHAT_COMPLETIONS_MODEL_PREFIX) :]
+    if not remainder:
+        return model, False
+    return f"openai/{remainder}", True
+
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
     """

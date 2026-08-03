@@ -20,6 +20,9 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 )
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    normalize_openai_chat_completions_model,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
@@ -630,23 +633,6 @@ def _apply_prompt_management_to_responses_call(
     return input, model, custom_llm_provider
 
 
-# Opt-in via model id (mirrors the `responses/` prefix pattern on chat completions).
-_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX = "openai/chat_completions/"
-
-
-def _normalize_openai_chat_completions_responses_model(model: str) -> tuple[str, bool]:
-    """
-    Strip `openai/chat_completions/<name>` → `openai/<name>` and return True when the
-    prefix was applied (same effect as use_chat_completions_api=True).
-    """
-    if not model.startswith(_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX):
-        return model, False
-    remainder = model[len(_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX) :]
-    if not remainder:
-        return model, False
-    return f"openai/{remainder}", True
-
-
 def _pop_use_chat_completions_api_kw(kwargs: dict[str, Any]) -> bool:
     """Pop use_chat_completions_api; True when the chat-completions bridge is requested."""
     use_cc = kwargs.pop("use_chat_completions_api", None)
@@ -933,7 +919,7 @@ def responses(
         if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
             return mock_responses_api_response(mock_response=litellm_params.mock_response)
 
-        _stripped_model, _from_chat_completions_prefix = _normalize_openai_chat_completions_responses_model(model)
+        _stripped_model, _from_chat_completions_prefix = normalize_openai_chat_completions_model(model)
         model = _stripped_model
         local_vars["model"] = model
         use_chat_completions_api = use_chat_completions_api or _from_chat_completions_prefix
