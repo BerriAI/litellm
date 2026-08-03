@@ -5,7 +5,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 import json
 import re
 from collections.abc import Sequence
-from typing import Any, Literal, cast
+from typing import Any, Literal, Mapping, cast
 
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
@@ -165,6 +165,30 @@ class LiteLLMCompletionResponsesConfig:
 
         # Return as-is for unknown formats
         return tool_choice
+
+    @staticmethod
+    def _transform_tool_choice_for_responses_api_response(
+        tool_choice: str | Mapping[str, Any] | None,
+    ) -> str | Mapping[str, Any] | None:
+        """
+        Inverse of ``_transform_tool_choice``: normalizes tool_choice into the
+        shape ``ResponsesAPIResponse.tool_choice`` accepts (flat
+        ``{"type": "function", "name": "..."}``), not Chat Completion's nested
+        ``{"type": "function", "function": {"name": "..."}}``, which fails
+        Pydantic validation on this field.
+        """
+        normalized = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
+
+        if normalized is None or isinstance(normalized, str):
+            return normalized
+
+        if isinstance(normalized, dict) and normalized.get("type") == "function":
+            function_name = normalized.get("function", {}).get("name") or normalized.get("name")
+            if function_name:
+                return {"type": "function", "name": function_name}
+
+        # Return as-is for unknown formats
+        return normalized
 
     @staticmethod
     def _should_drop_derived_web_search_options(model: str, custom_llm_provider: str | None) -> bool:
@@ -1617,7 +1641,10 @@ class LiteLLMCompletionResponsesConfig:
             ),
             parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
             temperature=getattr(chat_completion_response, "temperature", 0),
-            tool_choice=getattr(chat_completion_response, "tool_choice", "auto"),
+            tool_choice=LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+                getattr(chat_completion_response, "tool_choice", "auto")
+            )
+            or "auto",
             tools=getattr(chat_completion_response, "tools", []),
             top_p=getattr(chat_completion_response, "top_p", None),
             max_output_tokens=getattr(chat_completion_response, "max_output_tokens", None),
