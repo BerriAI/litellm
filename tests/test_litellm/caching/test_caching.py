@@ -1,5 +1,8 @@
 import logging
 import re
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from litellm.caching.caching import Cache
 from litellm.types.caching import LiteLLMCacheType
@@ -146,3 +149,65 @@ def test_exact_cache_key_still_includes_prompt():
         model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}]
     )
     assert key_a != key_b
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_filters_kwargs_like_sync():
+    """async_get_cache must pass only messages/input/metadata to the backend,
+    matching get_cache. Passing unfiltered kwargs (model, temperature, etc.)
+    risks interference with prompt extraction or future backend changes."""
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    backend = MagicMock()
+    backend.async_get_cache = AsyncMock(return_value=None)
+    cache.cache = backend
+
+    messages = [{"role": "user", "content": "hello"}]
+    metadata = {"user_api_key": "test-key"}
+
+    await cache.async_get_cache(
+        model="gpt-4o-mini",
+        messages=messages,
+        metadata=metadata,
+        temperature=0.7,
+        stream=True,
+    )
+
+    backend.async_get_cache.assert_called_once()
+    _, call_kwargs = backend.async_get_cache.call_args
+    assert "model" not in call_kwargs
+    assert "temperature" not in call_kwargs
+    assert "stream" not in call_kwargs
+    assert call_kwargs["messages"] is messages
+    assert call_kwargs["metadata"] == metadata
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_propagates_semantic_similarity_metadata():
+    """async_get_cache must receive a metadata COPY (not the original) and then
+    propagate semantic-similarity back via _update_metadata_from_cache_lookup_kwargs.
+    Without the fix, the backend receives the original dict directly and the
+    propagation step is skipped entirely."""
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    received_metadata_objects: list = []
+
+    async def fake_get(key, **kwargs):
+        md = kwargs.get("metadata", {})
+        received_metadata_objects.append(md)
+        md["semantic-similarity"] = 0.95
+        return None
+
+    backend = MagicMock()
+    backend.async_get_cache = AsyncMock(side_effect=fake_get)
+    cache.cache = backend
+
+    original_metadata: dict = {"user_api_key": "k"}
+
+    await cache.async_get_cache(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=original_metadata,
+    )
+
+    assert len(received_metadata_objects) == 1
+    assert received_metadata_objects[0] is not original_metadata
+    assert original_metadata.get("semantic-similarity") == 0.95
