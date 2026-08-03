@@ -85,7 +85,7 @@ Usage with curl::
          http://localhost:4000/mcp/atlassian_mcp
 """
 
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 from starlette.types import Message, Send
 
@@ -125,14 +125,14 @@ class MCPDebug:
     )
 
     @staticmethod
-    def _mask(value: Optional[str]) -> str:
+    def _mask(value: str | None) -> str:
         """Mask a single value for safe display in headers."""
         if not value:
             return "(none)"
         return MCPDebug._masker._mask_value(value)
 
     @staticmethod
-    def is_debug_enabled(headers: Dict[str, str]) -> bool:
+    def is_debug_enabled(headers: dict[str, str]) -> bool:
         """
         Check if the client opted into MCP debug mode.
 
@@ -147,9 +147,9 @@ class MCPDebug:
     @staticmethod
     def resolve_auth_resolution(
         server: "MCPServer",
-        mcp_auth_header: Optional[str],
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
-        oauth2_headers: Optional[Dict[str, str]],
+        mcp_auth_header: str | None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        oauth2_headers: dict[str, str] | None,
     ) -> str:
         """
         Determine which auth priority will be used for the outbound MCP call.
@@ -178,13 +178,13 @@ class MCPDebug:
     @staticmethod
     def build_debug_headers(
         *,
-        inbound_headers: Dict[str, str],
-        oauth2_headers: Optional[Dict[str, str]],
-        litellm_api_key: Optional[str],
+        inbound_headers: dict[str, str],
+        oauth2_headers: dict[str, str] | None,
+        litellm_api_key: str | None,
         auth_resolution: str,
-        server_url: Optional[str],
-        server_auth_type: Optional[str],
-    ) -> Dict[str, str]:
+        server_url: str | None,
+        server_auth_type: str | None,
+    ) -> dict[str, str]:
         """
         Build masked debug response headers.
 
@@ -209,7 +209,7 @@ class MCPDebug:
         dict
             Headers to include in the response (all values masked).
         """
-        debug: Dict[str, str] = {}
+        debug: dict[str, str] = {}
 
         # --- Inbound auth summary ---
         inbound_parts = []
@@ -244,7 +244,7 @@ class MCPDebug:
         return debug
 
     @staticmethod
-    def wrap_send_with_debug_headers(send: Send, debug_headers: Dict[str, str]) -> Send:
+    def wrap_send_with_debug_headers(send: Send, debug_headers: dict[str, str]) -> Send:
         """
         Return a new ASGI ``send`` callable that injects *debug_headers*
         into the ``http.response.start`` message.
@@ -263,14 +263,14 @@ class MCPDebug:
     @staticmethod
     def maybe_build_debug_headers(
         *,
-        raw_headers: Optional[Dict[str, str]],
-        scope: Dict,
-        mcp_servers: Optional[List[str]],
-        mcp_auth_header: Optional[str],
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
-        oauth2_headers: Optional[Dict[str, str]],
-        client_ip: Optional[str],
-    ) -> Dict[str, str]:
+        raw_headers: dict[str, str] | None,
+        scope: dict,
+        mcp_servers: list[str] | None,
+        mcp_auth_header: str | None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        oauth2_headers: dict[str, str] | None,
+        client_ip: str | None,
+    ) -> dict[str, str]:
         """
         Build debug headers if debug mode is enabled, otherwise return empty dict.
 
@@ -286,8 +286,8 @@ class MCPDebug:
             global_mcp_server_manager,
         )
 
-        server_url: Optional[str] = None
-        server_auth_type: Optional[str] = None
+        server_url: str | None = None
+        server_auth_type: str | None = None
         auth_resolution = "no-auth"
 
         for server_name in mcp_servers or []:

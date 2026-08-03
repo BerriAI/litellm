@@ -18,15 +18,10 @@ handler (analogous to the OpenAI / Azure transcription handlers).
 import asyncio
 import math
 import time
+from collections.abc import Coroutine
 from typing import (
     TYPE_CHECKING,
     Any,
-    Coroutine,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
 )
 
 import httpx
@@ -75,20 +70,20 @@ class SonioxAudioTranscriptionHandler:
     def audio_transcriptions(
         self,
         model: str,
-        audio_file: Optional[FileTypes],
+        audio_file: FileTypes | None,
         optional_params: dict,
         litellm_params: dict,
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_key: str | None,
+        api_base: str | None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         atranscription: bool = False,
-        headers: Optional[Dict[str, Any]] = None,
-        provider_config: Optional[SonioxAudioTranscriptionConfig] = None,
-    ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+        headers: dict[str, Any] | None = None,
+        provider_config: SonioxAudioTranscriptionConfig | None = None,
+    ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         """Sync/async dispatch for Soniox transcription requests.
 
         Note: ``max_retries`` is accepted for signature compatibility with
@@ -136,18 +131,18 @@ class SonioxAudioTranscriptionHandler:
 
     def _prepare(
         self,
-        audio_file: Optional[FileTypes],
+        audio_file: FileTypes | None,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         provider_config: SonioxAudioTranscriptionConfig,
-        headers: Dict[str, Any],
-    ) -> Tuple[
-        Dict[str, str],  # auth headers
+        headers: dict[str, Any],
+    ) -> tuple[
+        dict[str, str],  # auth headers
         str,  # api_base (no trailing slash)
-        Dict[str, Any],  # body for POST /v1/transcriptions (without file_id/audio_url)
-        Dict[str, Any],  # handler-only options (poll interval, cleanup, ...)
+        dict[str, Any],  # body for POST /v1/transcriptions (without file_id/audio_url)
+        dict[str, Any],  # handler-only options (poll interval, cleanup, ...)
     ]:
         # Validate env -> auth headers.
         auth_headers = provider_config.validate_environment(
@@ -175,7 +170,7 @@ class SonioxAudioTranscriptionHandler:
             max_attempts = SONIOX_DEFAULT_MAX_POLL_ATTEMPTS
         cleanup_raw = params.pop("soniox_cleanup", SONIOX_DEFAULT_CLEANUP)
         if cleanup_raw is None:
-            cleanup: List[str] = []
+            cleanup: list[str] = []
         elif isinstance(cleanup_raw, str):
             cleanup = [cleanup_raw]
         else:
@@ -192,7 +187,7 @@ class SonioxAudioTranscriptionHandler:
         clamped_poll_interval = max(SONIOX_MIN_POLL_INTERVAL, min(poll_interval, SONIOX_MAX_POLL_INTERVAL))
         clamped_max_attempts = max(1, min(max_attempts, SONIOX_MAX_POLL_ATTEMPTS))
 
-        handler_opts: Dict[str, Any] = {
+        handler_opts: dict[str, Any] = {
             "poll_interval": clamped_poll_interval,
             "max_attempts": clamped_max_attempts,
             "cleanup": cleanup,
@@ -214,10 +209,10 @@ class SonioxAudioTranscriptionHandler:
         self,
         model: str,
         optional_params: dict,
-        handler_opts: Dict[str, Any],
-        file_id: Optional[str],
-    ) -> Dict[str, Any]:
-        body: Dict[str, Any] = {"model": model}
+        handler_opts: dict[str, Any],
+        file_id: str | None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"model": model}
         # Soniox-native passthrough fields
         for key, value in optional_params.items():
             if value is None:
@@ -232,7 +227,7 @@ class SonioxAudioTranscriptionHandler:
         return body
 
     @staticmethod
-    def _redact_body_for_logging(body: Dict[str, Any]) -> Dict[str, Any]:
+    def _redact_body_for_logging(body: dict[str, Any]) -> dict[str, Any]:
         """Return a shallow copy of ``body`` with secret fields redacted.
 
         Soniox's create-transcription body can include
@@ -254,9 +249,9 @@ class SonioxAudioTranscriptionHandler:
     @staticmethod
     def _safe_log_pre_call(
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         api_base: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
     ) -> None:
         try:
             logging_obj.pre_call(
@@ -276,9 +271,9 @@ class SonioxAudioTranscriptionHandler:
     @staticmethod
     def _safe_log_post_call(
         logging_obj: LiteLLMLoggingObj,
-        audio_file: Optional[FileTypes],
-        api_key: Optional[str],
-        body: Dict[str, Any],
+        audio_file: FileTypes | None,
+        api_key: str | None,
+        body: dict[str, Any],
         original_response: Any,
     ) -> None:
         try:
@@ -318,16 +313,16 @@ class SonioxAudioTranscriptionHandler:
     def _sync_audio_transcriptions(
         self,
         model: str,
-        audio_file: Optional[FileTypes],
+        audio_file: FileTypes | None,
         optional_params: dict,
         litellm_params: dict,
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        client: Optional[HTTPHandler],
-        headers: Dict[str, Any],
+        api_key: str | None,
+        api_base: str | None,
+        client: HTTPHandler | None,
+        headers: dict[str, Any],
         provider_config: SonioxAudioTranscriptionConfig,
     ) -> TranscriptionResponse:
         auth_headers, base_url, opt_params, handler_opts = self._prepare(
@@ -351,8 +346,8 @@ class SonioxAudioTranscriptionHandler:
         )
 
         file_id = handler_opts.get("file_id")
-        uploaded_file_id: Optional[str] = None
-        transcription_id: Optional[str] = None
+        uploaded_file_id: str | None = None
+        transcription_id: str | None = None
 
         try:
             if not file_id and not handler_opts.get("audio_url"):
@@ -442,9 +437,9 @@ class SonioxAudioTranscriptionHandler:
         self,
         http_client: HTTPHandler,
         base_url: str,
-        auth_headers: Dict[str, str],
+        auth_headers: dict[str, str],
         audio_file: FileTypes,
-        filename_override: Optional[str],
+        filename_override: str | None,
         timeout: float,
         provider_config: SonioxAudioTranscriptionConfig,
     ) -> str:
@@ -468,13 +463,13 @@ class SonioxAudioTranscriptionHandler:
         self,
         http_client: HTTPHandler,
         base_url: str,
-        auth_headers: Dict[str, str],
+        auth_headers: dict[str, str],
         transcription_id: str,
         poll_interval: float,
         max_attempts: int,
         timeout: float,
         provider_config: SonioxAudioTranscriptionConfig,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         for _ in range(max_attempts):
             resp = http_client.get(
                 url=f"{base_url}/v1/transcriptions/{transcription_id}",
@@ -509,10 +504,10 @@ class SonioxAudioTranscriptionHandler:
         self,
         http_client: HTTPHandler,
         base_url: str,
-        auth_headers: Dict[str, str],
-        cleanup: List[str],
-        file_id_to_cleanup: Optional[str],
-        transcription_id: Optional[str],
+        auth_headers: dict[str, str],
+        cleanup: list[str],
+        file_id_to_cleanup: str | None,
+        transcription_id: str | None,
         timeout: float,
     ) -> None:
         if not cleanup:
@@ -547,16 +542,16 @@ class SonioxAudioTranscriptionHandler:
     async def _async_audio_transcriptions(
         self,
         model: str,
-        audio_file: Optional[FileTypes],
+        audio_file: FileTypes | None,
         optional_params: dict,
         litellm_params: dict,
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        client: Optional[AsyncHTTPHandler],
-        headers: Dict[str, Any],
+        api_key: str | None,
+        api_base: str | None,
+        client: AsyncHTTPHandler | None,
+        headers: dict[str, Any],
         provider_config: SonioxAudioTranscriptionConfig,
     ) -> TranscriptionResponse:
         import litellm
@@ -583,8 +578,8 @@ class SonioxAudioTranscriptionHandler:
         )
 
         file_id = handler_opts.get("file_id")
-        uploaded_file_id: Optional[str] = None
-        transcription_id: Optional[str] = None
+        uploaded_file_id: str | None = None
+        transcription_id: str | None = None
 
         try:
             if not file_id and not handler_opts.get("audio_url"):
@@ -674,9 +669,9 @@ class SonioxAudioTranscriptionHandler:
         self,
         http_client: AsyncHTTPHandler,
         base_url: str,
-        auth_headers: Dict[str, str],
+        auth_headers: dict[str, str],
         audio_file: FileTypes,
-        filename_override: Optional[str],
+        filename_override: str | None,
         timeout: float,
         provider_config: SonioxAudioTranscriptionConfig,
     ) -> str:
@@ -699,13 +694,13 @@ class SonioxAudioTranscriptionHandler:
         self,
         http_client: AsyncHTTPHandler,
         base_url: str,
-        auth_headers: Dict[str, str],
+        auth_headers: dict[str, str],
         transcription_id: str,
         poll_interval: float,
         max_attempts: int,
         timeout: float,
         provider_config: SonioxAudioTranscriptionConfig,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         for _ in range(max_attempts):
             resp = await http_client.get(
                 url=f"{base_url}/v1/transcriptions/{transcription_id}",
@@ -740,10 +735,10 @@ class SonioxAudioTranscriptionHandler:
         self,
         http_client: AsyncHTTPHandler,
         base_url: str,
-        auth_headers: Dict[str, str],
-        cleanup: List[str],
-        file_id_to_cleanup: Optional[str],
-        transcription_id: Optional[str],
+        auth_headers: dict[str, str],
+        cleanup: list[str],
+        file_id_to_cleanup: str | None,
+        transcription_id: str | None,
         timeout: float,
     ) -> None:
         if not cleanup:

@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 import httpx  # type: ignore
 from openai import (
@@ -83,7 +84,7 @@ class AzureOpenAIAssistantsAPIConfig:
                         status_code=400,
                     )
             elif param == "attachments":  # this is a v2 param. Azure currently supports the old 'file_id's param
-                file_ids: List[str] = []
+                file_ids: list[str] = []
                 if isinstance(value, list):
                     for item in value:
                         if "file_id" in item:
@@ -93,16 +94,12 @@ class AzureOpenAIAssistantsAPIConfig:
                                 pass
                             else:
                                 raise litellm.utils.UnsupportedParamsError(
-                                    message="Azure doesn't support {}. To drop it from the call, set `litellm.drop_params = True.".format(
-                                        value
-                                    ),
+                                    message=f"Azure doesn't support {value}. To drop it from the call, set `litellm.drop_params = True.",
                                     status_code=400,
                                 )
                 else:
                     raise litellm.utils.UnsupportedParamsError(
-                        message="Invalid param. attachments should always be a list. Got={}, Expected=List. Raw value={}".format(
-                            type(value), value
-                        ),
+                        message=f"Invalid param. attachments should always be a list. Got={type(value)}, Expected=List. Raw value={value}",
                         status_code=400,
                     )
         return optional_params
@@ -110,7 +107,7 @@ class AzureOpenAIAssistantsAPIConfig:
 
 def _check_dynamic_azure_params(
     azure_client_params: dict,
-    azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]],
+    azure_client: AzureOpenAI | AsyncAzureOpenAI | None,
 ) -> bool:
     """
     Returns True if user passed in client params != initialized azure client
@@ -135,9 +132,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     def make_sync_azure_openai_chat_completion_request(
         self,
-        azure_client: Union[AzureOpenAI, OpenAI],
+        azure_client: AzureOpenAI | OpenAI,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
     ):
         """
         Helper to:
@@ -156,9 +153,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     @track_llm_api_timing()
     async def make_azure_openai_chat_completion_request(
         self,
-        azure_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
+        azure_client: AsyncAzureOpenAI | AsyncOpenAI,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
     ):
         """
@@ -186,21 +183,21 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        api_key: Optional[str],
+        api_key: str | None,
         api_base: str,
         api_version: str,
         api_type: str,
-        azure_ad_token: Optional[str],
-        azure_ad_token_provider: Optional[Callable],
+        azure_ad_token: str | None,
+        azure_ad_token_provider: Callable | None,
         dynamic_params: bool,
         print_verbose: Callable,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         optional_params,
         litellm_params,
         logger_fn,
         acompletion: bool = False,
-        headers: Optional[dict] = None,
+        headers: dict | None = None,
         client=None,
     ):
         if headers:
@@ -212,7 +209,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             max_retries = optional_params.pop("max_retries", None)
             if max_retries is None:
                 max_retries = DEFAULT_MAX_RETRIES
-            json_mode: Optional[bool] = optional_params.pop("json_mode", False)
+            json_mode: bool | None = optional_params.pop("json_mode", False)
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url
@@ -377,7 +374,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     async def acompletion(
         self,
-        api_key: Optional[str],
+        api_key: str | None,
         api_version: str,
         model: str,
         api_base: str,
@@ -387,11 +384,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         max_retries: int,
-        azure_ad_token: Optional[str] = None,
-        azure_ad_token_provider: Optional[Callable] = None,
-        convert_tool_call_to_json_mode: Optional[bool] = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: Callable | None = None,
+        convert_tool_call_to_json_mode: bool | None = None,
         client=None,  # this is the AsyncAzureOpenAI
-        litellm_params: Optional[dict] = {},
+        litellm_params: dict | None = {},
     ):
         response = None
         try:
@@ -487,17 +484,17 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         self,
         logging_obj,
         api_base: str,
-        api_key: Optional[str],
+        api_key: str | None,
         api_version: str,
         dynamic_params: bool,
         data: dict,
         model: str,
         timeout: Any,
         max_retries: int,
-        azure_ad_token: Optional[str] = None,
-        azure_ad_token_provider: Optional[Callable] = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: Callable | None = None,
         client=None,
-        litellm_params: Optional[dict] = {},
+        litellm_params: dict | None = {},
     ):
         # init AzureOpenAI Client
         azure_client_params = {
@@ -563,17 +560,17 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         self,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        api_key: Optional[str],
+        api_key: str | None,
         api_version: str,
         dynamic_params: bool,
         data: dict,
         model: str,
         timeout: Any,
         max_retries: int,
-        azure_ad_token: Optional[str] = None,
-        azure_ad_token_provider: Optional[Callable] = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: Callable | None = None,
         client=None,
-        litellm_params: Optional[dict] = {},
+        litellm_params: dict | None = {},
     ):
         try:
             azure_client = self.get_azure_openai_client(
@@ -644,14 +641,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         input: list,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        api_key: Optional[str] = None,
-        api_version: Optional[str] = None,
-        client: Optional[AsyncAzureOpenAI] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        max_retries: Optional[int] = None,
-        azure_ad_token: Optional[str] = None,
-        azure_ad_token_provider: Optional[Callable] = None,
-        litellm_params: Optional[dict] = {},
+        api_key: str | None = None,
+        api_version: str | None = None,
+        client: AsyncAzureOpenAI | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        max_retries: int | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: Callable | None = None,
+        litellm_params: dict | None = {},
     ) -> EmbeddingResponse:
         response = None
         try:
@@ -687,7 +684,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             except json.JSONDecodeError as json_error:
                 raise AzureOpenAIError(
                     status_code=raw_response.status_code or 500,
-                    message=f"Failed to parse raw Azure embedding response: {str(json_error)}",
+                    message=f"Failed to parse raw Azure embedding response: {json_error!s}",
                 ) from json_error
             if isinstance(response, str):
                 raise AzureOpenAIError(
@@ -736,15 +733,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        api_key: Optional[str] = None,
-        azure_ad_token: Optional[str] = None,
-        azure_ad_token_provider: Optional[Callable] = None,
-        max_retries: Optional[int] = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: Callable | None = None,
+        max_retries: int | None = None,
         client=None,
         aembedding=None,
-        headers: Optional[dict] = None,
-        litellm_params: Optional[dict] = None,
-    ) -> Union[EmbeddingResponse, Coroutine[Any, Any, EmbeddingResponse]]:
+        headers: dict | None = None,
+        litellm_params: dict | None = None,
+    ) -> EmbeddingResponse | Coroutine[Any, Any, EmbeddingResponse]:
         if headers:
             optional_params["extra_headers"] = headers
         if self._client_session is None:
@@ -829,8 +826,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     async def make_async_azure_httpx_request(
         self,
-        client: Optional[AsyncHTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
+        client: AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
         api_base: str,
         api_version: str,
         api_key: str,
@@ -956,8 +953,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     def make_sync_azure_httpx_request(
         self,
-        client: Optional[HTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
+        client: HTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
         api_base: str,
         api_version: str,
         api_key: str,
@@ -1073,8 +1070,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def create_azure_base_url(
         self,
         azure_client_params: dict,
-        model: Optional[str],
-        base_model: Optional[str] = None,
+        model: str | None,
+        base_model: str | None = None,
     ) -> str:
         from litellm.llms.azure_ai.image_generation import (
             AzureFoundryFluxImageGenerationConfig,
@@ -1116,7 +1113,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     async def aimage_generation(
         self,
         data: dict,
-        model_response: Optional[ImageResponse],
+        model_response: ImageResponse | None,
         azure_client_params: dict,
         api_key: str,
         input: list,
@@ -1124,9 +1121,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         headers: dict,
         client=None,
         timeout=None,
-        model: Optional[str] = None,
+        model: str | None = None,
     ) -> ImageResponse:
-        response: Optional[dict] = None
+        response: dict | None = None
         try:
             # response = await azure_client.images.generate(**data, timeout=timeout)
             api_base: str = azure_client_params.get("api_base", "")  # "https://example-endpoint.openai.azure.com"
@@ -1205,16 +1202,16 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
         headers: dict,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        api_version: Optional[str] = None,
-        model_response: Optional[ImageResponse] = None,
-        azure_ad_token: Optional[str] = None,
-        azure_ad_token_provider: Optional[Callable] = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        api_version: str | None = None,
+        model_response: ImageResponse | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: Callable | None = None,
         client=None,
         aimg_generation=None,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> ImageResponse:
         try:
             if model and len(model) > 0:
@@ -1246,7 +1243,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     headers["Authorization"] = f"Bearer {azure_ad_token}"
 
             # init AzureOpenAI Client
-            azure_client_params: Dict[str, Any] = self.initialize_azure_sdk_client(
+            azure_client_params: dict[str, Any] = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
                 api_key=api_key,
                 model_name=model or "",
@@ -1336,17 +1333,17 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         input: str,
         voice: str,
         optional_params: dict,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        api_version: Optional[str],
-        organization: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
+        api_version: str | None,
+        organization: str | None,
         max_retries: int,
-        timeout: Union[float, httpx.Timeout],
-        azure_ad_token: Optional[str] = None,
-        azure_ad_token_provider: Optional[Callable] = None,
-        aspeech: Optional[bool] = None,
+        timeout: float | httpx.Timeout,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: Callable | None = None,
+        aspeech: bool | None = None,
         client=None,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> HttpxBinaryResponseContent:
         max_retries = optional_params.pop("max_retries", 2)
 
@@ -1391,15 +1388,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         input: str,
         voice: str,
         optional_params: dict,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        api_version: Optional[str],
-        azure_ad_token: Optional[str],
-        azure_ad_token_provider: Optional[Callable],
+        api_key: str | None,
+        api_base: str | None,
+        api_version: str | None,
+        azure_ad_token: str | None,
+        azure_ad_token_provider: Callable | None,
         max_retries: int,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         client=None,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> HttpxBinaryResponseContent:
         azure_client: AsyncAzureOpenAI = self.get_azure_openai_client(
             api_base=api_base,
@@ -1422,15 +1419,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     def get_headers(
         self,
-        model: Optional[str],
+        model: str | None,
         api_key: str,
         api_base: str,
         api_version: str,
         timeout: float,
         mode: str,
-        messages: Optional[list] = None,
-        input: Optional[list] = None,
-        prompt: Optional[str] = None,
+        messages: list | None = None,
+        input: list | None = None,
+        prompt: str | None = None,
     ) -> dict:
         client_session = litellm.client_session or httpx.Client()
         if api_base is not None and "gateway.ai.cloudflare.com" in api_base:

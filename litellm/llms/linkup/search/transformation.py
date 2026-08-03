@@ -4,7 +4,7 @@ Calls Linkup's /search endpoint to search the web.
 Linkup API Reference: https://docs.linkup.so/pages/documentation/api-reference/endpoint/post-search
 """
 
-from typing import Dict, List, Literal, Optional, TypedDict, Union
+from typing import Literal, TypedDict
 
 import httpx
 
@@ -36,8 +36,8 @@ class LinkupSearchRequest(_LinkupSearchRequestRequired, total=False):
     includeImages: bool  # Optional - Include images in results (default false)
     fromDate: str  # Optional - Start date for results (YYYY-MM-DD)
     toDate: str  # Optional - End date for results (YYYY-MM-DD)
-    includeDomains: List[str]  # Optional - Domains to search on (max 100)
-    excludeDomains: List[str]  # Optional - Domains to exclude
+    includeDomains: list[str]  # Optional - Domains to search on (max 100)
+    excludeDomains: list[str]  # Optional - Domains to exclude
     includeInlineCitations: bool  # Optional - Include inline citations (default false)
     maxResults: int  # Optional - Maximum number of results to return
 
@@ -51,11 +51,11 @@ class LinkupSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
@@ -74,9 +74,9 @@ class LinkupSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -92,10 +92,10 @@ class LinkupSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Linkup API format.
 

@@ -2,32 +2,24 @@
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import (
     Any,
-    Coroutine,
-    List,
     Literal,
-    Optional,
-    Tuple,
-    Union,
     cast,
     overload,
-    Iterator,
-    AsyncIterator,
 )
 
 import httpx
-
-from litellm.llms.openai.chat.gpt_transformation import (
-    OpenAIChatCompletionStreamingHandler,
-)
-from litellm.llms.openai.common_utils import OpenAIError
-
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+)
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -51,35 +43,35 @@ _EXECUTED_TOOLS_ADAPTER = TypeAdapter(tuple[GroqExecutedToolIdentity, ...])
 
 
 class GroqChatConfig(OpenAILikeChatConfig):
-    frequency_penalty: Optional[int] = None
-    function_call: Optional[Union[str, dict]] = None
-    functions: Optional[list] = None
-    logit_bias: Optional[dict] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    response_format: Optional[dict] = None
-    tools: Optional[list] = None
-    tool_choice: Optional[Union[str, dict]] = None
+    frequency_penalty: int | None = None
+    function_call: str | dict | None = None
+    functions: list | None = None
+    logit_bias: dict | None = None
+    max_tokens: int | None = None
+    n: int | None = None
+    presence_penalty: int | None = None
+    stop: str | list | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    response_format: dict | None = None
+    tools: list | None = None
+    tool_choice: str | dict | None = None
 
     def __init__(
         self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        tools: Optional[list] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
+        frequency_penalty: int | None = None,
+        function_call: str | dict | None = None,
+        functions: list | None = None,
+        logit_bias: dict | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: int | None = None,
+        stop: str | list | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        response_format: dict | None = None,
+        tools: list | None = None,
+        tool_choice: str | dict | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -87,7 +79,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
                 setattr(self.__class__, key, value)
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "groq"
 
     @classmethod
@@ -96,9 +88,9 @@ class GroqChatConfig(OpenAILikeChatConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         return GroqChatCompletionStreamingHandler(
             streaming_response=streaming_response,
@@ -133,20 +125,20 @@ class GroqChatConfig(OpenAILikeChatConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         for idx, message in enumerate(messages):
             """
             1. Don't pass 'null' function_call assistant message to groq - https://github.com/BerriAI/litellm/issues/5839
@@ -169,8 +161,8 @@ class GroqChatConfig(OpenAILikeChatConfig):
             return super()._transform_messages(messages=messages, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
         api_base = api_base or get_secret_str("GROQ_API_BASE") or "https://api.groq.com/openai/v1"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("GROQ_API_KEY")
@@ -218,7 +210,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         if self._should_fake_stream(non_default_params):
             optional_params["fake_stream"] = True
         if _response_format is not None and isinstance(_response_format, dict):
-            json_schema: Optional[dict] = None
+            json_schema: dict | None = None
             if "response_schema" in _response_format:
                 json_schema = _response_format["response_schema"]
             elif "json_schema" in _response_format:
@@ -291,12 +283,12 @@ class GroqChatConfig(OpenAILikeChatConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         model_response = super().transform_response(
             model=model,
@@ -344,7 +336,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
             verbose_logger.info(f"Groq executed_tools entries did not match the expected shape; not billed: {e}")
             return ()
 
-    def _map_groq_service_tier(self, original_service_tier: Optional[str]) -> Literal["auto", "default", "flex"]:
+    def _map_groq_service_tier(self, original_service_tier: str | None) -> Literal["auto", "default", "flex"]:
         """
         Ensure groq service tier is OpenAI compatible.
         """

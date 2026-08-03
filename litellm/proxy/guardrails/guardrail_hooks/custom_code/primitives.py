@@ -7,7 +7,7 @@ and provide safe, sandboxed functionality for common guardrail operations.
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -21,7 +21,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 # =============================================================================
 
 
-def allow() -> Dict[str, Any]:
+def allow() -> dict[str, Any]:
     """
     Allow the request/response to proceed unchanged.
 
@@ -31,7 +31,7 @@ def allow() -> Dict[str, Any]:
     return {"action": "allow"}
 
 
-def block(reason: str, detection_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def block(reason: str, detection_info: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     Block the request/response with a reason.
 
@@ -42,17 +42,17 @@ def block(reason: str, detection_info: Optional[Dict[str, Any]] = None) -> Dict[
     Returns:
         Dict indicating the request should be blocked
     """
-    result: Dict[str, Any] = {"action": "block", "reason": reason}
+    result: dict[str, Any] = {"action": "block", "reason": reason}
     if detection_info:
         result["detection_info"] = detection_info
     return result
 
 
 def modify(
-    texts: Optional[List[str]] = None,
-    images: Optional[List[Any]] = None,
-    tool_calls: Optional[List[Any]] = None,
-) -> Dict[str, Any]:
+    texts: list[str] | None = None,
+    images: list[Any] | None = None,
+    tool_calls: list[Any] | None = None,
+) -> dict[str, Any]:
     """
     Modify the request/response content.
 
@@ -64,7 +64,7 @@ def modify(
     Returns:
         Dict indicating the content should be modified
     """
-    result: Dict[str, Any] = {"action": "modify"}
+    result: dict[str, Any] = {"action": "modify"}
     if texts is not None:
         result["texts"] = texts
     if images is not None:
@@ -137,7 +137,7 @@ def regex_replace(text: str, pattern: str, replacement: str, flags: int = 0) -> 
         return text
 
 
-def regex_find_all(text: str, pattern: str, flags: int = 0) -> List[str]:
+def regex_find_all(text: str, pattern: str, flags: int = 0) -> list[str]:
     """
     Find all occurrences of a pattern in text.
 
@@ -161,7 +161,7 @@ def regex_find_all(text: str, pattern: str, flags: int = 0) -> List[str]:
 # =============================================================================
 
 
-def json_parse(text: str) -> Optional[Any]:
+def json_parse(text: str) -> Any | None:
     """
     Parse a JSON string into a Python object.
 
@@ -195,7 +195,7 @@ def json_stringify(obj: Any) -> str:
         return ""
 
 
-def json_schema_valid(obj: Any, schema: Dict[str, Any]) -> bool:
+def json_schema_valid(obj: Any, schema: dict[str, Any]) -> bool:
     """
     Validate an object against a JSON schema.
 
@@ -226,7 +226,7 @@ def json_schema_valid(obj: Any, schema: Dict[str, Any]) -> bool:
         return False
 
 
-def _basic_json_schema_validate(obj: Any, schema: Dict[str, Any], max_depth: int = 50) -> bool:
+def _basic_json_schema_validate(obj: Any, schema: dict[str, Any], max_depth: int = 50) -> bool:
     """
     Basic JSON schema validation without external library.
     Handles: type, required, properties
@@ -234,7 +234,7 @@ def _basic_json_schema_validate(obj: Any, schema: Dict[str, Any], max_depth: int
     Uses an iterative approach with a stack to avoid recursion limits.
     max_depth limits nesting to prevent infinite loops from circular schemas.
     """
-    type_map: Dict[str, Union[Type, Tuple[Type, ...]]] = {
+    type_map: dict[str, type | tuple[type, ...]] = {
         "object": dict,
         "array": list,
         "string": str,
@@ -245,7 +245,7 @@ def _basic_json_schema_validate(obj: Any, schema: Dict[str, Any], max_depth: int
     }
 
     # Stack of (obj, schema, depth) tuples to process
-    stack: List[Tuple[Any, Dict[str, Any], int]] = [(obj, schema, 0)]
+    stack: list[tuple[Any, dict[str, Any], int]] = [(obj, schema, 0)]
 
     while stack:
         current_obj, current_schema, depth = stack.pop()
@@ -286,7 +286,7 @@ def _basic_json_schema_validate(obj: Any, schema: Dict[str, Any], max_depth: int
 _URL_PATTERN = re.compile(r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[^\s]*", re.IGNORECASE)
 
 
-def extract_urls(text: str) -> List[str]:
+def extract_urls(text: str) -> list[str]:
     """
     Extract all URLs from text.
 
@@ -330,7 +330,7 @@ def all_urls_valid(text: str) -> bool:
     return all(is_valid_url(url) for url in urls)
 
 
-def get_url_domain(url: str) -> Optional[str]:
+def get_url_domain(url: str) -> str | None:
     """
     Extract the domain from a URL.
 
@@ -358,7 +358,7 @@ _HTTP_DEFAULT_TIMEOUT = 30.0
 _HTTP_MAX_TIMEOUT = 60.0
 
 
-def _http_error_response(error: str) -> Dict[str, Any]:
+def _http_error_response(error: str) -> dict[str, Any]:
     """Create a standardized error response for HTTP requests."""
     return {
         "status_code": 0,
@@ -369,7 +369,7 @@ def _http_error_response(error: str) -> Dict[str, Any]:
     }
 
 
-def _http_success_response(response: httpx.Response) -> Dict[str, Any]:
+def _http_success_response(response: httpx.Response) -> dict[str, Any]:
     """Create a standardized success response from an httpx Response."""
     parsed_body: Any
     try:
@@ -387,8 +387,8 @@ def _http_success_response(response: httpx.Response) -> Dict[str, Any]:
 
 
 def _prepare_http_body(
-    body: Optional[Any],
-) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    body: Any | None,
+) -> tuple[dict[str, Any] | None, str | None]:
     """Prepare body arguments for HTTP request - returns (json_body, data_body)."""
     if body is None:
         return None, None
@@ -404,10 +404,10 @@ def _prepare_http_body(
 async def http_request(
     url: str,
     method: str = "GET",
-    headers: Optional[Dict[str, str]] = None,
-    body: Optional[Any] = None,
-    timeout: Optional[float] = None,
-) -> Dict[str, Any]:
+    headers: dict[str, str] | None = None,
+    body: Any | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
     """
     Make an async HTTP request to an external service.
 
@@ -480,18 +480,18 @@ async def http_request(
         return _http_success_response(e.response)
     except httpx.RequestError as e:
         verbose_proxy_logger.warning(f"Custom code http_request error: {e}")
-        return _http_error_response(f"Request failed: {str(e)}")
+        return _http_error_response(f"Request failed: {e!s}")
     except Exception as e:
         verbose_proxy_logger.warning(f"Custom code http_request unexpected error: {e}")
-        return _http_error_response(f"Unexpected error: {str(e)}")
+        return _http_error_response(f"Unexpected error: {e!s}")
 
 
 async def _execute_http_request(
     client: Any,
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]],
-    body: Optional[Any],
+    headers: dict[str, str] | None,
+    body: Any | None,
     timeout: float,
 ) -> httpx.Response:
     """Execute the HTTP request using the appropriate client method."""
@@ -513,9 +513,9 @@ async def _execute_http_request(
 
 async def http_get(
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    timeout: Optional[float] = None,
-) -> Dict[str, Any]:
+    headers: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
     """
     Make an async HTTP GET request.
 
@@ -534,10 +534,10 @@ async def http_get(
 
 async def http_post(
     url: str,
-    body: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    timeout: Optional[float] = None,
-) -> Dict[str, Any]:
+    body: Any | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
     """
     Make an async HTTP POST request.
 
@@ -625,7 +625,7 @@ def detect_code(text: str) -> bool:
     return len(detect_code_languages(text)) > 0
 
 
-def detect_code_languages(text: str) -> List[str]:
+def detect_code_languages(text: str) -> list[str]:
     """
     Detect which programming languages are present in text.
 
@@ -647,7 +647,7 @@ def detect_code_languages(text: str) -> List[str]:
     return detected
 
 
-def contains_code_language(text: str, languages: List[str]) -> bool:
+def contains_code_language(text: str, languages: list[str]) -> bool:
     """
     Check if text contains code from specific languages.
 
@@ -681,7 +681,7 @@ def contains(text: str, substring: str) -> bool:
     return substring in text
 
 
-def contains_any(text: str, substrings: List[str]) -> bool:
+def contains_any(text: str, substrings: list[str]) -> bool:
     """
     Check if text contains any of the given substrings.
 
@@ -695,7 +695,7 @@ def contains_any(text: str, substrings: List[str]) -> bool:
     return any(s in text for s in substrings)
 
 
-def contains_all(text: str, substrings: List[str]) -> bool:
+def contains_all(text: str, substrings: list[str]) -> bool:
     """
     Check if text contains all of the given substrings.
 
@@ -755,7 +755,7 @@ def trim(text: str) -> str:
 # =============================================================================
 
 
-def get_custom_code_primitives() -> Dict[str, Any]:
+def get_custom_code_primitives() -> dict[str, Any]:
     """
     Get all primitives to inject into the custom code environment.
 

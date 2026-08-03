@@ -11,12 +11,12 @@ Follows the same pattern as parallel_request_limiter_v3.py.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.exceptions import RateLimitType
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
@@ -86,7 +86,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Check session iteration count before making the API call.
 
@@ -133,7 +133,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
         return None
 
-    def _get_session_id(self, data: dict) -> Optional[str]:
+    def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""
         metadata = data.get("metadata") or {}
         session_id = metadata.get("session_id")
@@ -148,7 +148,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
         return None
 
-    def _get_max_iterations(self, user_api_key_dict: UserAPIKeyAuth) -> Optional[int]:
+    def _get_max_iterations(self, user_api_key_dict: UserAPIKeyAuth) -> int | None:
         """Extract max_iterations from agent litellm_params, with fallback to key metadata."""
         # Try agent litellm_params first
         agent_id = user_api_key_dict.agent_id

@@ -9,7 +9,7 @@ Notes:
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -49,7 +49,7 @@ class AlertingHangingRequestCheck:
 
     async def add_request_to_hanging_request_check(
         self,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ):
         """
         Add a request to the hanging request cache. This is the list of request_ids that gets periodicall checked for hanging requests
@@ -59,7 +59,7 @@ class AlertingHangingRequestCheck:
 
         request_metadata = get_litellm_metadata_from_kwargs(kwargs=request_data)
         model = request_data.get("model", "")
-        api_base: Optional[str] = None
+        api_base: str | None = None
 
         if request_data.get("deployment", None) is not None and isinstance(request_data["deployment"], dict):
             api_base = litellm.get_api_base(
@@ -101,7 +101,7 @@ class AlertingHangingRequestCheck:
         )
 
         for request_id in hanging_requests:
-            hanging_request_data: Optional[HangingRequestData] = await self.hanging_request_cache.async_get_cache(
+            hanging_request_data: HangingRequestData | None = await self.hanging_request_cache.async_get_cache(
                 key=request_id,
             )
 
@@ -112,7 +112,7 @@ class AlertingHangingRequestCheck:
                 continue
 
             request_status = await proxy_logging_obj.internal_usage_cache.async_get_cache(
-                key="request_status:{}".format(hanging_request_data.request_id),
+                key=f"request_status:{hanging_request_data.request_id}",
                 litellm_parent_otel_span=None,
                 local_only=True,
             )

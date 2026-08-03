@@ -6,7 +6,7 @@ Used to get the LangFuseLogger for a given request
 Handles Key/Team Based Langfuse Logging
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
 
@@ -23,7 +23,7 @@ class LangFuseHandler:
     def get_langfuse_logger_for_request(
         standard_callback_dynamic_params: StandardCallbackDynamicParams,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
-        globalLangfuseLogger: Optional[LangFuseLogger] = None,
+        globalLangfuseLogger: LangFuseLogger | None = None,
     ) -> LangFuseLogger:
         """
         This function is used to get the LangFuseLogger for a given request
@@ -35,7 +35,7 @@ class LangFuseHandler:
         2. If dynamic credentials are not passed return the globalLangfuseLogger
 
         """
-        temp_langfuse_logger: Optional[LangFuseLogger] = globalLangfuseLogger
+        temp_langfuse_logger: LangFuseLogger | None = globalLangfuseLogger
         if LangFuseHandler._dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params) is False:
             return LangFuseHandler._return_global_langfuse_logger(
                 globalLangfuseLogger=globalLangfuseLogger,
@@ -65,7 +65,7 @@ class LangFuseHandler:
 
     @staticmethod
     def _return_global_langfuse_logger(
-        globalLangfuseLogger: Optional[LangFuseLogger],
+        globalLangfuseLogger: LangFuseLogger | None,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> LangFuseLogger:
         """
@@ -79,7 +79,7 @@ class LangFuseHandler:
         if globalLangfuseLogger is not None:
             return globalLangfuseLogger
 
-        credentials_dict: Dict[
+        credentials_dict: dict[
             str, Any
         ] = {}  # the global langfuse logger uses Environment Variables, there are no dynamic credentials
         globalLangfuseLogger = in_memory_dynamic_logger_cache.get_cache(
@@ -95,7 +95,7 @@ class LangFuseHandler:
 
     @staticmethod
     def _create_langfuse_logger_from_credentials(
-        credentials: Dict,
+        credentials: dict,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> LangFuseLogger:
         """
@@ -120,7 +120,7 @@ class LangFuseHandler:
     @staticmethod
     def get_dynamic_langfuse_logging_config(
         standard_callback_dynamic_params: StandardCallbackDynamicParams,
-        globalLangfuseLogger: Optional[LangFuseLogger] = None,
+        globalLangfuseLogger: LangFuseLogger | None = None,
     ) -> LangfuseLoggingConfig:
         """
         This function is used to get the Langfuse logging config to use for a given request.

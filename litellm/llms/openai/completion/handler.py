@@ -1,5 +1,5 @@
 import json
-from typing import Callable, List, Optional, Union
+from collections.abc import Callable
 
 from openai import AsyncOpenAI, OpenAI
 
@@ -34,19 +34,19 @@ class OpenAITextCompletion(BaseLLM):
         model_response: ModelResponse,
         api_key: str,
         model: str,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
         timeout: float,
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        print_verbose: Optional[Callable] = None,
-        api_base: Optional[str] = None,
+        print_verbose: Callable | None = None,
+        api_base: str | None = None,
         acompletion: bool = False,
         litellm_params=None,
         logger_fn=None,
         client=None,
-        organization: Optional[str] = None,
-        headers: Optional[dict] = None,
+        organization: str | None = None,
+        headers: dict | None = None,
     ):
         try:
             if headers:
@@ -172,7 +172,7 @@ class OpenAITextCompletion(BaseLLM):
         model: str,
         timeout: float,
         max_retries: int,
-        organization: Optional[str] = None,
+        organization: str | None = None,
         client=None,
     ):
         try:
@@ -223,7 +223,7 @@ class OpenAITextCompletion(BaseLLM):
         model_response: ModelResponse,
         model: str,
         timeout: float,
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
         max_retries=None,
         client=None,
         organization=None,
@@ -281,7 +281,7 @@ class OpenAITextCompletion(BaseLLM):
         model: str,
         timeout: float,
         max_retries: int,
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
         client=None,
         organization=None,
     ):

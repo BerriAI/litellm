@@ -4,7 +4,6 @@ Black Forest Labs Common Utilities
 Common utilities, constants, and error handling for Black Forest Labs API.
 """
 
-from typing import Dict
 from urllib.parse import urlparse
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -12,8 +11,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 class BlackForestLabsError(BaseLLMException):
     """Exception class for Black Forest Labs API errors."""
-
-    pass
 
 
 # API Constants
@@ -58,7 +55,7 @@ DEFAULT_POLLING_INTERVAL = 1.5  # seconds
 DEFAULT_MAX_POLLING_TIME = 300  # 5 minutes
 
 # Model to endpoint mapping for image edit
-IMAGE_EDIT_MODELS: Dict[str, str] = {
+IMAGE_EDIT_MODELS: dict[str, str] = {
     "flux-kontext-pro": "/v1/flux-kontext-pro",
     "flux-kontext-max": "/v1/flux-kontext-max",
     "flux-pro-1.0-fill": "/v1/flux-pro-1.0-fill",
@@ -66,7 +63,7 @@ IMAGE_EDIT_MODELS: Dict[str, str] = {
 }
 
 # Model to endpoint mapping for image generation
-IMAGE_GENERATION_MODELS: Dict[str, str] = {
+IMAGE_GENERATION_MODELS: dict[str, str] = {
     "flux-pro-1.1": "/v1/flux-pro-1.1",
     "flux-pro-1.1-ultra": "/v1/flux-pro-1.1-ultra",
     "flux-dev": "/v1/flux-dev",
