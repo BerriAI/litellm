@@ -77,10 +77,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             else:
                 remaining_points.append(point)
 
-        # Non-message points (currently Bedrock tool_config) are handled in the
-        # provider transform, where each tool_config point appends at most one
-        # cachePoint to the tools. That block also counts toward Anthropic's
-        # limit, so reserve a slot for it here to leave room.
+        # A tool_config point ends up as one more cache block on the tools, so
+        # reserve a slot for it here to stay under Anthropic's limit.
         reserved_blocks = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
 
         processed_messages = self._apply_message_injections(
@@ -89,10 +87,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
         )
 
-        # Pass through non-message injection points for provider-specific handling
-        if remaining_points:
+        # Points already written onto the tools are done; the rest are passed
+        # through for provider-specific handling
+        pending_points = [p for p in remaining_points if not p.get("_litellm_applied")]
+        if pending_points:
             non_default_params["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_as_judged(
-                remaining_points
+                pending_points
             )
 
         return model, processed_messages, non_default_params
@@ -363,15 +363,75 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             if any(isinstance(block, dict) and block.get("cache_control") is not None for block in system):
                 return True
         if tools is not None:
-            return any(
-                isinstance(tool, dict)
-                and (
-                    tool.get("cache_control") is not None
-                    or (isinstance(tool.get("function"), dict) and tool["function"].get("cache_control") is not None)
-                )
-                for tool in tools
-            )
+            return any(AnthropicCacheControlHook._tool_has_cache_control(tool) for tool in tools)
         return False
+
+    @staticmethod
+    def _tool_has_cache_control(tool: object) -> bool:
+        """Whether a tool definition carries a cache_control breakpoint.
+
+        Tools carry the mark either at the top level (Anthropic shape) or
+        nested under ``function`` (OpenAI shape); the Anthropic chat transform
+        accepts both.
+        """
+        if not isinstance(tool, dict):
+            return False
+        if tool.get("cache_control") is not None:
+            return True
+        function = tool.get("function")
+        return isinstance(function, dict) and function.get("cache_control") is not None
+
+    @staticmethod
+    def _is_cacheable_tool(tool: object) -> bool:
+        """Whether a tool ends up as a real tool definition in the provider request.
+
+        Built-in / server-side tools (web search, tool search, MCP servers) carry
+        neither an OpenAI ``function`` nor an Anthropic ``input_schema`` and are
+        dropped or rewritten by the provider transforms, so a breakpoint placed
+        on them would be lost.
+        """
+        return isinstance(tool, dict) and ("function" in tool or "input_schema" in tool)
+
+    @staticmethod
+    def with_tool_config_cache_control(
+        non_default_params: dict[str, Any],
+        tools: list[dict] | None,
+    ) -> list[dict] | None:
+        """Write a ``tool_config`` injection point onto the last tool definition.
+
+        The breakpoint used to be applied only inside the Bedrock request
+        transform, so logging callbacks (Langfuse and friends) logged the tools
+        without any cache marker even though the request carried one. Marking
+        the OpenAI-shaped tool instead keeps the request and what callbacks log
+        in sync, and it is the same shape a client sets by hand. Tools already
+        carrying a client breakpoint are left alone.
+        """
+        points = cast(  # cast-ok: untyped params dict; this key only holds the documented injection-point list
+            list[CacheControlInjectionPoint] | None,
+            non_default_params.get("cache_control_injection_points"),
+        )
+        if not points or not tools:
+            return tools
+
+        point = next((p for p in points if p.get("location") == "tool_config"), None)
+        if point is None:
+            return tools
+
+        if any(AnthropicCacheControlHook._tool_has_cache_control(tool) for tool in tools):
+            return tools
+
+        target_index = next(
+            (idx for idx in reversed(range(len(tools))) if AnthropicCacheControlHook._is_cacheable_tool(tools[idx])),
+            None,
+        )
+        if target_index is None:
+            return tools
+
+        control = point.get("control") or ChatCompletionCachedContent(type="ephemeral")
+        non_default_params["cache_control_injection_points"] = [
+            {**p, "_litellm_applied": True} if p is point else p for p in points
+        ]
+        return [{**tool, "cache_control": control} if idx == target_index else tool for idx, tool in enumerate(tools)]
 
     @staticmethod
     def get_default_injection_points(

@@ -1909,3 +1909,199 @@ class TestAnthropicPromptCachingEnvVars:
         """An unparseable TTL must fall back to Anthropic's 5m default, never reach the provider verbatim."""
         _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
         assert ttl is None
+
+
+class TestToolConfigCacheControlVisibility:
+    """A tool_config injection point must reach the OpenAI-shaped tools.
+
+    Applying it only inside the Bedrock transform made the breakpoint invisible
+    to logging callbacks (issue #34758): Langfuse and friends log
+    ``optional_params["tools"]``, not the provider payload.
+    """
+
+    FUNCTION_TOOL = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+        },
+    }
+
+    def test_marks_last_tool(self):
+        tools = [copy.deepcopy(self.FUNCTION_TOOL), copy.deepcopy(self.FUNCTION_TOOL)]
+        result = AnthropicCacheControlHook.with_tool_config_cache_control(
+            non_default_params={"cache_control_injection_points": [{"location": "tool_config"}]},
+            tools=tools,
+        )
+        assert result is not None
+        assert "cache_control" not in result[0]
+        assert result[1]["cache_control"] == {"type": "ephemeral"}
+        assert tools == [self.FUNCTION_TOOL, self.FUNCTION_TOOL], "client tool list must not be mutated"
+
+    def test_honors_configured_control(self):
+        result = AnthropicCacheControlHook.with_tool_config_cache_control(
+            non_default_params={
+                "cache_control_injection_points": [
+                    {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}}
+                ]
+            },
+            tools=[copy.deepcopy(self.FUNCTION_TOOL)],
+        )
+        assert result is not None
+        assert result[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_skips_builtin_tools_that_carry_no_definition(self):
+        """Built-in tools are dropped by the provider transforms, so a breakpoint
+        placed on them would silently disappear from the request."""
+        tools = [copy.deepcopy(self.FUNCTION_TOOL), {"type": "web_search_20250305", "name": "web_search"}]
+        result = AnthropicCacheControlHook.with_tool_config_cache_control(
+            non_default_params={"cache_control_injection_points": [{"location": "tool_config"}]},
+            tools=tools,
+        )
+        assert result is not None
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in result[1]
+
+    def test_leaves_client_marked_tools_alone(self):
+        tools = [{**copy.deepcopy(self.FUNCTION_TOOL), "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+        result = AnthropicCacheControlHook.with_tool_config_cache_control(
+            non_default_params={"cache_control_injection_points": [{"location": "tool_config"}]},
+            tools=tools,
+        )
+        assert result == tools
+
+    @pytest.mark.parametrize(
+        "points",
+        [[], [{"location": "message", "role": "system"}]],
+        ids=["no_points", "message_point_only"],
+    )
+    def test_noop_without_tool_config_point(self, points):
+        tools = [copy.deepcopy(self.FUNCTION_TOOL)]
+        result = AnthropicCacheControlHook.with_tool_config_cache_control(
+            non_default_params={"cache_control_injection_points": points},
+            tools=tools,
+        )
+        assert result == tools
+
+    @pytest.mark.asyncio
+    async def test_bedrock_request_and_logged_tools_agree(self):
+        """The tools the callback sees carry the breakpoint, and the Bedrock
+        payload still carries exactly one tool cachePoint (no double injection)."""
+        import asyncio
+
+        class CaptureLogger(litellm.integrations.custom_logger.CustomLogger):
+            def __init__(self):
+                self.optional_params = None
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                self.optional_params = kwargs.get("optional_params")
+
+        with patch.dict(
+            os.environ,
+            {
+                "AWS_ACCESS_KEY_ID": "fake_access_key_id",
+                "AWS_SECRET_ACCESS_KEY": "fake_secret_access_key",
+                "AWS_REGION_NAME": "us-east-1",
+            },
+        ):
+            capture = CaptureLogger()
+            litellm.callbacks = [capture]
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 10, "outputTokens": 2, "totalTokens": 12},
+            }
+
+            client_tools = [copy.deepcopy(self.FUNCTION_TOOL)]
+            client = AsyncHTTPHandler()
+            with patch.object(client, "post", return_value=mock_response) as mock_post:
+                await litellm.acompletion(
+                    model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    messages=[{"role": "user", "content": "What is the weather?"}],
+                    tools=client_tools,
+                    cache_control_injection_points=[{"location": "tool_config"}],
+                    client=client,
+                )
+
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            bedrock_tools = request_body["toolConfig"]["tools"]
+            assert sum(1 for tool in bedrock_tools if "cachePoint" in tool) == 1
+            assert "cachePoint" in bedrock_tools[-1]
+
+            await asyncio.sleep(1)
+            logged_tools = capture.optional_params["tools"]
+            assert logged_tools[-1]["cache_control"] == {"type": "ephemeral"}
+            assert client_tools == [self.FUNCTION_TOOL], "client tool list must not be mutated"
+
+    def test_applied_point_is_not_passed_through_to_the_provider(self):
+        """Once the breakpoint sits on the tools, the point itself is spent.
+
+        Passing it on made the Anthropic provider reject the request with
+        "cache_control_injection_points: Extra inputs are not permitted"."""
+        params = {"cache_control_injection_points": [{"location": "tool_config"}]}
+        AnthropicCacheControlHook.with_tool_config_cache_control(
+            non_default_params=params, tools=[copy.deepcopy(self.FUNCTION_TOOL)]
+        )
+
+        _, _, non_default_params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert "cache_control_injection_points" not in non_default_params
+
+    def test_unapplied_point_still_reaches_the_provider(self):
+        """Without tools to mark, the Bedrock transform is still the one that
+        applies the breakpoint, so the point must survive the hook."""
+        _, _, non_default_params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": [{"location": "tool_config"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert non_default_params["cache_control_injection_points"] == [
+            {"location": "tool_config", "_litellm_judged": True}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_anthropic_request_carries_the_tool_breakpoint(self):
+        """The Anthropic payload gets the breakpoint on the tool and none of
+        litellm's internal injection-point bookkeeping."""
+        litellm.callbacks = []
+        client = AsyncHTTPHandler()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.json.return_value = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+        }
+
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            await litellm.acompletion(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[copy.deepcopy(self.FUNCTION_TOOL)],
+                cache_control_injection_points=[{"location": "tool_config"}],
+                api_key="fake-anthropic-key",
+                client=client,
+            )
+
+        call_kwargs = mock_post.call_args.kwargs
+        request_body = call_kwargs.get("json") or json.loads(call_kwargs["data"])
+        assert "cache_control_injection_points" not in request_body
+        assert request_body["tools"][-1]["cache_control"] == {"type": "ephemeral"}
