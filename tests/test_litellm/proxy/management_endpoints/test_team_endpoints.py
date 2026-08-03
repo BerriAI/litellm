@@ -10617,3 +10617,55 @@ def test_validate_member_user_id_provisioning_caps_the_ids_it_echoes_back():
     assert f"u{_MAX_REPORTED_UNKNOWN_USER_IDS}" not in detail
     assert f"and {500 - _MAX_REPORTED_UNKNOWN_USER_IDS} more" in detail
     assert len(detail) < 1000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint_name, expected_blocked",
+    [("block_team", True), ("unblock_team", False)],
+)
+async def test_block_unblock_team_refreshes_cached_team(endpoint_name, expected_blocked):
+    """`/team/block` and `/team/unblock` must refresh the cached team object.
+
+    Auth resolves teams through `team_id:{team_id}` before hitting the DB, and
+    `common_checks` enforces `blocked` off that cached object. Writing the DB row
+    without refreshing the cache lets a blocked team keep serving traffic (and a
+    just-unblocked team keep getting rejected) until the entry expires.
+    """
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import BlockTeamRequest
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_id = "team-block-cache-refresh"
+    existing = LiteLLM_TeamTable(team_id=team_id, team_alias="t", blocked=not expected_blocked)
+    updated = LiteLLM_TeamTable(team_id=team_id, team_alias="t", blocked=expected_blocked)
+    endpoint = getattr(team_endpoints, endpoint_name)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as pc,
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch.object(team_endpoints, "_refresh_cached_team", new=AsyncMock()) as mock_refresh,
+    ):
+        pc.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+        pc.db.litellm_teamtable.update = AsyncMock(return_value=updated)
+
+        result = await endpoint(
+            data=BlockTeamRequest(team_id=team_id),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+            ),
+        )
+
+    assert result is updated
+    update_kwargs = pc.db.litellm_teamtable.update.call_args.kwargs
+    assert update_kwargs["data"] == {"blocked": expected_blocked}
+    mock_refresh.assert_awaited_once()
+    assert mock_refresh.await_args.kwargs["team_row"] is updated
+    # Without `object_permission`, the refresh caches the team with the relation
+    # nulled out.
+    assert update_kwargs.get("include") == {"object_permission": True}
