@@ -30,6 +30,17 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def check_potential_json_str(cls, values):
+        # FastAPI re-validates the endpoint's response model with
+        # `from_attributes=True` when the handler returns a Pydantic instance
+        # (e.g. the Prisma `update` return in `/model/block` / `/model/unblock`).
+        # In that path `values` is the model instance, not a dict, so
+        # `values.get(...)` raises `AttributeError`. Pydantic documents that a
+        # before-validator may receive any input:
+        # https://docs.pydantic.dev/latest/concepts/validators/#model-validators
+        # Returning non-dict input unchanged lets Pydantic's normal
+        # attribute-based validation pick up the fields. See #35597.
+        if not isinstance(values, dict):
+            return values
         if isinstance(values.get("litellm_params"), str):
             try:
                 values["litellm_params"] = json.loads(values["litellm_params"])

@@ -129,6 +129,55 @@ class TestModel:
         assert model.litellm_params == {"model": "gpt-4"}
         assert model.model_info == {"team_id": "t1"}
 
+    def test_check_potential_json_str_passes_through_non_dict_input(self):
+        """
+        Regression pin for #35597.
+
+        FastAPI re-validates the endpoint's response model with
+        `from_attributes=True` when the handler returns a Pydantic instance
+        (e.g. the Prisma `update` return in `/model/block` and
+        `/model/unblock`). The before-validator must accept that non-dict
+        input and return it unchanged, otherwise `values.get(...)` raises
+        `AttributeError: 'LiteLLM_ProxyModelTable' object has no attribute 'get'`
+        and the endpoint returns HTTP 500 after the database write succeeds.
+
+        Pydantic documents that a before-model validator may receive any
+        input: https://docs.pydantic.dev/latest/concepts/validators/#model-validators
+
+        `model_validate` does not exercise this code path with a model
+        instance (the `from_attributes` config on LiteLLMPydanticObjectBase
+        is the OpenAI BaseModel default, but `model_validate` only consults
+        it when explicitly passed), so the pin calls the validator directly
+        with a model instance — that is the exact input shape the FastAPI
+        re-validation path produces.
+        """
+        source = LiteLLM_ProxyModelTable(
+            model_id="m1",
+            model_name="gpt-4",
+            litellm_params={"model": "gpt-4"},
+            model_info={"team_id": "t1"},
+            blocked=True,
+        )
+        # Pydantic 2.x invokes the `mode="before"` validator with the raw
+        # input. With `from_attributes=True` (FastAPI's default for
+        # response-model validation) and a returned Pydantic instance as
+        # input, the validator receives the instance itself. Before the fix,
+        # `values.get(...)` on a Pydantic instance raised AttributeError.
+        passed_through = LiteLLM_ProxyModelTable.check_potential_json_str(source)
+        assert passed_through is source, "non-dict input must be returned unchanged"
+        # And the dict path still works — the fix is a pass-through, not a
+        # behaviour change for the original case.
+        parsed = LiteLLM_ProxyModelTable.check_potential_json_str(
+            {
+                "model_id": "m2",
+                "model_name": "gpt-4",
+                "litellm_params": '{"model": "gpt-4"}',
+                "model_info": '{"team_id": "t2"}',
+            }
+        )
+        assert parsed["litellm_params"] == {"model": "gpt-4"}
+        assert parsed["model_info"] == {"team_id": "t2"}
+
     def test_team_helpers_none_when_no_model_info(self):
         model = LiteLLM_ProxyModelTable(
             model_id="m1", model_name="gpt-4", litellm_params={}, model_info=None

@@ -3231,3 +3231,92 @@ class TestPatchModelBlockedAuthGate:
             )
             assert result is updated_row
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+
+
+class TestBlockUnblockModelReturnsModel:
+    """
+    Regression pin for #35597.
+
+    `/model/block` and `/model/unblock` previously returned HTTP 500 after
+    the database write succeeded. The Prisma `update` returns a
+    Pydantic-generated `LiteLLM_ProxyModelTable` instance, FastAPI then
+    re-validates the response against the route's `response_model` (also
+    `LiteLLM_ProxyModelTable`) with `from_attributes=True`, and the
+    `mode="before"` validator `check_potential_json_str` did
+    `values.get(...)` on the model instance — raising `AttributeError`
+    because a Pydantic model is not a dict.
+
+    The fix is a 2-line pass-through in the validator
+    (`if not isinstance(values, dict): return values`). The unit-level pin
+    is in `tests/test_litellm/models/test_models.py::TestModel::test_check_potential_json_str_passes_through_non_dict_input`.
+    This class exercises the full `_set_model_blocked_status` flow with a
+    real Pydantic instance as the Prisma return so the validator is called
+    end-to-end with a non-dict input.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("blocked", [True, False])
+    async def test_set_model_blocked_status_returns_pydantic_instance(self, blocked):
+        from litellm.proxy._types import BlockModelRequest
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _set_model_blocked_status,
+        )
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        existing_row = LiteLLM_ProxyModelTable(
+            model_id="m-block-test",
+            model_name="gpt-4o",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"id": "m-block-test"},
+            blocked=not blocked,
+        )
+        updated_row = LiteLLM_ProxyModelTable(
+            model_id="m-block-test",
+            model_name="gpt-4o",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"id": "m-block-test"},
+            blocked=blocked,
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(
+            return_value=updated_row
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            result = await _set_model_blocked_status(
+                data=BlockModelRequest(model_id="m-block-test"),
+                user_api_key_dict=admin,
+                blocked=blocked,
+                action="blocked" if blocked else "unblocked",
+                litellm_changed_by=None,
+            )
+
+        # Endpoint must return the updated row without raising. Before the
+        # fix the FastAPI response-model validation would raise
+        # `AttributeError: 'LiteLLM_ProxyModelTable' object has no attribute 'get'`
+        # on this exact return path.
+        assert result is updated_row
+        assert result.blocked is blocked
+        # And the validator's pass-through contract must hold: re-validating
+        # the returned instance must not crash.
+        passed_through = LiteLLM_ProxyModelTable.check_potential_json_str(result)
+        assert passed_through is result
+        # The DB update must have asked for the new blocked state plus the
+        # updated_by/updated_at audit fields.
+        update_call_kwargs = mock_prisma.db.litellm_proxymodeltable.update.call_args.kwargs
+        assert update_call_kwargs["data"]["blocked"] is blocked
+        assert update_call_kwargs["data"]["updated_by"] == "admin"
