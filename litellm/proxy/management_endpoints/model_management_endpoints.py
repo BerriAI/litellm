@@ -14,7 +14,7 @@ import asyncio
 import datetime
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -147,41 +147,69 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+_TEAM_PUBLIC_NAME_PROBE_SQL = (
+    f'SELECT 1 FROM "{LitellmTableNames.PROXY_MODEL_TABLE_NAME.value}" '
+    "WHERE model_info->>'team_public_model_name' = $1 LIMIT 1"
+)
+
+
+async def _db_has_team_public_model_name(candidate: str, prisma_client: PrismaClient) -> bool:
+    """Whether any stored deployment exposes ``candidate`` as a team public model name.
+
+    ``team_public_model_name`` lives inside the ``model_info`` JSON blob rather than
+    its own column, so this reads it with a JSONB accessor instead of a Prisma filter.
+    """
+    rows = await prisma_client.db.query_raw(_TEAM_PUBLIC_NAME_PROBE_SQL, candidate)
+    return bool(rows)
+
+
 async def _raise_on_model_id_name_collision(
     candidate_id: str | None,
+    incoming_model_name: str | None,
     llm_router: Router | None,
     prisma_client: PrismaClient,
 ) -> None:
-    """Reject a deployment id that equals an existing model_name.
+    """Reject a deployment id that equals a routable model name.
 
     The router resolves incoming ``model`` strings against deployment ids before
-    model names, so a deployment whose id equals a model_name captures all
-    traffic for that name and bypasses load balancing, cooldowns, and fallbacks.
-    The id colliding with its own model_name is rejected too: it is invisible in
-    a 1-member pool but pins the pool as soon as a second member is added.
+    model names (and before team public names), so a deployment whose id equals a
+    routable name captures all traffic for that name and bypasses load balancing,
+    cooldowns, and fallbacks. For team deployments the capture crosses a tenant
+    boundary: the other team's requests are served by this deployment, using its
+    provider credentials.
 
-    Checks the router's in-memory names first, then falls back to one DB probe
-    so a name written via another proxy instance (visible in the router only
-    after the next DB poll) is still caught.
+    Three name spaces are routable and therefore checked: the incoming
+    deployment's own name (invisible in a 1-member pool, but it pins the pool the
+    moment a second member joins), every existing ``model_name``, and every
+    existing ``team_public_model_name``. The router's in-memory sets answer first;
+    DB probes cover names written through another proxy instance that this one has
+    not polled yet.
     """
     if candidate_id is None:
         return
-    router_collision = llm_router is not None and candidate_id in llm_router.model_names
-    db_collision = (
-        not router_collision
-        and await ModelRepository(prisma_client).table.find_first(
-            where={"model_name": candidate_id}  # mutable-ok: prisma's query builder isinstance-checks for a plain dict
-        )
-        is not None
+    if candidate_id == incoming_model_name:
+        _raise_model_id_collision(candidate_id=candidate_id, collides_with="the model_name in this request")
+    if llm_router is not None:
+        if candidate_id in llm_router.model_names:
+            _raise_model_id_collision(candidate_id=candidate_id, collides_with="an existing model_name")
+        if candidate_id in llm_router.team_public_model_names:
+            _raise_model_id_collision(candidate_id=candidate_id, collides_with="an existing team public model name")
+    stored_model = await ModelRepository(prisma_client).table.find_first(
+        where={"model_name": candidate_id}  # mutable-ok: prisma's query builder isinstance-checks for a plain dict
     )
-    if not router_collision and not db_collision:
-        return
+    if stored_model is not None:
+        _raise_model_id_collision(candidate_id=candidate_id, collides_with="an existing model_name")
+    if await _db_has_team_public_model_name(candidate=candidate_id, prisma_client=prisma_client):
+        _raise_model_id_collision(candidate_id=candidate_id, collides_with="an existing team public model name")
+
+
+def _raise_model_id_collision(candidate_id: str, collides_with: str) -> NoReturn:
     raise ProxyException(
         message=(
-            f"model_info.id '{candidate_id}' collides with the existing model_name '{candidate_id}'. "
-            "Deployment ids are resolved before model names at request time, so this deployment "
-            "would capture all traffic for that model name and bypass load balancing, cooldowns, "
-            "and fallbacks. Choose a different model_info.id, or omit it to auto-generate one."
+            f"model_info.id '{candidate_id}' collides with {collides_with}. Deployment ids are "
+            "resolved before model names at request time, so this deployment would capture all "
+            "traffic for that name and bypass load balancing, cooldowns, and fallbacks. Choose a "
+            "different model_info.id, or omit it to auto-generate one."
         ),
         type=ProxyErrorTypes.validation_error.value,
         code=status.HTTP_400_BAD_REQUEST,
@@ -189,21 +217,44 @@ async def _raise_on_model_id_name_collision(
     )
 
 
-def _warn_on_model_name_shadowed_by_id(model_name: str | None, llm_router: Router | None) -> None:
-    """Warn when a model_name equals an existing deployment id.
+async def _raise_on_model_name_shadowed_by_id(
+    model_name: str | None,
+    llm_router: Router | None,
+    prisma_client: PrismaClient,
+) -> None:
+    """Reject a model name that equals an existing deployment id.
 
-    The id wins at request time, so requests for this name pin to that
-    deployment instead of load balancing across the pool. Warn rather than
-    reject: the colliding id already exists, so this write is not the one
-    introducing the broken state.
+    The mirror of :func:`_raise_on_model_id_name_collision`. Ids win at request
+    time, so a pool created or renamed to an existing id can never receive
+    traffic, and a caller authorized for this name is instead served by the
+    deployment carrying that id, potentially another team's deployment and
+    provider credentials. Rejected rather than warned because a name that cannot
+    route is not a state worth persisting; collisions already stored keep serving
+    and are surfaced by the router's load-time warnings instead.
     """
-    if model_name is None or llm_router is None or not llm_router.has_model_id(model_name):
+    if model_name is None:
         return
-    verbose_proxy_logger.warning(
-        "model_name '%s' equals an existing deployment id. Requests for this model name will "
-        "resolve to that deployment id and pin to it, bypassing load balancing, cooldowns, and "
-        "fallbacks for this name. Rename the model or change the colliding deployment's model_info.id.",
-        model_name,
+    if llm_router is not None and llm_router.has_model_id(model_name):
+        _raise_model_name_collision(model_name)
+    stored_model = await ModelRepository(prisma_client).table.find_unique(
+        where={"model_id": model_name}  # mutable-ok: prisma's query builder isinstance-checks for a plain dict
+    )
+    if stored_model is not None:
+        _raise_model_name_collision(model_name)
+
+
+def _raise_model_name_collision(model_name: str) -> NoReturn:
+    raise ProxyException(
+        message=(
+            f"model_name '{model_name}' collides with an existing deployment id. Deployment ids are "
+            "resolved before model names at request time, so requests for this name would pin to "
+            "that deployment instead of this one, bypassing load balancing, cooldowns, and "
+            "fallbacks. Choose a different model name, or change the colliding deployment's "
+            "model_info.id."
+        ),
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="model_name",
     )
 
 
@@ -369,7 +420,11 @@ async def patch_model(
             existing_params=db_model.litellm_params,
         )
 
-        _warn_on_model_name_shadowed_by_id(model_name=patch_data.model_name, llm_router=llm_router)
+        await _raise_on_model_name_shadowed_by_id(
+            model_name=patch_data.model_name,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+        )
 
         # Handle team model updates with proper alias management
         update_data = await _update_team_model_in_db(
@@ -1420,11 +1475,16 @@ async def add_new_model(
 
         await _raise_on_model_id_name_collision(
             candidate_id=model_params.model_info.id,
+            incoming_model_name=model_params.model_name,
             llm_router=llm_router,
             prisma_client=prisma_client,
         )
 
-        _warn_on_model_name_shadowed_by_id(model_name=model_params.model_name, llm_router=llm_router)
+        await _raise_on_model_name_shadowed_by_id(
+            model_name=model_params.model_name,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+        )
 
         model_response: LiteLLM_ProxyModelTable | None = None
         # update DB

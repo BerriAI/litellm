@@ -6649,7 +6649,7 @@ class TestDeploymentIdModelNameCollisionWarning:
                     model_info=ModelInfo(id="dep-c"),
                 )
             )
-        assert "collides with the model name" not in caplog.text
+        assert "collides with the routable name" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_pool_with_distinct_ids_load_balances_across_members(self):
@@ -6698,7 +6698,91 @@ class TestDeploymentIdModelNameCollisionWarning:
         collision_warnings = [
             r
             for r in caplog.records
-            if "collides with the model name" in r.getMessage() or "equals an existing deployment id" in r.getMessage()
+            if "collides with the routable name" in r.getMessage() or "equals an existing deployment id" in r.getMessage()
         ]
         assert len(collision_warnings) == 1
         assert "Deployment id 'sonnet'" in collision_warnings[0].getMessage()
+
+    def _team_member(self, public_name: str, deployment_id: str, api_key: str = "fake-key") -> dict:
+        return {
+            "model_name": f"model_name_team_{deployment_id}",
+            "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": api_key},
+            "model_info": {
+                "id": deployment_id,
+                "team_id": f"team-{deployment_id}",
+                "team_public_model_name": public_name,
+            },
+        }
+
+    def test_router_init_warns_when_id_shadows_team_public_model_name(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            litellm.Router(
+                model_list=[
+                    self._team_member("shared-haiku", "team-a-dep"),
+                    self._pool_member("attacker-pool", "shared-haiku"),
+                ]
+            )
+        assert "Deployment id 'shared-haiku'" in caplog.text
+
+    def test_add_deployment_warns_when_team_public_name_shadowed_by_existing_id(self, caplog):
+        import logging
+
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(model_list=[self._pool_member("attacker-pool", "shared-haiku")])
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router.add_deployment(
+                deployment=Deployment(
+                    model_name="model_name_team_a_uuid",
+                    litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-4-5", api_key="fake-key"),
+                    model_info=ModelInfo(
+                        id="team-a-dep",
+                        team_id="team-a",
+                        team_public_model_name="shared-haiku",
+                    ),
+                )
+            )
+        assert "Model name 'shared-haiku' equals an existing deployment id" in caplog.text
+
+    def test_warn_on_id_name_collision_fires_only_for_routable_name_matches(self, caplog):
+        import logging
+
+        router = litellm.Router(
+            model_list=[
+                self._pool_member("haiku", "dep-a"),
+                self._team_member("shared-haiku", "team-a-dep"),
+            ]
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router._warn_on_id_name_collision(model_id="haiku", model_name="some-pool")
+        assert "Deployment id 'haiku'" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router._warn_on_id_name_collision(model_id="shared-haiku", model_name="some-pool")
+        assert "Deployment id 'shared-haiku'" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router._warn_on_id_name_collision(model_id="dep-a", model_name="haiku")
+            router._warn_on_id_name_collision(model_id=None, model_name="haiku")
+        assert caplog.text == ""
+
+    def test_warn_on_name_shadowed_by_existing_id_skips_self_and_unknown_names(self, caplog):
+        import logging
+
+        router = litellm.Router(model_list=[self._pool_member("haiku", "dep-a")])
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router._warn_on_name_shadowed_by_existing_id(model_id="dep-new", model_name="dep-a")
+        assert "Model name 'dep-a' equals an existing deployment id" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router._warn_on_name_shadowed_by_existing_id(model_id="dep-a", model_name="dep-a")
+            router._warn_on_name_shadowed_by_existing_id(model_id="dep-new", model_name="unknown-name")
+            router._warn_on_name_shadowed_by_existing_id(model_id="dep-new", model_name=None)
+        assert caplog.text == ""
