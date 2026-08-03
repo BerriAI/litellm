@@ -6135,7 +6135,8 @@ class Router:
 
         from litellm.exceptions import MidStreamFallbackError
 
-        fallback_continuation_state = (kwargs.get("metadata") or {}).get("_fallback_continuation_state")
+        request_metadata = kwargs.get("metadata")
+        fallback_continuation_state = request_metadata.get("_fallback_continuation_state") if request_metadata else None
         if (
             isinstance(e, MidStreamFallbackError)
             and isinstance(fallback_continuation_state, _FallbackContinuationState)
