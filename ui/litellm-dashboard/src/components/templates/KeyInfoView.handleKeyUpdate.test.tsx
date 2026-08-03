@@ -267,6 +267,16 @@ vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   }),
 }));
 
+// KeyInfoView's Logging Exporters select pulls credentials + orgs via react-query;
+// mock both so this QueryClientProvider-free unit test of handleKeyUpdate runs.
+vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
+  useCredentials: vi.fn().mockReturnValue({ data: { credentials: [] }, refetch: vi.fn() }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: vi.fn().mockReturnValue({ data: [], refetch: vi.fn() }),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/keys/useSetKeyBlockedState", () => ({
   useSetKeyBlockedState: vi.fn().mockReturnValue({
     mutate: vi.fn(),

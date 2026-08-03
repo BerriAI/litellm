@@ -113,5 +113,4 @@ def initialize_standard_callback_dynamic_params(
                     _param_value = metadata.get(param)
                     validate_no_callback_env_reference(param, _param_value, source=slot_label)
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
-
     return standard_callback_dynamic_params

@@ -3123,6 +3123,16 @@
       "count": 1
     }
   },
+  "src/components/logging_credentials/AccessControlFields.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/logging_credentials/EditLoggingCredentialModal.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
   "src/components/logging_settings_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -3542,6 +3552,9 @@
     },
     "local/no-complex-jsx-arrow": {
       "count": 4
+    },
+    "max-lines": {
+      "count": 1
     },
     "no-nested-ternary": {
       "count": 2

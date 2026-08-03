@@ -3108,6 +3108,22 @@ OPENAI_RESPONSE_HEADERS = [
 ]
 
 
+class OtelDestinationParams(TypedDict, total=False):
+    """A resolved, admin-owned OTLP destination carried server-side only.
+
+    Populated by the proxy from the exporters assigned to a request's identity
+    chain; never read from a request body or metadata. The v2 logger validates and
+    exports through it. ``callback_name`` is the OTEL backend this destination
+    belongs to, so fan-out routes each destination to the right backend's logger.
+    """
+
+    callback_name: str
+    endpoint: str
+    headers: Mapping[str, str]
+    resource_attributes: Mapping[str, str]
+    protocol: str | None
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: Optional[str]
@@ -3796,11 +3812,11 @@ class RawRequestTypedDict(TypedDict, total=False):
     error: Optional[str]
 
 
-from litellm.models.credentials import CredentialBase as CredentialBase  # noqa: E402
-from litellm.models.credentials import CredentialItem as CredentialItem  # noqa: E402
 from litellm.models.credentials import (  # noqa: E402
     CreateCredentialItem as CreateCredentialItem,
 )
+from litellm.models.credentials import CredentialBase as CredentialBase  # noqa: E402
+from litellm.models.credentials import CredentialItem as CredentialItem  # noqa: E402
 
 
 class ExtractedFileData(TypedDict):

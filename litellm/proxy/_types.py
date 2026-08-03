@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Union
 
@@ -17,7 +17,10 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
-from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+from litellm.constants import (
+    LITELLM_LOGGING_CREDENTIAL_NAME_KEY,
+    MCP_STDIO_ALLOWED_COMMANDS,
+)
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
@@ -1928,7 +1931,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_callback_vars(cls, values):
         callback_vars = values.get("callback_vars", {})
-        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys()) | {LITELLM_LOGGING_CREDENTIAL_NAME_KEY}
         for key, value in callback_vars.items():
             if key not in valid_keys:
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
@@ -1967,7 +1970,7 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
                 "callbacks": [],
                 "callback_vars": {},
             }
-        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys()) | {LITELLM_LOGGING_CREDENTIAL_NAME_KEY}
         if callback_vars is not None:
             for key in callback_vars:
                 if key not in valid_keys:
@@ -2853,6 +2856,7 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
     litellm_budget_table: LiteLLM_BudgetTable | None = None
     created_at: datetime
     updated_at: datetime
+    resolved_logging_exporters: Sequence[str] | None = None
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
@@ -3869,6 +3873,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    resolved_logging_exporters: Sequence[str] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):

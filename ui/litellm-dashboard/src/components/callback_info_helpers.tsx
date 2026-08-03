@@ -14,7 +14,7 @@ interface CallbackConfig {
   displayName: string;
   logo?: string;
   supports_key_team_logging: boolean;
-  dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
+  dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number" | "credential">;
   description: string;
 }
 
@@ -111,6 +111,15 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_host: "text",
     },
     description: "Langfuse v3 OTEL Logging Integration",
+  },
+  {
+    id: "weave_otel",
+    displayName: "Weave OTEL",
+    // OTEL v2 destination: admin-owned and routed by credential_info.access,
+    // not configured as a per-team callback here.
+    supports_key_team_logging: false,
+    dynamic_params: {},
+    description: "Weave (W&B) OTEL Logging Integration",
   },
   {
     id: "langsmith",

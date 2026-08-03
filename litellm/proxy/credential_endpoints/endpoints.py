@@ -11,6 +11,10 @@ from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.management_endpoints.logging_exporter_access import is_logging_credential
+from litellm.proxy.management_endpoints.logging_exporter_validation import (
+    validate_credential_access,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
@@ -52,6 +56,9 @@ async def create_credential(
     Reloads credentials in memory.
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
+
+    if is_logging_credential(credential.credential_info):
+        validate_credential_access(credential.credential_info)
 
     try:
         if prisma_client is None:
@@ -270,12 +277,8 @@ def update_db_credential(
 
         merged_credential.credential_values.update(encrypted_params)
 
-    # update model info
     if encrypted_credential.credential_info:
-        """Update credential info"""
-        if "credential_info" not in merged_credential.credential_info:
-            merged_credential.credential_info = {}
-        merged_credential.credential_info.update(encrypted_credential.credential_info)
+        merged_credential.credential_info = encrypted_credential.credential_info
 
     return merged_credential
 
@@ -307,6 +310,8 @@ async def update_credential(
         db_credential = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
+        if is_logging_credential(db_credential.credential_info) or is_logging_credential(credential.credential_info):
+            validate_credential_access(credential.credential_info)
         merged_credential = update_db_credential(db_credential, credential)
         credential_object_jsonified = jsonify_object(merged_credential.model_dump())
         await credentials_repository.update_by_name(
@@ -316,32 +321,53 @@ async def update_credential(
                 "updated_by": user_api_key_dict.user_id,
             },
         )
-
-        # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
-        new_name = merged_credential.credential_name
-        existing_in_memory: CredentialItem | None = None
-        for cred in litellm.credential_list:
-            if cred.credential_name == credential_name:
-                existing_in_memory = cred
-                break
-
-        if existing_in_memory is not None:
-            in_memory_values = dict(existing_in_memory.credential_values or {})
-            if credential.credential_values:
-                in_memory_values.update(credential.credential_values)
-            in_memory_info = dict(existing_in_memory.credential_info or {})
-            if credential.credential_info:
-                in_memory_info.update(credential.credential_info)
-            updated_in_memory = CredentialItem(
-                credential_name=new_name,
-                credential_values=in_memory_values,
-                credential_info=in_memory_info,
-            )
-            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
-            if new_name != credential_name:
-                litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
-            CredentialAccessor.upsert_credentials([updated_in_memory])
-
+        _sync_in_memory_credential(
+            old_name=credential_name,
+            merged=merged_credential,
+            patch=credential,
+        )
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        # Raised, not returned: returning the exception makes it the response body and
+        # FastAPI answers 200, so a rejected access shape reads as a successful write to
+        # any client checking the status (the destination edit modal does).
+        raise handle_exception_on_proxy(e)
+
+
+def _sync_in_memory_credential(
+    *,
+    old_name: str,
+    merged: CredentialItem,
+    patch: CredentialItem,
+) -> None:
+    """Mirror the DB write into ``litellm.credential_list``.
+
+    Skips when the credential isn't resident in memory (e.g. created on
+    another scaled instance, restored from DB on the next reload).
+    ``credential_info`` is replaced exactly as the DB write replaces it, so the
+    routing-live copy and the stored row can't disagree; values merge, matching
+    the DB's ``update``. Diverging here would hide a lost field until the next
+    reload swapped the in-memory copy for the row that never had it.
+    """
+    existing_in_memory: CredentialItem | None = None
+    for cred in litellm.credential_list:
+        if cred.credential_name == old_name:
+            existing_in_memory = cred
+            break
+    if existing_in_memory is None:
+        return
+
+    in_memory_values = dict(existing_in_memory.credential_values or {})
+    if patch.credential_values:
+        in_memory_values.update(patch.credential_values)
+    in_memory_info = (
+        dict(patch.credential_info) if patch.credential_info else dict(existing_in_memory.credential_info or {})
+    )
+    updated_in_memory = CredentialItem(
+        credential_name=merged.credential_name,
+        credential_values=in_memory_values,
+        credential_info=in_memory_info,
+    )
+    if merged.credential_name != old_name:
+        litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != old_name]
+    CredentialAccessor.upsert_credentials([updated_in_memory])

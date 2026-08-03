@@ -3386,6 +3386,7 @@ def _get_masked_values(
         "credentials",
         "password",
         "passwd",
+        "otel_headers",
     ]
 
     def _mask_value(v: Any) -> Any:
@@ -4019,6 +4020,8 @@ def _init_custom_logger_compatible_class(
             _otel_logger = WeaveOtelLogger(config=otel_config, callback_name="weave_otel")
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
+        elif logging_integration == "generic":
+            return _maybe_construct_otel_v2("generic", _in_memory_loggers)
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
@@ -4143,17 +4146,56 @@ def _init_custom_logger_compatible_class(
     return None
 
 
-def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Any | None:
-    """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
-    instance configured via the preset for ``callback_name``.
+def _has_admin_owned_logging_destination(callback_name: str) -> bool:
+    """Whether a destination that actually routes somewhere is registered for this backend.
 
-    Returns ``None`` when V2 is off OR when there's no preset registered for
-    ``callback_name`` — callers should then fall through to the legacy path.
+    Admin-owned trace destinations (``logging`` credentials, created from the UI)
+    are an OTEL v2 feature, gated on the ``LITELLM_OTEL_V2`` flag like the rest of
+    v2. When the flag is on and one exists for ``callback_name``, the preset's
+    missing-global-credentials check is relaxed: the destination carries its own
+    credentials, so the v2 logger need not find global env credentials to build.
+
+    Existence alone is not enough: relaxing the check changes how the backend is built
+    for every request on the proxy, so a destination whose ``access`` grants nobody --
+    or whose values don't build a destination at all -- must not trigger it. Otherwise
+    registering an inert row degrades the backend proxy-wide and drops the exports of
+    teams that carry their own ``callback_vars`` credentials for it.
+    """
+    import litellm
+    from litellm.proxy.management_endpoints.logging_exporter_access import (
+        destination_for_credential,
+        parse_credential_info,
+    )
+
+    for credential in litellm.credential_list:
+        raw = credential.credential_info or {}
+        if raw.get("credential_type") != "logging" or raw.get("description") != callback_name:
+            continue
+        info = parse_credential_info(raw)
+        access = info.access if info is not None else None
+        if access is None or not (access.global_ or access.teams or access.orgs):
+            continue
+        if destination_for_credential(credential) is not None:
+            return True
+    return False
+
+
+def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Any | None:
+    """Build (or reuse) a single ``OpenTelemetryV2`` instance configured via the
+    preset for ``callback_name`` when V2 owns this backend.
+
+    The global ``LITELLM_OTEL_V2`` flag is the sole activation gate: V2 owns the
+    backend only when the flag is on. Returns ``None`` otherwise, or when there's no
+    preset registered for ``callback_name`` — callers should then fall through to the
+    legacy path. A registered admin-owned destination does not by itself activate V2;
+    it only relaxes the preset's missing-global-credentials check (the destination
+    carries its own credentials).
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
     if not is_otel_v2_enabled():
         return None
+    has_admin_dest = _has_admin_owned_logging_destination(callback_name)
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
@@ -4164,11 +4206,20 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> An
         if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == callback_name:
             return callback
     try:
-        config = preset_fn()
+        config = preset_fn(allow_missing_credentials=has_admin_dest)
     except Exception:
-        # If env vars are missing or the preset raises, defer to the legacy path
-        # so customers get the same error story they had before V2 landed.
         return None
+    if not config.exporters and not has_admin_dest:
+        # An operator asked for this backend and nothing resolved to send spans to, so it
+        # would export nothing at all. v2 no longer degrades to a console exporter (that
+        # printed every span, prompt content included, synchronously on the request path),
+        # so without this the deployment is silently dark.
+        verbose_logger.warning(
+            "OTel v2: '%s' is enabled but no exporter is configured, so no spans will be "
+            "exported. Set OTEL_EXPORTER/OTEL_ENDPOINT, this backend's credentials, or "
+            "register a logging destination for it.",
+            callback_name,
+        )
     v2_logger = OpenTelemetryV2(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger
@@ -4337,6 +4388,12 @@ def get_custom_logger_compatible_class(
                 raise ValueError("ARIZE_API_KEY not found in environment variables")
             for callback in _in_memory_loggers:
                 if isinstance(callback, ArizeLogger) and callback.callback_name == "arize":
+                    return callback
+        elif logging_integration == "generic":
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == "generic":
                     return callback
         elif logging_integration == "logfire":
             if "LOGFIRE_TOKEN" not in os.environ:

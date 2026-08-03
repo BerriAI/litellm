@@ -243,8 +243,16 @@ class OpenTelemetryV2Config(BaseSettings):
         if self.endpoint and self.exporter == "console":
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
-        # shorthand into one spec so the provider always has a destination.
-        if not self.exporters:
+        # shorthand into one spec so the provider has a destination. The exception is
+        # the "nothing configured" degrade case -- a preset returning a bare config
+        # because it found no credentials, where ``exporter`` is left at its default
+        # ``console`` and no endpoint is set: leave it exporter-less so the provider
+        # exports nothing, rather than degrading to a console exporter that prints every
+        # span (including prompt and completion content) to stdout synchronously on the
+        # request path. An explicitly chosen exporter (even ``console``), a non-console
+        # kind, or an endpoint all still fold.
+        console_by_default = self.exporter == "console" and "exporter" not in self.model_fields_set
+        if not self.exporters and (self.endpoint or not console_by_default):
             self.exporters = [
                 ExporterSpec(
                     kind=self.exporter,
