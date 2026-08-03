@@ -21,13 +21,9 @@ def _resolve_databricks_base_model(model: str) -> str:
     """
     if model.startswith("databricks/dbrx-instruct") or model.startswith("dbrx-instruct"):
         return "databricks-dbrx-instruct"
-    if model.startswith("databricks/meta-llama-3.1-70b-instruct") or model.startswith(
-        "meta-llama-3.1-70b-instruct"
-    ):
+    if model.startswith("databricks/meta-llama-3.1-70b-instruct") or model.startswith("meta-llama-3.1-70b-instruct"):
         return "databricks-meta-llama-3-1-70b-instruct"
-    if model.startswith("databricks/meta-llama-3.1-405b-instruct") or model.startswith(
-        "meta-llama-3.1-405b-instruct"
-    ):
+    if model.startswith("databricks/meta-llama-3.1-405b-instruct") or model.startswith("meta-llama-3.1-405b-instruct"):
         return "databricks-meta-llama-3-1-405b-instruct"
     if (
         model.startswith("databricks/mixtral-8x7b-instruct-v0.1")
@@ -57,6 +53,4 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     base_model = _resolve_databricks_base_model(model)
-    return generic_cost_per_token(
-        model=base_model, usage=usage, custom_llm_provider="databricks"
-    )
+    return generic_cost_per_token(model=base_model, usage=usage, custom_llm_provider="databricks")
