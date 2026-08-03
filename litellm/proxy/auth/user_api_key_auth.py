@@ -2679,7 +2679,7 @@ def get_api_key_from_custom_header(request: Request, custom_litellm_key_header_n
     return api_key
 
 
-def _get_temp_budget_increase(valid_token: UserAPIKeyAuth) -> Optional[float]:
+def _get_temp_budget_increase(valid_token: UserAPIKeyAuth) -> float | None:
     valid_token_metadata = valid_token.metadata
     if "temp_budget_increase" not in valid_token_metadata or "temp_budget_expiry" not in valid_token_metadata:
         return None
