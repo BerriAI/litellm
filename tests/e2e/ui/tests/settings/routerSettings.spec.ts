@@ -78,13 +78,21 @@ test.describe("Router Settings - Fallbacks", () => {
     const primarySelect = modal.locator(".ant-select").filter({ hasText: "Select primary model" });
     await primarySelect.click();
     await page.keyboard.type(PRIMARY);
-    await page.keyboard.press("Enter");
+    const primaryOption = page
+      .locator(".ant-select-dropdown:visible")
+      .getByRole("option", { name: PRIMARY, exact: true });
+    await primaryOption.waitFor({ state: "attached", timeout: 15_000 });
+    await primaryOption.evaluate((el: HTMLElement) => el.click());
     await expect(modal.getByRole("tab", { name: PRIMARY })).toBeVisible({ timeout: 10_000 });
 
     const fallbackSelect = modal.locator(".ant-select").filter({ hasText: "Select fallback models" });
     await fallbackSelect.click();
     await page.keyboard.type(FALLBACK);
-    await page.keyboard.press("Enter");
+    const fallbackOption = page
+      .locator(".ant-select-dropdown:visible")
+      .getByRole("option", { name: FALLBACK, exact: true });
+    await fallbackOption.waitFor({ state: "attached", timeout: 15_000 });
+    await fallbackOption.evaluate((el: HTMLElement) => el.click());
     await page.keyboard.press("Escape");
     // The Fallback Chain helper text reads "(N/10 used)"; once it ticks to 1 the
     // selection has been recorded.

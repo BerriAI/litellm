@@ -63,16 +63,11 @@ test.describe("Clear custom pricing on a deployment", () => {
   });
 
   test("UI sends null for cleared pricing and backend removes the override", async ({ page }) => {
-    // Navigate to the model detail view.
-    await page.goto("/ui");
-    await page.getByText("Models + Endpoints").click();
-
-    // The Model ID cell is the drill-in control; the row itself is not clickable.
-    const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);
-    await expect(modelIdCell).toBeVisible({ timeout: 15_000 });
-    await modelIdCell.click();
+    // Deep-link into the detail view so a crowded paginated models table on a
+    // shared stage DB cannot hide the row we just created.
+    await page.goto(`/ui?page=models&model=${createdModelId}`);
     await expect(page.getByText("Back to Models").first()).toBeVisible({
-      timeout: 10_000,
+      timeout: 15_000,
     });
 
     // Sanity: the seeded pricing is shown in the detail view (77.7000 / 99.9000

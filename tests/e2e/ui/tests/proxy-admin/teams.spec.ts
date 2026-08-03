@@ -94,8 +94,13 @@ test.describe("Proxy Admin - Teams", () => {
     await navigateToPage(page, Page.Teams);
     await dismissFeedbackPopup(page);
 
+    const search = page.getByPlaceholder(/search/i).first();
+    if (await search.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await search.fill(E2E_TEAM_DELETE_ALIAS);
+    }
+
     const teamRow = page.locator("tr", { hasText: E2E_TEAM_DELETE_ALIAS }).first();
-    await expect(teamRow).toBeVisible({ timeout: 10_000 });
+    await expect(teamRow).toBeVisible({ timeout: 15_000 });
     // Actions live in a kebab menu: open it, then click "Delete team".
     await teamRow.locator('[data-testid^="team-actions-"]').click();
     await page.getByTestId("team-action-delete").click();

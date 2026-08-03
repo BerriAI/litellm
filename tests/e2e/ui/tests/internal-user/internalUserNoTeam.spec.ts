@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { E2E_INTERNAL_NOTEAM_EMAIL, E2E_USER_PASSWORD } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 
@@ -12,11 +13,14 @@ test.describe("Internal User with no team memberships", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
   test("Create Key team dropdown is empty when the user belongs to no teams", async ({ page }) => {
-    // Log in via the form as the no-team seeded user.
+    // Log in via the form as the no-team seeded user (created by fixtures/seed.ts).
     await page.goto("/ui/login");
-    await page.getByPlaceholder("Enter your username").fill("noteam@test.local");
-    await page.getByPlaceholder("Enter your password").fill("test");
+    await page.getByPlaceholder("Enter your username").fill(E2E_INTERNAL_NOTEAM_EMAIL);
+    await page.getByPlaceholder("Enter your password").fill(E2E_USER_PASSWORD);
     await page.getByRole("button", { name: "Login", exact: true }).click();
+    await page.waitForURL((url) => url.pathname.includes("/ui") && !url.pathname.includes("/login"), {
+      timeout: 30_000,
+    });
     await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 30_000 });
     expect(new URL(page.url()).pathname).not.toMatch(/\/connect$/);
     await navigateToPage(page, Page.ApiKeys);

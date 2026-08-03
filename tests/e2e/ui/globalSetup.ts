@@ -1,5 +1,6 @@
 import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
+import { seedFixtures } from "./fixtures/seed";
 import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 import * as fs from "fs";
 import * as path from "path";
@@ -29,6 +30,12 @@ async function globalSetup() {
   if (!settingsRes.ok()) {
     throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status()}): ${await settingsRes.text()}`);
   }
+
+  // The users, teams and keys every spec reads are created here over the
+  // management API rather than by loading SQL into the database, so the suite
+  // can run against any deployment it can reach (a local proxy, CI, or a remote
+  // one whose database it has no direct access to).
+  await seedFixtures(api, `${UI_BASE_URL}${rootPath}`, masterKey);
   await api.dispose();
 
   for (const role of Object.values(Role)) {

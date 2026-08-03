@@ -24,20 +24,40 @@ export const INTERNAL_USER_STORAGE_PATH = storagePath("internalUser.storageState
 export const INTERNAL_VIEWER_STORAGE_PATH = storagePath("internalViewer.storageState.json");
 export const TEAM_ADMIN_STORAGE_PATH = storagePath("teamAdmin.storageState.json");
 
-// Seeded user identities (match seed.sql)
+// Seeded user identities (match fixtures/seed.ts)
 export const E2E_PROXY_ADMIN_USER_ID = "e2e-proxy-admin";
 export const E2E_PROXY_ADMIN_EMAIL = "admin@test.local";
+export const E2E_ADMIN_VIEWER_USER_ID = "e2e-admin-viewer";
+export const E2E_ADMIN_VIEWER_EMAIL = "adminviewer@test.local";
 export const E2E_INTERNAL_USER_ID = "e2e-internal-user";
 export const E2E_INTERNAL_USER_EMAIL = "internal@test.local";
+export const E2E_INTERNAL_VIEWER_USER_ID = "e2e-internal-viewer";
+export const E2E_INTERNAL_VIEWER_EMAIL = "viewer@test.local";
+export const E2E_TEAM_ADMIN_USER_ID = "e2e-team-admin";
+export const E2E_TEAM_ADMIN_EMAIL = "teamadmin@test.local";
+export const E2E_INVITABLE_USER_ID = "e2e-invitable-user";
+export const E2E_INVITABLE_USER_EMAIL = "invitable@test.local";
+export const E2E_INTERNAL_NOTEAM_USER_ID = "e2e-internal-noteam";
+export const E2E_INTERNAL_NOTEAM_EMAIL = "noteam@test.local";
+export const E2E_INVITABLE_BY_TEAM_ADMIN_USER_ID = "e2e-invitable-by-team-admin";
+export const E2E_INVITABLE_BY_TEAM_ADMIN_EMAIL = "invitable-team@test.local";
+export const E2E_REMOVABLE_MEMBER_USER_ID = "e2e-removable-member";
+export const E2E_REMOVABLE_MEMBER_EMAIL = "removable@test.local";
+export const E2E_USER_PASSWORD = "test";
 
-// Key aliases for seeded test keys (match seed.sql)
+// Organization and its budget (match fixtures/seed.ts)
+export const E2E_ORG_ID = "e2e-org-main";
+export const E2E_ORG_ALIAS = "E2E Organization";
+export const E2E_ORG_BUDGET_ID = "e2e-budget-org";
+
+// Key aliases for seeded test keys (match fixtures/seed.ts)
 export const E2E_UPDATE_LIMITS_KEY_ALIAS = "e2eUpdateLimitsKey";
 export const E2E_DELETE_KEY_ALIAS = "e2eDeleteKey";
 export const E2E_REGENERATE_KEY_ALIAS = "e2eRegenerateKey";
 export const E2E_INTERNAL_USER_KEY_ALIAS = "e2eInternalUserKey";
 export const E2E_VIEWER_KEY_ALIAS = "e2eViewerKey";
 
-// Team identifiers (match seed.sql)
+// Team identifiers (match fixtures/seed.ts)
 export const E2E_TEAM_CRUD_ID = "e2e-team-crud";
 export const E2E_TEAM_CRUD_ALIAS = "E2E Team CRUD";
 export const E2E_TEAM_DELETE_ID = "e2e-team-delete";
