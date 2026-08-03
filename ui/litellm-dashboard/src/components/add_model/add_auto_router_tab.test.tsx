@@ -111,4 +111,40 @@ describe("AddAutoRouterTab", () => {
     expect(await screen.findByText("Please select a team to continue")).toBeInTheDocument();
     expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
+
+  it("defaults a new router to session affinity on, matching the backend field default", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    await user.click(screen.getByText("Advanced: Session Affinity"));
+    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      session_affinity: true,
+    });
+  });
+
+  it("carries session affinity turned off through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    await user.click(screen.getByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      session_affinity: false,
+    });
+  });
 });

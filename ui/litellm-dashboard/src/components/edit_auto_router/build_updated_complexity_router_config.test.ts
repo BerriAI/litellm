@@ -199,3 +199,28 @@ describe("buildUpdatedComplexityRouterConfig assistant turns", () => {
     expect(result.classifier_context_include_assistant_turns).toBeUndefined();
   });
 });
+
+describe("buildUpdatedComplexityRouterConfig session affinity", () => {
+  it("writes session_affinity=false when the toggle is off", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, session_affinity: false });
+    expect(result.session_affinity).toBe(false);
+  });
+
+  it("writes session_affinity=true when the toggle is on", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, session_affinity: true });
+    expect(result.session_affinity).toBe(true);
+  });
+
+  it("re-asserts the backend's on-by-default when the form value is absent, rather than dropping the key", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, session_affinity: false }, FORM_VALUE);
+    expect(result.session_affinity).toBe(true);
+  });
+
+  it("stops a stored session_affinity=false from surviving a save that turned the toggle back on", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, session_affinity: false },
+      { ...FORM_VALUE, session_affinity: true },
+    );
+    expect(result.session_affinity).toBe(true);
+  });
+});

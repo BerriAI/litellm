@@ -243,3 +243,76 @@ describe("EditAutoRouterModal assistant turns", () => {
     expect(savedConfig().classifier_context_include_assistant_turns).toBe(false);
   });
 });
+
+describe("EditAutoRouterModal session affinity", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const renderWithStoredConfig = (complexity_router_config: Record<string, unknown>) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{ ...MODEL_DATA, litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config } }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // Every router created before the toggle existed stores no session_affinity key and is running
+  // with affinity ON, because the backend field defaults to True. Rendering that as OFF would
+  // tell the user the opposite of what their router does, and saving would then write the lie.
+  it("shows a stored config with no session_affinity key as on", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(true);
+  });
+
+  it("shows a stored session_affinity=false as off and preserves it through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: false });
+
+    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(false);
+  });
+
+  it("persists turning session affinity off", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(false);
+  });
+
+  it("persists turning session affinity back on", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: false });
+
+    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(true);
+  });
+});
