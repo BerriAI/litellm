@@ -59,7 +59,7 @@ class AgentRequestHandler:
 
             return list(set(allowed_agents))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed agents: {e!s}")
+            verbose_logger.warning(f"Failed to get allowed agents: {e}")
             return []
 
     @staticmethod
@@ -179,7 +179,7 @@ class AgentRequestHandler:
 
             return list(set(all_agents))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed agents for key: {e!s}")
+            verbose_logger.warning(f"Failed to get allowed agents for key: {e}")
             return []
 
     @staticmethod
@@ -255,7 +255,7 @@ class AgentRequestHandler:
             # litellm-dashboard is the default UI team and will never have agents;
             # skip noisy warnings for it.
             if user_api_key_auth.team_id != UI_TEAM_ID:
-                verbose_logger.warning(f"Failed to get allowed agents for team: {e!s}")
+                verbose_logger.warning(f"Failed to get allowed agents for team: {e}")
             return []
 
     @staticmethod
@@ -310,7 +310,7 @@ class AgentRequestHandler:
 
             return list(agent_ids)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get agents from access groups: {e!s}")
+            verbose_logger.warning(f"Failed to get agents from access groups: {e}")
             return []
 
     @staticmethod
@@ -369,7 +369,7 @@ class AgentRequestHandler:
 
             return key_object_permission.agent_access_groups or []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get agent access groups for key: {e!s}")
+            verbose_logger.warning(f"Failed to get agent access groups for key: {e}")
             return []
 
     @staticmethod
@@ -412,5 +412,5 @@ class AgentRequestHandler:
 
             return object_permissions.agent_access_groups or []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get agent access groups for team: {e!s}")
+            verbose_logger.warning(f"Failed to get agent access groups for team: {e}")
             return []

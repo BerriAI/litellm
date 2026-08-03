@@ -170,7 +170,7 @@ async def search(
                     team_object=team_object,
                 )
         except Exception as e:
-            verbose_proxy_logger.error(f"Search tool authorization failed for {search_tool_name_value}: {e!s}")
+            verbose_proxy_logger.error(f"Search tool authorization failed for {search_tool_name_value}: {e}")
             raise
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):

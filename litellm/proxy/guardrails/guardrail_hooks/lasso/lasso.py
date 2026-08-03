@@ -299,8 +299,8 @@ class LassoGuardrail(CustomGuardrail):
                     except Exception as e:
                         if isinstance(e, HTTPException):
                             raise e
-                        verbose_proxy_logger.error(f"Error in post-call Lasso masking: {e!s}")
-                        raise LassoGuardrailAPIError(f"Failed to apply post-call masking: {e!s}")
+                        verbose_proxy_logger.error(f"Error in post-call Lasso masking: {e}")
+                        raise LassoGuardrailAPIError(f"Failed to apply post-call masking: {e}")
                 else:
                     # Use the same data for conversation_id consistency (no cache access needed)
                     await self._run_lasso_guardrail(response_data, cache=global_cache, message_type="COMPLETION")
@@ -599,7 +599,7 @@ class LassoGuardrail(CustomGuardrail):
 
         # Log error with context
         verbose_proxy_logger.error(
-            f"Error calling Lasso API: {error!s}",
+            f"Error calling Lasso API: {error}",
             extra={
                 "guardrail_name": getattr(self, "guardrail_name", "unknown"),
                 "message_type": message_type,
@@ -620,7 +620,7 @@ class LassoGuardrail(CustomGuardrail):
                     raise LassoGuardrailAPIError(f"API error: {error.response.status_code}")
 
         # Generic error handling
-        raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {error!s}")
+        raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {error}")
 
     def _log_masking_applied(
         self,

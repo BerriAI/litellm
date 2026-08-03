@@ -621,7 +621,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise OpenAIError(
-                message=f"Unable to get json response - {e!s}, Original Response: {raw_response.text}",
+                message=f"Unable to get json response - {e}, Original Response: {raw_response.text}",
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )

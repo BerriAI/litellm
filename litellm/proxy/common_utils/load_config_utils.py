@@ -34,9 +34,9 @@ def get_file_contents_from_s3(bucket_name, object_key):
 
     except ImportError as e:
         # this is most likely if a user is not using the litellm docker container
-        verbose_proxy_logger.error(f"ImportError: {e!s}")
+        verbose_proxy_logger.error(f"ImportError: {e}")
     except Exception as e:
-        verbose_proxy_logger.error(f"Error retrieving file contents: {e!s}")
+        verbose_proxy_logger.error(f"Error retrieving file contents: {e}")
         return None
 
 
@@ -57,7 +57,7 @@ async def get_config_file_contents_from_gcs(bucket_name, object_key):
         return config
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error retrieving file contents: {e!s}")
+        verbose_proxy_logger.error(f"Error retrieving file contents: {e}")
         return None
 
 
@@ -111,10 +111,10 @@ def download_python_file_from_s3(
         return True
 
     except ImportError as e:
-        verbose_proxy_logger.error(f"ImportError: {e!s}")
+        verbose_proxy_logger.error(f"ImportError: {e}")
         return False
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error downloading Python file: {e!s}")
+        verbose_proxy_logger.exception(f"Error downloading Python file: {e}")
         return False
 
 
@@ -158,7 +158,7 @@ async def download_python_file_from_gcs(
         return True
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error downloading Python file from GCS: {e!s}")
+        verbose_proxy_logger.exception(f"Error downloading Python file from GCS: {e}")
         return False
 
 

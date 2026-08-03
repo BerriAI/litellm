@@ -1140,7 +1140,7 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         if self.original_exception:
-            _message += f" Original exception: {type(self.original_exception).__name__}: {self.original_exception!s}"
+            _message += f" Original exception: {type(self.original_exception).__name__}: {self.original_exception}"
         return _message
 
     def __repr__(self):

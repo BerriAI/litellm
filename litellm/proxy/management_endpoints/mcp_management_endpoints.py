@@ -399,7 +399,7 @@ if MCP_AVAILABLE:
         try:
             encrypted_payload = encrypt_value_helper(payload_json)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to encrypt temporary MCP server payload for Redis cache: {e!s}")
+            verbose_proxy_logger.debug(f"Failed to encrypt temporary MCP server payload for Redis cache: {e}")
             return
 
         if not isinstance(encrypted_payload, str):
@@ -413,7 +413,7 @@ if MCP_AVAILABLE:
                 ttl=max(1, ttl_seconds),
             )
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to write temporary MCP server to Redis cache: {e!s}")
+            verbose_proxy_logger.debug(f"Failed to write temporary MCP server to Redis cache: {e}")
 
     async def _get_temporary_mcp_server_from_redis(
         server_id: str,
@@ -435,7 +435,7 @@ if MCP_AVAILABLE:
                 key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
             )
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed reading temporary MCP server from Redis cache: {e!s}")
+            verbose_proxy_logger.debug(f"Failed reading temporary MCP server from Redis cache: {e}")
             return None
 
         if not isinstance(cached_server, str):
@@ -454,7 +454,7 @@ if MCP_AVAILABLE:
         try:
             loaded = json.loads(decrypted_json)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Invalid decrypted temporary MCP payload in Redis cache: {e!s}")
+            verbose_proxy_logger.debug(f"Invalid decrypted temporary MCP payload in Redis cache: {e}")
             return None
         if not isinstance(loaded, dict):
             return None
@@ -463,7 +463,7 @@ if MCP_AVAILABLE:
         try:
             return MCPServer.model_validate(payload_dict)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Invalid temporary MCP server payload in Redis cache: {e!s}")
+            verbose_proxy_logger.debug(f"Invalid temporary MCP server payload in Redis cache: {e}")
             return None
 
     async def get_cached_temporary_mcp_server(
@@ -1183,10 +1183,10 @@ if MCP_AVAILABLE:
                 touched_by=user_api_key_dict.user_id or user_api_key_dict.team_id,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error registering mcp server: {e!s}")
+            verbose_proxy_logger.exception(f"Error registering mcp server: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error registering mcp server: {e!s}"},
+                detail={"error": f"Error registering mcp server: {e}"},
             )
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
@@ -1483,10 +1483,10 @@ if MCP_AVAILABLE:
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error creating mcp server: {e!s}")
+            verbose_proxy_logger.exception(f"Error creating mcp server: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error creating mcp server: {e!s}"},
+                detail={"error": f"Error creating mcp server: {e}"},
             )
 
         # Registry refresh is best-effort: the row is already committed, so a
@@ -1498,7 +1498,7 @@ if MCP_AVAILABLE:
             await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"MCP server {new_mcp_server.server_id} created but in-memory registry refresh failed: {e!s}"
+                f"MCP server {new_mcp_server.server_id} created but in-memory registry refresh failed: {e}"
             )
 
         return _redact_mcp_credentials(new_mcp_server)
@@ -1559,10 +1559,10 @@ if MCP_AVAILABLE:
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error caching temporary mcp server: {e!s}")
+            verbose_proxy_logger.exception(f"Error caching temporary mcp server: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error caching temporary mcp server: {e!s}"},
+                detail={"error": f"Error caching temporary mcp server: {e}"},
             )
 
         return _redact_mcp_credentials(temp_record)

@@ -231,7 +231,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
             return " ".join(text_parts) if text_parts else ""
         except (AttributeError, IndexError) as e:
-            verbose_proxy_logger.error(f"PANW Prisma AIRS: Error extracting response text: {e!s}")
+            verbose_proxy_logger.error(f"PANW Prisma AIRS: Error extracting response text: {e}")
         return ""
 
     async def _call_panw_api(
@@ -433,7 +433,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 }
 
         except httpx.TimeoutException as e:
-            verbose_proxy_logger.error(f"PANW Prisma AIRS: Timeout error: {e!s}")
+            verbose_proxy_logger.error(f"PANW Prisma AIRS: Timeout error: {e}")
             return {
                 "action": "block",
                 "category": "timeout_error",
@@ -441,7 +441,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             }
 
         except httpx.RequestError as e:
-            verbose_proxy_logger.error(f"PANW Prisma AIRS: Network/request error: {e!s}")
+            verbose_proxy_logger.error(f"PANW Prisma AIRS: Network/request error: {e}")
             return {
                 "action": "block",
                 "category": "network_error",
@@ -449,7 +449,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             }
 
         except Exception as e:
-            verbose_proxy_logger.error(f"PANW Prisma AIRS: Unexpected error: {e!s}")
+            verbose_proxy_logger.error(f"PANW Prisma AIRS: Unexpected error: {e}")
             return {"action": "block", "category": "api_error", "_is_transient": True}
 
     @staticmethod
@@ -1056,7 +1056,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"PANW Prisma AIRS scan failed: {e!s}")
+            verbose_proxy_logger.error(f"PANW Prisma AIRS scan failed: {e}")
             raise HTTPException(
                 status_code=500,
                 detail={
@@ -1170,7 +1170,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"PANW Prisma AIRS scan failed: {e!s}")
+            verbose_proxy_logger.error(f"PANW Prisma AIRS scan failed: {e}")
             raise HTTPException(
                 status_code=500,
                 detail={
@@ -1366,7 +1366,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             error_obj["code"] = e.status_code
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
         except Exception as e:
-            verbose_proxy_logger.error(f"PANW Prisma AIRS streaming error: {e!s}")
+            verbose_proxy_logger.error(f"PANW Prisma AIRS streaming error: {e}")
             yield f"data: {json.dumps({'error': {'message': 'Security scan failed - streaming response blocked for safety', 'type': 'guardrail_scan_error', 'code': 500, 'guardrail': self.guardrail_name}})}\n\n"
 
     async def _scan_tool_calls_for_guardrail(

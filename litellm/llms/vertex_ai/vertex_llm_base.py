@@ -783,7 +783,7 @@ class VertexBase:
         except Exception as retry_error:
             verbose_logger.error(
                 f"Reauthentication retry failed for project_id: {project_id}. "
-                f"Original error: {error!s}. Retry error: {retry_error!s}"
+                f"Original error: {error}. Retry error: {retry_error}"
             )
             # Re-raise the original error for better context
             raise error
@@ -837,7 +837,7 @@ class VertexBase:
         except Exception as retry_error:
             verbose_logger.error(
                 f"Async reauthentication retry failed for project_id: {project_id}. "
-                f"Original error: {error!s}. Retry error: {retry_error!s}"
+                f"Original error: {error}. Retry error: {retry_error}"
             )
             raise error
 
@@ -897,7 +897,7 @@ class VertexBase:
                 _credentials, credential_project_id = self.load_auth(credentials=credentials, project_id=project_id)
             except Exception as e:
                 verbose_logger.exception(
-                    f"Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {e!s}"
+                    f"Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {e}"
                 )
                 raise e
 

@@ -55,7 +55,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
         form = await request.form()
     except Exception as e:
         raise ValueError(
-            f"Failed to parse multipart form data: {e!s}. "
+            f"Failed to parse multipart form data: {e}. "
             "When using curl with --form/-F, do NOT set the Content-Type header "
             "manually — curl will set it automatically with the required boundary."
         )

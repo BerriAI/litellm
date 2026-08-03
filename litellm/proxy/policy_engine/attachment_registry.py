@@ -60,8 +60,8 @@ class AttachmentRegistry:
                 self._attachments.append(attachment)
                 verbose_proxy_logger.debug(f"Loaded attachment for policy: {attachment.policy}")
             except Exception as e:
-                verbose_proxy_logger.error(f"Error loading attachment: {e!s}")
-                raise ValueError(f"Invalid attachment: {e!s}") from e
+                verbose_proxy_logger.error(f"Error loading attachment: {e}")
+                raise ValueError(f"Invalid attachment: {e}") from e
 
         self._config_attachments = tuple(self._attachments)
         self._initialized = True
@@ -318,7 +318,7 @@ class AttachmentRegistry:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error adding attachment to DB: {e}")
-            raise Exception(f"Error adding attachment to DB: {e!s}")
+            raise Exception(f"Error adding attachment to DB: {e}")
 
     async def delete_attachment_from_db(
         self,
@@ -354,7 +354,7 @@ class AttachmentRegistry:
             return {"message": f"Attachment {attachment_id} deleted successfully"}
         except Exception as e:
             verbose_proxy_logger.exception(f"Error deleting attachment from DB: {e}")
-            raise Exception(f"Error deleting attachment from DB: {e!s}")
+            raise Exception(f"Error deleting attachment from DB: {e}")
 
     async def get_attachment_by_id_from_db(
         self,
@@ -394,7 +394,7 @@ class AttachmentRegistry:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error getting attachment from DB: {e}")
-            raise Exception(f"Error getting attachment from DB: {e!s}")
+            raise Exception(f"Error getting attachment from DB: {e}")
 
     async def get_all_attachments_from_db(
         self,
@@ -432,7 +432,7 @@ class AttachmentRegistry:
             ]
         except Exception as e:
             verbose_proxy_logger.exception(f"Error getting attachments from DB: {e}")
-            raise Exception(f"Error getting attachments from DB: {e!s}")
+            raise Exception(f"Error getting attachments from DB: {e}")
 
     async def sync_attachments_from_db(
         self,
@@ -468,7 +468,7 @@ class AttachmentRegistry:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error syncing attachments from DB: {e}")
-            raise Exception(f"Error syncing attachments from DB: {e!s}")
+            raise Exception(f"Error syncing attachments from DB: {e}")
 
 
 # Global singleton instance

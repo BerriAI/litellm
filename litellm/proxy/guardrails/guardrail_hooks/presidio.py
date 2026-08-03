@@ -139,9 +139,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             except FileNotFoundError:
                 raise Exception(f"File not found. file_path={ad_hoc_recognizers}")
             except json.JSONDecodeError as e:
-                raise Exception(f"Error decoding JSON file: {e!s}, file_path={ad_hoc_recognizers}")
+                raise Exception(f"Error decoding JSON file: {e}, file_path={ad_hoc_recognizers}")
             except Exception as e:
-                raise Exception(f"An error occurred: {e!s}, file_path={ad_hoc_recognizers}")
+                raise Exception(f"An error occurred: {e}, file_path={ad_hoc_recognizers}")
         self.validate_environment(
             presidio_analyzer_api_base=presidio_analyzer_api_base,
             presidio_anonymizer_api_base=presidio_anonymizer_api_base,
@@ -1124,7 +1124,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             yield mock_response_stream
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error masking streaming PII output: {e!s}")
+            verbose_proxy_logger.error(f"Error masking streaming PII output: {e}")
             for chunk in all_chunks:
                 yield chunk
 
@@ -1253,7 +1253,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             yield mock_response_stream
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in PII streaming processing: {e!s}")
+            verbose_proxy_logger.error(f"Error in PII streaming processing: {e}")
             for chunk in remaining_chunks:
                 yield chunk
 

@@ -364,7 +364,7 @@ async def get_litellm_model_cost_map():
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Internal Server Error ({e!s})",
+            detail=f"Internal Server Error ({e})",
         )
 
 

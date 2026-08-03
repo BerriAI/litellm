@@ -120,14 +120,14 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error(f"HTTP error in CountTokens handler: {e!s}")
+            verbose_logger.error(f"HTTP error in CountTokens handler: {e}")
             raise BedrockError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except Exception as e:
-            verbose_logger.error(f"Error in CountTokens handler: {e!s}")
+            verbose_logger.error(f"Error in CountTokens handler: {e}")
             raise BedrockError(
                 status_code=500,
-                message=f"CountTokens processing error: {e!s}",
+                message=f"CountTokens processing error: {e}",
             )

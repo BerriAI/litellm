@@ -514,7 +514,7 @@ class RouterBudgetLimiting(CustomLogger):
                     DEFAULT_REDIS_SYNC_INTERVAL
                 )  # Wait for DEFAULT_REDIS_SYNC_INTERVAL seconds before next sync
             except Exception as e:
-                verbose_router_logger.error(f"Error in periodic sync task: {e!s}")
+                verbose_router_logger.error(f"Error in periodic sync task: {e}")
                 await asyncio.sleep(
                     DEFAULT_REDIS_SYNC_INTERVAL
                 )  # Still wait DEFAULT_REDIS_SYNC_INTERVAL seconds on error before retrying
@@ -545,7 +545,7 @@ class RouterBudgetLimiting(CustomLogger):
             self.redis_increment_operation_queue = []
 
         except Exception as e:
-            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {e!s}")
+            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {e}")
 
     async def _sync_in_memory_spend_with_redis(self):
         """
@@ -600,7 +600,7 @@ class RouterBudgetLimiting(CustomLogger):
                         verbose_router_logger.debug(f"Updated in-memory cache for {key}: {value}")
 
         except Exception as e:
-            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {e!s}")
+            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {e}")
 
     def _get_budget_config_for_deployment(
         self,

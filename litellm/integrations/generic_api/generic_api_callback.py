@@ -42,7 +42,7 @@ def load_compatible_callbacks() -> dict:
         with open(json_path, "r") as f:
             return json.load(f)
     except Exception as e:
-        verbose_logger.warning(f"Error loading generic_api_compatible_callbacks.json: {e!s}")
+        verbose_logger.warning(f"Error loading generic_api_compatible_callbacks.json: {e}")
         return {}
 
 
@@ -214,7 +214,7 @@ class GenericAPILogger(CustomBatchLogger):
                         key, value = item.split("=", 1)
                         headers_dict[key.strip()] = value.strip()
             except Exception as e:
-                verbose_logger.warning(f"Error parsing headers from environment variables: {e!s}")
+                verbose_logger.warning(f"Error parsing headers from environment variables: {e}")
 
         # 2. Update with litellm generic headers if available
         if litellm.generic_logger_headers:
@@ -308,7 +308,7 @@ class GenericAPILogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Generic API Logger Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Generic API Logger Error - {e}\n{traceback.format_exc()}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -339,7 +339,7 @@ class GenericAPILogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Generic API Logger Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Generic API Logger Error - {e}\n{traceback.format_exc()}")
 
     async def async_send_batch(self):
         """
@@ -395,7 +395,7 @@ class GenericAPILogger(CustomBatchLogger):
                 )
 
         except Exception as e:
-            verbose_logger.exception(f"Generic API Logger Error sending batch - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Generic API Logger Error sending batch - {e}\n{traceback.format_exc()}")
         finally:
             self.log_queue.clear()
 

@@ -741,7 +741,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
         except json.JSONDecodeError as e:
             raise OCIError(
                 status_code=500,
-                message=f"Chunk cannot be parsed as JSON: {e!s}",
+                message=f"Chunk cannot be parsed as JSON: {e}",
             )
 
         if dict_chunk.get("apiFormat") == "COHERE":

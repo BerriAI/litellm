@@ -167,7 +167,7 @@ async def init_policies(
         policy_registry.load_policies(policies_config)
         verbose_proxy_logger.info(f"Successfully loaded {len(policies_config)} policies")
     except Exception as e:
-        verbose_proxy_logger.error(f"Failed to load policies: {e!s}")
+        verbose_proxy_logger.error(f"Failed to load policies: {e}")
         raise
 
     # Load attachments if provided
@@ -176,7 +176,7 @@ async def init_policies(
             attachment_registry.load_attachments(policy_attachments_config)
             verbose_proxy_logger.info(f"Successfully loaded {len(policy_attachments_config)} policy attachments")
         except Exception as e:
-            verbose_proxy_logger.error(f"Failed to load policy attachments: {e!s}")
+            verbose_proxy_logger.error(f"Failed to load policy attachments: {e}")
             raise
 
     return validation_result
