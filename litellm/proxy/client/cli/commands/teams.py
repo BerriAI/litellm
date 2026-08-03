@@ -76,7 +76,7 @@ def list(ctx: click.Context):
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {e!s}", err=True)
+        click.echo(f"Error: {e}", err=True)
         raise click.Abort()
 
 
@@ -99,7 +99,7 @@ def available(ctx: click.Context):
         error_body = e.response.json()
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
     except Exception as e:
-        click.echo(f"Error: {e!s}", err=True)
+        click.echo(f"Error: {e}", err=True)
         raise click.Abort()
 
 
@@ -158,5 +158,5 @@ def assign_key(ctx: click.Context, team_id: str | None):
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {e!s}", err=True)
+        click.echo(f"Error: {e}", err=True)
         raise click.Abort()

@@ -70,7 +70,7 @@ class DyanmoDBLogger:
             # Assuming log_data is a dictionary with log information
             response = table.put_item(Item=payload)
 
-            print_verbose(f"Response from DynamoDB:{response!s}")
+            print_verbose(f"Response from DynamoDB:{response}")
 
             print_verbose(f"DynamoDB Layer Logging - final response object: {response_obj}")
             return response

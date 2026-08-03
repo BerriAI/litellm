@@ -5659,7 +5659,7 @@ class BaseLLMHTTPHandler:
                     fingerprint=fingerprint,
                 )
             except Exception as e:
-                verbose_logger.exception(f"LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: {e!s}")
+                verbose_logger.exception(f"LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: {e}")
 
         # Check if we need to convert response to fake stream for chat completions
         # This happens when:
@@ -5906,7 +5906,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             verbose_logger.exception(f"Error connecting to backend: {e}")
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e!s}"))
+                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     # The WebSocket is already closed or the response is completed, so we can ignore this error
@@ -6303,7 +6303,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             verbose_logger.exception(f"Error in responses WS: {e}")
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e!s}"))
+                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     pass

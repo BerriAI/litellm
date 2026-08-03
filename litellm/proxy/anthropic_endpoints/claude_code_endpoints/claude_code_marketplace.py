@@ -121,7 +121,7 @@ async def get_marketplace():
         verbose_proxy_logger.exception(f"Error generating marketplace: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to generate marketplace: {e!s}"},
+            detail={"error": f"Failed to generate marketplace: {e}"},
         )
 
 
@@ -304,7 +304,7 @@ async def register_plugin(
         verbose_proxy_logger.exception(f"Error registering plugin: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Registration failed: {e!s}"},
+            detail={"error": f"Registration failed: {e}"},
         )
 
 

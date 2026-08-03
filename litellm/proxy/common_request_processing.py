@@ -908,7 +908,7 @@ def _log_llm_api_exception(e: Exception) -> None:
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
         )
         return
-    verbose_proxy_logger.exception(f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {e!s}")
+    verbose_proxy_logger.exception(f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {e}")
 
 
 async def _cancel_llm_call_on_client_disconnect(
@@ -2696,7 +2696,7 @@ class ProxyBaseLLMRequestProcessing:
                 status_code=http_status_error.response.status_code,
                 detail={"error": error_text},
             )
-        error_msg = f"{e!s}"
+        error_msg = f"{e}"
         # Check for AttributeError in the exception chain.
         # The AttributeError may be wrapped in multiple layers
         # (e.g. AttributeError -> OpenAIException -> APIConnectionError),
@@ -2898,7 +2898,7 @@ class ProxyBaseLLMRequestProcessing:
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.async_data_generator(): Exception occured - {e!s}"
+                f"litellm.proxy.proxy_server.async_data_generator(): Exception occured - {e}"
             )
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -2914,7 +2914,7 @@ class ProxyBaseLLMRequestProcessing:
             if isinstance(e, HTTPException):
                 raise e
             error_traceback = _redact_string(traceback.format_exc())
-            error_msg = f"{e!s}\n\n{error_traceback}"
+            error_msg = f"{e}\n\n{error_traceback}"
             proxy_exception = ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),

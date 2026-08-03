@@ -118,7 +118,7 @@ class OnyxGuardrail(CustomGuardrail):
                 payload = parsed.get("response", {})
             except Exception as e:
                 verbose_proxy_logger.error(
-                    f"Error in converting request_data to ModelResponse: {e!s}",
+                    f"Error in converting request_data to ModelResponse: {e}",
                     extra={
                         "conversation_id": conversation_id,
                         "input_type": input_type,
@@ -133,7 +133,7 @@ class OnyxGuardrail(CustomGuardrail):
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                f"Error in apply_guardrail guard: {e!s}",
+                f"Error in apply_guardrail guard: {e}",
                 extra={"conversation_id": conversation_id, "input_type": input_type},
             )
             return inputs

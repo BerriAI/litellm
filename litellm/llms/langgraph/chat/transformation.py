@@ -451,14 +451,14 @@ class LangGraphConfig(BaseConfig):
                 )
                 setattr(model_response, "usage", usage)
             except Exception as e:
-                verbose_logger.warning(f"Failed to calculate token usage: {e!s}")
+                verbose_logger.warning(f"Failed to calculate token usage: {e}")
 
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing LangGraph response: {e!s}")
+            verbose_logger.error(f"Error processing LangGraph response: {e}")
             raise LangGraphError(
-                message=f"Error processing response: {e!s}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 

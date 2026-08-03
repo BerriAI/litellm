@@ -582,7 +582,7 @@ def route_in_additonal_public_routes(current_route: str):
 
         return False
     except Exception as e:
-        verbose_proxy_logger.error(f"route_in_additonal_public_routes: {e!s}")
+        verbose_proxy_logger.error(f"route_in_additonal_public_routes: {e}")
         return False
 
 
@@ -619,7 +619,7 @@ def get_request_route(request: Request) -> str:
         return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
-            f"error on get_request_route: {e!s}, defaulting to request.url.path={request.url.path}"
+            f"error on get_request_route: {e}, defaulting to request.url.path={request.url.path}"
         )
         return str(request.url.path)
 
@@ -639,7 +639,7 @@ def get_request_route_template(request: Request) -> str | None:
         template = getattr(route, "path", None)
         return template if isinstance(template, str) and template else None
     except Exception as e:
-        verbose_proxy_logger.debug(f"error on get_request_route_template: {e!s}")
+        verbose_proxy_logger.debug(f"error on get_request_route_template: {e}")
         return None
 
 

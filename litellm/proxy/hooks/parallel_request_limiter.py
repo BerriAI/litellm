@@ -776,7 +776,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )  # save in cache for up to 1 min.
         except Exception as e:
-            verbose_proxy_logger.exception(f"Inside Parallel Request Limiter: An exception occurred - {e!s}")
+            verbose_proxy_logger.exception(f"Inside Parallel Request Limiter: An exception occurred - {e}")
 
     async def get_internal_user_object(
         self,

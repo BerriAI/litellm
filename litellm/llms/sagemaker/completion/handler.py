@@ -529,7 +529,7 @@ class SagemakerLLM(BaseAWSLLM):
                 )
                 raise e
         except Exception as e:
-            error_message = f"{e!s}"
+            error_message = f"{e}"
             if "Inference Component Name header is required" in error_message:
                 error_message += "\n pass in via `litellm.completion(..., model_id={InferenceComponentName})`"
             raise SagemakerError(status_code=500, message=error_message)

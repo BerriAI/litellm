@@ -292,7 +292,7 @@ def get_model_cost_map(url: str) -> dict:
             str(e),
         )
         _cost_map_source_info.source = "local"
-        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {e!s}"
+        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {e}"
         return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
 
     # Validate using cached count (cheap int comparison, no file I/O)

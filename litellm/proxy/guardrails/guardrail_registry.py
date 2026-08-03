@@ -285,7 +285,7 @@ class GuardrailRegistry:
 
             return guardrail_dict
         except Exception as e:
-            raise Exception(f"Error adding guardrail to DB: {e!s}")
+            raise Exception(f"Error adding guardrail to DB: {e}")
 
     async def delete_guardrail_from_db(self, guardrail_id: str, prisma_client: PrismaClient):
         """
@@ -297,7 +297,7 @@ class GuardrailRegistry:
 
             return {"message": f"Guardrail {guardrail_id} deleted successfully"}
         except Exception as e:
-            raise Exception(f"Error deleting guardrail from DB: {e!s}")
+            raise Exception(f"Error deleting guardrail from DB: {e}")
 
     async def update_guardrail_in_db(self, guardrail_id: str, guardrail: Guardrail, prisma_client: PrismaClient):
         """
@@ -328,7 +328,7 @@ class GuardrailRegistry:
             # Convert to dict and return
             return dict(updated_guardrail)
         except Exception as e:
-            raise Exception(f"Error updating guardrail in DB: {e!s}")
+            raise Exception(f"Error updating guardrail in DB: {e}")
 
     @staticmethod
     async def get_all_guardrails_from_db(
@@ -350,7 +350,7 @@ class GuardrailRegistry:
 
             return guardrails
         except Exception as e:
-            raise Exception(f"Error getting guardrails from DB: {e!s}")
+            raise Exception(f"Error getting guardrails from DB: {e}")
 
     async def get_guardrail_by_id_from_db(self, guardrail_id: str, prisma_client: PrismaClient) -> Guardrail | None:
         """
@@ -366,7 +366,7 @@ class GuardrailRegistry:
 
             return Guardrail(**(dict(guardrail)))  # type: ignore
         except Exception as e:
-            raise Exception(f"Error getting guardrail from DB: {e!s}")
+            raise Exception(f"Error getting guardrail from DB: {e}")
 
     async def get_guardrail_by_name_from_db(self, guardrail_name: str, prisma_client: PrismaClient) -> Guardrail | None:
         """
@@ -382,7 +382,7 @@ class GuardrailRegistry:
 
             return Guardrail(**(dict(guardrail)))  # type: ignore
         except Exception as e:
-            raise Exception(f"Error getting guardrail from DB: {e!s}")
+            raise Exception(f"Error getting guardrail from DB: {e}")
 
 
 class InMemoryGuardrailHandler:

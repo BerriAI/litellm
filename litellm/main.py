@@ -8303,7 +8303,7 @@ async def ahealth_check(
 
         if mode is None:
             return {
-                "error": f"error:{e!s}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
+                "error": f"error:{e}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
                 "exception": e,
             }
 
@@ -8669,7 +8669,7 @@ def stream_chunk_builder(
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
         return response
     except Exception as e:
-        verbose_logger.exception(f"litellm.main.py::stream_chunk_builder() - Exception occurred - {e!s}")
+        verbose_logger.exception(f"litellm.main.py::stream_chunk_builder() - Exception occurred - {e}")
         raise litellm.APIError(
             status_code=500,
             message="Error building chunks for logging/streaming usage calculation",

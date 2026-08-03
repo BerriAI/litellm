@@ -309,7 +309,7 @@ def handle_generic_response(
         completion_response = OCICompletionResponse(**json_data)
     except (TypeError, ValidationError) as e:
         raise OCIError(
-            message=f"Response cannot be casted to OCICompletionResponse: {e!s}",
+            message=f"Response cannot be casted to OCICompletionResponse: {e}",
             status_code=raw_response.status_code,
         )
 
@@ -373,7 +373,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     except (TypeError, ValidationError) as e:
         raise OCIError(
             status_code=500,
-            message=f"Chunk cannot be parsed as OCIStreamChunk: {e!s}",
+            message=f"Chunk cannot be parsed as OCIStreamChunk: {e}",
         )
 
     if typed_chunk.index is None:

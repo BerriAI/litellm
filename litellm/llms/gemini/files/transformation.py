@@ -190,8 +190,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 status_details=None,
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing file upload response: {e!s}")
-            raise ValueError(f"Error parsing file upload response: {e!s}")
+            verbose_logger.exception(f"Error parsing file upload response: {e}")
+            raise ValueError(f"Error parsing file upload response: {e}")
 
     def transform_retrieve_file_request(
         self,
@@ -294,8 +294,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 status_details=(str(response_json.get("error", "")) if gemini_state == "FAILED" else None),
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing file retrieve response: {e!s}")
-            raise ValueError(f"Error parsing file retrieve response: {e!s}")
+            verbose_logger.exception(f"Error parsing file retrieve response: {e}")
+            raise ValueError(f"Error parsing file retrieve response: {e}")
 
     def transform_delete_file_request(
         self,
@@ -362,8 +362,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             else:
                 raise ValueError(f"Failed to delete file: {raw_response.text}")
         except Exception as e:
-            verbose_logger.exception(f"Error parsing file delete response: {e!s}")
-            raise ValueError(f"Error parsing file delete response: {e!s}")
+            verbose_logger.exception(f"Error parsing file delete response: {e}")
+            raise ValueError(f"Error parsing file delete response: {e}")
 
     def transform_list_files_request(
         self,

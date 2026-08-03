@@ -193,7 +193,7 @@ class AzureAIAgentsHandler:
                 ),
             )
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {e!s}")
+            verbose_logger.warning(f"Failed to calculate token usage: {e}")
 
         return model_response
 

@@ -441,7 +441,7 @@ async def _handle_stream_message(
                                     "message": getattr(
                                         proxy_exc,
                                         "message",
-                                        f"Streaming error: {proxy_exc!s}",
+                                        f"Streaming error: {proxy_exc}",
                                     ),
                                 },
                             }
@@ -491,7 +491,7 @@ async def _handle_stream_message(
                         "id": request_id,
                         "error": {
                             "code": -32603,
-                            "message": f"Streaming error: {e!s}",
+                            "message": f"Streaming error: {e}",
                         },
                     }
                 )
@@ -974,4 +974,4 @@ async def invoke_agent_a2a(
             )
         except Exception:
             pass
-        return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e!s}", 500)
+        return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)

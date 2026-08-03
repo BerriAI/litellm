@@ -246,7 +246,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
 
         except Exception as e:
             # If we can't determine the cost, assume it has cost (conservative approach)
-            verbose_proxy_logger.debug(f"Error checking cost for model {model_name}: {e!s}, assuming it has cost")
+            verbose_proxy_logger.debug(f"Error checking cost for model {model_name}: {e}, assuming it has cost")
             return False
 
     # All models checked have zero cost
@@ -973,7 +973,7 @@ async def get_default_end_user_budget(
         return _budget_obj
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching default end user budget: {e!s}")
+        verbose_proxy_logger.error(f"Error fetching default end user budget: {e}")
         return None
 
 
@@ -2238,7 +2238,7 @@ async def get_team_object_by_alias(
         verbose_proxy_logger.exception("Error looking up team by alias: %s", team_alias)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Error looking up team by alias '{team_alias}': {e!s}"},
+            detail={"error": f"Error looking up team by alias '{team_alias}': {e}"},
         )
 
 
@@ -2324,7 +2324,7 @@ async def get_org_object_by_alias(
         verbose_proxy_logger.exception("Error looking up organization by alias: %s", org_alias)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Error looking up organization by alias '{org_alias}': {e!s}"},
+            detail={"error": f"Error looking up organization by alias '{org_alias}': {e}"},
         )
 
 

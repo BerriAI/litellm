@@ -190,7 +190,7 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Error in log_success_fallback_event: {e!s}")
+            verbose_router_logger.error(f"Error in log_success_fallback_event: {e}")
 
 
 async def log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
@@ -218,7 +218,7 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Error in log_failure_fallback_event: {e!s}")
+            verbose_router_logger.error(f"Error in log_failure_fallback_event: {e}")
 
 
 def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
