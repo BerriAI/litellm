@@ -134,7 +134,35 @@ class TestRequestCompliance:
         assert (
             "TextContent" in ref_names
         ), f"TextContent not found in oneOf refs: {ref_names}"
-        print(f"Content oneOf refs: {ref_names}")
+
+        # `discriminator="type"` on litellm's Pydantic `Content` RootModel only
+        # works if every variant schema requires a `type` field with a single
+        # literal value (`const`, or a one-element `enum`), and those literals
+        # are unique across variants. Verify that invariant directly against
+        # the spec's variant schemas, since the JSON Schema `discriminator`
+        # keyword that used to guarantee this is gone.
+        type_literals = []
+        for ref_name in ref_names:
+            variant_schema = spec_dict["components"]["schemas"][ref_name]
+            assert (
+                "type" in variant_schema.get("required", [])
+            ), f"{ref_name} does not require a 'type' field"
+
+            type_prop = variant_schema["properties"]["type"]
+            if "const" in type_prop:
+                literal = type_prop["const"]
+            elif len(type_prop.get("enum", [])) == 1:
+                literal = type_prop["enum"][0]
+            else:
+                raise AssertionError(
+                    f"{ref_name}.type is not a single literal value: {type_prop}"
+                )
+            type_literals.append(literal)
+
+        assert len(type_literals) == len(
+            set(type_literals)
+        ), f"Content variants do not have unique 'type' literals: {type_literals}"
+        print(f"Content oneOf refs: {ref_names}, type literals: {type_literals}")
 
     def test_text_content_schema(self, spec_dict):
         """Verify TextContent schema."""
