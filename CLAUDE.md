@@ -29,7 +29,7 @@ Never use `pytest` commands or the like as "Screenshots / Proof of Fix". We pref
 
 If you ever make public-facing PR descriptions, comments, issues, commit messages, etc., always follow these guidelines to sound less AI-y:
 - don't use emojis
-- don't use "—". Instead, reach for ";", ".", etc.
+- don't use "—". Instead, reach for ",", ".", conjunction words, ";", etc. in that order of preference. Default to "," unless it would make a comma splice or the sentence is getting long, then work down the list with some variety so the text reads nicely. Treat ";" as a last resort, since leaning on semicolons everywhere also reads as AI-y
 - don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
 - don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
 - don't add a trailing "." at the end of paragraphs (just like this file). That means every paragraph, not just the last one (of the markdown file, PR description, GitHub comment, etc.). Rule of thumb: if you're adding new line(s) before the next sentence, don't add a "."
