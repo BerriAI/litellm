@@ -7,6 +7,12 @@ import re
 from collections.abc import Sequence
 from typing import Any, Literal, cast
 
+from openai.types.chat.chat_completion_named_tool_choice_param import (
+    ChatCompletionNamedToolChoiceParam,
+)
+from openai.types.chat.chat_completion_named_tool_choice_param import (
+    Function as NamedToolChoiceFunction,
+)
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_param import FunctionToolParam
@@ -160,7 +166,17 @@ class LiteLLMCompletionResponsesConfig:
             elif tool_choice_type == "function":
                 function_name = tool_choice.get("name")
                 if function_name:
-                    return {"type": "function", "function": {"name": function_name}}
+                    return ChatCompletionNamedToolChoiceParam(
+                        type="function", function=NamedToolChoiceFunction(name=function_name)
+                    )
+                return "required"
+            elif tool_choice_type == "custom":
+                custom = tool_choice.get("custom")
+                custom_name = tool_choice.get("name") or (custom.get("name") if isinstance(custom, dict) else None)
+                if custom_name:
+                    return ChatCompletionNamedToolChoiceParam(
+                        type="function", function=NamedToolChoiceFunction(name=custom_name)
+                    )
                 return "required"
 
         # Return as-is for unknown formats
