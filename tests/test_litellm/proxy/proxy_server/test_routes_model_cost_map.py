@@ -10,6 +10,7 @@ Routes covered:
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -237,7 +238,7 @@ def test_cancel_model_cost_map_reload_happy(client, auth_as, monkeypatch, mock_p
         "status": "success",
         "timestamp": "<VOLATILE>",
     }
-    assert table.update_many.await_args.kwargs["data"] == {"param_value": None}
+    assert json.loads(table.update_many.await_args.kwargs["data"]["param_value"]) == {"interval_hours": None}
     assert table.delete.await_count == 0
 
 

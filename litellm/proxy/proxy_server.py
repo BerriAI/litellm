@@ -6557,10 +6557,11 @@ class ProxyConfig:
 
             models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
             self.model_cost_map_loaded_at = current_time
-            # Adopted only after the fetch succeeded, so a failure is retried rather than
-            # recorded as served
-            self.model_cost_map_applied_revision = schedule.reload_revision
             await record_reload_run(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
+            # Adopted last, so neither a failed fetch nor a failed status write is recorded
+            # as served; either way the next poll retries instead of leaving the card
+            # reporting a run that never landed
+            self.model_cost_map_applied_revision = schedule.reload_revision
 
             verbose_proxy_logger.info("Model cost map reloaded successfully. Models count: %s", models_count)
 

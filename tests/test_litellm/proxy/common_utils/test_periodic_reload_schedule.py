@@ -75,6 +75,8 @@ class _FakeConfigTable:
 
     @staticmethod
     def _apply(row, data):
+        if "param_value" in data and data["param_value"] is None:
+            raise ValueError("`data.param_value`: A value is required but not set")
         for field, value in data.items():
             increment = value.get("increment") if isinstance(value, dict) else None
             setattr(row, field, getattr(row, field) + increment if increment is not None else value)

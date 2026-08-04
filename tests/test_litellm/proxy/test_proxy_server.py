@@ -3821,7 +3821,9 @@ class TestPriceDataReloadAPI:
             assert data["status"] == "success"
             assert "message" in data
             assert "timestamp" in data
-            assert mock_prisma.db.litellm_config.update_many.await_args.kwargs["data"] == {"param_value": None}
+            assert json.loads(mock_prisma.db.litellm_config.update_many.await_args.kwargs["data"]["param_value"]) == {
+                "interval_hours": None
+            }
             mock_prisma.db.litellm_config.delete.assert_not_called()
 
     def test_cancel_model_cost_map_reload_non_admin_access(self, client_with_auth):
@@ -4239,6 +4241,41 @@ class TestPriceDataReloadIntegration:
                 }
                 mock_prisma.db.litellm_config.upsert.assert_not_called()
                 mock_prisma.db.litellm_config.create.assert_not_called()
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+
+    def test_distributed_reload_leaves_request_unserved_when_status_write_fails(self):
+        """
+        A run that never reached the row must not be recorded as served. Adopting the
+        revision here would leave the card reporting the previous run until someone clicks
+        again, because a manual request is published once and never republished
+        """
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(hours=9)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row({"interval_hours": 6}, reload_revision=7)
+        )
+        mock_prisma.db.litellm_config.update_many = AsyncMock(side_effect=Exception("connection reset"))
+
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with (
+                patch(
+                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                    new_callable=AsyncMock,
+                ) as mock_get_map,
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+            ):
+                mock_get_map.return_value = ModelCostMapReloaded(model_cost_map={"gpt-4": {"input_cost_per_token": 0.1}})
+
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+                assert proxy_config.model_cost_map_applied_revision == 0
         finally:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
