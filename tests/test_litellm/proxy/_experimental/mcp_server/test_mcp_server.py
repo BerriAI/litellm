@@ -118,15 +118,16 @@ async def test_mcp_server_tool_call_body_contains_request_data():
 
 @pytest.mark.asyncio
 async def test_mcp_server_tool_call_carries_x_litellm_tags_header_into_request_data():
-    """The tool-call handler hands `add_litellm_data_to_request` a synthetic request that carries only
-    a content type, so the caller's `x-litellm-tags` never reached the tag merge that runs there and
-    the spend log for a tools/call had no tags. The tags travel in the body instead, which that same
-    helper already reads, so the header attributes MCP traffic exactly as it does an LLM route."""
+    """The tool-call handler hands `add_litellm_data_to_request` a synthetic request that carried
+    only a content type, so the caller's `x-litellm-tags` never reached the tag merge running there
+    and a tools/call spend log had no tags. The synthetic request now carries the header, so the
+    shared parser resolves it exactly as it does on an LLM route."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             mcp_server_tool_call,
             set_auth_context,
         )
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -135,10 +136,12 @@ async def test_mcp_server_tool_call_carries_x_litellm_tags_header_into_request_d
         raw_headers={"X-LiteLLM-Tags": "application:orders, service:checkout"},
     )
 
-    captured_data = {}
+    resolved_tags = {}
 
     async def mock_add_litellm_data_to_request(data, request, user_api_key_dict, proxy_config):
-        captured_data.update(data)
+        resolved_tags["tags"] = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+            llm_router=None, headers=dict(request.headers), data={}
+        )
         return data
 
     async def mock_call_mcp_tool(*args, **kwargs):
@@ -155,7 +158,7 @@ async def test_mcp_server_tool_call_carries_x_litellm_tags_header_into_request_d
             with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
                 await mcp_server_tool_call("test_tool", {"param1": "value1"})
 
-    assert captured_data["tags"] == ["application:orders", "service:checkout"]
+    assert resolved_tags["tags"] == ["application:orders", "service:checkout"]
 
 
 @pytest.mark.asyncio
