@@ -24,17 +24,6 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-try:
-    from prisma.errors import PrismaError, UniqueViolationError
-except ImportError:
-
-    class PrismaError(Exception):  # type: ignore[no-redef]
-        """Sentinel used when prisma is not installed; never raised in that case."""
-
-    class UniqueViolationError(PrismaError):  # type: ignore[no-redef]
-        """Sentinel used when prisma is not installed; never raised in that case."""
-
-
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -262,6 +251,8 @@ async def register_plugin(
           }'
         ```
     """
+    from prisma.errors import UniqueViolationError
+
     try:
         prisma_client = await _get_prisma_client()
 
@@ -492,6 +483,8 @@ async def update_plugin(
           }'
         ```
     """
+    from prisma.errors import PrismaError
+
     try:
         prisma_client = await _get_prisma_client()
 
