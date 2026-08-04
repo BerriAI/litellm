@@ -164,6 +164,7 @@ try:
     import orjson
     import yaml  # type: ignore
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.schedulers.base import SchedulerNotRunningError
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -238,6 +239,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
 )
+from litellm.constants import PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
@@ -564,6 +566,7 @@ from litellm.proxy.utils import (
     prefetch_config_params,
     update_spend,
 )
+from litellm.proxy.utils import update_daily_tag_spend
 from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.router import (
@@ -799,9 +802,43 @@ def cleanup_router_config_variables():
     prisma_client = None
 
 
+async def _drain_spend_buffers_on_shutdown() -> None:
+    if scheduler is not None:
+        with contextlib.suppress(SchedulerNotRunningError):
+            scheduler.shutdown(wait=False)
+
+    if prisma_client is None or ProxyUpdateSpend.disable_spend_updates():
+        return
+
+    for label, coro_factory in (
+        (
+            "spend buffer",
+            lambda: update_spend(prisma_client, db_writer_client, proxy_logging_obj),
+        ),
+        (
+            "daily tag spend",
+            lambda: update_daily_tag_spend(prisma_client, proxy_logging_obj),
+        ),
+    ):
+        try:
+            await asyncio.wait_for(
+                coro_factory(),
+                timeout=PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.warning(
+                "Draining %s on shutdown exceeded %ss; some rows may be lost",
+                label,
+                PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error draining {label} on shutdown: {e}")
+
+
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    await _drain_spend_buffers_on_shutdown()
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
