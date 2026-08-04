@@ -6546,7 +6546,8 @@ class ProxyConfig:
                 reload_result = await refetch_model_cost_map(url=model_cost_map_url)
                 if isinstance(reload_result, ModelCostMapReloadUnavailable):
                     verbose_proxy_logger.warning(
-                        f"Model cost map reload failed ({reload_result.reason}); keeping current pricing data, will retry on the next config poll"
+                        "Model cost map reload failed (%s); keeping current pricing data, will retry on the next config poll",
+                        reload_result.reason,
                     )
                     return
                 new_model_cost_map = reload_result.model_cost_map
