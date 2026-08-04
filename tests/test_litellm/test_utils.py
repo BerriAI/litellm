@@ -4012,7 +4012,8 @@ class TestGetOptionalParamsDeepSeek:
         )
         assert result.get("thinking") == {"type": "enabled"}
 
-    def test_deepseek_supports_reasoning_effort_param(self):
+    @pytest.mark.parametrize("reasoning_effort", ["high", "future-tier"])
+    def test_deepseek_supports_reasoning_effort_param(self, reasoning_effort):
         """
         Verify that get_optional_params for deepseek accepts 'reasoning_effort',
         which is only supported by DeepSeekChatConfig, not OpenAIConfig.
@@ -4022,9 +4023,10 @@ class TestGetOptionalParamsDeepSeek:
         result = get_optional_params(
             model="deepseek-reasoner",
             custom_llm_provider="deepseek",
-            reasoning_effort="high",
+            reasoning_effort=reasoning_effort,
         )
-        assert result.get("thinking") == {"type": "enabled"}
+        assert result.get("reasoning_effort") == reasoning_effort
+        assert "thinking" not in result
 
     def test_deepseek_thinking_strips_budget_tokens(self):
         """
@@ -4314,6 +4316,8 @@ def test_deepseek_v4_models_in_cost_map():
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
         assert info["max_input_tokens"] == 1_000_000
+        assert info["max_output_tokens"] == 384_000
+        assert info["max_tokens"] == 384_000
         assert info["supports_function_calling"] is True
         assert info["supports_tool_choice"] is True
 
@@ -4329,6 +4333,9 @@ def test_deepseek_v4_models_in_cost_map():
         assert info["input_cost_per_token"] == expected_input
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+        assert info["max_output_tokens"] == 384_000
+        assert info["max_tokens"] == 384_000
         assert info["supports_function_calling"] is True
         assert info["supports_tool_choice"] is True
 
@@ -4358,6 +4365,8 @@ def test_deepseek_v4_models_in_backup_cost_map():
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
         assert info["max_input_tokens"] == 1_000_000
+        assert info["max_output_tokens"] == 384_000
+        assert info["max_tokens"] == 384_000
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
@@ -4371,6 +4380,9 @@ def test_deepseek_v4_models_in_backup_cost_map():
         assert info["input_cost_per_token"] == expected_input
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+        assert info["max_output_tokens"] == 384_000
+        assert info["max_tokens"] == 384_000
 
 
 _FIREWORKS_MODELS = [

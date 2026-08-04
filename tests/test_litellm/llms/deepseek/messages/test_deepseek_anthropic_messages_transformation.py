@@ -1,4 +1,6 @@
 import litellm
+import pytest
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -6,7 +8,16 @@ from litellm.llms.deepseek.messages.transformation import (
     DeepSeekAnthropicMessagesConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, get_model_info
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        GetModelCostMap.load_local_model_cost_map(),
+    )
 
 
 def test_deepseek_provider_uses_anthropic_messages_config():
@@ -187,3 +198,29 @@ def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_too
         "input_schema": {"type": "object"},
     }
     assert request["tools"][1]["type"] == "web_search_20260209"
+
+
+@pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek/deepseek-v4-flash"])
+def test_deepseek_v4_flash_advertises_adaptive_effort(model, local_model_cost_map):
+    model_info = get_model_info(model, custom_llm_provider="deepseek")
+
+    assert model_info["supports_adaptive_thinking"] is True
+    assert model_info["supports_output_config"] is True
+
+
+@pytest.mark.parametrize("effort", ["max", "future-tier"])
+def test_deepseek_anthropic_messages_passes_adaptive_effort_unchanged(effort, local_model_cost_map):
+    request = DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="deepseek-v4-flash",
+        messages=[{"role": "user", "content": "Solve 1 + 1."}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": effort},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": effort}
