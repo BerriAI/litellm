@@ -7,7 +7,7 @@ import base64
 import gzip
 import json as json_lib
 import os
-from typing import Any, List
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -15,6 +15,7 @@ import pytest
 
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix import (
+    CheckpointTarget,
     OvalixGuardrail,
     OvalixGuardrailBlockedException,
     OvalixGuardrailMissingSecrets,
@@ -276,13 +277,13 @@ class TestOvalixGuardrail:
                     checkpoint_id="pre-1",
                     actor="a1b2c3d4",
                     session_id="session-1",
-                    application_id="app-1",
+                    target=CheckpointTarget("app-1", "request"),
                 )
 
             assert result == TRACKER_RESPONSE_ALLOW
             mock_post.assert_called_once()
             call_args = mock_post.call_args
-            assert call_args.args[0] == ("https://tracker.test/tracking/custom_application/checkpoint")
+            assert call_args.args[0] == ("https://tracker.test/tracking/beta/checkpoint")
             body = call_args.kwargs["json"]
             assert body["application_id"] == "app-1"
             assert body["checkpoint_id"] == "pre-1"
@@ -746,13 +747,21 @@ def _routing_body(pre, post, pre_file, post_file, application_id="app-9"):
     }
 
 
-def _checkpoint_bodies(mock_post):
-    """Bodies of the tracker checkpoint calls only, excluding regex/resolve traffic."""
+def _checkpoint_calls(mock_post):
+    """(body, url) of the tracker checkpoint calls only, excluding regex/resolve traffic."""
     return [
-        c.kwargs["json"]
+        (c.kwargs["json"], c.args[0])
         for c in mock_post.call_args_list
         if c.args and c.args[0].endswith(("/checkpoint", "/file_checkpoint"))
     ]
+
+
+def _checkpoint_bodies(mock_post):
+    return [body for body, _ in _checkpoint_calls(mock_post)]
+
+
+def _route_of(url):
+    return url.rsplit("/", 1)[-1]
 
 
 def _mock_handler(g, routing=None):
@@ -979,7 +988,9 @@ async def test_file_checkpoint_call_routes_to_litellm_file_endpoint():
         return r
 
     with patch.object(g._async_handler, "post", new=_post):
-        await g._call_checkpoint("FILE", {"name": "f.txt", "content": "x"}, "file-1", "a", "s", "app-1")
+        await g._call_checkpoint(
+            "FILE", {"name": "f.txt", "content": "x"}, "file-1", "a", "s", CheckpointTarget("app-1", "request")
+        )
     assert seen["url"] == "https://t/tracking/beta/file_checkpoint"
 
 
@@ -1251,7 +1262,7 @@ def test_enable_routing_cache_from_env_string(monkeypatch):
 async def test_call_checkpoint_requires_application_and_checkpoint():
     g = _static_guardrail()
     with pytest.raises(ValueError):
-        await g._call_checkpoint("TEXT", {"content": "x"}, "", "actor", "sess", "app-1")
+        await g._call_checkpoint("TEXT", {"content": "x"}, "", "actor", "sess", CheckpointTarget("app-1", "request"))
 
 
 @pytest.mark.asyncio
@@ -1283,7 +1294,7 @@ async def test_discovery_resolved_without_any_checkpoint_raises():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("input_type, inspected", [("request", ["pre-9"]), ("response", [])])
+@pytest.mark.parametrize("input_type, inspected", [("request", ["request"]), ("response", [])])
 async def test_one_sided_discovery_inspects_configured_direction_only(input_type, inspected):
     """Discovery registers both hooks speculatively, so a direction the app does not inspect must pass through."""
     g = _discovery_guardrail(enable_cache=False)
@@ -1293,7 +1304,7 @@ async def test_one_sided_discovery_inspects_configured_direction_only(input_type
         inputs=inputs, request_data=_alias_request_data(), input_type=input_type, logging_obj=None
     )
     assert result["texts"] == ["hi"]
-    assert [b["checkpoint_id"] for b in _checkpoint_bodies(mock_post)] == inspected
+    assert [b["input_type"] for b in _checkpoint_bodies(mock_post)] == inspected
 
 
 @pytest.mark.asyncio
@@ -1312,7 +1323,7 @@ async def test_file_only_checkpoint_inspects_files_and_skips_text():
         inputs=inputs, request_data=_alias_request_data(), input_type="request", logging_obj=None
     )
     assert result["texts"] == ["hi"]
-    assert [(b["data_type"], b["checkpoint_id"]) for b in _checkpoint_bodies(mock_post)] == [("FILE", "pre-file-9")]
+    assert [(b["data_type"], _route_of(c)) for b, c in _checkpoint_calls(mock_post)] == [("FILE", "file_checkpoint")]
 
 
 def test_initialize_guardrail_wires_new_params(monkeypatch):
@@ -1592,3 +1603,145 @@ async def test_cached_404_still_raises_when_failing_closed(monkeypatch):
         with pytest.raises(GuardrailRaisedException):
             await g._resolve_routing(_alias_request_data("[Ghost App] prod"))
     assert mock_post.call_count == 1
+
+
+def _alias_guardrail():
+    return OvalixGuardrail(
+        tracker_api_base="https://t",
+        tracker_api_key="k",
+        guardrail_name="o",
+        event_hook="pre_call",
+        default_on=True,
+    )
+
+
+def _capturing_post(response=None):
+    seen = {}
+
+    async def _post(url, headers=None, json=None):
+        seen["url"] = url
+        seen["body"] = json
+        r = MagicMock()
+        r.json.return_value = response if response is not None else _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    return seen, _post
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data_type,expected_route",
+    [("TEXT", "checkpoint"), ("TOOL", "checkpoint"), ("FILE", "file_checkpoint")],
+)
+async def test_call_checkpoint_by_name_sends_name_and_direction_not_ids(data_type, expected_route):
+    """Name routing must put application_name and input_type on the wire and no ids at all.
+
+    The two forms are mutually exclusive server-side, so leaking an id alongside the name is rejected
+    """
+    g = _alias_guardrail()
+    seen, post = _capturing_post()
+
+    with patch.object(g._async_handler, "post", new=post):
+        await g._call_checkpoint(
+            data_type,
+            {"content": "x"},
+            "unused-cp",
+            "actor",
+            "sess",
+            CheckpointTarget("app-9", "response", application_name="Weather App"),
+        )
+
+    assert seen["url"] == f"https://t/tracking/beta/{expected_route}"
+    assert seen["body"]["application_name"] == "Weather App"
+    assert seen["body"]["input_type"] == "response"
+    assert "application_id" not in seen["body"]
+    assert "checkpoint_id" not in seen["body"]
+
+
+@pytest.mark.asyncio
+async def test_call_checkpoint_by_ids_sends_ids_and_no_name_or_direction():
+    g = _static_guardrail()
+    seen, post = _capturing_post()
+
+    with patch.object(g._async_handler, "post", new=post):
+        await g._call_checkpoint(
+            "TEXT", {"content": "x"}, "pre-1", "actor", "sess", CheckpointTarget("app-1", "request")
+        )
+
+    assert seen["body"]["application_id"] == "app-1"
+    assert seen["body"]["checkpoint_id"] == "pre-1"
+    assert "application_name" not in seen["body"]
+    assert "input_type" not in seen["body"]
+
+
+@pytest.mark.asyncio
+async def test_call_checkpoint_by_name_does_not_require_a_checkpoint_id():
+    """The tracker chooses the checkpoint under name routing, so an empty id must not be rejected."""
+    g = _alias_guardrail()
+    seen, post = _capturing_post()
+
+    with patch.object(g._async_handler, "post", new=post):
+        await g._call_checkpoint(
+            "TEXT",
+            {"content": "x"},
+            "",
+            "actor",
+            "sess",
+            CheckpointTarget("", "request", application_name="Weather App"),
+        )
+
+    assert seen["body"]["application_name"] == "Weather App"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_routing_name_is_none_when_application_is_pinned():
+    """A deployment that pins application_id reads no alias, so it must keep routing by ids."""
+    g = _static_guardrail()
+
+    assert await g._checkpoint_routing_name({"metadata": {"user_api_key_alias": "[Weather App] k"}}) is None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_routing_name_extracted_from_key_alias():
+    g = _alias_guardrail()
+    with patch.object(g, "_get_app_name_regex", new=AsyncMock(return_value=re.compile(r"^\s*\[([^\]]+)\]"))):
+        name = await g._checkpoint_routing_name({"metadata": {"user_api_key_alias": "[Weather App] free text"}})
+
+    assert name == "Weather App"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_routing_name_is_none_without_an_alias():
+    g = _alias_guardrail()
+
+    assert await g._checkpoint_routing_name({"metadata": {}}) is None
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_resolved_by_alias_routes_checkpoints_by_name():
+    """End to end: an alias-resolved application sends its name per checkpoint, never the resolved id.
+
+    This is what keeps a just-created application inspectable: the ids from resolution may name an
+    application the tracker's process-wide config has not picked up yet
+    """
+    g = _alias_guardrail()
+    seen, post = _capturing_post()
+
+    with (
+        patch.object(
+            g, "_resolve_routing", new=AsyncMock(return_value=ResolvedRouting("app-9", "pre-9", "post-9", None, None))
+        ),
+        patch.object(g, "_get_app_name_regex", new=AsyncMock(return_value=re.compile(r"^\s*\[([^\]]+)\]"))),
+        patch.object(g._async_handler, "post", new=post),
+    ):
+        await g.apply_guardrail(
+            GenericGuardrailAPIInputs(texts=["hello"]),
+            {"metadata": {"user_api_key_alias": "[Weather App] k", "user_api_key_user_email": "u@e.com"}},
+            "request",
+        )
+
+    assert seen["url"] == "https://t/tracking/beta/checkpoint"
+    assert seen["body"]["application_name"] == "Weather App"
+    assert seen["body"]["input_type"] == "request"
+    assert "application_id" not in seen["body"]

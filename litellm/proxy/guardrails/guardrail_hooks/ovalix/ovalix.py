@@ -89,6 +89,21 @@ class ResolvedRouting(NamedTuple):
         )
 
 
+class CheckpointTarget(NamedTuple):
+    """How a checkpoint call addresses the application.
+
+    When application_name is set the call sends the name and the direction, and the tracker resolves
+    and evaluates in one request; resolution can create the application, and ids from a separate
+    resolve call may name one the tracker's config has not caught up with, which it reports as an
+    uninspected allow rather than an error. application_id is what the session id groups on, and is
+    what gets sent when the deployment pins the application in config and reads no alias.
+    """
+
+    application_id: str
+    input_type: str
+    application_name: str | None = None
+
+
 def _coerce_bool(value: bool | str) -> bool:
     if isinstance(value, bool):
         return value
@@ -253,27 +268,35 @@ class OvalixGuardrail(CustomGuardrail):
         checkpoint_id: str,
         actor: str,
         session_id: str,
-        application_id: str,
+        target: CheckpointTarget,
     ) -> Mapping[str, Any]:
-        """Call the Ovalix Tracker checkpoint API and return the JSON response."""
-        if not application_id or not checkpoint_id:
+        """Call the Ovalix Tracker checkpoint API and return the JSON response.
+
+        Both routes live on the tracker's /beta litellm router, which accepts the api key this
+        guardrail already sends. The name and id routing forms are mutually exclusive, so exactly one
+        reaches the wire; the name form also sends the direction, which is what the tracker selects
+        the pre or post checkpoint by.
+        """
+        if not target.application_name and (not target.application_id or not checkpoint_id):
             raise ValueError("Ovalix: application_id or checkpoint_id not resolved")
 
-        url = (
-            f"{self._tracker_api_base}/tracking/beta/file_checkpoint"
-            if data_type == "FILE"
-            else f"{self._tracker_api_base}/tracking/custom_application/checkpoint"
+        route = "file_checkpoint" if data_type == "FILE" else "checkpoint"
+        routing = (
+            {"application_name": target.application_name, "input_type": target.input_type}
+            if target.application_name
+            else {"application_id": target.application_id, "checkpoint_id": checkpoint_id}
         )
         payload = {
-            "application_id": application_id,
-            "checkpoint_id": checkpoint_id,
             "actor": actor,
             "session_id": session_id,
             "data_type": data_type,
             "data": data,
             "tool": "LiteLLM",
+            **routing,
         }
-        response = await self._async_handler.post(url, headers=self._tracker_headers, json=payload)
+        response = await self._async_handler.post(
+            f"{self._tracker_api_base}/tracking/beta/{route}", headers=self._tracker_headers, json=payload
+        )
         response.raise_for_status()
         return response.json()
 
@@ -287,11 +310,11 @@ class OvalixGuardrail(CustomGuardrail):
         checkpoint_id: str,
         actor: str,
         session_id: str,
-        application_id: str,
+        target: CheckpointTarget,
         escalation_reason: str,
     ) -> str | None:
         try:
-            resp = await self._call_checkpoint(data_type, data, checkpoint_id, actor, session_id, application_id)
+            resp = await self._call_checkpoint(data_type, data, checkpoint_id, actor, session_id, target)
         except Exception as e:
             verbose_proxy_logger.exception("Ovalix checkpoint call failed: %s", e)
             raise GuardrailRaisedException(
@@ -312,12 +335,12 @@ class OvalixGuardrail(CustomGuardrail):
         checkpoint_id: str,
         actor: str,
         session_id: str,
-        application_id: str,
+        target: CheckpointTarget,
         escalation_reason: str,
     ) -> str | None:
         for data_type, data in items:
             reason = await self._block_reason_for_item(
-                data_type, data, checkpoint_id, actor, session_id, application_id, escalation_reason
+                data_type, data, checkpoint_id, actor, session_id, target, escalation_reason
             )
             if reason is not None:
                 return reason
@@ -329,12 +352,12 @@ class OvalixGuardrail(CustomGuardrail):
         checkpoint_id: str,
         actor: str,
         session_id: str,
-        application_id: str,
+        target: CheckpointTarget,
     ) -> str | None:
         for part in sorted(file_parts, key=lambda p: p.message_index, reverse=True):
             data = await self._file_part_to_data(part)
             reason = await self._block_reason_for_item(
-                "FILE", data, checkpoint_id, actor, session_id, application_id, _FILE_BLOCK_ESCALATION_REASON
+                "FILE", data, checkpoint_id, actor, session_id, target, _FILE_BLOCK_ESCALATION_REASON
             )
             if reason is not None:
                 return reason
@@ -354,6 +377,11 @@ class OvalixGuardrail(CustomGuardrail):
         actor = self._get_actor(request_data)
         session_id = self._get_session_id_for_application(request_data, routing.application_id)
         is_response = input_type == "response"
+        target = CheckpointTarget(
+            application_id=routing.application_id,
+            input_type=input_type,
+            application_name=await self._checkpoint_routing_name(request_data),
+        )
 
         prompt_checkpoint = routing.checkpoint_id_post if is_response else routing.checkpoint_id_pre
         file_checkpoint = (
@@ -379,9 +407,7 @@ class OvalixGuardrail(CustomGuardrail):
             if is_response
             else extract_file_parts_from_messages(structured_messages, size_limit=_DEFAULT_FILE_SIZE_LIMIT)
         )
-        file_block = await self._check_files_for_block(
-            file_parts, file_checkpoint, actor, session_id, routing.application_id
-        )
+        file_block = await self._check_files_for_block(file_parts, file_checkpoint, actor, session_id, target)
         if file_block is not None:
             self._block_current_message(file_block)
 
@@ -401,7 +427,7 @@ class OvalixGuardrail(CustomGuardrail):
             prompt_checkpoint,
             actor,
             session_id,
-            routing.application_id,
+            target,
             _TOOL_BLOCK_ESCALATION_REASON,
         )
         if tool_block is not None:
@@ -414,7 +440,7 @@ class OvalixGuardrail(CustomGuardrail):
             prompt_checkpoint,
             actor,
             session_id,
-            routing.application_id,
+            target,
             _TOOL_RESULT_BLOCK_ESCALATION_REASON,
         )
         if tool_result_block is not None:
@@ -428,7 +454,7 @@ class OvalixGuardrail(CustomGuardrail):
             prompt_checkpoint,
             actor,
             session_id,
-            routing.application_id,
+            target,
             tool_result_text_indices(structured_messages, texts),
         )
         if output_texts is None:
@@ -451,7 +477,7 @@ class OvalixGuardrail(CustomGuardrail):
         checkpoint_id: str,
         actor: str,
         session_id: str,
-        application_id: str,
+        target: CheckpointTarget,
         skip_indices: frozenset[int],
     ) -> list[str] | None:
         output = list(texts)
@@ -465,7 +491,7 @@ class OvalixGuardrail(CustomGuardrail):
             content = texts[original_index]
             try:
                 resp = await self._call_checkpoint(
-                    "TEXT", {"content": content}, checkpoint_id, actor, session_id, application_id
+                    "TEXT", {"content": content}, checkpoint_id, actor, session_id, target
                 )
             except Exception as e:
                 verbose_proxy_logger.exception("Ovalix checkpoint call failed: %s", e)
@@ -579,6 +605,19 @@ class OvalixGuardrail(CustomGuardrail):
             message=f"Ovalix guardrail error: routing resolution failed: {error!s}",
             should_wrap_with_default_message=False,
         )
+
+    async def _checkpoint_routing_name(self, request_data: Mapping[str, Any]) -> str | None:
+        """The application name to route checkpoints by, or None to route by resolved ids.
+
+        None when the deployment pins an application in config, or when no name can be read from the
+        api key alias. Only reached after _resolve_routing has already fetched and cached the regex.
+        """
+        if self._application_id:
+            return None
+        alias = self._get_key_alias(request_data)
+        if not alias:
+            return None
+        return self._extract_application_name(alias, await self._get_app_name_regex())
 
     async def _resolve_routing(self, request_data: Mapping[str, Any]) -> ResolvedRouting | None:
         if self._application_id:
