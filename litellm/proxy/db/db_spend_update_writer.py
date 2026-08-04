@@ -12,7 +12,9 @@ import os
 import random
 import time
 import traceback
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -66,6 +68,26 @@ if TYPE_CHECKING:
 else:
     PrismaClient = Any
     ProxyLogging = Any
+
+
+# Only tag rows carry a request_id, so the other entity types spread nothing. Built
+# once here rather than as an empty literal per transaction, and read-only so it cannot
+# be filled in by accident from one of the call sites that spreads it.
+_NO_TAG_REQUEST_ID: Mapping[str, Any] = MappingProxyType({})
+
+
+def _get_llm_router():
+    """The proxy's router, or None outside a running proxy.
+
+    Injected rather than imported where it is used, so the savings computation stays
+    a pure function of its arguments and the caller owns where the router comes from.
+    """
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        return llm_router
+    except Exception:  # noqa: BLE001  # no proxy in scope; savings degrade to zero
+        return None
 
 
 def _extract_cache_read_tokens(usage_obj: dict) -> int:
@@ -141,7 +163,11 @@ class DBSpendUpdateWriter:
 
         try:
             verbose_proxy_logger.debug(
-                f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id}"
+                "Enters prisma db call, response_cost: %s, token: %s; user_id: %s; team_id: %s",
+                response_cost,
+                token,
+                user_id,
+                team_id,
             )
             if ProxyUpdateSpend.disable_spend_updates() is True:
                 return
@@ -706,7 +732,7 @@ class DBSpendUpdateWriter:
             if isinstance(request_tags, str):
                 tags = safe_json_loads(request_tags, default=[])
                 if not tags:
-                    verbose_proxy_logger.debug(f"Failed to parse request_tags JSON: {request_tags}")
+                    verbose_proxy_logger.debug("Failed to parse request_tags JSON: %s", request_tags)
                     return
             elif isinstance(request_tags, list):
                 tags = request_tags
@@ -1098,7 +1124,7 @@ class DBSpendUpdateWriter:
 
         ### UPDATE USER TABLE ###
         user_list_transactions = db_spend_update_transactions["user_list_transactions"]
-        verbose_proxy_logger.debug(f"User Spend transactions: {user_list_transactions}")
+        verbose_proxy_logger.debug("User Spend transactions: %s", user_list_transactions)
         if user_list_transactions is not None and len(user_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1130,7 +1156,7 @@ class DBSpendUpdateWriter:
 
         ### UPDATE END-USER TABLE ###
         end_user_list_transactions = db_spend_update_transactions["end_user_list_transactions"]
-        verbose_proxy_logger.debug(f"End-User Spend transactions: {end_user_list_transactions}")
+        verbose_proxy_logger.debug("End-User Spend transactions: %s", end_user_list_transactions)
         if end_user_list_transactions is not None and len(end_user_list_transactions.keys()) > 0:
             await ProxyUpdateSpend.update_end_user_spend(
                 n_retry_times=n_retry_times,
@@ -1140,7 +1166,7 @@ class DBSpendUpdateWriter:
             )
         ### UPDATE KEY TABLE ###
         key_list_transactions = db_spend_update_transactions["key_list_transactions"]
-        verbose_proxy_logger.debug(f"KEY Spend transactions: {key_list_transactions}")
+        verbose_proxy_logger.debug("KEY Spend transactions: %s", key_list_transactions)
         if key_list_transactions is not None and len(key_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1173,7 +1199,7 @@ class DBSpendUpdateWriter:
 
         ### UPDATE TEAM TABLE ###
         team_list_transactions = db_spend_update_transactions["team_list_transactions"]
-        verbose_proxy_logger.debug(f"Team Spend transactions: {team_list_transactions}")
+        verbose_proxy_logger.debug("Team Spend transactions: %s", team_list_transactions)
         if team_list_transactions is not None and len(team_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1182,7 +1208,9 @@ class DBSpendUpdateWriter:
                         async with transaction.batch_() as batcher:
                             # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
                             for team_id, response_cost in sorted(team_list_transactions.items()):
-                                verbose_proxy_logger.debug(f"Updating spend for team id={team_id} by {response_cost}")
+                                verbose_proxy_logger.debug(
+                                    "Updating spend for team id=%s by %s", team_id, response_cost
+                                )
                                 batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"team_id": team_id},
                                     data={"spend": {"increment": response_cost}},
@@ -1204,7 +1232,7 @@ class DBSpendUpdateWriter:
 
         ### UPDATE TEAM Membership TABLE with spend ###
         team_member_list_transactions = db_spend_update_transactions["team_member_list_transactions"]
-        verbose_proxy_logger.debug(f"Team Membership Spend transactions: {team_member_list_transactions}")
+        verbose_proxy_logger.debug("Team Membership Spend transactions: %s", team_member_list_transactions)
         if team_member_list_transactions is not None and len(team_member_list_transactions.keys()) > 0:
             # Track which team memberships will be updated for cache invalidation
             team_memberships_to_invalidate: list[tuple[str, str]] = []
@@ -1258,12 +1286,12 @@ class DBSpendUpdateWriter:
                         cache_key = f"team_membership:{user_id}:{team_id}"
                         await user_api_key_cache.async_delete_cache(key=cache_key)
                         verbose_proxy_logger.debug(
-                            f"Invalidated team membership cache for user_id={user_id}, team_id={team_id}"
+                            "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
                         )
 
         ### UPDATE ORG TABLE ###
         org_list_transactions = db_spend_update_transactions["org_list_transactions"]
-        verbose_proxy_logger.debug(f"Org Spend transactions: {org_list_transactions}")
+        verbose_proxy_logger.debug("Org Spend transactions: %s", org_list_transactions)
         if org_list_transactions is not None and len(org_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1346,7 +1374,7 @@ class DBSpendUpdateWriter:
         """
         from litellm.proxy.utils import _raise_failed_update_spend_exception
 
-        verbose_proxy_logger.debug(f"{entity_name} Spend transactions: {transactions}")
+        verbose_proxy_logger.debug("%s Spend transactions: %s", entity_name, transactions)
         if transactions is not None and len(transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1356,7 +1384,11 @@ class DBSpendUpdateWriter:
                             # Sort by entity_id for consistent lock ordering across pods to prevent deadlocks.
                             for entity_id, response_cost in sorted(transactions.items()):
                                 verbose_proxy_logger.debug(
-                                    f"Updating spend for {entity_name} {where_field}={entity_id} by {response_cost}"
+                                    "Updating spend for %s %s=%s by %s",
+                                    entity_name,
+                                    where_field,
+                                    entity_id,
+                                    response_cost,
                                 )
                                 getattr(batcher, table_accessor).update_many(
                                     where={where_field: entity_id},
@@ -1485,7 +1517,7 @@ class DBSpendUpdateWriter:
         from litellm.proxy.utils import _raise_failed_update_spend_exception
 
         verbose_proxy_logger.debug(
-            f"Daily {entity_type.capitalize()} Spend transactions: {len(daily_spend_transactions)}"
+            "Daily %s Spend transactions: %s", entity_type.capitalize(), len(daily_spend_transactions)
         )
         BATCH_SIZE = 100
         start_time = time.time()
@@ -1519,7 +1551,7 @@ class DBSpendUpdateWriter:
 
                         if len(transactions_to_process) == 0:
                             verbose_proxy_logger.debug(
-                                f"No new transactions to process for daily {entity_type} spend update"
+                                "No new transactions to process for daily %s spend update", entity_type
                             )
                             return
 
@@ -1545,6 +1577,40 @@ class DBSpendUpdateWriter:
                                     # Get the table dynamically
                                     table = getattr(batcher, table_name)
 
+                                    # Additive metrics that older queued rows may omit; one
+                                    # enumeration feeds both the create and the increment below
+                                    optional_metrics = {
+                                        field: value
+                                        for field, value in (
+                                            ("cache_read_input_tokens", transaction.get("cache_read_input_tokens")),
+                                            (
+                                                "cache_creation_input_tokens",
+                                                transaction.get("cache_creation_input_tokens"),
+                                            ),
+                                            ("compression_saved_tokens", transaction.get("compression_saved_tokens")),
+                                            (
+                                                "compression_savings_spend",
+                                                transaction.get("compression_savings_spend"),
+                                            ),
+                                            (
+                                                "prompt_caching_savings_spend",
+                                                transaction.get("prompt_caching_savings_spend"),
+                                            ),
+                                            ("autorouter_savings_spend", transaction.get("autorouter_savings_spend")),
+                                        )
+                                        if value is not None
+                                    }
+
+                                    # Only tag rows carry a request_id. Resolved to a spreadable
+                                    # value here so both payloads are built in one shot: a dict
+                                    # appended to after construction is one nobody can reason about
+                                    # by reading its literal.
+                                    tag_request_id: Mapping[str, Any] = (
+                                        MappingProxyType({"request_id": transaction["request_id"]})
+                                        if entity_type == "tag" and "request_id" in transaction
+                                        else _NO_TAG_REQUEST_ID
+                                    )
+
                                     # Common data structure for both create and update
                                     common_data = {
                                         entity_id_field: entity_id,
@@ -1561,34 +1627,10 @@ class DBSpendUpdateWriter:
                                         "api_requests": transaction["api_requests"],
                                         "successful_requests": transaction["successful_requests"],
                                         "failed_requests": transaction["failed_requests"],
+                                        **optional_metrics,
+                                        **tag_request_id,
                                     }
 
-                                    # Add cache-related fields if they exist
-                                    if "cache_read_input_tokens" in transaction:
-                                        common_data["cache_read_input_tokens"] = transaction.get(
-                                            "cache_read_input_tokens", 0
-                                        )
-                                    if "cache_creation_input_tokens" in transaction:
-                                        common_data["cache_creation_input_tokens"] = transaction.get(
-                                            "cache_creation_input_tokens", 0
-                                        )
-                                    if "compression_saved_tokens" in transaction:
-                                        common_data["compression_saved_tokens"] = transaction.get(
-                                            "compression_saved_tokens", 0
-                                        )
-                                    if "compression_savings_spend" in transaction:
-                                        common_data["compression_savings_spend"] = transaction.get(
-                                            "compression_savings_spend", 0
-                                        )
-                                    if "prompt_caching_savings_spend" in transaction:
-                                        common_data["prompt_caching_savings_spend"] = transaction.get(
-                                            "prompt_caching_savings_spend", 0
-                                        )
-
-                                    if entity_type == "tag" and "request_id" in transaction:
-                                        common_data["request_id"] = transaction.get("request_id")
-
-                                    # Create update data structure
                                     update_data = {
                                         "prompt_tokens": {"increment": transaction["prompt_tokens"]},
                                         "completion_tokens": {"increment": transaction["completion_tokens"]},
@@ -1596,35 +1638,11 @@ class DBSpendUpdateWriter:
                                         "api_requests": {"increment": transaction["api_requests"]},
                                         "successful_requests": {"increment": transaction["successful_requests"]},
                                         "failed_requests": {"increment": transaction["failed_requests"]},
+                                        **{field: {"increment": value} for field, value in optional_metrics.items()},
+                                        # An existing row predating the endpoint column gets it filled in here
+                                        "endpoint": transaction.get("endpoint") or "",
+                                        **tag_request_id,
                                     }
-
-                                    # Add cache-related fields to update if they exist
-                                    if "cache_read_input_tokens" in transaction:
-                                        update_data["cache_read_input_tokens"] = {
-                                            "increment": transaction.get("cache_read_input_tokens", 0)
-                                        }
-                                    if "cache_creation_input_tokens" in transaction:
-                                        update_data["cache_creation_input_tokens"] = {
-                                            "increment": transaction.get("cache_creation_input_tokens", 0)
-                                        }
-                                    if "compression_saved_tokens" in transaction:
-                                        update_data["compression_saved_tokens"] = {
-                                            "increment": transaction.get("compression_saved_tokens", 0)
-                                        }
-                                    if "compression_savings_spend" in transaction:
-                                        update_data["compression_savings_spend"] = {
-                                            "increment": transaction.get("compression_savings_spend", 0)
-                                        }
-                                    if "prompt_caching_savings_spend" in transaction:
-                                        update_data["prompt_caching_savings_spend"] = {
-                                            "increment": transaction.get("prompt_caching_savings_spend", 0)
-                                        }
-
-                                    if entity_type == "tag" and "request_id" in transaction:
-                                        update_data["request_id"] = transaction.get("request_id")
-
-                                    # Add endpoint to update_data so existing rows get their endpoint field updated
-                                    update_data["endpoint"] = transaction.get("endpoint") or ""
 
                                     table.upsert(
                                         where=where_clause,
@@ -1829,14 +1847,15 @@ class DBSpendUpdateWriter:
             raise ValueError(f"Invalid type: {type}")
         if not all(key in payload for key in expected_keys):
             verbose_proxy_logger.debug(
-                f"Missing expected keys: {expected_keys}, in payload, skipping from daily_user_spend_transactions"
+                "Missing expected keys: %s, in payload, skipping from daily_user_spend_transactions", expected_keys
             )
             return None
 
         any_expected_keys = ["model", "mcp_namespaced_tool_name"]
         if not any(key in payload for key in any_expected_keys):
             verbose_proxy_logger.debug(
-                f"Missing any expected keys: {any_expected_keys}, in payload, skipping from daily_user_spend_transactions"
+                "Missing any expected keys: %s, in payload, skipping from daily_user_spend_transactions",
+                any_expected_keys,
             )
             return None
         elif "mcp_namespaced_tool_name" in payload:
@@ -1848,7 +1867,7 @@ class DBSpendUpdateWriter:
             return None
 
         request_status = prisma_client.get_request_status(payload)
-        verbose_proxy_logger.debug(f"Logged request status: {request_status}")
+        verbose_proxy_logger.debug("Logged request status: %s", request_status)
         _metadata: SpendLogsMetadata = json.loads(payload["metadata"])
         usage_obj = _metadata.get("usage_object", {}) or {}
         if isinstance(payload["startTime"], datetime):
@@ -1858,7 +1877,7 @@ class DBSpendUpdateWriter:
             date = payload["startTime"].split("T")[0]
         else:
             verbose_proxy_logger.debug(
-                f"Invalid start time: {payload['startTime']}, skipping from daily_user_spend_transactions"
+                "Invalid start time: %s, skipping from daily_user_spend_transactions", payload["startTime"]
             )
             return None
         try:
@@ -1875,6 +1894,11 @@ class DBSpendUpdateWriter:
                 custom_llm_provider=payload.get("custom_llm_provider", None),
                 compression_saved_tokens=compression_saved_tokens,
                 cache_read_input_tokens=cache_read_input_tokens,
+                routing_decision=_metadata.get("routing_decision"),
+                model_id=payload.get("model_id"),
+                llm_router=_get_llm_router,
+                usage_object=usage_obj,
+                cost_breakdown=_metadata.get("cost_breakdown"),
             )
 
             daily_transaction = BaseDailySpendTransaction(
@@ -1896,6 +1920,7 @@ class DBSpendUpdateWriter:
                 compression_saved_tokens=compression_saved_tokens,
                 compression_savings_spend=savings_spend.compression,
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
+                autorouter_savings_spend=savings_spend.autorouter,
             )
             return daily_transaction
         except Exception as e:

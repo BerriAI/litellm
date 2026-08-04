@@ -344,7 +344,7 @@ class QualifireGuardrail(CustomGuardrail):
                 )
                 url = f"{self.qualifire_api_base}/api/evaluation/evaluate"
 
-            verbose_proxy_logger.debug(f"Qualifire Guardrail: Making request to {url}")
+            verbose_proxy_logger.debug("Qualifire Guardrail: Making request to %s", url)
 
             # Make the API request
             response = await self.async_handler.post(
@@ -373,8 +373,8 @@ class QualifireGuardrail(CustomGuardrail):
             if is_flagged:
                 if on_flagged == "monitor":
                     verbose_proxy_logger.warning(
-                        "Qualifire Guardrail: Monitoring mode - violation detected but allowing request. "
-                        f"Response: {qualifire_response}"
+                        "Qualifire Guardrail: Monitoring mode - violation detected but allowing request. Response: %s",
+                        qualifire_response,
                     )
                 else:
                     # Block the request
@@ -389,7 +389,7 @@ class QualifireGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.exception(f"Qualifire Guardrail error: {e}")
+            verbose_proxy_logger.exception("Qualifire Guardrail error: %s", e)
             raise
 
     @log_guardrail_information

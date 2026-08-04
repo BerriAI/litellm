@@ -227,7 +227,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         Returns:
             Tuple of (is_allowed, rule_id, message)
         """
-        verbose_proxy_logger.debug(f"Checking permission for tool: {tool_name or tool_type}")
+        verbose_proxy_logger.debug("Checking permission for tool: %s", tool_name or tool_type)
 
         # Check each rule in order
         for rule in self.rules:
@@ -539,7 +539,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not denied_tool_names:
             return data
 
-        verbose_proxy_logger.info(f"Blocking {len(denied_tool_names)} unauthorized tool uses")
+        verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tool_names))
 
         # Create a mapping of tool_use_id to error result
         error_tool_names = set()
@@ -606,7 +606,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not denied_tools:
             return
 
-        verbose_proxy_logger.info(f"Blocking {len(denied_tools)} unauthorized tool uses")
+        verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tools))
 
         # Create a mapping of tool_use_id to error result
         error_results = {}
@@ -680,7 +680,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             is_allowed, _, message = self._check_tool_permission(tool_name, tool_type)
 
             if not is_allowed and message is not None:
-                verbose_proxy_logger.warning(f"Tool Permission Guardrail: {message}")
+                verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
                 if self.on_disallowed_action == "block":
                     raise HTTPException(
                         status_code=400,
@@ -730,7 +730,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Tool Permission Guardrail: No tool uses found")
             return response
 
-        verbose_proxy_logger.debug(f"Tool Permission Guardrail: Found {len(tool_calls)} tool calls")
+        verbose_proxy_logger.debug("Tool Permission Guardrail: Found %s tool calls", len(tool_calls))
 
         # Check permissions for each tool use
         denied_tools = []
@@ -738,7 +738,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             is_allowed, rule_id, message = self._get_permission_for_tool_call(tool_call)
 
             if not is_allowed and message is not None:
-                verbose_proxy_logger.warning(f"Tool Permission Guardrail: {message}")
+                verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
 
                 if self.on_disallowed_action == "block":
                     raise GuardrailRaisedException(
@@ -809,7 +809,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                     yield chunk
                 return
 
-            verbose_proxy_logger.debug(f"Tool Permission Guardrail: Found {len(tool_calls)} tool calls")
+            verbose_proxy_logger.debug("Tool Permission Guardrail: Found %s tool calls", len(tool_calls))
 
             # Check permissions for each tool use
             denied_tools = []
@@ -817,7 +817,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 is_allowed, rule_id, message = self._get_permission_for_tool_call(tool_call)
 
                 if not is_allowed and message is not None:
-                    verbose_proxy_logger.warning(f"Tool Permission Guardrail: {message}")
+                    verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
 
                     if self.on_disallowed_action == "block":
                         raise GuardrailRaisedException(

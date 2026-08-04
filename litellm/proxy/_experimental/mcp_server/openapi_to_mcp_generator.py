@@ -138,8 +138,9 @@ def get_base_url(spec: dict[str, Any], spec_path: str | None = None) -> str:
                 base_domain = f"{parsed.scheme}://{parsed.netloc}"
                 full_base_url = base_domain + server_url
                 verbose_logger.info(
-                    f"OpenAPI spec has relative server URL '{server_url}'. "
-                    f"Deriving base from spec_path: {full_base_url}"
+                    "OpenAPI spec has relative server URL '%s'. Deriving base from spec_path: %s",
+                    server_url,
+                    full_base_url,
                 )
                 return full_base_url
 
@@ -160,12 +161,12 @@ def get_base_url(spec: dict[str, Any], spec_path: str | None = None) -> str:
         ]:
             if spec_path.endswith(suffix):
                 base_url = spec_path[: -len(suffix)]
-                verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+                verbose_logger.info("No server info in OpenAPI spec. Using derived base URL: %s", base_url)
                 return base_url
 
         if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
             base_url = "/".join(spec_path.split("/")[:-1])
-            verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+            verbose_logger.info("No server info in OpenAPI spec. Using derived base URL: %s", base_url)
             return base_url
 
     return ""
@@ -497,4 +498,4 @@ def register_tools_from_openapi(spec: dict[str, Any], base_url: str):
                     input_schema=input_schema,
                     handler=tool_func,
                 )
-                verbose_logger.debug(f"Registered tool: {tool_name}")
+                verbose_logger.debug("Registered tool: %s", tool_name)

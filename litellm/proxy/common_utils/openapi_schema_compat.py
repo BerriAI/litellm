@@ -80,7 +80,7 @@ def get_openapi_schema_with_compat(
 
     except (ImportError, AttributeError) as e:
         # If patching fails, try normal generation with error handling
-        verbose_proxy_logger.debug(f"Could not patch Pydantic schema generation: {e}. Trying normal generation.")
+        verbose_proxy_logger.debug("Could not patch Pydantic schema generation: %s. Trying normal generation.", e)
         try:
             return get_openapi_func(
                 title=title,
@@ -97,7 +97,7 @@ def get_openapi_schema_with_compat(
             ):
                 # If we still get the error, log it and return minimal schema
                 verbose_proxy_logger.warning(
-                    f"PydanticSchemaGenerationError during schema generation: {pydantic_error}"
+                    "PydanticSchemaGenerationError during schema generation: %s", pydantic_error
                 )
                 return {
                     "openapi": "3.0.0",

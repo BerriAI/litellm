@@ -34,12 +34,14 @@ from litellm.types.utils import (
     Function,
     GenericGuardrailAPIInputs,
     StandardLoggingPayload,
+    StandardLoggingUserAPIKeyMetadata,
 )
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
     )
+    from litellm.proxy._types import UserAPIKeyAuth
 
 _WEBHOOK_PATH_RESPONSE_MODERATION = "/v1/after_completion/openai/v1"
 _WEBHOOK_PATH_PROMPT_MODERATION = "/v1/before_prompt/openai/v1"
@@ -161,9 +163,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 parsed_rate = float(rbrk_sampling_rate.strip())
                 self.sampling_rate = max(0.0, min(1.0, parsed_rate))
                 if parsed_rate != self.sampling_rate:
-                    verbose_logger.warning(f"RUBRIK_SAMPLING_RATE={parsed_rate} clamped to {self.sampling_rate}")
+                    verbose_logger.warning("RUBRIK_SAMPLING_RATE=%s clamped to %s", parsed_rate, self.sampling_rate)
             except ValueError:
-                verbose_logger.warning(f"Invalid RUBRIK_SAMPLING_RATE: {rbrk_sampling_rate!r}, using 1.0")
+                verbose_logger.warning("Invalid RUBRIK_SAMPLING_RATE: %r, using 1.0", rbrk_sampling_rate)
 
     def _parse_batch_size(self) -> None:
         _batch_size = os.getenv("RUBRIK_BATCH_SIZE")
@@ -171,11 +173,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             try:
                 parsed_size = int(_batch_size)
                 if parsed_size <= 0:
-                    verbose_logger.warning(f"RUBRIK_BATCH_SIZE={_batch_size!r} must be > 0, using default")
+                    verbose_logger.warning("RUBRIK_BATCH_SIZE=%r must be > 0, using default", _batch_size)
                 else:
                     self.batch_size = parsed_size
             except ValueError:
-                verbose_logger.warning(f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default")
+                verbose_logger.warning("Invalid RUBRIK_BATCH_SIZE: %r, using default", _batch_size)
 
     def _setup_clients(self, webhook_url: str) -> None:
         self.response_moderation_endpoint = f"{webhook_url}{_WEBHOOK_PATH_RESPONSE_MODERATION}"
@@ -277,7 +279,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return inputs
         except Exception as e:
             verbose_logger.error(
-                f"{label} hook failed: {e}. Returning original inputs unchanged.",
+                "%s hook failed: %s. Returning original inputs unchanged.",
+                label,
+                e,
                 exc_info=True,
             )
             return inputs
@@ -386,8 +390,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if logging_obj is None:
             verbose_logger.error(
                 "Rubrik: moderation block fired with logging_obj=None for "
-                f"litellm_call_id={request_data.get('litellm_call_id')}; "
-                "cannot suppress success event or attach failure payload."
+                "litellm_call_id=%s; "
+                "cannot suppress success event or attach failure payload.",
+                request_data.get("litellm_call_id"),
             )
             request_data["_rubrik_logging_obj"] = None
             return
@@ -648,14 +653,15 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 payload["messages"] = (system_scaffold, messages)
         except Exception as e:
             verbose_logger.warning(
-                f"Rubrik: failed to prepend system prompt: {e}",
+                "Rubrik: failed to prepend system prompt: %s",
+                e,
                 exc_info=True,
             )
 
     async def _prepare_log_payload(self, kwargs: Mapping[str, Any], event_type: str) -> StandardLoggingPayload | None:
         """Shared logic for success logging (sampled)."""
         if random.random() > self.sampling_rate:
-            verbose_logger.debug(f"Skipping Rubrik {event_type} logging (sampling_rate={self.sampling_rate})")
+            verbose_logger.debug("Skipping Rubrik %s logging (sampling_rate=%s)", event_type, self.sampling_rate)
             return None
 
         # Deep-copy so mutations don't affect other callbacks sharing this object
@@ -699,7 +705,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             await self._append_and_maybe_flush(payload)
         except Exception as e:
             verbose_logger.error(
-                f"Rubrik {event_type} logging hook failed: {e}. Skipping logging for this event.",
+                "Rubrik %s logging hook failed: %s. Skipping logging for this event.",
+                event_type,
+                e,
                 exc_info=True,
             )
 
@@ -708,7 +716,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # skip here to avoid double-logging the pre-block response.
         if kwargs.get("_rubrik_blocked"):
             verbose_logger.debug(
-                f"Rubrik: skipping success event for blocked request litellm_call_id={kwargs.get('litellm_call_id')}"
+                "Rubrik: skipping success event for blocked request litellm_call_id=%s",
+                kwargs.get("litellm_call_id"),
             )
             return
         await self._enqueue_log_event(kwargs, "success")
@@ -725,7 +734,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         self,
         request_data: dict,
         original_exception: Exception,
-        user_api_key_dict: Any,
+        user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: str | None = None,
     ) -> None:
         """Log blocked requests signalled via ``ModifyResponseException``
@@ -753,22 +762,26 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             # way we cannot build the payload.
             verbose_logger.warning(
                 "Rubrik: block exception without stashed logging_obj. "
-                f"litellm_call_id={request_data.get('litellm_call_id')}, "
-                f"model={request_data.get('model')}, "
-                f"user_id={getattr(user_api_key_dict, 'user_id', None)}, "
-                f"raising_guardrail="
-                f"{getattr(original_exception, 'guardrail_name', None)}"
+                "litellm_call_id=%s, "
+                "model=%s, "
+                "user_id=%s, "
+                "raising_guardrail=%s",
+                request_data.get("litellm_call_id"),
+                request_data.get("model"),
+                user_api_key_dict.user_id,
+                getattr(original_exception, "guardrail_name", None),
             )
             return
 
         call_id: str | None = None
-        await self._build_and_enqueue_block_event(logging_obj, original_exception, call_id)
+        await self._build_and_enqueue_block_event(logging_obj, original_exception, call_id, user_api_key_dict)
 
     async def _build_and_enqueue_block_event(
         self,
         logging_obj: "LiteLLMLoggingObj",
         exception: "ModifyResponseException",
         call_id: str | None,
+        user_api_key_dict: "UserAPIKeyAuth",
     ) -> None:
         try:
             call_details = logging_obj.model_call_details
@@ -780,11 +793,12 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             # prevent. The flag dies with model_call_details when the request
             # completes; there's nothing to clean up.
             call_id = call_details.get("litellm_call_id")
-            payload = self._prepare_block_failure_payload(logging_obj, exception)
-        except (AttributeError, KeyError, TypeError) as e:
+            payload = self._prepare_block_failure_payload(logging_obj, exception, user_api_key_dict)
+        except (AttributeError, ImportError, KeyError, TypeError) as e:
             verbose_logger.error(
-                f"Rubrik: failed to build blocked-tool payload for "
-                f"litellm_call_id={call_id}: {e}. Event will NOT be logged.",
+                "Rubrik: failed to build blocked-tool payload for litellm_call_id=%s: %s. Event will NOT be logged.",
+                call_id,
+                e,
                 exc_info=True,
             )
             return
@@ -793,7 +807,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             await self._append_and_maybe_flush(payload)
         except Exception as e:
             verbose_logger.error(
-                f"Rubrik: failed to enqueue blocked-tool event for litellm_call_id={call_id}: {e}.",
+                "Rubrik: failed to enqueue blocked-tool event for litellm_call_id=%s: %s.",
+                call_id,
+                e,
                 exc_info=True,
             )
 
@@ -801,17 +817,20 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         self,
         logging_obj: "LiteLLMLoggingObj",
         exception: "ModifyResponseException",
+        user_api_key_dict: "UserAPIKeyAuth",
     ) -> StandardLoggingPayload:
         """Build a failure-style payload using the exception text as response.
 
         Blocked-tool events are security-relevant and **bypass sampling**:
         every block is logged.
 
-        The deferred success-handler runs as a separately-scheduled task and
-        races with this hook, so ``standard_logging_object`` on
-        ``model_call_details`` may not yet be populated. If present we reuse
-        it; otherwise we fall back to a best-effort payload built from the
-        fields available at block time.
+        A non-streaming block always takes the fallback, and not because of a
+        race: registering a post_call guardrail sets ``_defer_async_logging``,
+        which parks the success handler that would have written
+        ``standard_logging_object``, and ``_flush_deferred_async_logging``
+        returns early once an exception was raised. Streaming requests never set
+        that flag, so a streamed block can arrive with the object already
+        populated; the branch below covers it and wins over the fallback.
 
         For prompt blocks the LLM is never called, so ``standard_logging_object``
         is never populated. The fallback therefore must carry enough fields to
@@ -830,9 +849,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
           ``acompletion()``, which hasn't run yet for a prompt block.
         - ``model_id``: not available before the LLM returns hidden_params;
           defaults to empty string.
-        - ``user_api_key_hash``: ``call_details["metadata"]["user_api_key"]`` --
-          the hashed token written by ``add_user_information_to_request_data``
-          before ``pre_call_hook`` fires.
+        - caller identity: ``_caller_metadata`` off the ``user_api_key_dict``
+          the failure hook is handed. The enriched litellm metadata lives under
+          ``call_details["litellm_params"]["metadata"]``, never at the top
+          level, so the previous top-level read resolved to an empty string for
+          every block.
         - time fields: ``call_details["start_time"]`` reused for all three;
           end/completion times are meaningless for a prompt block.
         """
@@ -845,10 +866,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         else:
             verbose_logger.debug(
                 "Rubrik: standard_logging_object not yet on model_call_details "
-                f"for litellm_call_id={call_details.get('litellm_call_id')}; "
-                "using best-effort fallback payload."
+                "for litellm_call_id=%s; "
+                "using best-effort fallback payload.",
+                call_details.get("litellm_call_id"),
             )
-            payload = self._build_fallback_payload(call_details)
+            payload = self._build_fallback_payload(call_details, user_api_key_dict)
 
         payload["response"] = exception_text
 
@@ -863,8 +885,30 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         return payload  # type: ignore[return-value]
 
     @staticmethod
-    def _build_fallback_payload(call_details: Mapping[str, Any]) -> dict[str, Any]:
-        _metadata: Mapping[str, Any] = call_details.get("metadata") or _EMPTY_MAPPING
+    def _caller_metadata(user_api_key_dict: "UserAPIKeyAuth") -> StandardLoggingUserAPIKeyMetadata:
+        """Identify the caller whose request was blocked.
+
+        Uses the same mapper the success path and the proxy spend logger use, so
+        a block log and a success log agree on the caller key set.
+
+        The import is deferred because ``litellm/integrations/`` is SDK-side
+        while the mapper lives under ``proxy/``: ``rubrik.py`` is imported during
+        guardrail discovery and must not pull proxy-only dependencies into its
+        import chain. It is unguarded because the only dispatcher of this hook,
+        ``ProxyLogging.post_call_failure_hook``, already imports fastapi at
+        module scope, so there is no path where this hook runs and the mapper is
+        missing.
+        """
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+        return LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict)
+
+    @classmethod
+    def _build_fallback_payload(
+        cls,
+        call_details: Mapping[str, Any],
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> dict[str, Any]:
         # Convert datetime to a Unix float so json.dumps can serialize it.
         # httpx's json= parameter uses stdlib json.dumps with no custom encoder.
         _raw_start = call_details.get("start_time")
@@ -884,11 +928,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             "endTime": _start,
             "completionStartTime": _start,
             "messages": call_details.get("messages") or (),
-            "metadata": {
-                # "user_api_key" is the hashed token written by
-                # add_user_information_to_request_data before guardrails fire.
-                "user_api_key_hash": _metadata.get("user_api_key_hash") or _metadata.get("user_api_key") or "",
-            },
+            "metadata": cls._caller_metadata(user_api_key_dict),
             "status": "failure",
         }
 
@@ -906,7 +946,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(f"Rubrik HTTP Error: {e.response.status_code} - {e.response.text}")
+            verbose_logger.exception("Rubrik HTTP Error: %s - %s", e.response.status_code, e.response.text)
             raise
         except Exception:
             verbose_logger.exception("Rubrik Layer Error")
@@ -963,7 +1003,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             Exception: If the service is unavailable or returns an error.
             TypeError: If the response JSON is not a dict.
         """
-        verbose_logger.debug(f"Sending request to {service_name}: {endpoint}")
+        verbose_logger.debug("Sending request to %s: %s", service_name, endpoint)
         http_response = await self.moderation_client.post(
             endpoint,
             json=payload,

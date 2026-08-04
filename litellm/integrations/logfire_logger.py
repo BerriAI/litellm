@@ -90,7 +90,7 @@ class LogfireLogger:
         try:
             import logfire
 
-            verbose_logger.debug(f"logfire Logging - Enters logging function for model {kwargs}")
+            verbose_logger.debug("logfire Logging - Enters logging function for model %s", kwargs)
 
             if not response_obj:
                 response_obj = {}
@@ -159,4 +159,4 @@ class LogfireLogger:
 
             print_verbose(f"Logfire Layer Logging - final response object: {response_obj}")
         except Exception as e:
-            verbose_logger.debug(f"Logfire Layer Error - {e}\n{traceback.format_exc()}")
+            verbose_logger.debug("Logfire Layer Error - %s\n%s", e, traceback.format_exc())

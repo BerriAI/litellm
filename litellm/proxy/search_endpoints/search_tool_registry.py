@@ -78,7 +78,7 @@ class SearchToolRegistry:
 
             return search_tool_dict
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error adding search tool to DB: {e}")
+            verbose_proxy_logger.exception("Error adding search tool to DB: %s", e)
             raise Exception(f"Error adding search tool to DB: {e}")
 
     async def delete_search_tool_from_db(self, search_tool_id: str, prisma_client: PrismaClient):
@@ -109,7 +109,7 @@ class SearchToolRegistry:
                 "search_tool_name": existing_tool.search_tool_name,
             }
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error deleting search tool from DB: {e}")
+            verbose_proxy_logger.exception("Error deleting search tool from DB: %s", e)
             raise Exception(f"Error deleting search tool from DB: {e}")
 
     async def update_search_tool_in_db(self, search_tool_id: str, search_tool: SearchTool, prisma_client: PrismaClient):
@@ -143,7 +143,7 @@ class SearchToolRegistry:
             # Convert to dict with ISO formatted datetimes
             return self._convert_prisma_to_dict(updated_search_tool)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error updating search tool in DB: {e}")
+            verbose_proxy_logger.exception("Error updating search tool in DB: %s", e)
             raise Exception(f"Error updating search tool in DB: {e}")
 
     @staticmethod
@@ -176,7 +176,7 @@ class SearchToolRegistry:
 
             return search_tools
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting search tools from DB: {e}")
+            verbose_proxy_logger.exception("Error getting search tools from DB: %s", e)
             raise Exception(f"Error getting search tools from DB: {e}")
 
     async def get_search_tool_by_id_from_db(
@@ -204,7 +204,7 @@ class SearchToolRegistry:
             search_tool_dict = self._convert_prisma_to_dict(search_tool)
             return SearchTool(**search_tool_dict)  # type: ignore
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting search tool from DB: {e}")
+            verbose_proxy_logger.exception("Error getting search tool from DB: %s", e)
             raise Exception(f"Error getting search tool from DB: {e}")
 
     async def get_search_tool_by_name_from_db(
@@ -232,5 +232,5 @@ class SearchToolRegistry:
             search_tool_dict = self._convert_prisma_to_dict(search_tool)
             return SearchTool(**search_tool_dict)  # type: ignore
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting search tool from DB: {e}")
+            verbose_proxy_logger.exception("Error getting search tool from DB: %s", e)
             raise Exception(f"Error getting search tool from DB: {e}")

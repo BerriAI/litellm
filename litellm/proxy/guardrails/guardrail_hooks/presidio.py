@@ -740,7 +740,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif isinstance(content, list) and content_idx_optional is not None:
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
-            verbose_proxy_logger.debug(f"Presidio PII Masking: Redacted pii message: {data['messages']}")
+            verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", data["messages"])
             data["messages"] = messages
             return data
         except Exception as e:
@@ -832,7 +832,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif isinstance(content, list) and content_idx_optional is not None:
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
-            verbose_proxy_logger.debug(f"Presidio PII Masking: Redacted pii message: {messages}")
+            verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
 
         return kwargs, result
@@ -847,7 +847,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Output parse the response object to replace the masked tokens with user sent values
         """
         verbose_proxy_logger.debug(
-            f"PII Masking Args: self.output_parse_pii={self.output_parse_pii}; type of response={type(response)}"
+            "PII Masking Args: self.output_parse_pii=%s; type of response=%s", self.output_parse_pii, type(response)
         )
 
         if self.apply_to_output is True:
@@ -1124,7 +1124,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             yield mock_response_stream
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error masking streaming PII output: {e}")
+            verbose_proxy_logger.error("Error masking streaming PII output: %s", e)
             for chunk in all_chunks:
                 yield chunk
 
@@ -1253,7 +1253,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             yield mock_response_stream
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in PII streaming processing: {e}")
+            verbose_proxy_logger.error("Error in PII streaming processing: %s", e)
             for chunk in remaining_chunks:
                 yield chunk
 

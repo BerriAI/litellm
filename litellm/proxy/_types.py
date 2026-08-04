@@ -14,7 +14,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
@@ -543,6 +543,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/team/list",
         "/organization/list",
         "/team/available",
+        "/team/metadata_schema",
         "/user/info",
         "/v2/user/info",
         "/model/info",
@@ -610,6 +611,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/block",
             "/team/unblock",
             "/team/available",
+            "/team/metadata_schema",
             "/team/permissions_list",
             "/team/permissions_update",
             "/team/permissions_bulk_update",
@@ -4565,6 +4567,11 @@ class BaseDailySpendTransaction(TypedDict):
     # cost-savings metrics (dollars, priced per request before aggregation)
     compression_savings_spend: float
     prompt_caching_savings_spend: float
+    # Not required: rows queued by a pod running the previous release, or replayed from
+    # the Redis buffer across an upgrade, carry no such key. Every reader coalesces a
+    # missing value to zero, so requiring it here would describe a shape the aggregation
+    # is explicitly tested against.
+    autorouter_savings_spend: NotRequired[float]
 
     # request level metrics
     spend: float

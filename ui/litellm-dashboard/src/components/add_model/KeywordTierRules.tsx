@@ -2,6 +2,8 @@ import { DeleteOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/ic
 import { Button, Card, Empty, Select as AntdSelect, Tooltip, Typography } from "antd";
 import React from "react";
 
+import { emptyKeywordTierRuleIndexes } from "./complexity_router_keywords";
+
 const { Text } = Typography;
 
 export type ComplexityTier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
@@ -24,7 +26,36 @@ const TIER_OPTIONS: { value: ComplexityTier; label: string }[] = [
   { value: "REASONING", label: "Reasoning" },
 ];
 
+// A row exists only because the caller asked for it, so it reports its own gap straight away
+// rather than waiting for a submit; the submit button is disabled while one is outstanding, so
+// there is no failed attempt left to surface it.
 const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange }) => {
+  const emptyRuleIndexes = new Set(emptyKeywordTierRuleIndexes(rules));
+  const [drafts, setDrafts] = React.useState<Record<string, string>>({});
+
+  const setDraft = (id: string, text: string) => setDrafts((current) => ({ ...current, [id]: text }));
+
+  // The dropdown is kept closed, which leaves antd nothing for Enter to select, so a typed keyword
+  // would only become a tag on blur. Submitting used to supply that blur; the button is disabled
+  // while the row reads as empty, so Enter has to commit the word itself or the row cannot be filled.
+  const commitDraft = (rule: KeywordTierRule) => {
+    const keyword = (drafts[rule.id] ?? "").trim();
+    if (!keyword) return;
+    updateRule(rule.id, { keywords: [...rule.keywords, keyword] });
+    setDraft(rule.id, "");
+  };
+
+  const commitDraftOnEnter = (rule: KeywordTierRule) => (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    commitDraft(rule);
+  };
+
+  const replaceKeywords = (rule: KeywordTierRule) => (keywords: string[]) => {
+    updateRule(rule.id, { keywords });
+    setDraft(rule.id, "");
+  };
+
   const addRule = () => {
     onChange([...rules, { id: `${Date.now()}`, keywords: [], tier: "COMPLEX" }]);
   };
@@ -73,14 +104,24 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange }) 
                   <AntdSelect
                     mode="tags"
                     value={rule.keywords}
-                    onChange={(keywords: string[]) => updateRule(rule.id, { keywords })}
+                    onChange={replaceKeywords(rule)}
+                    searchValue={drafts[rule.id] ?? ""}
+                    onSearch={(text) => setDraft(rule.id, text)}
+                    onInputKeyDown={commitDraftOnEnter(rule)}
+                    onBlur={() => commitDraft(rule)}
                     placeholder="e.g., invoice, refund, billing"
                     tokenSeparators={[","]}
                     open={false}
                     suffixIcon={null}
                     style={{ width: "100%" }}
                     allowClear
+                    status={emptyRuleIndexes.has(index) ? "error" : undefined}
                   />
+                  {emptyRuleIndexes.has(index) && (
+                    <Text type="danger" style={{ fontSize: 12 }}>
+                      At least one keyword is required
+                    </Text>
+                  )}
                 </div>
                 <div style={{ width: 220 }}>
                   <Text strong style={{ display: "block", marginBottom: 8 }}>

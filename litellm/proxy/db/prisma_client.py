@@ -398,7 +398,7 @@ class PrismaWrapper:
 
             return token_created + timedelta(seconds=expires_in)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to parse token expiration: {e}")
+            verbose_proxy_logger.debug("Failed to parse token expiration: %s", e)
             return None
 
     def _calculate_seconds_until_refresh(self) -> float:
@@ -420,8 +420,8 @@ class PrismaWrapper:
         if expiration_time is None:
             # If we can't parse the token, use fallback interval
             verbose_proxy_logger.debug(
-                f"Could not parse token expiration, using fallback interval of "
-                f"{self.FALLBACK_REFRESH_INTERVAL_SECONDS}s"
+                "Could not parse token expiration, using fallback interval of %ss",
+                self.FALLBACK_REFRESH_INTERVAL_SECONDS,
             )
             return self.FALLBACK_REFRESH_INTERVAL_SECONDS
 
@@ -670,8 +670,9 @@ class PrismaWrapper:
         This is more efficient than polling, requiring only 1 wake-up per token cycle.
         """
         verbose_proxy_logger.info(
-            f"{self._log_prefix}RDS IAM token refresh loop started. "
-            f"Tokens will be refreshed {self.TOKEN_REFRESH_BUFFER_SECONDS}s before expiration."
+            "%sRDS IAM token refresh loop started. Tokens will be refreshed %ss before expiration.",
+            self._log_prefix,
+            self.TOKEN_REFRESH_BUFFER_SECONDS,
         )
 
         while True:
@@ -695,8 +696,10 @@ class PrismaWrapper:
                 break
             except Exception as e:
                 verbose_proxy_logger.error(
-                    f"{self._log_prefix}Error in RDS IAM token refresh loop: {e}. "
-                    f"Retrying in {self.FALLBACK_REFRESH_INTERVAL_SECONDS}s..."
+                    "%sError in RDS IAM token refresh loop: %s. Retrying in %ss...",
+                    self._log_prefix,
+                    e,
+                    self.FALLBACK_REFRESH_INTERVAL_SECONDS,
                 )
                 # On error, wait before retrying to avoid tight error loops
                 try:
@@ -874,7 +877,7 @@ class PrismaManager:
                     try:
                         from litellm_proxy_extras.utils import ProxyExtrasDBManager
                     except ImportError as e:
-                        verbose_proxy_logger.error(f"\033[1;31mLiteLLM: Failed to import proxy extras. Got {e}\033[0m")
+                        verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
                         return False
 
                     prisma_dir = PrismaManager._get_prisma_dir()
@@ -899,12 +902,12 @@ class PrismaManager:
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True
             except subprocess.TimeoutExpired:
-                verbose_proxy_logger.warning(f"Attempt {attempt + 1} timed out")
+                verbose_proxy_logger.warning("Attempt %s timed out", attempt + 1)
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt
                 retry_msg = f" Retrying... ({attempts_left} attempts left)" if attempts_left > 0 else ""
-                verbose_proxy_logger.warning(f"The process failed to execute. Details: {e}.{retry_msg}")
+                verbose_proxy_logger.warning("The process failed to execute. Details: %s.%s", e, retry_msg)
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)

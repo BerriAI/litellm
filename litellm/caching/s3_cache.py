@@ -104,12 +104,12 @@ class S3Cache(BaseCache):
         Compatible with Python 3.8+.
         """
         try:
-            verbose_logger.debug(f"Set ASYNC S3 Cache: Key={key}. Value={value}")
+            verbose_logger.debug("Set ASYNC S3 Cache: Key=%s. Value=%s", key, value)
             loop = asyncio.get_event_loop()
             func = partial(self.set_cache, key, value, **kwargs)
             await loop.run_in_executor(None, func)
         except Exception as e:
-            verbose_logger.error(f"S3 Caching: async_set_cache() - Got exception from S3: {e}")
+            verbose_logger.error("S3 Caching: async_set_cache() - Got exception from S3: %s", e)
 
     def get_cache(self, key, **kwargs):
         import botocore
@@ -138,17 +138,20 @@ class S3Cache(BaseCache):
             if not isinstance(cached_response, dict):
                 cached_response = dict(cached_response)
             verbose_logger.debug(
-                f"Got S3 Cache: key: {key}, cached_response {cached_response}. Type Response {type(cached_response)}"
+                "Got S3 Cache: key: %s, cached_response %s. Type Response %s",
+                key,
+                cached_response,
+                type(cached_response),
             )
 
             return cached_response
         except botocore.exceptions.ClientError as e:  # type: ignore
             if e.response["Error"]["Code"] == "NoSuchKey":
-                verbose_logger.debug(f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket.")
+                verbose_logger.debug("S3 Cache: The specified key '%s' does not exist in the S3 bucket.", key)
                 return None
 
         except Exception as e:
-            verbose_logger.error(f"S3 Caching: get_cache() - Got exception from S3: {e}")
+            verbose_logger.error("S3 Caching: get_cache() - Got exception from S3: %s", e)
 
     async def async_get_cache(self, key, **kwargs):
         """
@@ -156,13 +159,13 @@ class S3Cache(BaseCache):
         Compatible with Python 3.8+.
         """
         try:
-            verbose_logger.debug(f"Get ASYNC S3 Cache: key: {key}")
+            verbose_logger.debug("Get ASYNC S3 Cache: key: %s", key)
             loop = asyncio.get_event_loop()
             func = partial(self.get_cache, key, **kwargs)
             result = await loop.run_in_executor(None, func)
             return result
         except Exception as e:
-            verbose_logger.error(f"S3 Caching: async_get_cache() - Got exception from S3: {e}")
+            verbose_logger.error("S3 Caching: async_get_cache() - Got exception from S3: %s", e)
             return None
 
     def flush_cache(self):

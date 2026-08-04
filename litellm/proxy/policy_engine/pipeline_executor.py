@@ -92,7 +92,12 @@ class PipelineExecutor:
             step_results.append(step_result)
 
             verbose_proxy_logger.debug(
-                f"Pipeline '{policy_name}' step {i}: guardrail={step.guardrail}, outcome={outcome}, action={action}"
+                "Pipeline '%s' step %s: guardrail=%s, outcome=%s, action=%s",
+                policy_name,
+                i,
+                step.guardrail,
+                outcome,
+                action,
             )
 
             # Forward modified data to next step if pass_data is True
@@ -158,7 +163,7 @@ class PipelineExecutor:
         """
         callback = PipelineExecutor.find_guardrail_callback(step.guardrail)
         if callback is None:
-            verbose_proxy_logger.warning(f"Pipeline: guardrail '{step.guardrail}' not found in callbacks")
+            verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
         try:
@@ -205,7 +210,7 @@ class PipelineExecutor:
                 error_msg = _extract_error_message(e)
                 return ("fail", None, error_msg, e)
             else:
-                verbose_proxy_logger.error(f"Pipeline: unexpected error from guardrail '{step.guardrail}': {e}")
+                verbose_proxy_logger.error("Pipeline: unexpected error from guardrail '%s': %s", step.guardrail, e)
                 return ("error", None, str(e), e)
 
     @staticmethod

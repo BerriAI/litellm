@@ -2734,6 +2734,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    conversation_continuing: bool
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2753,6 +2754,7 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "classifier_model",
         "escalated",
         "tier_boundaries",
+        "conversation_continuing",
     }
 )
 
@@ -2989,9 +2991,18 @@ class CachingDetails(TypedDict):
 
 class CostBreakdown(TypedDict, total=False):
     """
-    Detailed cost breakdown for a request
+    Detailed cost breakdown for a request.
+
+    ``service_tier`` and ``data_residency`` record the pricing basis the cost was
+    computed on, not what the caller asked for. A consumer that has to price a
+    counterfactual against this request (what another model would have charged for
+    it) needs the same basis to compare like with like, and re-deriving it from the
+    request is not possible after the fact: the tier the biller used comes from
+    ``optional_params``, which no log record carries.
     """
 
+    service_tier: Optional[str]
+    data_residency: Optional[str]
     input_cost: float  # Cost of raw (non-cached) input tokens only
     cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)

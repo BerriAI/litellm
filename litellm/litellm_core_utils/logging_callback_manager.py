@@ -146,7 +146,7 @@ class LoggingCallbackManager:
         if callback not in parent_list:
             parent_list.append(callback)
         else:
-            verbose_logger.debug(f"Callback {callback} already exists in {parent_list}, not adding again..")
+            verbose_logger.debug("Callback %s already exists in %s, not adding again..", callback, parent_list)
 
     def _check_callback_list_size(self, parent_list: list[CustomLogger | Callable | str]) -> bool:
         """
@@ -155,7 +155,9 @@ class LoggingCallbackManager:
         """
         if len(parent_list) >= MAX_CALLBACKS:
             verbose_logger.warning(
-                f"Cannot add callback - would exceed MAX_CALLBACKS limit of {MAX_CALLBACKS}. Current callbacks: {len(parent_list)}"
+                "Cannot add callback - would exceed MAX_CALLBACKS limit of %s. Current callbacks: %s",
+                MAX_CALLBACKS,
+                len(parent_list),
             )
             return False
         return True
@@ -281,7 +283,7 @@ class LoggingCallbackManager:
             parent_list.append(callback)
         else:
             verbose_logger.debug(
-                f"Callback function {callback.__name__} already exists in {parent_list}, not adding again.."
+                "Callback function %s already exists in %s, not adding again..", callback.__name__, parent_list
             )
 
     def _add_custom_logger_to_list(
@@ -301,7 +303,10 @@ class LoggingCallbackManager:
                 and self._get_custom_logger_key(existing_logger) == custom_logger_key
             ):
                 verbose_logger.debug(
-                    f"Custom logger of type {custom_logger_type_name}, key: {custom_logger_key} already exists in {parent_list}, not adding again.."
+                    "Custom logger of type %s, key: %s already exists in %s, not adding again..",
+                    custom_logger_type_name,
+                    custom_logger_key,
+                    parent_list,
                 )
                 return
         parent_list.append(custom_logger)

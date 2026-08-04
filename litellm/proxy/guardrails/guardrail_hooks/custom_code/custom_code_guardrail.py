@@ -176,7 +176,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
             try:
                 self._do_compile()
-                verbose_proxy_logger.debug(f"Custom code guardrail '{self.guardrail_name}' compiled successfully")
+                verbose_proxy_logger.debug("Custom code guardrail '%s' compiled successfully", self.guardrail_name)
 
             except SyntaxError as e:
                 self._compile_error = f"Syntax error in custom code: {e}"
@@ -254,7 +254,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             # Pre-call block uses passthrough; must not wrap as execution error (500)
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Custom code guardrail '{self.guardrail_name}' execution error: {e}")
+            verbose_proxy_logger.error("Custom code guardrail '%s' execution error: %s", self.guardrail_name, e)
             raise CustomCodeExecutionError(
                 f"Custom code guardrail execution failed: {e}",
                 details={
@@ -308,15 +308,16 @@ class CustomCodeGuardrail(CustomGuardrail):
         """
         if not isinstance(result, dict):
             verbose_proxy_logger.warning(
-                f"Custom code guardrail '{self.guardrail_name}': "
-                f"Expected dict result, got {type(result).__name__}. Treating as allow."
+                "Custom code guardrail '%s': Expected dict result, got %s. Treating as allow.",
+                self.guardrail_name,
+                type(result).__name__,
             )
             return inputs
 
         action = result.get("action", "allow")
 
         if action == "allow":
-            verbose_proxy_logger.debug(f"Custom code guardrail '{self.guardrail_name}': Allowing {input_type}")
+            verbose_proxy_logger.debug("Custom code guardrail '%s': Allowing %s", self.guardrail_name, input_type)
             return inputs
 
         elif action == "block":
@@ -324,7 +325,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             detection_info = result.get("detection_info", {})
 
             verbose_proxy_logger.info(
-                f"Custom code guardrail '{self.guardrail_name}': Blocking {input_type} - {reason}"
+                "Custom code guardrail '%s': Blocking %s - %s", self.guardrail_name, input_type, reason
             )
 
             is_output = input_type == "response"
@@ -348,7 +349,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             )
 
         elif action == "modify":
-            verbose_proxy_logger.debug(f"Custom code guardrail '{self.guardrail_name}': Modifying {input_type}")
+            verbose_proxy_logger.debug("Custom code guardrail '%s': Modifying %s", self.guardrail_name, input_type)
 
             # Apply modifications
             modified_inputs = dict(inputs)
@@ -366,7 +367,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
         else:
             verbose_proxy_logger.warning(
-                f"Custom code guardrail '{self.guardrail_name}': Unknown action '{action}'. Treating as allow."
+                "Custom code guardrail '%s': Unknown action '%s'. Treating as allow.", self.guardrail_name, action
             )
             return inputs
 
@@ -393,7 +394,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             try:
                 self.custom_code = new_code
                 self._do_compile()
-                verbose_proxy_logger.info(f"Custom code guardrail '{self.guardrail_name}': Code updated successfully")
+                verbose_proxy_logger.info("Custom code guardrail '%s': Code updated successfully", self.guardrail_name)
             except SyntaxError as e:
                 # Rollback on failure
                 self.custom_code = old_code

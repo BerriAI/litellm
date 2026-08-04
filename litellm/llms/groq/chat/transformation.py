@@ -99,7 +99,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_params.append("reasoning_effort")
         except Exception as e:
-            verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
+            verbose_logger.debug("Error checking if model supports reasoning: %s", e)
 
         return base_params
 

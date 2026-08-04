@@ -194,7 +194,7 @@ class LangsmithLogger(CustomBatchLogger):
 
             fields = self._extract_metadata_fields(metadata, credentials)
             verbose_logger.debug(
-                f"Langsmith Logging - project_name: {fields['project_name']}, run_name {fields['run_name']}"
+                "Langsmith Logging - project_name: %s, run_name %s", fields["project_name"], fields["run_name"]
             )
 
             payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
@@ -244,7 +244,7 @@ class LangsmithLogger(CustomBatchLogger):
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    f"Skipping Langsmith logging. Sampling rate={sampling_rate}, random_sample={random_sample}"
+                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.debug(
@@ -267,7 +267,7 @@ class LangsmithLogger(CustomBatchLogger):
                     credentials=credentials,
                 )
             )
-            verbose_logger.debug(f"Langsmith, event added to queue. Will flush in {self.flush_interval} seconds...")
+            verbose_logger.debug("Langsmith, event added to queue. Will flush in %s seconds...", self.flush_interval)
 
             if len(self.log_queue) >= self.batch_size:
                 self._send_batch()
@@ -282,7 +282,7 @@ class LangsmithLogger(CustomBatchLogger):
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    f"Skipping Langsmith logging. Sampling rate={sampling_rate}, random_sample={random_sample}"
+                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.debug(
@@ -321,7 +321,7 @@ class LangsmithLogger(CustomBatchLogger):
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    f"Skipping Langsmith logging. Sampling rate={sampling_rate}, random_sample={random_sample}"
+                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.info("Langsmith Failure Event Logging!")
@@ -422,16 +422,16 @@ class LangsmithLogger(CustomBatchLogger):
             response.raise_for_status()
 
             if response.status_code >= 300:
-                verbose_logger.error(f"Langsmith Error: {response.status_code} - {response.text}")
+                verbose_logger.error("Langsmith Error: %s - %s", response.status_code, response.text)
             else:
                 if self.is_mock_mode:
-                    verbose_logger.debug(f"[LANGSMITH MOCK] Batch of {len(elements_to_log)} runs successfully mocked")
+                    verbose_logger.debug("[LANGSMITH MOCK] Batch of %s runs successfully mocked", len(elements_to_log))
                 else:
-                    verbose_logger.debug(f"Batch of {len(self.log_queue)} runs successfully created")
+                    verbose_logger.debug("Batch of %s runs successfully created", len(self.log_queue))
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(f"Langsmith HTTP Error: {e.response.status_code} - {e.response.text}")
+            verbose_logger.exception("Langsmith HTTP Error: %s - %s", e.response.status_code, e.response.text)
         except Exception:
-            verbose_logger.exception(f"Langsmith Layer Error - {traceback.format_exc()}")
+            verbose_logger.exception("Langsmith Layer Error - %s", traceback.format_exc())
 
     def _group_batches_by_credentials(self) -> dict[CredentialsKey, BatchGroup]:
         """Groups queue objects by credentials using a proper key structure"""

@@ -48,6 +48,7 @@ def _attach_litellm_config(mock_prisma):
 
 def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
     """Admin can trigger a manual reload; handler returns model count + status."""
+    from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -56,8 +57,8 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 
     fake_cost_map = {"gpt-4": {"input_cost": 0.03}, "gpt-3.5": {"input_cost": 0.002}}
     monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map",
-        lambda url=None: fake_cost_map,
+        "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+        AsyncMock(return_value=ModelCostMapReloaded(model_cost_map=fake_cost_map)),
     )
     monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
     monkeypatch.setattr("litellm.model_cost", {}, raising=False)
@@ -83,6 +84,46 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
         "timestamp": "<VOLATILE>",
     }
     assert table.upsert.await_count == 1
+
+
+def test_reload_model_cost_map_fetch_failure_502_keeps_map(
+    client, auth_as, monkeypatch, mock_prisma
+):
+    """Fetch failure returns 502 with the reason; the pod's map and DB flag are untouched.
+
+    Regression: the endpoint used to report success after silently swapping in
+    the stale packaged backup.
+    """
+    from litellm.litellm_core_utils.get_model_cost_map import (
+        ModelCostMapReloadUnavailable,
+    )
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _attach_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    sentinel_map = {"existing-model": {"input_cost": 0.01}}
+    monkeypatch.setattr("litellm.model_cost", sentinel_map, raising=False)
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+        AsyncMock(
+            return_value=ModelCostMapReloadUnavailable(
+                reason="HTTP 429 from upstream (after 3 attempts)"
+            )
+        ),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post("/reload/model_cost_map")
+    assert response.status_code == 502
+    detail = response.json().get("detail", "")
+    assert "HTTP 429 from upstream" in detail
+    assert "Current pricing data was kept" in detail
+    import litellm as litellm_module
+
+    assert litellm_module.model_cost is sentinel_map
+    assert table.upsert.await_count == 0
 
 
 def test_reload_model_cost_map_not_admin_forbidden(client, auth_as):
