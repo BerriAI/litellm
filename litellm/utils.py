@@ -6149,6 +6149,16 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("MOONSHOT_API_KEY")
+        elif custom_llm_provider == "galadriel":
+            if "GALADRIEL_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("GALADRIEL_API_KEY")
+        elif custom_llm_provider == "bytez":
+            if "BYTEZ_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BYTEZ_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
