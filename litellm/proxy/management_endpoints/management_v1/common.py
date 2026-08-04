@@ -3,7 +3,7 @@
 from urllib.parse import urlencode
 
 from fastapi import Request
-from fastapi.dependencies.utils import get_flat_dependant
+from fastapi.dependencies.models import Dependant
 from fastapi.responses import JSONResponse
 
 from litellm.types.proxy.management_endpoints.management_v1 import (
@@ -36,12 +36,21 @@ def problem_response(problem: ProblemDetail) -> JSONResponse:
     )
 
 
+def _flat_query_param_aliases(dependant: Dependant) -> frozenset[str]:
+    frontier: tuple[Dependant, ...] = (dependant,)
+    aliases: frozenset[str] = frozenset()
+    while frontier:
+        aliases |= frozenset(field.alias for level in frontier for field in level.query_params)
+        frontier = tuple(sub for level in frontier for sub in level.dependencies)
+    return aliases
+
+
 def _declared_query_params(request: Request) -> frozenset[str]:
     route = request.scope.get("route")
     dependant = getattr(route, "dependant", None)
-    if dependant is None:
+    if not isinstance(dependant, Dependant):
         return frozenset()
-    return frozenset(field.alias for field in get_flat_dependant(dependant, skip_repeats=True).query_params)
+    return _flat_query_param_aliases(dependant)
 
 
 def escape_like(value: str) -> str:
