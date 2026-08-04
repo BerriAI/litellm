@@ -4265,6 +4265,50 @@ async def _project_soft_budget_check(
             )
 
 
+def project_cache_key(project_id: str) -> str:
+    """Cache key auth resolves projects through."""
+    return f"project_id:{project_id}"
+
+
+async def _cache_project_object(
+    project_obj: LiteLLM_ProjectTableCachedObj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    project_obj.last_refreshed_at = time.time()
+    await _cache_management_object(
+        key=project_cache_key(project_obj.project_id),
+        value=project_obj,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        model_type=LiteLLM_ProjectTableCachedObj,
+    )
+
+
+async def refresh_cached_project(
+    project_row: BaseModel,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None = None,
+) -> None:
+    """
+    Refresh the cached project object after a DB write.
+
+    Every endpoint that mutates `litellm_projecttable` must call this so the
+    cached `LiteLLM_ProjectTableCachedObj` that `_run_project_checks` reads stays
+    in sync. Without it, auth keeps enforcing the previous `blocked`, `models`
+    and budget values until the entry expires.
+
+    `project_row` is the Prisma row returned by `update`/`find_unique` on
+    `litellm_projecttable`; include `litellm_budget_table` on that query so the
+    refreshed entry carries the same relation `get_project_object` caches.
+    """
+    await _cache_project_object(
+        project_obj=LiteLLM_ProjectTableCachedObj.model_validate(project_row.model_dump()),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
 async def get_project_object(
     project_id: str,
     prisma_client: PrismaClient | None,
@@ -4282,9 +4326,8 @@ async def get_project_object(
         return None
 
     # Check cache first
-    cache_key = f"project_id:{project_id}"
     deserialized_project = await user_api_key_cache.async_get_cache(
-        key=cache_key,
+        key=project_cache_key(project_id),
         model_type=LiteLLM_ProjectTableCachedObj,
     )
     if deserialized_project is not None:
@@ -4298,16 +4341,12 @@ async def get_project_object(
     if project_row is None:
         return None
 
-    project_obj = LiteLLM_ProjectTableCachedObj.model_validate(project_row.model_dump())
-
     # Cache with TTL following _cache_management_object pattern
-    project_obj.last_refreshed_at = time.time()
-    await _cache_management_object(
-        key=cache_key,
-        value=project_obj,
+    project_obj = LiteLLM_ProjectTableCachedObj.model_validate(project_row.model_dump())
+    await _cache_project_object(
+        project_obj=project_obj,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
-        model_type=LiteLLM_ProjectTableCachedObj,
     )
 
     return project_obj
