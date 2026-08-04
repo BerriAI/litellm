@@ -5,7 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import datetime
 from itertools import groupby
 from typing import Any, cast
@@ -23,7 +23,9 @@ from fastapi import (
     WebSocket,
     status,
 )
+from fastapi.params import Depends as ParamsDepends
 from fastapi.responses import StreamingResponse
+from starlette.datastructures import State
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
@@ -57,6 +59,7 @@ from litellm.proxy._types import (
     LiteLLMRoutes,
     PassThroughEndpointResponse,
     PassThroughGenericEndpoint,
+    PassThroughGuardrailsConfig,
     ProxyException,
     UserAPIKeyAuth,
 )
@@ -848,7 +851,7 @@ async def pass_through_request(
         # parsed dict (hooks mutate it, breaking the signature / Content-Length).
         # Tolerate request objects without `state` (test fixtures) and only honor
         # values httpx accepts for `content=`.
-        _request_state = getattr(request, "state", None)
+        _request_state: State | None = getattr(request, "state", None)
         state_raw_body: str | bytes | None = (
             getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
             if _request_state is not None
@@ -1643,7 +1646,7 @@ async def _parse_request_data_by_content_type(
 def create_pass_through_route(
     endpoint,
     target: str,
-    custom_headers: Mapping[str, Any] | None = None,
+    custom_headers: Mapping[str, str] | None = None,
     _forward_headers: bool | None = False,
     _merge_query_params: bool | None = False,
     dependencies: list | None = None,
@@ -1653,7 +1656,7 @@ def create_pass_through_route(
     is_streaming_request: bool | None = False,
     query_params: dict | None = None,
     default_query_params: dict | None = None,
-    guardrails: dict[str, Any] | None = None,
+    guardrails: PassThroughGuardrailsConfig | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
 ):
@@ -2272,7 +2275,7 @@ async def websocket_passthrough_request(
 
 
 def _is_streaming_response(response: httpx.Response) -> bool:
-    _content_type = response.headers.get("content-type")
+    _content_type: str | None = response.headers.get("content-type")
     if _content_type is not None and "text/event-stream" in _content_type:
         return True
     return False
@@ -2290,7 +2293,8 @@ def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
     """
     if response.status_code >= 400:
         return True
-    media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+    content_type: str = response.headers.get("content-type", "")
+    media_type = content_type.split(";")[0].strip().lower()
     return media_type in ("", "application/json") or media_type.endswith("+json")
 
 
@@ -2408,9 +2412,9 @@ class SafeRouteAdder:
     def add_api_route_if_not_exists(
         app: FastAPI,
         path: str,
-        endpoint: Any,
+        endpoint: Callable[..., object],
         methods: list[str],
-        dependencies: list | None = None,
+        dependencies: list[ParamsDepends] | None = None,
     ) -> bool:
         """
         Add an API route to the app only if it doesn't already exist.
@@ -2925,12 +2929,12 @@ def _get_pass_through_endpoints_from_config() -> list[PassThroughGenericEndpoint
             if isinstance(endpoint, dict):
                 endpoint_dict = dict(endpoint)
                 endpoint_dict["is_from_config"] = True
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+                returned_endpoints.append(PassThroughGenericEndpoint.model_validate(endpoint_dict))
             elif isinstance(endpoint, PassThroughGenericEndpoint):
                 # Create a copy with is_from_config=True
                 endpoint_dict = endpoint.model_dump()
                 endpoint_dict["is_from_config"] = True
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+                returned_endpoints.append(PassThroughGenericEndpoint.model_validate(endpoint_dict))
         except ValidationError as e:
             verbose_proxy_logger.warning(
                 "Skipping malformed pass-through endpoint from config: %s",
@@ -2968,11 +2972,11 @@ async def _get_pass_through_endpoints_from_db(
             if isinstance(endpoint, dict):
                 endpoint_dict = dict(endpoint)
                 endpoint_dict["is_from_config"] = False
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+                returned_endpoints.append(PassThroughGenericEndpoint.model_validate(endpoint_dict))
             elif isinstance(endpoint, PassThroughGenericEndpoint):
                 endpoint_dict = endpoint.model_dump()
                 endpoint_dict["is_from_config"] = False
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+                returned_endpoints.append(PassThroughGenericEndpoint.model_validate(endpoint_dict))
     else:
         # Find specific endpoint by ID
         found_endpoint = _find_endpoint_by_id(pass_through_endpoint_data, endpoint_id)
@@ -2983,7 +2987,7 @@ async def _get_pass_through_endpoints_from_db(
                 else dict(found_endpoint)
             )
             endpoint_dict["is_from_config"] = False
-            returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+            returned_endpoints.append(PassThroughGenericEndpoint.model_validate(endpoint_dict))
 
     return returned_endpoints
 
@@ -3134,7 +3138,7 @@ async def update_pass_through_endpoints(
     # Find the index for updating the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -3165,7 +3169,7 @@ async def update_pass_through_endpoints(
     endpoint_dict.pop("is_from_config", None)
 
     # Create updated endpoint object
-    updated_endpoint = PassThroughGenericEndpoint(**endpoint_dict)
+    updated_endpoint = PassThroughGenericEndpoint.model_validate(endpoint_dict)
 
     # Update the list
     pass_through_endpoint_data[endpoint_index] = endpoint_dict
@@ -3271,7 +3275,7 @@ async def create_pass_through_endpoints(
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
 
     # Return the created endpoint with the generated ID
-    created_endpoint = PassThroughGenericEndpoint(**data_dict)
+    created_endpoint = PassThroughGenericEndpoint.model_validate(data_dict)
 
     # Register the new route
     _custom_headers: dict | None = created_endpoint.headers or {}
@@ -3363,7 +3367,7 @@ async def delete_pass_through_endpoints(
     # Find the index for deleting from the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -3409,7 +3413,7 @@ def _find_endpoint_by_id(
     for endpoint in endpoints_data:
         _endpoint: PassThroughGenericEndpoint | None = None
         if isinstance(endpoint, dict):
-            _endpoint = PassThroughGenericEndpoint(**endpoint)
+            _endpoint = PassThroughGenericEndpoint.model_validate(endpoint)
         elif isinstance(endpoint, PassThroughGenericEndpoint):
             _endpoint = endpoint
 

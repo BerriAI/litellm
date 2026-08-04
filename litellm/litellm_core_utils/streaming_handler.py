@@ -11,13 +11,14 @@ from dataclasses import dataclass
 from typing import (
     Any,
     NoReturn,
-    Union,
+    TypedDict,
     cast,
 )
 
 import anyio
 import httpx
 from pydantic import BaseModel
+from typing_extensions import NotRequired
 
 import litellm
 from litellm import verbose_logger
@@ -98,10 +99,23 @@ class _ProviderChunkParsed:
 
 @dataclass(frozen=True, slots=True)
 class _ProviderChunkEarlyReturn:
-    value: Any
+    value: ModelResponseStream | None
 
 
-_ProviderChunkResult = Union[_ProviderChunkParsed, _ProviderChunkEarlyReturn]
+_ProviderChunkResult = _ProviderChunkParsed | _ProviderChunkEarlyReturn
+
+
+class _AzureChunkDelta(TypedDict, total=False):
+    content: str
+
+
+class _AzureChunkChoice(TypedDict):
+    delta: _AzureChunkDelta | None
+    finish_reason: NotRequired[str]
+
+
+class _AzureChunkPayload(TypedDict):
+    choices: list[_AzureChunkChoice]
 
 
 class CustomStreamWrapper:
@@ -109,7 +123,7 @@ class CustomStreamWrapper:
         self,
         completion_stream,
         model,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObject,
         custom_llm_provider: str | None = None,
         stream_options=None,
         make_call: Callable | None = None,
@@ -124,9 +138,8 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
 
-        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams.model_validate(
-            dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
-        )
+        _litellm_params_raw: dict[str, object] = self.logging_obj.model_call_details.get("litellm_params", {})
+        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams.model_validate(dict(**_litellm_params_raw))
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
@@ -151,7 +164,7 @@ class CustomStreamWrapper:
 
         _api_base = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
+            optional_params=_litellm_params_raw,
         )
 
         self._hidden_params = {
@@ -462,14 +475,16 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         elif chunk.startswith("data:"):
-            data_json = json.loads(chunk[5:])  # chunk.startswith("data:"):
+            data_json: _AzureChunkPayload = json.loads(chunk[5:])  # chunk.startswith("data:"):
             try:
                 if len(data_json["choices"]) > 0:
-                    delta = data_json["choices"][0]["delta"]
+                    choice = data_json["choices"][0]
+                    delta = choice["delta"]
                     text = "" if delta is None else delta.get("content", "")
-                    if data_json["choices"][0].get("finish_reason", None):
+                    _choice_finish_reason = choice.get("finish_reason", None)
+                    if _choice_finish_reason:
                         is_finished = True
-                        finish_reason = data_json["choices"][0]["finish_reason"]
+                        finish_reason = _choice_finish_reason
                 print_verbose(f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}")
                 return {
                     "text": text,
@@ -1656,7 +1671,7 @@ class CustomStreamWrapper:
         else:
             asyncio.run(self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit))
         ## SYNC LOGGING — only for sync SDK entrypoints; async proxy paths export via async_success_handler
-        litellm_params = self.logging_obj.model_call_details.get("litellm_params", {})
+        litellm_params: dict[str, object] = self.logging_obj.model_call_details.get("litellm_params", {})
         if self.logging_obj._is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 

@@ -271,7 +271,7 @@ def _select_model_by_priority(
 
 
 def _convert_mcp_content_to_openai(
-    content: "SamplingMessageContentBlock | Sequence[SamplingMessageContentBlock]",
+    content: "SamplingMessageContentBlock | list[SamplingMessageContentBlock]",
 ) -> "str | dict[str, object] | list[dict[str, object]]":
     """
     Convert MCP SamplingMessage content to OpenAI message content format.
@@ -296,7 +296,7 @@ def _convert_mcp_content_to_openai(
 
 
 def _convert_single_content(
-    content: Any,
+    content: "SamplingMessageContentBlock",
 ) -> "dict[str, object] | list[dict[str, object]]":
     """Convert a single MCP content item to OpenAI format.
 
@@ -308,19 +308,14 @@ def _convert_single_content(
     """
     import json
 
-    content_type = getattr(content, "type", None)
-    if content_type == "text":
+    if content.type == "text":
         return {"type": "text", "text": content.text}
-    elif content_type == "image":
-        data = getattr(content, "data", "")
-        mime_type = getattr(content, "mimeType", "image/png")
+    elif content.type == "image":
         return {
             "type": "image_url",
-            "image_url": {"url": f"data:{mime_type};base64,{data}"},
+            "image_url": {"url": f"data:{content.mimeType};base64,{content.data}"},
         }
-    elif content_type == "audio":
-        data = getattr(content, "data", "")
-        mime_type = getattr(content, "mimeType", "audio/wav")
+    elif content.type == "audio":
         # Map MIME type to OpenAI audio format
         format_map = {
             "audio/wav": "wav",
@@ -329,36 +324,33 @@ def _convert_single_content(
             "audio/flac": "flac",
             "audio/ogg": "ogg",
         }
-        audio_format = format_map.get(mime_type, "wav")
+        audio_format = format_map.get(content.mimeType, "wav")
         return {
             "type": "input_audio",
-            "input_audio": {"data": data, "format": audio_format},
+            "input_audio": {"data": content.data, "format": audio_format},
         }
-    elif content_type == "tool_use":
+    elif content.type == "tool_use":
         # ToolUseContent → proper OpenAI function-call representation.
         # The ``_marker_type`` key lets the message-level converter
         # hoist this into the ``tool_calls`` array on the assistant
         # message instead of embedding it inline as a content part.
         return {
             "_marker_type": "tool_use",
-            "id": getattr(content, "id", f"call_{id(content)}"),
+            "id": content.id,
             "type": "function",
             "function": {
-                "name": getattr(content, "name", ""),
-                "arguments": json.dumps(getattr(content, "input", {}), default=str),
+                "name": content.name,
+                "arguments": json.dumps(content.input, default=str),
             },
         }
-    elif content_type == "tool_result":
+    elif content.type == "tool_result":
         # ToolResultContent → proper OpenAI tool-role message.
         # Marked so the message-level converter can emit it as a
         # separate ``{"role": "tool", ...}`` message.
-        tool_use_id = getattr(content, "toolUseId", "")
-        nested_content: Sequence[ContentBlock] = getattr(content, "content", [])
-        if isinstance(nested_content, list):
-            text_parts = [getattr(c, "text", str(c)) for c in nested_content if getattr(c, "type", None) == "text"]
-            result_text = "\n".join(text_parts) if text_parts else ""
-        else:
-            result_text = str(nested_content)
+        tool_use_id = content.toolUseId
+        nested_content: Sequence[ContentBlock] = content.content
+        text_parts = [getattr(c, "text", str(c)) for c in nested_content if getattr(c, "type", None) == "text"]
+        result_text = "\n".join(text_parts) if text_parts else ""
         return {
             "_marker_type": "tool_result",
             "role": "tool",
@@ -581,12 +573,28 @@ def _convert_mcp_tool_choice_to_openai(
     return "auto"
 
 
+class _SamplingToolCallFunction(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def arguments(self) -> str: ...
+
+
+class _SamplingToolCall(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def function(self) -> _SamplingToolCallFunction: ...
+
+
 class _SamplingResponseMessage(Protocol):
     @property
     def content(self) -> str | None: ...
 
     @property
-    def tool_calls(self) -> Sequence[object] | None: ...
+    def tool_calls(self) -> Sequence[_SamplingToolCall] | None: ...
 
 
 class _SamplingResponseChoice(Protocol):
@@ -641,7 +649,7 @@ def _convert_openai_response_to_mcp_result(
         stop_reason = "endTurn"
     actual_model: str = getattr(response, "model", model_name) or model_name
     # Check if response has tool calls
-    tool_calls = getattr(message, "tool_calls", None)
+    tool_calls = message.tool_calls
     if tool_calls:
         # Build ToolUseContent items
         content_parts: list[SamplingMessageContentBlock] = []
@@ -652,12 +660,11 @@ def _convert_openai_response_to_mcp_result(
         for tc in tool_calls:
             import json
 
-            tool_input = tc.function.arguments
-            if isinstance(tool_input, str):
-                try:
-                    tool_input = json.loads(tool_input)
-                except (json.JSONDecodeError, TypeError):
-                    tool_input = {"raw": tool_input}
+            tool_input: dict[str, object]
+            try:
+                tool_input = json.loads(tc.function.arguments)
+            except (json.JSONDecodeError, TypeError):
+                tool_input = {"raw": tc.function.arguments}
             content_parts.append(
                 ToolUseContent(
                     type="tool_use",
