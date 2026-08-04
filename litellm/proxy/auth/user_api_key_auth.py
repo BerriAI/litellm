@@ -1009,6 +1009,51 @@ async def _resolve_jwt_to_virtual_key(
     return None
 
 
+async def _hoist_request_destinations(request: Request, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Resolve admin-owned OTEL destinations for this request and anchor them.
+
+    Runs after the auth builder, while we are still inside the request task, so
+    the ``ContextVar`` is visible to every ``SpanProcessor.on_end`` that fires
+    for spans this request opens. Stashes the same list on ``request.state`` so
+    ``_apply_admin_logging_exporters`` can reuse it without a second DB pass.
+
+    Best-effort: a resolver failure must not break the request. The contextvar
+    is left at its default (empty tuple), so the fan-out processor no-ops. Idempotent:
+    it fires early in the builder and again as an outer catch-all; the second call
+    skips once ``request.state`` holds the result (a failed first call leaves it unset).
+    """
+    if getattr(getattr(request, "state", None), "otel_destinations", None) is not None:
+        return
+    try:
+        from litellm.integrations.otel.model.destination import OtelDestination
+        from litellm.integrations.otel.plumbing.context import (
+            set_request_destinations,
+        )
+        from litellm.proxy.litellm_pre_call_utils import (
+            _resolve_logging_exporters,
+        )
+
+        destinations_raw, _backends = await _resolve_logging_exporters(user_api_key_dict)
+        destinations = tuple(
+            OtelDestination(
+                callback_name=item.get("callback_name"),
+                endpoint=item.get("endpoint", ""),
+                headers=item.get("headers") or {},
+                resource_attributes=item.get("resource_attributes") or {},
+                protocol=item.get("protocol"),
+            )
+            for item in destinations_raw
+            if isinstance(item, dict) and item.get("endpoint")
+        )
+        set_request_destinations(destinations)
+        try:
+            request.state.otel_destinations = destinations_raw
+        except Exception:  # noqa: BLE001  # request.state mirror is best-effort; the ContextVar is the source of truth
+            pass
+    except Exception as exc:  # noqa: BLE001  # destination hoist is best-effort telemetry setup; it must never fail auth
+        verbose_proxy_logger.debug("OTel V2: hoist destination resolution failed: %s", exc)
+
+
 def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
     """Idempotently create the OTEL SERVER span and stash it on
     ``request.state.parent_otel_span``. Safe to call multiple times.
@@ -1405,6 +1450,8 @@ async def _user_api_key_auth_builder(
                             valid_token = auto_registered
                             api_key = valid_token.token or ""
 
+                    await _hoist_request_destinations(request, valid_token)
+
                     # Check if model has zero cost - if so, skip all budget checks
                     model = _get_model_from_request_context(
                         request_data=request_data,
@@ -1742,6 +1789,8 @@ async def _user_api_key_auth_builder(
         user_obj: LiteLLM_UserTable | None = None
         valid_token_dict: dict = {}
         if valid_token is not None:
+            valid_token.parent_otel_span = parent_otel_span
+            await _hoist_request_destinations(request, valid_token)
             # Got Valid Token from Cache, DB
             # Run checks for
             # 1. If token can call model
@@ -2645,6 +2694,8 @@ async def user_api_key_auth(
                 raise body_parse_exception
             raise
         user_api_key_auth_obj.budget_reservation = None
+
+        await _hoist_request_destinations(request, user_api_key_auth_obj)
 
         # A body that never parsed is authenticated (so the trace carries identity
         # and this ``auth`` span) but not authorized: there is no model to check it
