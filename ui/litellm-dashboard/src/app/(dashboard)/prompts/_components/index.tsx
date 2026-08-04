@@ -47,7 +47,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
 
-  const isAdmin = userRole ? isAdminRole(userRole) : false;
+  userRole ? isAdminRole(userRole) : false;
   // Admin Viewer follows the read-parity rule: see prompts, no writes.
   const canModify = userRole ? isProxyAdminRole(userRole) : false;
 
