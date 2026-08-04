@@ -181,6 +181,56 @@ class TestGithubCopilotResponsesAPITransformation:
         initiator = config._get_initiator("Hello, how are you?")
         assert initiator == "user", "Should return 'user' for string input"
 
+    def test_get_initiator_ignores_non_dict_items(self):
+        """Test _get_initiator skips non-dict items and returns 'user' for user-only input"""
+        config = GithubCopilotResponsesAPIConfig()
+
+        input_with_non_dict = [
+            {"role": "user", "content": "Hello"},
+            "raw string item",  # non-dict item should be skipped, not crash
+        ]
+
+        initiator = config._get_initiator(input_with_non_dict)
+        assert initiator == "user", "Should skip non-dict items and return 'user'"
+
+    @pytest.mark.parametrize(
+        "prior_item",
+        [
+            {"role": "assistant", "content": "Hi"},
+            {"role": "tool", "content": "result"},
+            {"type": "function_call", "call_id": "call_1"},
+            {"type": "reasoning", "summary": []},
+            {"type": "message", "content": []},
+        ],
+    )
+    def test_transform_request_sets_agent_initiator_for_prior_agent_items(self, prior_item):
+        config = GithubCopilotResponsesAPIConfig()
+        headers = {}
+        body = config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=[{"role": "user", "content": "Hello"}, prior_item],
+            response_api_optional_request_params={"stream": False},
+            litellm_params=MagicMock(),
+            headers=headers,
+        )
+        assert headers["X-Initiator"] == "agent"
+        assert body["model"] == "gpt-5.1-codex"
+        assert body["input"][1] == prior_item
+        assert body["stream"] is False
+
+    def test_transform_request_sets_user_initiator_for_user_input(self):
+        config = GithubCopilotResponsesAPIConfig()
+        headers = {}
+        body = config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=[{"role": "user", "content": "Hello"}],
+            response_api_optional_request_params={},
+            litellm_params=MagicMock(),
+            headers=headers,
+        )
+        assert headers["X-Initiator"] == "user"
+        assert body["input"] == [{"role": "user", "content": "Hello"}]
+
     def test_has_vision_input_with_input_image(self):
         """Test _has_vision_input detects input_image type"""
         config = GithubCopilotResponsesAPIConfig()

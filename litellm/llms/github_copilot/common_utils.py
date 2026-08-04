@@ -16,6 +16,27 @@ API_VERSION = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
 
 
+def get_copilot_initiator(input_param: object) -> str:
+    """Classify a Copilot request as user- or agent-initiated.
+
+    Responses API history contains assistant/tool/function-call/reasoning items
+    as well as role-less items. Any such prior item means the request continues
+    an agent turn; a string or user-only input is a new user turn.
+    """
+    if isinstance(input_param, str):
+        return "user"
+    if isinstance(input_param, list):
+        for item in input_param:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            if not role or (isinstance(role, str) and role.lower() in {"assistant", "tool"}):
+                return "agent"
+            if item.get("type") in {"function_call", "function_call_output", "reasoning"}:
+                return "agent"
+    return "user"
+
+
 class GithubCopilotError(BaseLLMException):
     def __init__(
         self,
