@@ -1462,11 +1462,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
                         continue
-                    if not is_thinking_enabled:
-                        _tool_choice = {
-                            "name": RESPONSE_FORMAT_TOOL_NAME,
-                            "type": "tool",
-                        }
+                    has_caller_tools = bool(non_default_params.get("tools"))
+                    if not is_thinking_enabled and "tool_choice" not in optional_params:
+                        if has_caller_tools:
+                            _tool_choice = {"type": "any"}
+                        else:
+                            _tool_choice = {
+                                "name": RESPONSE_FORMAT_TOOL_NAME,
+                                "type": "tool",
+                            }
                         optional_params["tool_choice"] = _tool_choice
 
                     optional_params = self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
@@ -1823,6 +1827,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
+        if (
+            optional_params.get("json_mode") is True
+            and optional_params.get("thinking") is None
+            and self._last_tool_result_is_response_format_tool(messages)
+        ):
+            optional_params["tool_choice"] = {
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "type": "tool",
+            }
+
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
             optional_params=optional_params,
@@ -1951,6 +1965,62 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
 
         return data
+
+    @staticmethod
+    def _last_tool_result_is_response_format_tool(
+        messages: list[AllMessageValues],
+    ) -> bool:
+        last_regular_user_index = -1
+        last_tool_result_index = -1
+        for index, message in enumerate(messages or []):
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content") or []
+            has_tool_result = message.get("role") == "tool" or any(
+                isinstance(block, dict) and block.get("type") == "tool_result"
+                for block in content
+            )
+            if has_tool_result:
+                last_tool_result_index = index
+            elif message.get("role") == "user":
+                last_regular_user_index = index
+
+        if last_tool_result_index <= last_regular_user_index:
+            return False
+
+        tool_names_by_id: dict[str, str] = {}
+        for message in messages[last_regular_user_index + 1 : last_tool_result_index + 1]:
+            if not isinstance(message, dict):
+                continue
+            for tool_call in message.get("tool_calls") or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function") or {}
+                tool_id = tool_call.get("id")
+                tool_name = function.get("name")
+                if tool_id and tool_name:
+                    tool_names_by_id[tool_id] = tool_name
+            for block in message.get("content") or []:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                tool_id = block.get("id")
+                tool_name = block.get("name")
+                if tool_id and tool_name:
+                    tool_names_by_id[tool_id] = tool_name
+
+        last_result_name = None
+        result_message = messages[last_tool_result_index]
+        if isinstance(result_message, dict):
+            if result_message.get("role") == "tool":
+                last_result_name = tool_names_by_id.get(result_message.get("tool_call_id"))
+            for block in result_message.get("content") or []:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                last_result_name = block.get("name") or tool_names_by_id.get(
+                    block.get("tool_use_id")
+                )
+
+        return last_result_name == RESPONSE_FORMAT_TOOL_NAME
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data."""

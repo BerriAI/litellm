@@ -545,8 +545,7 @@ class ModelResponseIterator:
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
 
-        # Track if we're currently streaming a response_format tool
-        self.is_response_format_tool: bool = False
+        self._is_response_format_tool_by_content_block_index: Dict[int, bool] = {}
         # Track if we've converted any response_format tools (affects finish_reason)
         self.converted_response_format_tool: bool = False
 
@@ -770,6 +769,7 @@ class ModelResponseIterator:
 
             # Always use index=0 for OpenAI choice format (fixes multi-choice errors)
             index = 0
+            content_block_index = int(chunk.get("index", 0))
             if type_chunk == "content_block_delta":
                 """
                 Anthropic content chunk
@@ -816,6 +816,9 @@ class ModelResponseIterator:
                         ),
                         index=self.tool_index,
                     )
+                    self._is_response_format_tool_by_content_block_index[
+                        content_block_index
+                    ] = _stream_tool_name == RESPONSE_FORMAT_TOOL_NAME
                     # Track server tool use inputs for code_interpreter_results.
                     # The initial input in content_block_start is typically {}
                     # for streaming; the full input arrives via input_json_delta
@@ -903,8 +906,6 @@ class ModelResponseIterator:
                             except (json.JSONDecodeError, TypeError):
                                 pass
                         self._current_server_tool_id = None
-                # Reset response_format tool tracking when block stops
-                self.is_response_format_tool = False
                 # Reset current content block type
                 self.current_content_block_type = None
             elif type_chunk == "tool_result":
@@ -956,7 +957,16 @@ class ModelResponseIterator:
                     status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
                 )
 
-            text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
+            text, tool_use = self._handle_json_mode_chunk(
+                text=text,
+                tool_use=tool_use,
+                content_block_index=content_block_index,
+            )
+
+            if type_chunk == "content_block_stop":
+                self._is_response_format_tool_by_content_block_index.pop(
+                    content_block_index, None
+                )
 
             returned_chunk = ModelResponseStream(
                 choices=[
@@ -982,7 +992,10 @@ class ModelResponseIterator:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
     def _handle_json_mode_chunk(
-        self, text: str, tool_use: ChatCompletionToolCallChunk | None
+        self,
+        text: str,
+        tool_use: ChatCompletionToolCallChunk | None,
+        content_block_index: int = 0,
     ) -> tuple[str, ChatCompletionToolCallChunk | None]:
         """
         If JSON mode is enabled, convert the tool call to a message.
@@ -1014,10 +1027,14 @@ class ModelResponseIterator:
             # New tool call from content_block_start - tool name is always complete here
             # (per Anthropic's fine-grained streaming pattern)
             tool_name = tool_use.get("function", {}).get("name", "")
-            self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
+            self._is_response_format_tool_by_content_block_index[
+                content_block_index
+            ] = tool_name == RESPONSE_FORMAT_TOOL_NAME
 
         # Convert tool to content if we're tracking a response_format tool
-        if self.is_response_format_tool:
+        if self._is_response_format_tool_by_content_block_index.get(
+            content_block_index, False
+        ):
             message = AnthropicConfig._convert_tool_response_to_message(tool_calls=[tool_use])
             if message is not None:
                 text = message.content or ""
