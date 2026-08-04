@@ -2898,11 +2898,6 @@ jobs:
           name: Push Prisma schema
           command: uv run --no-sync python -m prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
       - run:
-          name: Seed database
-          command: |
-            PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
-              -f tests/e2e/ui/fixtures/seed.sql
-      - run:
           name: Start mock LLM server
           command: uv run --no-sync python tests/e2e/ui/fixtures/mock_llm_server/server.py
           background: true
@@ -3026,11 +3021,6 @@ jobs:
       - run:
           name: Push Prisma schema
           command: uv run --no-sync python -m prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
-      - run:
-          name: Seed database
-          command: |
-            PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
-              -f tests/e2e/ui/fixtures/seed.sql
       - run:
           name: Start mock LLM server
           command: uv run --no-sync python tests/e2e/ui/fixtures/mock_llm_server/server.py
