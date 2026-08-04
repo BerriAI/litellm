@@ -302,6 +302,7 @@ class UsageMetadata(TypedDict, total=False):
     toolUsePromptTokenCount: int
     toolUsePromptTokensDetails: List[PromptTokensDetails]
     promptTokensDetails: List[PromptTokensDetails]
+    promptTokenDetails: List[PromptTokensDetails]
     cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]

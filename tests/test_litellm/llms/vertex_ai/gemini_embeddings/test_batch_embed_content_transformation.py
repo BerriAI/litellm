@@ -282,6 +282,70 @@ class TestProcessResponse:
         assert len(result.data) == 1
         assert result.usage.prompt_tokens > 0
 
+    def test_batch_image_usage_from_metadata_singular_key(self):
+        """batchEmbedContents returns usageMetadata with the singular
+        `promptTokenDetails` key; image-only input must bill 258 tokens / 1 image
+        instead of the previous prompt_tokens=0."""
+        predictions: VertexAIBatchEmbeddingsResponseObject = {
+            "embeddings": [{"values": [0.1, 0.2]}]
+        }
+        result = process_response(
+            input=[IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            _predictions=predictions,
+            raw_usage_metadata={
+                "promptTokenCount": 258,
+                "promptTokenDetails": [{"modality": "IMAGE", "tokenCount": 258}],
+            },
+        )
+        assert result.usage.prompt_tokens == 258
+        assert result.usage.total_tokens == 258
+        assert result.usage.prompt_tokens_details.image_count == 1
+
+        prompt_cost, _ = generic_cost_per_token(
+            model="gemini-embedding-2",
+            usage=result.usage,
+            custom_llm_provider="gemini",
+        )
+        assert prompt_cost > 0
+
+    def test_batch_mixed_text_image_aggregates_usage_from_metadata(self):
+        """Mixed text + image over batchEmbedContents aggregates the native
+        per-modality usageMetadata rather than counting only the text element."""
+        predictions: VertexAIBatchEmbeddingsResponseObject = {
+            "embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}]
+        }
+        result = process_response(
+            input=["hello", IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            _predictions=predictions,
+            raw_usage_metadata={
+                "promptTokenCount": 259,
+                "promptTokenDetails": [
+                    {"modality": "TEXT", "tokenCount": 1},
+                    {"modality": "IMAGE", "tokenCount": 258},
+                ],
+            },
+        )
+        assert result.usage.prompt_tokens == 259
+        assert result.usage.prompt_tokens_details.image_count == 1
+        assert result.usage.prompt_tokens_details.text_tokens == 1
+
+    def test_batch_without_metadata_falls_back_to_token_counter(self):
+        """No usageMetadata: text-only batch still counts tokens locally."""
+        predictions: VertexAIBatchEmbeddingsResponseObject = {
+            "embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}]
+        }
+        result = process_response(
+            input=["hello", "world"],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            _predictions=predictions,
+        )
+        assert result.usage.prompt_tokens > 0
+
     def test_nested_empty_list_raises(self):
         with pytest.raises(ValueError, match="must not be empty"):
             transform_openai_input_gemini_content(
@@ -332,6 +396,25 @@ class TestProcessEmbedContentResponseUsage:
             custom_llm_provider="vertex_ai",
         )
         assert prompt_cost > 0
+
+    def test_singular_prompt_token_details_key_is_parsed(self):
+        """The live embedContent endpoint returns the singular `promptTokenDetails`
+        key (not `promptTokensDetails`); the per-modality breakdown must still bill."""
+        response_json = {
+            "embedding": {"values": [0.1, 0.2, 0.3]},
+            "usageMetadata": {
+                "promptTokenCount": 64,
+                "promptTokenDetails": [{"modality": "AUDIO", "tokenCount": 64}],
+            },
+        }
+        result = process_embed_content_response(
+            input=["data:audio/mpeg;base64,QUJD"],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+        )
+        assert result.usage.prompt_tokens == 64
+        assert result.usage.prompt_tokens_details.audio_tokens == 64
 
     def test_text_modality_detail_populated(self):
         response_json = {
