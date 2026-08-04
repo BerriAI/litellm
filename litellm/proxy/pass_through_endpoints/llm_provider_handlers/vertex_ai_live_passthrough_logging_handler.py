@@ -6,7 +6,7 @@ Supports different modalities: text, audio, video, and web search.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
@@ -33,7 +33,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     def _build_complete_streaming_response(self, *args, **kwargs):
         """Not applicable for WebSocket passthrough."""
-        return None
+        return
 
     def get_provider_config(self, model: str):
         """Return Vertex AI provider configuration."""
@@ -50,8 +50,8 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     @staticmethod
     def _extract_usage_metadata_from_websocket_messages(
-        websocket_messages: List[Dict],
-    ) -> Optional[Dict]:
+        websocket_messages: list[dict],
+    ) -> dict | None:
         """
         Extract and aggregate usage metadata from a list of WebSocket messages.
 
@@ -76,7 +76,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return all_usage_metadata[0]
 
         # Aggregate multiple usage metadata messages
-        aggregated: Dict[str, Any] = {
+        aggregated: dict[str, Any] = {
             "promptTokenCount": 0,
             "candidatesTokenCount": 0,
             "totalTokenCount": 0,
@@ -130,7 +130,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
     @staticmethod
     def _calculate_live_api_cost(
         model: str,
-        usage_metadata: Dict,
+        usage_metadata: dict,
         custom_llm_provider: str = "vertex_ai",
     ) -> float:
         """
@@ -148,11 +148,11 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Get model pricing information
             model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
-            verbose_proxy_logger.debug(f"Vertex AI Live API model info for '{model}': {model_info}")
+            verbose_proxy_logger.debug("Vertex AI Live API model info for '%s': %s", model, model_info)
 
             # Check if pricing info is available
             if not model_info or not model_info.get("input_cost_per_token"):
-                verbose_proxy_logger.error(f"No pricing info found for {model} in local model pricing database")
+                verbose_proxy_logger.error("No pricing info found for %s in local model pricing database", model)
                 return 0.0
 
             total_cost = 0.0
@@ -221,12 +221,12 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return total_cost
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error calculating Vertex AI Live API cost: {e}")
+            verbose_proxy_logger.error("Error calculating Vertex AI Live API cost: %s", e)
             return 0.0
 
     @staticmethod
     def _create_usage_object_from_metadata(
-        usage_metadata: Dict,
+        usage_metadata: dict,
         model: str,
     ) -> Usage:
         """
@@ -275,7 +275,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     def vertex_ai_live_passthrough_handler(
         self,
-        websocket_messages: List[Dict],
+        websocket_messages: list[dict],
         logging_obj,
         url_route: str,
         start_time: datetime,
@@ -302,7 +302,9 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Extract model from request body or kwargs
             model = kwargs.get("model", "gemini-2.0-flash-live-preview-04-09")
             custom_llm_provider = kwargs.get("custom_llm_provider", "vertex_ai")
-            verbose_proxy_logger.debug(f"Vertex AI Live API model: {model}, custom_llm_provider: {custom_llm_provider}")
+            verbose_proxy_logger.debug(
+                "Vertex AI Live API model: %s, custom_llm_provider: %s", model, custom_llm_provider
+            )
 
             # Extract usage metadata from WebSocket messages
             usage_metadata = self._extract_usage_metadata_from_websocket_messages(websocket_messages)
@@ -360,7 +362,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             }
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in Vertex AI Live API passthrough handler: {e}")
+            verbose_proxy_logger.error("Error in Vertex AI Live API passthrough handler: %s", e)
             return {
                 "result": None,
                 "kwargs": kwargs,

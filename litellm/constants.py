@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import List, Literal, Optional
+from typing import Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
 
@@ -197,6 +197,16 @@ RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
+# The earliest an evicted, litellm-created client may be closed. A request handed the
+# client just before eviction is still using it, so nothing is closed inside this window;
+# past it, the client is closed once it reports no connection in flight.
+EVICTED_LLM_CLIENT_CLOSE_GRACE_SECONDS = 900
+
+# How many evicted clients may be queued for closing at once. Past this, an evicted client
+# is left to the collector rather than letting a cache-churning workload grow the queue
+# without bound. Each queued entry is ~100 bytes and comes due within one grace window.
+EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING = 10_000
+
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
@@ -264,6 +274,9 @@ MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT",
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
 TOOL_POLICY_CACHE_TTL_SECONDS = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECONDS", 60))
+GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS = int(
+    os.getenv("GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS", 24 * 60 * 60)
+)
 # Aggregation threshold: default to 80% of the asyncio queue maxsize so the check can always trigger.
 # Must be < LITELLM_ASYNCIO_QUEUE_MAXSIZE; if set higher the aggregation logic will never fire.
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8)))
@@ -354,6 +367,15 @@ NON_LLM_CONNECTION_TIMEOUT = int(
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
 MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
+# One entry per distinct AWS credential-argument set. Per-user cost attribution passes the attributed
+# identity as aws_session_name, so this bounds how many attributed identities keep a cached STS session.
+BEDROCK_IAM_CACHE_MAX_ENTRIES = 1000
+# Single-flight lock stripes over that cache. Only keys landing on the same stripe wait for each
+# other, so a burst of distinct identities still resolves its credentials in parallel.
+BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES = 64
+# Retire a cached STS credential this many seconds before AWS expires it, so a request that reads it
+# still has a usable credential for the whole call.
+STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS = 60
 BEDROCK_MIN_THINKING_BUDGET_TOKENS = int(os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024))
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024
@@ -393,14 +415,14 @@ DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be
 # replaced with the original base_url. This is a common misconfiguration where
 # developers deploy agents with development URLs in their agent cards.
-LOCALHOST_URL_PATTERNS: List[str] = [
+LOCALHOST_URL_PATTERNS: list[str] = [
     "localhost",
     "127.0.0.1",
     "0.0.0.0",
     "[::1]",  # IPv6 localhost
 ]
 # Patterns in error messages that indicate a connection failure
-CONNECTION_ERROR_PATTERNS: List[str] = [
+CONNECTION_ERROR_PATTERNS: list[str] = [
     "connect",
     "connection",
     "network",
@@ -682,7 +704,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "context_management": None,
 }
 
-openai_compatible_endpoints: List = [
+openai_compatible_endpoints: list = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
@@ -728,7 +750,7 @@ openai_compatible_endpoints: List = [
 ]
 
 
-openai_compatible_providers: List = [
+openai_compatible_providers: list = [
     "anyscale",
     "groq",
     "nvidia_nim",
@@ -793,7 +815,7 @@ openai_compatible_providers: List = [
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
 ]
-openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
+openai_text_completion_compatible_providers: list = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",
     "hosted_vllm",
@@ -816,7 +838,7 @@ openai_text_completion_compatible_providers: List = [  # providers that support 
     "hyperbolic",
     "wandb",
 ]
-_openai_like_providers: List = [
+_openai_like_providers: list = [
     "predibase",
     "databricks",
     "lemonade",
@@ -1142,6 +1164,7 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
+    "anthropic.claude-opus-5",
     "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
@@ -1292,6 +1315,8 @@ MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG",
 X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
+RETURN_RAW_MODEL_NAME_METADATA_KEY = "_complexity_router_return_raw_model_name"
+INTERNAL_CALL_ORIGIN_METADATA_KEY = "internal_call_origin"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
     "Truncation is a DB storage safeguard. "
@@ -1356,7 +1381,7 @@ try:
     _raw_background_health_check_max_tokens = (
         _background_health_check_max_tokens_env.strip() if _background_health_check_max_tokens_env is not None else ""
     )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS: Optional[int] = (
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS: int | None = (
         int(_raw_background_health_check_max_tokens) if _raw_background_health_check_max_tokens else None
     )
 except (ValueError, TypeError):
@@ -1370,7 +1395,7 @@ try:
         if _background_health_check_max_tokens_reasoning_env is not None
         else ""
     )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: Optional[int] = (
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: int | None = (
         int(_raw_background_health_check_max_tokens_reasoning)
         if _raw_background_health_check_max_tokens_reasoning
         else None
@@ -1413,6 +1438,8 @@ LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE = int(
     os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE", 1000)
 )
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
+LITELLM_PROXY_BUDGET_NAME = "litellm-proxy-budget"
+GLOBAL_PROXY_SPEND_CACHE_KEY = f"{LITELLM_PROXY_ADMIN_NAME}:spend"
 
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
@@ -1450,8 +1477,10 @@ SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(os.getenv("SPEND_LOG_CLEA
 SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
     os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
 )
+TOOL_SPEND_TOP_TOOLS = 100
 SPEND_LOG_PARTITION_INTERVAL = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
 SPEND_LOG_PARTITION_PRECREATE_AHEAD = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
+SPEND_LOG_WRITE_BATCH_MAX_BYTES = max(1, int(os.getenv("SPEND_LOG_WRITE_BATCH_MAX_BYTES", 2_000_000)))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = int(os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000))
@@ -1468,6 +1497,7 @@ _batch_polling_env = os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower()
 PROXY_BATCH_POLLING_ENABLED = _batch_polling_env == "true"
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605))
 PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
+PROXY_CONFIG_RELOAD_INTERVAL_SECONDS = get_env_int("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS", 30)
 
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
@@ -1523,6 +1553,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     # test_general_settings_ui_fields_are_db_overridable enforces that pairing.
     "enable_anthropic_prompt_caching",
     "anthropic_prompt_caching_ttl",
+    "max_ui_session_budget",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))

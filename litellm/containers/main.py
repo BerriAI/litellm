@@ -1,8 +1,9 @@
 import asyncio
 import contextvars
 import json
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, overload
+from typing import Any, Literal, overload
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -47,16 +48,16 @@ __all__ = [
 @client
 async def acreate_container(
     name: str,
-    expires_after: Optional[Dict[str, Any]] = None,
-    file_ids: Optional[List[str]] = None,
+    expires_after: dict[str, Any] | None = None,
+    file_ids: list[str] | None = None,
     timeout=600,  # default to 10 minutes
     # LiteLLM specific params,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
 ) -> ContainerObject:
     """Asynchronously calls the `create_container` function with the given arguments and keyword arguments.
@@ -119,12 +120,12 @@ async def acreate_container(
 @overload
 def create_container(
     name: str,
-    expires_after: Optional[Dict[str, Any]] = None,
-    file_ids: Optional[List[str]] = None,
+    expires_after: dict[str, Any] | None = None,
+    file_ids: list[str] | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     acreate_container: Literal[True],
@@ -136,12 +137,12 @@ def create_container(
 @overload
 def create_container(
     name: str,
-    expires_after: Optional[Dict[str, Any]] = None,
-    file_ids: Optional[List[str]] = None,
+    expires_after: dict[str, Any] | None = None,
+    file_ids: list[str] | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     acreate_container: Literal[False] = False,
@@ -155,23 +156,20 @@ def create_container(
 @client
 def create_container(
     name: str,
-    expires_after: Optional[Dict[str, Any]] = None,
-    file_ids: Optional[List[str]] = None,
+    expires_after: dict[str, Any] | None = None,
+    file_ids: list[str] | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
-) -> Union[
-    ContainerObject,
-    Coroutine[Any, Any, ContainerObject],
-]:
+) -> ContainerObject | Coroutine[Any, Any, ContainerObject]:
     """Create a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -190,7 +188,7 @@ def create_container(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -211,7 +209,7 @@ def create_container(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+        container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -225,7 +223,7 @@ def create_container(
         )
 
         # Get optional parameters for the container API
-        container_create_request_params: Dict = ContainerRequestUtils.get_optional_params_container_create(
+        container_create_request_params: dict = ContainerRequestUtils.get_optional_params_container_create(
             container_provider_config=container_provider_config,
             container_create_optional_params=container_create_optional_params,
         )
@@ -280,16 +278,16 @@ def create_container(
 ##### Container List #######################
 @client
 async def alist_containers(
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
     timeout=600,  # default to 10 minutes
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
 ) -> ContainerListResponse:
     """Asynchronously list containers.
@@ -350,13 +348,13 @@ async def alist_containers(
 
 @overload
 def list_containers(
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     alist_containers: Literal[True],
@@ -367,13 +365,13 @@ def list_containers(
 
 @overload
 def list_containers(
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     alist_containers: Literal[False] = False,
@@ -386,24 +384,21 @@ def list_containers(
 
 @client
 def list_containers(
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
-) -> Union[
-    ContainerListResponse,
-    Coroutine[Any, Any, ContainerListResponse],
-]:
+) -> ContainerListResponse | Coroutine[Any, Any, ContainerListResponse]:
     """List containers using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -411,7 +406,7 @@ def list_containers(
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -432,7 +427,7 @@ def list_containers(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+        container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -490,9 +485,9 @@ async def aretrieve_container(
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
 ) -> ContainerObject:
     """Asynchronously retrieve a container.
@@ -551,9 +546,9 @@ async def aretrieve_container(
 def retrieve_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     aretrieve_container: Literal[True],
@@ -566,9 +561,9 @@ def retrieve_container(
 def retrieve_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     aretrieve_container: Literal[False] = False,
@@ -583,20 +578,17 @@ def retrieve_container(
 def retrieve_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
-) -> Union[
-    ContainerObject,
-    Coroutine[Any, Any, ContainerObject],
-]:
+) -> ContainerObject | Coroutine[Any, Any, ContainerObject]:
     """Retrieve a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -605,7 +597,7 @@ def retrieve_container(
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -636,7 +628,7 @@ def retrieve_container(
         was_encoded = original_container_id != container_id
 
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+        container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
             provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
@@ -708,9 +700,9 @@ async def adelete_container(
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
 ) -> DeleteContainerResult:
     """Asynchronously delete a container.
@@ -769,9 +761,9 @@ async def adelete_container(
 def delete_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     adelete_container: Literal[True],
@@ -784,9 +776,9 @@ def delete_container(
 def delete_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     adelete_container: Literal[False] = False,
@@ -801,20 +793,17 @@ def delete_container(
 def delete_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
-) -> Union[
-    DeleteContainerResult,
-    Coroutine[Any, Any, DeleteContainerResult],
-]:
+) -> DeleteContainerResult | Coroutine[Any, Any, DeleteContainerResult]:
     """Delete a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -823,7 +812,7 @@ def delete_container(
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -854,7 +843,7 @@ def delete_container(
         was_encoded = original_container_id != container_id
 
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+        container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
             provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
@@ -922,14 +911,14 @@ def delete_container(
 @client
 async def alist_container_files(
     container_id: str,
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
     timeout=600,  # default to 10 minutes
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
 ) -> ContainerFileListResponse:
     """Asynchronously list files in a container.
@@ -993,13 +982,13 @@ async def alist_container_files(
 @overload
 def list_container_files(
     container_id: str,
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
     timeout=600,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     alist_container_files: Literal[True],
@@ -1011,13 +1000,13 @@ def list_container_files(
 @overload
 def list_container_files(
     container_id: str,
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
     timeout=600,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     alist_container_files: Literal[False] = False,
@@ -1031,22 +1020,19 @@ def list_container_files(
 @client
 def list_container_files(
     container_id: str,
-    after: Optional[str] = None,
-    limit: Optional[int] = None,
-    order: Optional[str] = None,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
-) -> Union[
-    ContainerFileListResponse,
-    Coroutine[Any, Any, ContainerFileListResponse],
-]:
+) -> ContainerFileListResponse | Coroutine[Any, Any, ContainerFileListResponse]:
     """List files in a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -1055,7 +1041,7 @@ def list_container_files(
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -1084,7 +1070,7 @@ def list_container_files(
         )
 
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+        container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
             provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
@@ -1141,9 +1127,9 @@ async def aupload_container_file(
     file: FileTypes,
     timeout=600,  # default to 10 minutes
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
 ) -> ContainerFileObject:
     """Asynchronously upload a file to a container.
@@ -1226,9 +1212,9 @@ def upload_container_file(
     container_id: str,
     file: FileTypes,
     timeout=600,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     aupload_container_file: Literal[True],
@@ -1242,9 +1228,9 @@ def upload_container_file(
     container_id: str,
     file: FileTypes,
     timeout=600,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     aupload_container_file: Literal[False] = False,
@@ -1260,18 +1246,15 @@ def upload_container_file(
     container_id: str,
     file: FileTypes,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
     **kwargs,
-) -> Union[
-    ContainerFileObject,
-    Coroutine[Any, Any, ContainerFileObject],
-]:
+) -> ContainerFileObject | Coroutine[Any, Any, ContainerFileObject]:
     """Upload a file to a container using the OpenAI Container API.
 
     This endpoint allows uploading files directly to a container session,
@@ -1309,7 +1292,7 @@ def upload_container_file(
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        litellm_call_id: str | None = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -1338,7 +1321,7 @@ def upload_container_file(
         )
 
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+        container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
             provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 

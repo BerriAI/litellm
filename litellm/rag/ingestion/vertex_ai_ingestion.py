@@ -10,7 +10,7 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -40,8 +40,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         BaseRAGIngestion.__init__(self, ingest_options=ingest_options, router=router)
         VertexBase.__init__(self)
@@ -56,8 +56,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         Vertex AI RAG Engine handles embedding internally - skip this step.
 
@@ -69,13 +69,13 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
         existing_file_id: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Store content in Vertex AI RAG corpus.
 
@@ -120,7 +120,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
     async def _create_rag_corpus(
         self,
         display_name: str,
-        description: Optional[str] = None,
+        description: str | None = None,
     ) -> str:
         """
         Create a Vertex AI RAG corpus.
@@ -148,7 +148,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         url = f"{base_url}/v1beta1/projects/{self.project_id}/locations/{self.location}/ragCorpora"
 
         # Build request body with camelCase keys (Vertex AI API format)
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "displayName": display_name,
         }
 
@@ -169,8 +169,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 "vertexPredictionEndpoint": {"endpoint": embedding_model}
             }
 
-        verbose_logger.debug(f"Creating RAG corpus: {url}")
-        verbose_logger.debug(f"Request body: {json.dumps(request_body, indent=2)}")
+        verbose_logger.debug("Creating RAG corpus: %s", url)
+        verbose_logger.debug("Request body: %s", json.dumps(request_body, indent=2))
 
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
@@ -191,7 +191,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             raise Exception(error_msg)
 
         response_data = response.json()
-        verbose_logger.debug(f"Create corpus response: {json.dumps(response_data, indent=2)}")
+        verbose_logger.debug("Create corpus response: %s", json.dumps(response_data, indent=2))
 
         # The response is a long-running operation
         # Check if it's already done or if we need to poll
@@ -201,13 +201,13 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         else:
             # Need to poll the operation
             operation_name = response_data.get("name", "")
-            verbose_logger.debug(f"Polling operation: {operation_name}")
+            verbose_logger.debug("Polling operation: %s", operation_name)
             corpus_name = await self._poll_operation(
                 operation_name=operation_name,
                 access_token=access_token,
             )
 
-        verbose_logger.debug(f"Created RAG corpus: {corpus_name}")
+        verbose_logger.debug("Created RAG corpus: %s", corpus_name)
         return corpus_name
 
     async def _poll_operation(
@@ -272,7 +272,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 else:
                     raise Exception(f"No corpus name in operation response: {operation_data}")
 
-            verbose_logger.debug(f"Operation not done yet, attempt {attempt + 1}/{max_retries}")
+            verbose_logger.debug("Operation not done yet, attempt %s/%s", attempt + 1, max_retries)
             await asyncio.sleep(retry_delay)
 
         raise Exception(f"Operation timed out after {max_retries} attempts")
@@ -282,7 +282,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         rag_corpus_id: str,
         filename: str,
         file_content: bytes,
-        content_type: Optional[str],
+        content_type: str | None,
     ) -> str:
         """
         Upload a file to Vertex AI RAG corpus using multipart upload.
@@ -308,7 +308,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         url = f"{base_url}/upload/v1beta1/{rag_corpus_id}/ragFiles:upload"
 
         # Build metadata for the file with snake_case keys (as per upload API docs)
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, Any] = {
             "rag_file": {
                 "display_name": filename,
             }
@@ -342,8 +342,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 if chunk_overlap:
                     chunking_config["chunk_overlap"] = chunk_overlap
 
-        verbose_logger.debug(f"Uploading file to RAG corpus: {url}")
-        verbose_logger.debug(f"Metadata: {json.dumps(metadata, indent=2)}")
+        verbose_logger.debug("Uploading file to RAG corpus: %s", url)
+        verbose_logger.debug("Metadata: %s", json.dumps(metadata, indent=2))
 
         # Prepare multipart form data
         files = {
@@ -381,16 +381,16 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             if not file_id:
                 file_id = response_data.get("name", "")
 
-            verbose_logger.debug(f"Upload complete. File ID: {file_id}")
+            verbose_logger.debug("Upload complete. File ID: %s", file_id)
             return file_id
         except Exception as e:
-            verbose_logger.warning(f"Could not parse upload response: {e}")
+            verbose_logger.warning("Could not parse upload response: %s", e)
             return "uploaded"
 
     async def _import_files_from_gcs(
         self,
         rag_corpus_id: str,
-        gcs_uris: List[str],
+        gcs_uris: list[str],
     ) -> str:
         """
         Import files from Google Cloud Storage into RAG corpus.
@@ -414,7 +414,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         url = f"{base_url}/v1beta1/{rag_corpus_id}/ragFiles:import"
 
         # Build request body with camelCase keys (Vertex AI API format)
-        request_body: Dict[str, Any] = {"importRagFilesConfig": {"gcsSource": {"uris": gcs_uris}}}
+        request_body: dict[str, Any] = {"importRagFilesConfig": {"gcsSource": {"uris": gcs_uris}}}
 
         # Add chunking configuration if provided
         chunking_strategy = self.chunking_strategy
@@ -433,8 +433,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         if max_embedding_qpm:
             request_body["importRagFilesConfig"]["maxEmbeddingRequestsPerMin"] = max_embedding_qpm
 
-        verbose_logger.debug(f"Importing files from GCS: {url}")
-        verbose_logger.debug(f"Request body: {json.dumps(request_body, indent=2)}")
+        verbose_logger.debug("Importing files from GCS: %s", url)
+        verbose_logger.debug("Request body: %s", json.dumps(request_body, indent=2))
 
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
@@ -458,5 +458,5 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         response_data = response.json()
         operation_name = response_data.get("name", "")
 
-        verbose_logger.debug(f"Import operation started: {operation_name}")
+        verbose_logger.debug("Import operation started: %s", operation_name)
         return operation_name

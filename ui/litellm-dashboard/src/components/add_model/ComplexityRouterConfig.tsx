@@ -1,5 +1,5 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, Collapse, Divider, Space, Tooltip, Typography } from "antd";
+import { Select as AntdSelect, Card, Collapse, Divider, Space, Switch, Tooltip, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
@@ -12,6 +12,9 @@ const { Text } = Typography;
 
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
+export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
+export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
+export const DEFAULT_SESSION_AFFINITY = false;
 
 export interface ComplexityTiers {
   SIMPLE: string[];
@@ -40,10 +43,15 @@ export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  classifier_context_window_size?: number;
+  classifier_context_per_turn_chars?: number;
+  classifier_context_include_assistant_turns?: boolean;
+  session_affinity?: boolean;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
+  return_raw_model_name?: boolean;
 }
 
 interface ComplexityRouterConfigProps {
@@ -217,6 +225,54 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               </Text>
             ),
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
+          },
+          {
+            key: "session-affinity",
+            label: (
+              <Text strong style={{ color: "#374151" }}>
+                Advanced: Session Affinity
+              </Text>
+            ),
+            children: (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <Switch
+                    checked={value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
+                    onChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
+                    aria-label="Pin a session to its first model"
+                  />
+                  <Text strong>Pin a session to its first model</Text>
+                </div>
+                <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+                  Off by default: every turn is classified on its own merits and routed to the cheapest adequate tier.
+                  Turn this on to reuse the model chosen on a session&apos;s first turn for every later turn, which
+                  preserves provider prompt caches and avoids cross-model conversation-history errors, at the cost of
+                  keeping the whole session on the first turn&apos;s tier.
+                </Text>
+              </>
+            ),
+          },
+          {
+            key: "response",
+            label: (
+              <Text strong style={{ color: "#374151" }}>
+                Advanced: Response Format
+              </Text>
+            ),
+            children: (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <Switch
+                    checked={value.return_raw_model_name ?? false}
+                    onChange={(returnRawModelName) => onChange({ ...value, return_raw_model_name: returnRawModelName })}
+                  />
+                  <Text strong>Return raw model name</Text>
+                </div>
+                <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+                  Return the resolved underlying model name in responses instead of the autorouter alias.
+                </Text>
+              </>
+            ),
           },
           ...(onEscalationKeywordsChange
             ? [

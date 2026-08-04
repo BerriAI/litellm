@@ -1,6 +1,7 @@
 """Teams management client for LiteLLM proxy."""
 
-from typing import Any, Dict, List, Optional, Union
+import builtins
+from typing import Any
 
 import requests
 
@@ -10,7 +11,7 @@ from .exceptions import UnauthorizedError
 class TeamsManagementClient:
     """Client for managing teams in LiteLLM proxy."""
 
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
+    def __init__(self, base_url: str, api_key: str | None = None):
         """
         Initialize the TeamsManagementClient.
 
@@ -21,7 +22,7 @@ class TeamsManagementClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
@@ -35,9 +36,9 @@ class TeamsManagementClient:
 
     def list(
         self,
-        user_id: Optional[str] = None,
-        organization_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        user_id: str | None = None,
+        organization_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         List teams that the user belongs to.
 
@@ -69,15 +70,15 @@ class TeamsManagementClient:
 
     def list_v2(
         self,
-        user_id: Optional[str] = None,
-        organization_id: Optional[str] = None,
-        team_id: Optional[str] = None,
-        team_alias: Optional[str] = None,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        team_id: str | None = None,
+        team_alias: str | None = None,
         page: int = 1,
         page_size: int = 10,
-        sort_by: Optional[str] = None,
+        sort_by: str | None = None,
         sort_order: str = "asc",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get a paginated list of teams with filtering and sorting options.
 
@@ -99,7 +100,7 @@ class TeamsManagementClient:
             UnauthorizedError: If authentication fails
         """
         url = f"{self._base_url}/v2/team/list"
-        params: Dict[str, Union[str, int]] = {
+        params: dict[str, str | int] = {
             "page": page,
             "page_size": page_size,
             "sort_order": sort_order,
@@ -124,7 +125,7 @@ class TeamsManagementClient:
         response.raise_for_status()
         return response.json()
 
-    def get_available(self) -> List[Dict[str, Any]]:
+    def get_available(self) -> builtins.list[dict[str, Any]]:
         """
         Get list of available teams that the user can join.
 

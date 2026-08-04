@@ -7,12 +7,15 @@ login endpoints (e.g., /login and /v2/login).
 
 import os
 import secrets
-from typing import Literal, Optional, cast
+from datetime import datetime, timedelta, timezone
+from typing import Literal, cast
 
+import jwt
 from fastapi import HTTPException
 
 import litellm
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -52,7 +55,7 @@ async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -
         )
 
 
-def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
+def get_ui_credentials(master_key: str | None) -> tuple[str, str]:
     """
     Get UI username and password from environment variables or master key.
 
@@ -84,7 +87,7 @@ class LoginResult:
 
     user_id: str
     key: str
-    user_email: Optional[str]
+    user_email: str | None
     user_role: str
     login_method: Literal["sso", "username_password"]
 
@@ -92,7 +95,7 @@ class LoginResult:
         self,
         user_id: str,
         key: str,
-        user_email: Optional[str],
+        user_email: str | None,
         user_role: str,
         login_method: Literal["sso", "username_password"] = "username_password",
     ):
@@ -106,8 +109,8 @@ class LoginResult:
 async def authenticate_user(
     username: str,
     password: str,
-    master_key: Optional[str],
-    prisma_client: Optional[PrismaClient],
+    master_key: str | None,
+    prisma_client: PrismaClient | None,
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -139,19 +142,20 @@ async def authenticate_user(
     ui_username, ui_password = get_ui_credentials(master_key)
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
-    _user_row: Optional[LiteLLM_UserTable] = None
-    user_role: Optional[
+    _user_row: LiteLLM_UserTable | None = None
+    user_role: (
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
-    ] = None
+        | None
+    ) = None
 
     if prisma_client is not None:
         _user_row = cast(
-            Optional[LiteLLM_UserTable],
+            LiteLLM_UserTable | None,
             await UserRepository(prisma_client).table.find_first(
                 where={"user_email": {"equals": username, "mode": "insensitive"}}
             ),
@@ -218,7 +222,7 @@ async def authenticate_user(
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
             from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
-            user_info: Optional[LiteLLM_UserTable] = None
+            user_info: LiteLLM_UserTable | None = None
             if _user_row is not None:
                 user_info = _user_row
             elif user_id is not None:  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
@@ -311,6 +315,29 @@ async def authenticate_user(
             param="invalid_credentials",
             code=401,
         )
+
+
+def _ui_session_exp_timestamp() -> int:
+    """The ``exp`` claim (unix seconds) for a UI session cookie, ``LITELLM_UI_SESSION_DURATION``
+    from now. The virtual key sealed inside the cookie already expires after this same
+    duration; stamping the JWT itself gives the cookie the bounded lifetime the dashboard's
+    client-side expiry check and the server-side session-cookie readers both assume, instead
+    of a token that stays signature-valid until the master key rotates."""
+    ttl_seconds = duration_in_seconds(LITELLM_UI_SESSION_DURATION)
+    return int((datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).timestamp())
+
+
+def encode_ui_session_jwt(returned_ui_token_object: ReturnedUITokenObject, master_key: str) -> str:
+    """Encode a UI session cookie JWT with a bounded ``exp``.
+
+    The single choke point every UI login path (SSO and username/password /login, /v2,
+    /v3) uses to mint the ``token`` cookie, so the cookie's lifetime is set in exactly one
+    place and cannot drift between paths. Without the ``exp`` the cookie is valid until the
+    master key rotates, and the session-cookie readers that require a bounded lifetime
+    (the MCP interactive sign-in) reject it.
+    """
+    claims = {**cast(dict, returned_ui_token_object), "exp": _ui_session_exp_timestamp()}
+    return jwt.encode(claims, master_key, algorithm="HS256")
 
 
 def create_ui_token_object(

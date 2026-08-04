@@ -881,7 +881,6 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-v3"),
                 priority="default",
                 saturation=0.99,
-                data={},
             )
         e = exc_info.value
         assert e.status_code == 429

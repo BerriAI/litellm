@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo.html
 """
 
-from typing import List, Optional, Union, cast
+from typing import cast
 
 from litellm.types.llms.bedrock import (
     TWELVELABS_EMBEDDING_INPUT_TYPES,
@@ -31,7 +31,7 @@ class TwelveLabsMarengoEmbeddingConfig:
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return [
             "encoding_format",
             "textTruncate",
@@ -75,9 +75,9 @@ class TwelveLabsMarengoEmbeddingConfig:
         input: str,
         inference_params: dict,
         async_invoke_route: bool = False,
-        model_id: Optional[str] = None,
-        output_s3_uri: Optional[str] = None,
-    ) -> Union[TwelveLabsMarengoEmbeddingRequest, TwelveLabsAsyncInvokeRequest]:
+        model_id: str | None = None,
+        output_s3_uri: str | None = None,
+    ) -> TwelveLabsMarengoEmbeddingRequest | TwelveLabsAsyncInvokeRequest:
         """
         Transform OpenAI-style input to TwelveLabs Marengo format/async-invoke format.
 
@@ -156,7 +156,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         self,
         model_input: TwelveLabsMarengoEmbeddingRequest,
         model_id: str,
-        output_s3_uri: Optional[str] = None,
+        output_s3_uri: str | None = None,
     ) -> TwelveLabsAsyncInvokeRequest:
         """
         Wrap the transformed request in the correct AWS Bedrock async invoke format.
@@ -188,12 +188,12 @@ class TwelveLabsMarengoEmbeddingConfig:
             ),
         )
 
-    def _transform_response(self, response_list: List[dict], model: str) -> EmbeddingResponse:
+    def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
         """
         Transform TwelveLabs response to OpenAI format.
         Handles the actual TwelveLabs response format: {"data": [{"embedding": [...]}]}
         """
-        embeddings: List[Embedding] = []
+        embeddings: list[Embedding] = []
         total_tokens = 0
 
         for response in response_list:

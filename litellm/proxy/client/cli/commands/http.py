@@ -1,9 +1,8 @@
 import json as json_lib
-from typing import Optional
 
 import click
-import rich
 import requests
+import rich
 
 from ...http_client import HTTPClient
 
@@ -11,7 +10,6 @@ from ...http_client import HTTPClient
 @click.group()
 def http():
     """Make HTTP requests to the LiteLLM proxy server"""
-    pass
 
 
 @http.command()
@@ -40,8 +38,8 @@ def request(
     ctx: click.Context,
     method: str,
     uri: str,
-    data: Optional[str] = None,
-    json: Optional[str] = None,
+    data: str | None = None,
+    json: str | None = None,
     header: tuple[str, ...] = (),
 ):
     """Make an HTTP request to the LiteLLM proxy server

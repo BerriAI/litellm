@@ -2,7 +2,8 @@ import base64
 import datetime
 import json
 import math
-from typing import Any, Dict, List, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any
 
 import httpx
 
@@ -14,7 +15,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
-GEMINI_IMAGE_ASPECT_RATIOS: Dict[str, float] = {
+GEMINI_IMAGE_ASPECT_RATIOS: dict[str, float] = {
     "1:1": 1 / 1,
     "1:4": 1 / 4,
     "1:8": 1 / 8,
@@ -33,7 +34,7 @@ GEMINI_IMAGE_ASPECT_RATIOS: Dict[str, float] = {
 
 # Supported aspect ratio dimensions from Google Gemini image generation docs:
 # https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size
-GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: Dict[tuple[int, int], str] = {
+GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: dict[tuple[int, int], str] = {
     (512, 512): "1:1",
     (1024, 1024): "1:1",
     (2048, 2048): "1:1",
@@ -95,7 +96,7 @@ GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: Dict[tuple[int, int], str] = {
 }
 
 
-def map_openai_size_to_gemini_image_config(size: str, model: str) -> Optional[Dict[str, str]]:
+def map_openai_size_to_gemini_image_config(size: str, model: str) -> dict[str, str] | None:
     dimensions = _parse_openai_image_size(size)
     if dimensions is None:
         return None
@@ -128,16 +129,16 @@ def is_gemini_image_model(model: str) -> bool:
 
 
 def map_openai_image_params_to_gemini(
-    params: Dict[str, Any],
+    params: dict[str, Any],
     model: str,
     supported_params: Sequence[str],
-    optional_params: Optional[Dict[str, Any]] = None,
+    optional_params: dict[str, Any] | None = None,
     parse_image_config_string: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     optional_params = optional_params or {}
     filtered_params = {key: value for key, value in params.items() if key in supported_params}
 
-    mapped_params: Dict[str, Any] = {}
+    mapped_params: dict[str, Any] = {}
 
     if "n" in filtered_params and "n" not in optional_params:
         mapped_params["sampleCount"] = filtered_params["n"]
@@ -174,14 +175,14 @@ def map_openai_image_params_to_gemini(
     return mapped_params
 
 
-def _dedupe_gemini_search_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _dedupe_gemini_search_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
     search_tool_keys = VertexGeminiConfig._search_tool_keys()
     seen_search_keys: set[str] = set()
-    deduped_tools: List[Dict[str, Any]] = []
+    deduped_tools: list[dict[str, Any]] = []
 
     for tool in tools:
         if not isinstance(tool, dict):
@@ -202,7 +203,7 @@ def _dedupe_gemini_search_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, A
     return deduped_tools
 
 
-def _has_gemini_search_tool(tools: List[Any]) -> bool:
+def _has_gemini_search_tool(tools: list[Any]) -> bool:
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
@@ -212,9 +213,9 @@ def _has_gemini_search_tool(tools: List[Any]) -> bool:
 
 
 def map_gemini_image_tools_params(
-    non_default_params: Dict[str, Any],
-    mapped_params: Dict[str, Any],
-) -> Dict[str, Any]:
+    non_default_params: dict[str, Any],
+    mapped_params: dict[str, Any],
+) -> dict[str, Any]:
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
@@ -245,13 +246,13 @@ def map_gemini_image_tools_params(
 
 
 def get_gemini_image_web_search_requests(
-    response_data: Dict[str, Any],
-) -> Optional[int]:
+    response_data: dict[str, Any],
+) -> int | None:
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    grounding_metadata: List[Dict[str, Any]] = []
+    grounding_metadata: list[dict[str, Any]] = []
     for candidate in response_data.get("candidates", []):
         if not isinstance(candidate, dict):
             continue
@@ -266,11 +267,11 @@ def get_gemini_image_web_search_requests(
 
 def get_gemini_image_generation_config(
     model: str,
-    optional_params: Dict[str, Any],
-) -> Dict[str, Any]:
-    generation_config: Dict[str, Any] = {"response_modalities": ["IMAGE", "TEXT"]}
+    optional_params: dict[str, Any],
+) -> dict[str, Any]:
+    generation_config: dict[str, Any] = {"response_modalities": ["IMAGE", "TEXT"]}
 
-    image_config: Dict[str, Any] = {}
+    image_config: dict[str, Any] = {}
     if isinstance(optional_params.get("imageConfig"), dict):
         image_config.update(optional_params["imageConfig"])
 
@@ -294,7 +295,7 @@ def get_gemini_image_generation_config(
     return generation_config
 
 
-def _parse_openai_image_size(size: str) -> Optional[tuple[int, int]]:
+def _parse_openai_image_size(size: str) -> tuple[int, int] | None:
     if size == "auto":
         return None
 
@@ -345,11 +346,11 @@ class GeminiModelInfo(BaseLLMModelInfo):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """Google AI Studio sends api key via x-goog-api-key header"""
         return headers
@@ -359,18 +360,18 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return "v1beta"
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         return api_base or get_secret_str("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or (get_secret_str("GOOGLE_API_KEY")) or (get_secret_str("GEMINI_API_KEY"))
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         return model.replace("gemini/", "")
 
-    def process_model_name(self, models: List[Dict[str, str]]) -> List[str]:
+    def process_model_name(self, models: list[dict[str, str]]) -> list[str]:
         litellm_model_names = []
         for model in models:
             stripped_model_name = model["name"].replace("models/", "")
@@ -378,7 +379,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
             litellm_model_names.append(litellm_model_name)
         return litellm_model_names
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = GeminiModelInfo.get_api_base(api_base)
         api_key = GeminiModelInfo.get_api_key(api_key)
         endpoint = f"/{self.api_version}/models"
@@ -402,12 +403,10 @@ class GeminiModelInfo(BaseLLMModelInfo):
         litellm_model_names = self.process_model_name(models)
         return litellm_model_names
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return GeminiError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+    def get_token_counter(self) -> BaseTokenCounter | None:
         """
         Factory method to create a token counter for this provider.
 
@@ -418,7 +417,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return GoogleAIStudioTokenCounter()
 
 
-def encode_unserializable_types(data: Dict[str, object], depth: int = 0) -> Dict[str, object]:
+def encode_unserializable_types(data: dict[str, object], depth: int = 0) -> dict[str, object]:
     """Converts unserializable types in dict to json.dumps() compatible types.
 
     This function is called in models.py after calling convert_to_dict(). The
@@ -456,7 +455,7 @@ def encode_unserializable_types(data: Dict[str, object], depth: int = 0) -> Dict
     return processed_data
 
 
-def get_api_key_from_env() -> Optional[str]:
+def get_api_key_from_env() -> str | None:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
 
 
@@ -465,7 +464,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
 
     def should_use_token_counting_api(
         self,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         from litellm.types.utils import LlmProviders
 
@@ -474,13 +473,13 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: Optional[List[Dict[str, Any]]],
-        contents: Optional[List[Dict[str, Any]]],
-        deployment: Optional[Dict[str, Any]] = None,
+        messages: list[dict[str, Any]] | None,
+        contents: list[dict[str, Any]] | None,
+        deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system: Optional[Any] = None,
-    ) -> Optional[TokenCountResponse]:
+        tools: list[dict[str, Any]] | None = None,
+        system: Any | None = None,
+    ) -> TokenCountResponse | None:
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter

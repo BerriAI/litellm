@@ -1,4 +1,5 @@
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -41,7 +42,7 @@ DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING = (
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "anthropic"
 
     @property
@@ -71,7 +72,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # "metadata",
         ]
 
-    def _remove_scope_from_cache_control(self, anthropic_messages_request: Dict) -> None:
+    def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
         """
         Remove `scope` field from cache_control blocks.
 
@@ -144,14 +145,84 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         else:
             return system_param
 
+    @staticmethod
+    def _as_system_content_blocks(value: Any) -> list:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, str):
+            return [{"type": "text", "text": value}]
+        return [value]
+
+    @staticmethod
+    def _is_system_role_message(message: Any) -> bool:
+        return isinstance(message, dict) and message.get("role") == "system"
+
+    def _normalize_system_role_messages(self, anthropic_messages_request: dict, model: str) -> None:
+        """Move ``role: "system"`` entries out of ``messages`` per the Anthropic
+        ``/v1/messages`` contract, which the first-party API, Bedrock Invoke,
+        Vertex, and Azure Foundry all enforce identically.
+
+        A *leading* run of system entries is rejected on every model ("messages.0:
+        use the top-level 'system' parameter for the initial system prompt") and
+        must be hoisted into the top-level ``system`` field. Models flagged
+        ``supports_mid_conversation_system`` in the cost map (Claude 4.8+ and the
+        5 family) accept a *mid-conversation* entry (e.g. Claude Code's
+        ``mid-conversation-system-2026-04-07`` reminders) in place, where it MUST
+        stay: hoisting one mutates the ``system`` prefix and invalidates the
+        prompt cache for the whole message history. Older Claude models reject the
+        role in every position ("role 'system' is not supported on this model"),
+        so without the flag every system entry is hoisted to keep the request from
+        400-ing. Billing-header system blocks are stripped from the top-level
+        ``system`` field regardless of whether anything was hoisted.
+
+        Subclasses whose upstream rejects the role opt in by calling this from
+        their ``transform_anthropic_messages_request``; the first-party Anthropic
+        path forwards ``messages`` untouched and never calls it."""
+        from litellm.utils import _supports_factory
+
+        messages = anthropic_messages_request.get("messages")
+        if not isinstance(messages, list):
+            return
+        if _supports_factory(
+            model=model,
+            custom_llm_provider=self.custom_llm_provider,
+            key="supports_mid_conversation_system",
+        ):
+            leading_count = next(
+                (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
+                len(messages),
+            )
+            hoisted = messages[:leading_count]
+            remaining = messages[leading_count:]
+        else:
+            hoisted = [m for m in messages if self._is_system_role_message(m)]
+            remaining = [m for m in messages if not self._is_system_role_message(m)]
+        if hoisted:
+            anthropic_messages_request["messages"] = remaining
+        system_content = [
+            block
+            for source in (
+                anthropic_messages_request.get("system"),
+                *(m.get("content") for m in hoisted),
+            )
+            for block in self._as_system_content_blocks(source)
+        ]
+        filtered_system = self._filter_billing_headers_from_system(system_content)
+        if filtered_system:
+            anthropic_messages_request["system"] = filtered_system
+        else:
+            anthropic_messages_request.pop("system", None)
+
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
         if not api_base.endswith("/v1/messages"):
@@ -162,12 +233,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
@@ -188,7 +259,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
-    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: Dict, custom_llm_provider: str) -> None:
+    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: dict, custom_llm_provider: str) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
@@ -241,7 +312,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_legacy_thinking_for_adaptive_model(
-        model: str, optional_params: Dict, custom_llm_provider: str
+        model: str, optional_params: dict, custom_llm_provider: str
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
         Caller-provided ``output_config.effort`` is never overridden.
@@ -275,7 +346,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: Dict, max_tokens: Optional[int], custom_llm_provider: str
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         """Translate the 4.6+ adaptive-thinking interface (``thinking.type=adaptive``
         and/or ``output_config.effort``) down to what an older Anthropic model
@@ -408,11 +479,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """
         No transformation is needed for Anthropic messages
 

@@ -17,7 +17,7 @@ import asyncio
 import time
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
-from typing import Any, Union, cast
+from typing import Any, cast
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -50,6 +50,7 @@ from litellm.router_strategy.adaptive_router.signals import (
 from litellm.router_strategy.adaptive_router.update_queue import (
     AdaptiveRouterUpdateQueue,
 )
+from litellm.types.utils import StandardLoggingRoutingDecision
 
 # Sweep session-state cache when it exceeds this many live entries. Expired
 # entries are dropped in bulk; amortizes to O(1) per insert.
@@ -159,7 +160,7 @@ class AdaptiveRouter:
         model: str,
         request_kwargs: dict[str, Any],
         messages: list[dict[str, Any]] | None = None,
-        input: Union[str, list] | None = None,
+        input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:
         """
@@ -193,7 +194,17 @@ class AdaptiveRouter:
         if isinstance(kwargs_metadata, dict):
             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = chosen_model
 
-        return PreRoutingHookResponse(model=chosen_model, messages=messages)
+        return PreRoutingHookResponse(
+            model=chosen_model,
+            messages=messages,
+            routing_decision=StandardLoggingRoutingDecision(
+                router_model_name=self.router_name,
+                router_type="adaptive",
+                routed_model=chosen_model,
+                cause="bandit",
+                request_type=request_type.value,
+            ),
+        )
 
     # ---- Pick model ------------------------------------------------------
 

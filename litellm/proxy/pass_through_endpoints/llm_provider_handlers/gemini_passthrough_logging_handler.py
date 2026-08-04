@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -122,8 +122,8 @@ class GeminiPassthroughLoggingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        all_chunks: List[str],
-        model: Optional[str],
+        all_chunks: list[str],
+        model: str | None,
         end_time: datetime,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -133,7 +133,7 @@ class GeminiPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         model = model or GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
         complete_streaming_response = GeminiPassthroughLoggingHandler._build_complete_streaming_response(
             all_chunks=all_chunks,
@@ -168,11 +168,11 @@ class GeminiPassthroughLoggingHandler:
 
     @staticmethod
     def _build_complete_streaming_response(
-        all_chunks: List[str],
+        all_chunks: list[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
         url_route: str,
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    ) -> ModelResponse | TextCompletionResponse | None:
         parsed_chunks = []
         if "generateContent" in url_route or "streamGenerateContent" in url_route:
             gemini_iterator: Any = GeminiModelResponseIterator(
@@ -208,7 +208,7 @@ class GeminiPassthroughLoggingHandler:
 
     @staticmethod
     def _create_gemini_response_logging_payload_for_generate_content(
-        litellm_model_response: Union[ModelResponse, TextCompletionResponse],
+        litellm_model_response: ModelResponse | TextCompletionResponse,
         model: str,
         kwargs: dict,
         start_time: datetime,

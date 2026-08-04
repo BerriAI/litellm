@@ -10,4 +10,4 @@ guardrail_translation_mappings = {
     CallTypes.aimage_generation: OpenAIImageGenerationHandler,
 }
 
-__all__ = ["guardrail_translation_mappings", "OpenAIImageGenerationHandler"]
+__all__ = ["OpenAIImageGenerationHandler", "guardrail_translation_mappings"]

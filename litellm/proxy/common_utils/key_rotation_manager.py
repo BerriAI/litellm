@@ -5,7 +5,6 @@ Handles finding keys that need rotation based on their individual schedules.
 """
 
 from datetime import datetime, timezone
-from typing import List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -85,20 +84,20 @@ class KeyRotationManager:
                 verbose_proxy_logger.debug("No keys are due for rotation at this time")
                 return
 
-            verbose_proxy_logger.info(f"Found {len(keys_to_rotate)} keys due for rotation")
+            verbose_proxy_logger.info("Found %s keys due for rotation", len(keys_to_rotate))
 
             # Rotate each key
             for key in keys_to_rotate:
                 try:
                     await self._rotate_key(key)
                     key_identifier = key.key_name or (key.token[:8] + "..." if key.token else "unknown")
-                    verbose_proxy_logger.info(f"Successfully rotated key: {key_identifier}")
+                    verbose_proxy_logger.info("Successfully rotated key: %s", key_identifier)
                 except Exception as e:
                     key_identifier = key.key_name or (key.token[:8] + "..." if key.token else "unknown")
-                    verbose_proxy_logger.error(f"Failed to rotate key {key_identifier}: {e}")
+                    verbose_proxy_logger.error("Failed to rotate key %s: %s", key_identifier, e)
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Key rotation process failed: {e}")
+            verbose_proxy_logger.error("Key rotation process failed: %s", e)
         finally:
             # Only release the lock if it was actually acquired
             if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
@@ -106,7 +105,7 @@ class KeyRotationManager:
                     cronjob_id=KEY_ROTATION_JOB_NAME,
                 )
 
-    async def _find_keys_needing_rotation(self) -> List[LiteLLM_VerificationToken]:
+    async def _find_keys_needing_rotation(self) -> list[LiteLLM_VerificationToken]:
         """
         Find keys that are due for rotation based on their key_rotation_at timestamp.
 

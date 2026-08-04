@@ -1,7 +1,6 @@
 import io
 import json
 from os import PathLike
-from typing import List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
@@ -14,7 +13,7 @@ class InMemoryFile(io.BytesIO):
         self.content_type = content_type
 
 
-def parse_jsonl_with_embedded_newlines(content: str) -> List[dict]:
+def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
     """
     Parse JSONL content that may contain JSON objects with embedded newlines in string values.
 
@@ -53,7 +52,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> List[dict]:
             json_object = json.loads(buffer.strip())
             json_objects.append(json_object)
         except json.JSONDecodeError as e:
-            verbose_logger.error(f"error parsing final buffer: {buffer[:100]}..., error: {e}")
+            verbose_logger.error("error parsing final buffer: %s..., error: %s", buffer[:100], e)
             raise e
 
     return json_objects
@@ -129,7 +128,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
             # that followed it). Returning the partial `output` would silently
             # drop those rows; return the unchanged original so the provider
             # rejects the batch loudly instead of accepting a truncated one.
-            verbose_logger.error(f"error parsing trailing batch content: {buffer[:100]}...")
+            verbose_logger.error("error parsing trailing batch content: %s...", buffer[:100])
             if hasattr(source, "seek"):
                 try:
                     source.seek(0)  # type: ignore[attr-defined]
@@ -149,7 +148,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         return file_content
 
 
-def _get_router_metadata_variable_name(function_name: Optional[str]) -> str:
+def _get_router_metadata_variable_name(function_name: str | None) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
 

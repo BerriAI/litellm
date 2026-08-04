@@ -3,7 +3,7 @@ OpenAI Token Counter implementation using the Responses API /input_tokens endpoi
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -25,20 +25,20 @@ class OpenAITokenCounter(BaseTokenCounter):
 
     def should_use_token_counting_api(
         self,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         return custom_llm_provider == LlmProviders.OPENAI.value
 
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: Optional[List[Dict[str, Any]]],
-        contents: Optional[List[Dict[str, Any]]],
-        deployment: Optional[Dict[str, Any]] = None,
+        messages: list[dict[str, Any]] | None,
+        contents: list[dict[str, Any]] | None,
+        deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system: Optional[Any] = None,
-    ) -> Optional[TokenCountResponse]:
+        tools: list[dict[str, Any]] | None = None,
+        system: Any | None = None,
+    ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.
         """
@@ -89,7 +89,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except OpenAIError as e:
-            verbose_logger.warning(f"OpenAI CountTokens API error: status={e.status_code}, message={e.message}")
+            verbose_logger.warning("OpenAI CountTokens API error: status=%s, message=%s", e.status_code, e.message)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
@@ -100,7 +100,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 status_code=e.status_code,
             )
         except Exception as e:
-            verbose_logger.warning(f"Error calling OpenAI CountTokens API: {e}")
+            verbose_logger.warning("Error calling OpenAI CountTokens API: %s", e)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
