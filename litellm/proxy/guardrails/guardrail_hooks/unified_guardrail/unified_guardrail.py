@@ -250,12 +250,25 @@ class UnifiedLLMGuardrails(CustomLogger):
                 call_type = logging_call_type
 
         if call_type is None:
+            verbose_proxy_logger.warning(
+                "Guardrail '%s' selected for route '%s' but its call type could not be resolved; "
+                "skipping post-call scanning. Add the route to API_ROUTE_TO_CALL_TYPES.",
+                guardrail_to_apply.guardrail_name,
+                user_api_key_dict.request_route,
+            )
             return response
 
         if endpoint_guardrail_translation_mappings is None:
             endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
 
         if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+            verbose_proxy_logger.warning(
+                "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; "
+                "skipping post-call scanning.",
+                guardrail_to_apply.guardrail_name,
+                user_api_key_dict.request_route,
+                call_type,
+            )
             return response
 
         endpoint_translation: Final = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()

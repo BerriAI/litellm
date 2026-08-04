@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 29813
+    "limit": 29809
   },
   "reportArgumentType": {
     "limit": 2645
@@ -60,7 +60,7 @@
     "limit": 15849
   },
   "reportMissingTypeStubs": {
-    "limit": 41
+    "limit": 40
   },
   "reportOperatorIssue": {
     "limit": 0
@@ -99,7 +99,7 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45269
+    "limit": 45262
   },
   "reportUnknownLambdaType": {
     "limit": 113
