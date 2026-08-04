@@ -176,16 +176,17 @@ async def directory_user_search(
     Entra ID only - see `directory_search/microsoft.py` for its required
     config). A 404 is returned if no provider is configured.
 
-    Restricted to callers with admin view access (`PROXY_ADMIN` or
-    `PROXY_ADMIN_VIEW_ONLY`). Queries shorter than
-    `DIRECTORY_SEARCH_MIN_QUERY_LENGTH` return `[]` without contacting the
-    provider.
+    Restricted to `PROXY_ADMIN` - this searches an external directory (e.g.
+    Microsoft Entra ID), not existing LiteLLM resources, so admin viewers
+    don't get read access to it just because they can view proxy state.
+    Queries shorter than `DIRECTORY_SEARCH_MIN_QUERY_LENGTH` return `[]`
+    without contacting the provider.
     """
     try:
-        if not _user_has_admin_view(user_api_key_dict):
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(
                 status_code=403,
-                detail="Only proxy admins (including admin viewers) can search directory users.",
+                detail="Only proxy admins can search directory users.",
             )
 
         cleaned_query = query.strip()

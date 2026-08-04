@@ -14746,10 +14746,11 @@ export interface paths {
          *     Entra ID only - see `directory_search/microsoft.py` for its required
          *     config). A 404 is returned if no provider is configured.
          *
-         *     Restricted to callers with admin view access (`PROXY_ADMIN` or
-         *     `PROXY_ADMIN_VIEW_ONLY`). Queries shorter than
-         *     `DIRECTORY_SEARCH_MIN_QUERY_LENGTH` return `[]` without contacting the
-         *     provider.
+         *     Restricted to `PROXY_ADMIN` - this searches an external directory (e.g.
+         *     Microsoft Entra ID), not existing LiteLLM resources, so admin viewers
+         *     don't get read access to it just because they can view proxy state.
+         *     Queries shorter than `DIRECTORY_SEARCH_MIN_QUERY_LENGTH` return `[]`
+         *     without contacting the provider.
          */
         get: operations["directory_user_search_user_directory_search_get"];
         put?: never;

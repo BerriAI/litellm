@@ -105,17 +105,20 @@ async def test_directory_user_search_ignores_short_queries(mocker):
 
 
 @pytest.mark.asyncio
-async def test_directory_user_search_allows_admin_view_only(mocker):
-    """PROXY_ADMIN_VIEW_ONLY should be allowed - _user_has_admin_view grants
-    both PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY read access."""
-    _mock_provider(mocker)
+async def test_directory_user_search_rejects_admin_view_only(mocker):
+    """PROXY_ADMIN_VIEW_ONLY searches existing LiteLLM resources, not an
+    external directory - it should not be able to enumerate identities from
+    the configured provider."""
+    mock_get_provider = _mock_provider(mocker)
 
-    response = await directory_user_search(
-        query="alice",
-        user_api_key_dict=UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
-    )
+    with pytest.raises(ProxyException) as exc_info:
+        await directory_user_search(
+            query="alice",
+            user_api_key_dict=UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+        )
 
-    assert response == ()
+    assert exc_info.value.code == 403 or exc_info.value.code == "403"
+    mock_get_provider.assert_not_called()
 
 
 @pytest.mark.asyncio
