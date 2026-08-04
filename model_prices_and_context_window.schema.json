@@ -49,6 +49,14 @@
         "litellm_provider"
       ],
       "properties": {
+        "aliases": {
+          "type": "array",
+          "description": "Alternate model ids that share this entry's pricing and capabilities.",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
         "annotation_cost_per_page": {
           "type": "number",
           "minimum": 0
