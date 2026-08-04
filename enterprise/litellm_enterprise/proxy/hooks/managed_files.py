@@ -73,6 +73,24 @@ else:
     PrismaClient = Any
 
 
+def _parse_managed_file_object(
+    raw_file_object: object, unified_file_id: str
+) -> Optional[OpenAIFileObject]:
+    if not raw_file_object:
+        return None
+    try:
+        return (
+            OpenAIFileObject.model_validate_json(raw_file_object)
+            if isinstance(raw_file_object, str)
+            else OpenAIFileObject.model_validate(raw_file_object)
+        )
+    except Exception as e:
+        verbose_logger.warning(
+            f"Failed to parse managed file object {unified_file_id}: {e}"
+        )
+        return None
+
+
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     # Class variables or attributes
     def __init__(
@@ -376,13 +394,43 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if owner_filter is None:
             return []
 
-        file_ids = await self.prisma_client.db.litellm_managedfiletable.find_many(
+        rows = await self.prisma_client.db.litellm_managedfiletable.find_many(
             where={
                 **owner_filter,
                 "flat_model_file_ids": {"hasSome": model_object_ids},
             }
         )
-        return [OpenAIFileObject.model_validate(file_object.file_object) for file_object in file_ids]
+        return [
+            parsed
+            for row in rows
+            if (
+                parsed := _parse_managed_file_object(
+                    row.file_object, row.unified_file_id
+                )
+            )
+            is not None
+        ]
+
+    async def _provider_file_ids_claimed_by_managed_rows(
+        self, model_object_ids: List[str]
+    ) -> set[str]:
+        """Provider file ids from ``model_object_ids`` that appear in any managed row.
+
+        Used by list filtering so untracked (non-managed) provider uploads stay
+        visible, while managed rows owned by other callers can still be hidden.
+        """
+        if not model_object_ids:
+            return set()
+        page_ids = set(model_object_ids)
+        rows = await self.prisma_client.db.litellm_managedfiletable.find_many(
+            where={"flat_model_file_ids": {"hasSome": model_object_ids}},
+        )
+        claimed: set[str] = set()
+        for row in rows:
+            for provider_id in row.flat_model_file_ids or []:
+                if provider_id in page_ids:
+                    claimed.add(provider_id)
+        return claimed
 
     async def check_managed_file_id_access(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth
@@ -1248,29 +1296,69 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         elif isinstance(response, AsyncCursorPage):
             """
-            For listing files, filter for the ones created by the user
+            Filter a provider file list for multi-tenant isolation.
+
+            Managed rows on a shared provider account must only be visible to
+            their owner. Untracked (non-managed) provider uploads, including
+            provider-scoped /{provider}/v1/files creates that never entered the
+            managed table, must stay on the page; dropping them is LIT-4820.
             """
-            ## check if file object
             if hasattr(response, "data") and isinstance(response.data, list):
                 if all(
                     isinstance(file_object, FileObject) for file_object in response.data
                 ):
-                    ## Get all file id's
-                    ## Check which file id's were created by the user
-                    ## Filter the response to only include the files created by the user
-                    ## Return the filtered response
-                    file_ids = [
-                        file_object.id
-                        for file_object in cast(List[FileObject], response.data)  # type: ignore
-                    ]
-                    user_created_file_ids = await self.get_user_created_file_ids(
-                        user_api_key_dict, file_ids
+                    response.data = await self._filter_listed_provider_files(  # type: ignore
+                        provider_files=cast(List[FileObject], response.data),  # type: ignore
+                        user_api_key_dict=user_api_key_dict,
                     )
-                    ## Filter the response to only include the files created by the user
-                    response.data = user_created_file_ids  # type: ignore
                     return response
             return response
         return response
+
+    async def _filter_listed_provider_files(
+        self,
+        provider_files: List[FileObject],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> List[Union[FileObject, OpenAIFileObject]]:
+        file_ids = [file_object.id for file_object in provider_files]
+        if not file_ids:
+            return []
+
+        claimed_by_anyone = await self._provider_file_ids_claimed_by_managed_rows(
+            file_ids
+        )
+        owner_filter = build_owner_filter(user_api_key_dict)
+        user_owned_by_provider_id: Dict[str, OpenAIFileObject] = {}
+        if owner_filter is not None and claimed_by_anyone:
+            user_owned_rows = await self.prisma_client.db.litellm_managedfiletable.find_many(
+                where={
+                    **owner_filter,
+                    "flat_model_file_ids": {"hasSome": list(claimed_by_anyone)},
+                }
+            )
+            page_id_set = set(file_ids)
+            for row in user_owned_rows:
+                parsed = _parse_managed_file_object(row.file_object, row.unified_file_id)
+                if parsed is None:
+                    continue
+                for provider_id in row.flat_model_file_ids or []:
+                    if provider_id in page_id_set:
+                        user_owned_by_provider_id[provider_id] = parsed
+
+        kept: List[Union[FileObject, OpenAIFileObject]] = []
+        emitted_managed_ids: set[str] = set()
+        for provider_file in provider_files:
+            if provider_file.id not in claimed_by_anyone:
+                kept.append(provider_file)
+                continue
+            managed_obj = user_owned_by_provider_id.get(provider_file.id)
+            if managed_obj is None:
+                continue
+            if managed_obj.id in emitted_managed_ids:
+                continue
+            kept.append(managed_obj)
+            emitted_managed_ids.add(managed_obj.id)
+        return kept
 
     async def afile_retrieve(
         self, file_id: str, litellm_parent_otel_span: Optional[Span], llm_router=None
