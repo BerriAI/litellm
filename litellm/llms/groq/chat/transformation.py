@@ -265,7 +265,8 @@ class GroqChatConfig(OpenAILikeChatConfig):
 
         if web_search_options:
             verbose_logger.info(
-                f"Groq web search enabled; ignoring unsupported web_search_options fields: {sorted(web_search_options)}"
+                "Groq web search enabled; ignoring unsupported web_search_options fields: %s",
+                sorted(web_search_options),
             )
         if self._is_compound_model(model):
             return optional_params
@@ -334,7 +335,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
                 )
             )
         except ValidationError as e:
-            verbose_logger.info(f"Groq executed_tools entries did not match the expected shape; not billed: {e}")
+            verbose_logger.info("Groq executed_tools entries did not match the expected shape; not billed: %s", e)
             return ()
 
     def _map_groq_service_tier(self, original_service_tier: str | None) -> Literal["auto", "default", "flex"]:
