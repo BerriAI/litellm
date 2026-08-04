@@ -5,8 +5,8 @@ from litellm.types.utils import StandardLoggingPayload
 # Tiers a caller may name in a request, across the providers that accept the
 # parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock and
 # Groq (subsets of those), Anthropic ("auto", "standard_only") and Vertex, which
-# maps "default" to "standard". Used to bound the caller-controlled fallback in
-# ``get_service_tier_from_standard_logging_payload``.
+# maps "default" to "standard". Bounds the caller-controlled requested tier
+# wherever it is recorded.
 KNOWN_REQUEST_SERVICE_TIERS = frozenset(
     {"auto", "batch", "default", "flex", "priority", "scale", "standard", "standard_only"}
 )
@@ -31,10 +31,18 @@ def get_served_service_tier(standard_logging_payload: StandardLoggingPayload) ->
 
 
 def get_requested_service_tier(standard_logging_payload: StandardLoggingPayload) -> str | None:
-    """The tier the caller asked for, as sent to the provider."""
+    """
+    The tier the caller asked for, as sent to the provider.
+
+    The value is caller-controlled and survives param mapping even where the
+    provider then ignores it (Bedrock and Groq accept the request and drop an
+    unrecognized tier), so it is only reported when it names a known tier.
+    """
     model_parameters = standard_logging_payload.get("model_parameters")
     requested_tier = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
-    return requested_tier if isinstance(requested_tier, str) and requested_tier else None
+    if isinstance(requested_tier, str) and requested_tier in KNOWN_REQUEST_SERVICE_TIERS:
+        return requested_tier
+    return None
 
 
 def get_service_tier_from_standard_logging_payload(
@@ -48,18 +56,12 @@ def get_service_tier_from_standard_logging_payload(
     provider picked the concrete tier.
 
     Streaming responses carry no served tier, so the requested tier is the
-    fallback. That value is caller-controlled and survives param mapping even
-    where the provider then ignores it (Bedrock and Groq accept the request and
-    drop an unrecognized tier), so it is only labelled when it names a known
-    tier; otherwise one caller could mint a Prometheus series per string. Values
-    the provider itself reports are not caller-controlled and stay unrestricted,
-    so a tier a provider adds later is still labelled correctly.
+    fallback. Values the provider itself reports are not caller-controlled and
+    stay unrestricted, so a tier a provider adds later is still labelled
+    correctly.
     """
     served_tier = get_served_service_tier(standard_logging_payload)
     if served_tier is not None:
         return served_tier
 
-    requested_tier = get_requested_service_tier(standard_logging_payload)
-    if requested_tier is not None and requested_tier in KNOWN_REQUEST_SERVICE_TIERS:
-        return requested_tier
-    return None
+    return get_requested_service_tier(standard_logging_payload)

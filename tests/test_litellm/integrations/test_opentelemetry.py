@@ -5966,3 +5966,44 @@ class TestOTELServiceTierAttributes(unittest.TestCase):
         )
         self.assertNotIn(self.RESPONSE_KEY, attributes)
         self.assertNotIn(self.REQUEST_KEY, attributes)
+
+    def test_unknown_requested_tier_is_not_stamped(self):
+        """The requested tier is caller-controlled, so an unrecognized value is
+        dropped rather than written verbatim onto the span."""
+        response_obj = {
+            "id": "chatcmpl-4",
+            "model": "gpt-5-mini",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {"service_tier": "Z" * 5000},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertNotIn(self.REQUEST_KEY, attributes)
+
+    def test_served_tier_is_stamped_even_when_unrecognized(self):
+        """The served tier comes from the provider, not the caller, so a tier a
+        provider adds later is still stamped."""
+        response_obj = {
+            "id": "chatcmpl-5",
+            "model": "gpt-5-mini",
+            "service_tier": "tier-added-by-provider-later",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertEqual(attributes[self.RESPONSE_KEY], "tier-added-by-provider-later")
