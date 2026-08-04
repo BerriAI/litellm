@@ -17,7 +17,7 @@ import traceback
 import warnings
 from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from types import UnionType
+from types import MappingProxyType, UnionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -3659,6 +3659,38 @@ def _apply_ssrf_general_settings(settings: Mapping[str, object]) -> None:
         )
 
 
+_SSRF_SETTINGS_KEYS = (
+    "user_url_allowed_hosts",
+    "user_url_validation",
+    "provider_url_destination_allowed_hosts",
+)
+
+
+def _snapshot_ssrf_yaml_baseline() -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "user_url_allowed_hosts": litellm.user_url_allowed_hosts,
+            "user_url_validation": litellm.user_url_validation,
+            "provider_url_destination_allowed_hosts": litellm.provider_url_destination_allowed_hosts,
+        }
+    )
+
+
+def _reconcile_ssrf_settings_from_db(
+    db_settings: Mapping[str, object],
+    yaml_baseline: Mapping[str, object] | None,
+) -> None:
+    """
+    Apply the SSRF keys present in the DB rows; absent keys revert to the yaml
+    baseline. Callers must only pass a successfully read DB state, so a failed
+    read skips reconciling instead of wiping an operator's restrictions.
+    """
+    if yaml_baseline is None:
+        return
+    overrides = {k: db_settings[k] for k in _SSRF_SETTINGS_KEYS if k in db_settings}  # mutable-ok: one-shot
+    _apply_ssrf_general_settings({**yaml_baseline, **overrides})  # mutable-ok: applied immediately
+
+
 def _set_redis_usage_cache(coordination_redis_cache: RedisCache | None) -> None:
     """Publish the resolved coordination Redis to the consumers that read it directly."""
     global redis_usage_cache
@@ -3832,6 +3864,7 @@ class ProxyConfig:
         self._last_hashicorp_vault_config: dict[str, Any] | None = None
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
+        self._ssrf_yaml_baseline: Mapping[str, object] | None = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -4916,6 +4949,7 @@ class ProxyConfig:
 
             ### SSRF URL VALIDATION SETTINGS ###
             _apply_ssrf_general_settings(general_settings)
+            self._ssrf_yaml_baseline = _snapshot_ssrf_yaml_baseline()
 
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
@@ -5963,14 +5997,9 @@ class ProxyConfig:
             if old_value != new_value:
                 await self._reschedule_spend_log_cleanup_job()
 
-        for key in (
-            "user_url_allowed_hosts",
-            "user_url_validation",
-            "provider_url_destination_allowed_hosts",
-        ):
+        for key in _SSRF_SETTINGS_KEYS:
             if key in _general_settings:
                 general_settings[key] = _general_settings[key]
-        _apply_ssrf_general_settings(_general_settings)
 
     def _update_config_fields(
         self,
@@ -6195,6 +6224,18 @@ class ProxyConfig:
                 await self._update_general_settings(
                     db_general_settings=db_general_settings.param_value,
                 )
+
+            # Reconcile SSRF settings so removed DB keys or rows revert to the
+            # yaml baseline; a failed read raises above and skips this
+            db_litellm_settings = await get_config_param(prisma_client, "litellm_settings")
+            db_ssrf_settings: dict[str, object] = {}  # mutable-ok: merged across two rows then applied once
+            for row in (db_litellm_settings, db_general_settings):  # later wins: general_settings
+                row_value = getattr(row, "param_value", None)
+                if isinstance(row_value, dict):
+                    for key in _SSRF_SETTINGS_KEYS:
+                        if key in row_value:
+                            db_ssrf_settings[key] = row_value[key]
+            _reconcile_ssrf_settings_from_db(db_ssrf_settings, self._ssrf_yaml_baseline)
 
             # initialize vector stores, guardrails, etc. table in db
             await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
