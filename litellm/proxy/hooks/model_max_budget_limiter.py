@@ -56,7 +56,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             model=model, internal_model_max_budget=internal_model_max_budget
         )
         if _current_model_budget_info is None:
-            verbose_proxy_logger.debug(f"Model {model} not found in internal_model_max_budget")
+            verbose_proxy_logger.debug("Model %s not found in internal_model_max_budget", model)
             return True
 
         # check if current model is within budget
@@ -122,7 +122,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             model=model, internal_model_max_budget=internal_model_max_budget
         )
         if _current_model_budget_info is None:
-            verbose_proxy_logger.debug(f"Model {model} not found in end_user_model_max_budget")
+            verbose_proxy_logger.debug("Model %s not found in end_user_model_max_budget", model)
             return True
 
         # check if current model is within budget

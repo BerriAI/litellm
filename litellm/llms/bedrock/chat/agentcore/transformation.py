@@ -131,7 +131,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         jwt_token = api_key or optional_params.get("api_key")
         if jwt_token:
             verbose_logger.debug(
-                f"AgentCore: Using Bearer token authentication (Cognito/JWT) - token: {jwt_token[:50]}..."
+                "AgentCore: Using Bearer token authentication (Cognito/JWT) - token: %s...", jwt_token[:50]
             )
             headers["Content-Type"] = "application/json"
             headers["Authorization"] = f"Bearer {jwt_token}"
@@ -182,12 +182,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         """
         session_id = optional_params.get("runtimeSessionId", None)
         if session_id:
-            verbose_logger.debug(f"Using provided runtimeSessionId: {session_id}")
+            verbose_logger.debug("Using provided runtimeSessionId: %s", session_id)
             return session_id
 
         # Generate a session ID with 33+ characters
-        generated_id = f"litellm-session-{uuid.uuid4()!s}"
-        verbose_logger.debug(f"Generated new session ID: {generated_id}")
+        generated_id = f"litellm-session-{uuid.uuid4()}"
+        verbose_logger.debug("Generated new session ID: %s", generated_id)
         return generated_id
 
     def _get_runtime_user_id(self, optional_params: dict) -> str | None:
@@ -196,7 +196,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         """
         user_id = optional_params.get("runtimeUserId", None)
         if user_id:
-            verbose_logger.debug(f"Using provided runtimeUserId: {user_id}")
+            verbose_logger.debug("Using provided runtimeUserId: %s", user_id)
         return user_id
 
     def transform_request(
@@ -231,7 +231,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             dict: Payload dict containing the prompt and (optionally) the OpenAI
             content list.
         """
-        verbose_logger.debug(f"AgentCore transform_request - optional_params keys: {list(optional_params.keys())}")
+        verbose_logger.debug("AgentCore transform_request - optional_params keys: %s", list(optional_params.keys()))
 
         # Use the last message content as the prompt
         prompt = convert_content_list_to_str(messages[-1])
@@ -264,7 +264,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # The request data is the payload dict (will be JSON encoded by the HTTP handler)
         # Qualifier will be handled as a query parameter in get_complete_url
 
-        verbose_logger.debug(f"PAYLOAD: {payload}")
+        verbose_logger.debug("PAYLOAD: %s", payload)
         return payload
 
     @staticmethod
@@ -302,7 +302,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             # Skip non-dict data (some lines contain JSON strings)
             return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
-            verbose_logger.debug(f"Skipping non-JSON line: {line[:100]}")
+            verbose_logger.debug("Skipping non-JSON line: %s", line[:100])
             return None
 
     def _extract_usage_from_event(self, event_data: dict) -> AgentCoreUsage | None:
@@ -361,7 +361,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             total_tokens = prompt_tokens + completion_tokens
 
             verbose_logger.debug(
-                f"Calculated usage - prompt: {prompt_tokens}, completion: {completion_tokens}, total: {total_tokens}"
+                "Calculated usage - prompt: %s, completion: %s, total: %s",
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
             )
 
             return Usage(
@@ -370,7 +373,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 total_tokens=total_tokens,
             )
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {e!s}")
+            verbose_logger.warning("Failed to calculate token usage: %s", e)
             return None
 
     def _parse_json_response(self, response_json: dict) -> AgentCoreParsedResponse:
@@ -439,8 +442,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
         # Strategy 4: fallback - return raw JSON as content
         verbose_logger.warning(
-            f"AgentCore: Could not extract content from JSON response keys "
-            f"{list(response_json.keys())}. Returning raw JSON as content."
+            "AgentCore: Could not extract content from JSON response keys %s. Returning raw JSON as content.",
+            list(response_json.keys()),
         )
         return AgentCoreParsedResponse(
             content=json.dumps(response_json),
@@ -459,20 +462,20 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             AgentCoreParsedResponse: Parsed response data
         """
         content_type = raw_response.headers.get("content-type", "").lower()
-        verbose_logger.debug(f"AgentCore response Content-Type: {content_type}")
+        verbose_logger.debug("AgentCore response Content-Type: %s", content_type)
 
         # Parse response based on content type
         if "application/json" in content_type:
             # Direct JSON response
             verbose_logger.debug("Parsing JSON response")
             response_json = raw_response.json()
-            verbose_logger.debug(f"Response JSON: {response_json}")
+            verbose_logger.debug("Response JSON: %s", response_json)
             return self._parse_json_response(response_json)
         else:
             # SSE stream response (text/event-stream or default)
             verbose_logger.debug("Parsing SSE stream response")
             response_text = raw_response.text
-            verbose_logger.debug(f"AgentCore response (first 500 chars): {response_text[:500]}")
+            verbose_logger.debug("AgentCore response (first 500 chars): %s", response_text[:500])
             return self._parse_sse_stream(response_text)
 
     def _parse_sse_stream(self, response_text: str) -> AgentCoreParsedResponse:
@@ -496,7 +499,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             if not data:
                 continue
 
-            verbose_logger.debug(f"SSE event keys: {list(data.keys())}")
+            verbose_logger.debug("SSE event keys: %s", list(data.keys()))
 
             # Check for final complete message
             if "message" in data and isinstance(data["message"], dict):
@@ -506,12 +509,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             # Process event data
             if "event" in data and isinstance(data["event"], dict):
                 event_payload = data["event"]
-                verbose_logger.debug(f"Event payload keys: {list(event_payload.keys())}")
+                verbose_logger.debug("Event payload keys: %s", list(event_payload.keys()))
 
                 # Extract usage metadata
                 if usage := self._extract_usage_from_event(data):
                     usage_data = usage
-                    verbose_logger.debug(f"Found usage data: {usage_data}")
+                    verbose_logger.debug("Found usage data: %s", usage_data)
 
                 # Collect content deltas
                 if text := self._extract_content_delta(data):
@@ -520,7 +523,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # Build final content
         content = self._extract_content_from_message(final_message) if final_message else "".join(content_blocks)
 
-        verbose_logger.debug(f"Final usage_data: {usage_data}")
+        verbose_logger.debug("Final usage_data: %s", usage_data)
 
         return AgentCoreParsedResponse(content=content, usage=usage_data, final_message=final_message)
 
@@ -624,7 +627,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                         yield chunk
 
                 except json.JSONDecodeError:
-                    verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
+                    verbose_logger.debug("Skipping non-JSON SSE line: %s", line[:100])
                     continue
 
     def get_sync_custom_stream_wrapper(
@@ -651,7 +654,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client(params={})
 
-        verbose_logger.debug(f"Making sync streaming request to: {api_base}")
+        verbose_logger.debug("Making sync streaming request to: %s", api_base)
 
         # Make streaming request
         response = client.post(
@@ -837,7 +840,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                         yield chunk
 
                 except json.JSONDecodeError:
-                    verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
+                    verbose_logger.debug("Skipping non-JSON SSE line: %s", line[:100])
                     continue
 
     async def get_async_custom_stream_wrapper(
@@ -864,7 +867,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             client = get_async_httpx_client(llm_provider=cast(Any, "bedrock"), params={})
 
-        verbose_logger.debug(f"Making async streaming request to: {api_base}")
+        verbose_logger.debug("Making async streaming request to: %s", api_base)
 
         # Make async streaming request
         response = await client.post(
@@ -990,8 +993,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             content = parsed_data["content"]
             usage_data = parsed_data["usage"]
 
-            verbose_logger.debug(f"Parsed content length: {len(content)}")
-            verbose_logger.debug(f"Usage data: {usage_data}")
+            verbose_logger.debug("Parsed content length: %s", len(content))
+            verbose_logger.debug("Usage data: %s", usage_data)
 
             # Create the message
             message = Message(content=content, role="assistant")
@@ -1023,9 +1026,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Bedrock AgentCore response: {e!s}")
+            verbose_logger.error("Error processing Bedrock AgentCore response: %s", e)
             raise BedrockError(
-                message=f"Error processing response: {e!s}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 

@@ -197,6 +197,16 @@ RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
+# The earliest an evicted, litellm-created client may be closed. A request handed the
+# client just before eviction is still using it, so nothing is closed inside this window;
+# past it, the client is closed once it reports no connection in flight.
+EVICTED_LLM_CLIENT_CLOSE_GRACE_SECONDS = 900
+
+# How many evicted clients may be queued for closing at once. Past this, an evicted client
+# is left to the collector rather than letting a cache-churning workload grow the queue
+# without bound. Each queued entry is ~100 bytes and comes due within one grace window.
+EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING = 10_000
+
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
@@ -303,6 +313,7 @@ MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES = int(os.getenv("MAX_LONG_SIDE_FOR_IMAGE_HIGH_R
 MAX_TILE_WIDTH = int(os.getenv("MAX_TILE_WIDTH", 512))
 MAX_TILE_HEIGHT = int(os.getenv("MAX_TILE_HEIGHT", 512))
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS = float(os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000))
+GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL = 1.0 / 1000
 # Azure OpenAI Assistants feature costs
 # Source: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
 AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY = float(

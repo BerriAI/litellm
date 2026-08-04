@@ -97,7 +97,7 @@ class BaseRoutingStrategy(ABC):
                     default_sync_interval
                 )  # Wait for DEFAULT_REDIS_SYNC_INTERVAL seconds before next sync
             except Exception as e:
-                verbose_router_logger.error(f"Error in periodic sync task: {e!s}")
+                verbose_router_logger.error("Error in periodic sync task: %s", e)
                 await asyncio.sleep(
                     default_sync_interval
                 )  # Still wait DEFAULT_REDIS_SYNC_INTERVAL seconds on error before retrying
@@ -146,7 +146,7 @@ class BaseRoutingStrategy(ABC):
                 return return_result
 
         except Exception as e:
-            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {e!s}")
+            verbose_router_logger.error("Error syncing in-memory cache with Redis: %s", e)
             self.redis_increment_operation_queue = []
 
     def add_to_in_memory_keys_to_update(self, key: str):
@@ -226,4 +226,4 @@ class BaseRoutingStrategy(ABC):
                 await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=merged)
 
         except Exception as e:
-            verbose_router_logger.exception(f"Error syncing in-memory cache with Redis: {e!s}")
+            verbose_router_logger.exception("Error syncing in-memory cache with Redis: %s", e)

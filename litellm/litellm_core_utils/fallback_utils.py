@@ -70,7 +70,7 @@ async def async_completion_with_fallbacks(**kwargs):
                 )
 
         except Exception as e:
-            verbose_logger.exception(f"Fallback attempt failed for model {model}: {e!s}")
+            verbose_logger.exception("Fallback attempt failed for model %s: %s", model, e)
             most_recent_exception_str = str(e)
             continue
 

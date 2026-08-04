@@ -209,7 +209,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 elif isinstance(item, dict):
                     # Handle reasoning items specifically to filter out status=None
                     if item.get("type") == "reasoning":
-                        verbose_logger.debug(f"Handling reasoning item: {item}")
+                        verbose_logger.debug("Handling reasoning item: %s", item)
                         # Type assertion since we know it's a dict at this point
                         dict_item = cast(dict[str, Any], item)
                         filtered_item = self._handle_reasoning_item(dict_item)
@@ -251,7 +251,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
                 return dict_reasoning_item
             except Exception as e:
-                verbose_logger.debug(f"Failed to create ResponseReasoningItem, falling back to manual filtering: {e}")
+                verbose_logger.debug("Failed to create ResponseReasoningItem, falling back to manual filtering: %s", e)
                 # Fallback: manually filter out known None fields
                 filtered_item = {
                     k: v
@@ -282,7 +282,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         try:
             response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
+            verbose_logger.debug(
+                "Error constructing ResponsesAPIResponse: %s, using model_construct", raw_response_json
+            )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
@@ -429,7 +431,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 ):
                     return True
             except Exception as e:
-                verbose_logger.debug(f"Error getting model info in OpenAIResponsesAPIConfig: {e}")
+                verbose_logger.debug("Error getting model info in OpenAIResponsesAPIConfig: %s", e)
         return False
 
     def supports_native_websocket(self) -> bool:
@@ -649,7 +651,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         try:
             response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
+            verbose_logger.debug(
+                "Error constructing ResponsesAPIResponse: %s, using model_construct", raw_response_json
+            )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         response._hidden_params["additional_headers"] = processed_headers

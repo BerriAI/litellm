@@ -601,7 +601,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         try:
             json_message = json.loads(message)
         except json.JSONDecodeError:
-            verbose_logger.warning(f"Invalid JSON message: {message[:200]}")
+            verbose_logger.warning("Invalid JSON message: %s", message[:200])
             return []
 
         message_type = json_message.get("type")
@@ -620,7 +620,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         elif message_type == "response.cancel":
             return self.transform_response_cancel_event(json_message)
         else:
-            verbose_logger.warning(f"Unknown message type: {message_type}")
+            verbose_logger.warning("Unknown message type: %s", message_type)
             return []
 
     def _session_object(
@@ -866,7 +866,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             Tuple of (events, reset_delta_chunks)
         """
         content_end = event["contentEnd"]
-        verbose_logger.debug(f"Handling contentEnd: {content_end}")
+        verbose_logger.debug("Handling contentEnd: %s", content_end)
 
         if not current_output_item_id or not current_response_id:
             return [], current_delta_chunks
@@ -1149,7 +1149,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             message_preview = (
                 message[:200].decode("utf-8", errors="replace") if isinstance(message, bytes) else message[:200]
             )
-            verbose_logger.warning(f"Invalid JSON message: {message_preview}")
+            verbose_logger.warning("Invalid JSON message: %s", message_preview)
             return {
                 "response": [],
                 "current_output_item_id": realtime_response_transform_input.get("current_output_item_id"),
@@ -1230,7 +1230,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
             returned_messages.extend(events)
             # Store tool call info for potential use
-            verbose_logger.debug(f"Tool use event: {tool_name} (ID: {tool_call_id})")
+            verbose_logger.debug("Tool use event: %s (ID: %s)", tool_name, tool_call_id)
 
         elif "promptEnd" in event or "completionEnd" in event:
             (

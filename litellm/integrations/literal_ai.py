@@ -94,9 +94,9 @@ class LiteralAILogger(CustomBatchLogger):
             )
 
             if response.status_code >= 300:
-                verbose_logger.error(f"Literal AI Error: {response.status_code} - {response.text}")
+                verbose_logger.error("Literal AI Error: %s - %s", response.status_code, response.text)
             else:
-                verbose_logger.debug(f"Batch of {len(self.log_queue)} runs successfully created")
+                verbose_logger.debug("Batch of %s runs successfully created", len(self.log_queue))
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 
@@ -152,11 +152,11 @@ class LiteralAILogger(CustomBatchLogger):
                 headers=self.headers,
             )
             if response.status_code >= 300:
-                verbose_logger.error(f"Literal AI Error: {response.status_code} - {response.text}")
+                verbose_logger.error("Literal AI Error: %s - %s", response.status_code, response.text)
             else:
-                verbose_logger.debug(f"Batch of {len(self.log_queue)} runs successfully created")
+                verbose_logger.debug("Batch of %s runs successfully created", len(self.log_queue))
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(f"Literal AI HTTP Error: {e.response.status_code} - {e.response.text}")
+            verbose_logger.exception("Literal AI HTTP Error: %s - %s", e.response.status_code, e.response.text)
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 

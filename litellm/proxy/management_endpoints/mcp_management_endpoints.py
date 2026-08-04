@@ -94,7 +94,7 @@ DEFAULT_MCP_REGISTRY_VERSION = "1.0.0"
 try:
     importlib.import_module("mcp")
 except ImportError as e:
-    verbose_logger.debug(f"MCP module not found: {e}")
+    verbose_logger.debug("MCP module not found: %s", e)
     MCP_AVAILABLE = False
 
 if MCP_AVAILABLE:
@@ -399,7 +399,7 @@ if MCP_AVAILABLE:
         try:
             encrypted_payload = encrypt_value_helper(payload_json)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to encrypt temporary MCP server payload for Redis cache: {e!s}")
+            verbose_proxy_logger.debug("Failed to encrypt temporary MCP server payload for Redis cache: %s", e)
             return
 
         if not isinstance(encrypted_payload, str):
@@ -413,7 +413,7 @@ if MCP_AVAILABLE:
                 ttl=max(1, ttl_seconds),
             )
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to write temporary MCP server to Redis cache: {e!s}")
+            verbose_proxy_logger.debug("Failed to write temporary MCP server to Redis cache: %s", e)
 
     async def _get_temporary_mcp_server_from_redis(
         server_id: str,
@@ -435,7 +435,7 @@ if MCP_AVAILABLE:
                 key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
             )
         except Exception as e:
-            verbose_proxy_logger.debug(f"Failed reading temporary MCP server from Redis cache: {e!s}")
+            verbose_proxy_logger.debug("Failed reading temporary MCP server from Redis cache: %s", e)
             return None
 
         if not isinstance(cached_server, str):
@@ -454,7 +454,7 @@ if MCP_AVAILABLE:
         try:
             loaded = json.loads(decrypted_json)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Invalid decrypted temporary MCP payload in Redis cache: {e!s}")
+            verbose_proxy_logger.debug("Invalid decrypted temporary MCP payload in Redis cache: %s", e)
             return None
         if not isinstance(loaded, dict):
             return None
@@ -463,7 +463,7 @@ if MCP_AVAILABLE:
         try:
             return MCPServer.model_validate(payload_dict)
         except Exception as e:
-            verbose_proxy_logger.debug(f"Invalid temporary MCP server payload in Redis cache: {e!s}")
+            verbose_proxy_logger.debug("Invalid temporary MCP server payload in Redis cache: %s", e)
             return None
 
     async def get_cached_temporary_mcp_server(
@@ -814,7 +814,7 @@ if MCP_AVAILABLE:
                     if hasattr(server, "mcp_access_groups") and server.mcp_access_groups:
                         access_groups.update(server.mcp_access_groups)
             except Exception as e:
-                verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
+                verbose_proxy_logger.debug("Error getting MCP access groups: %s", e)
 
         # Convert to sorted list
         access_groups_list = sorted(list(access_groups))
@@ -864,7 +864,7 @@ if MCP_AVAILABLE:
                 entry = _build_mcp_registry_entry_for_server(server, base_url)
             except Exception as e:
                 verbose_proxy_logger.debug(
-                    f"Skipping MCP server {getattr(server, 'server_id', 'unknown')} in registry: {e}"
+                    "Skipping MCP server %s in registry: %s", getattr(server, "server_id", "unknown"), e
                 )
                 continue
             registry_servers.append({"server": entry})
@@ -1183,10 +1183,10 @@ if MCP_AVAILABLE:
                 touched_by=user_api_key_dict.user_id or user_api_key_dict.team_id,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error registering mcp server: {e!s}")
+            verbose_proxy_logger.exception("Error registering mcp server: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error registering mcp server: {e!s}"},
+                detail={"error": f"Error registering mcp server: {e}"},
             )
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
@@ -1398,7 +1398,7 @@ if MCP_AVAILABLE:
             mcp_server.last_health_check = health_result.last_health_check
             mcp_server.health_check_error = health_result.health_check_error
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error performing health check on server {server_id}: {e}")
+            verbose_proxy_logger.debug("Error performing health check on server %s: %s", server_id, e)
             mcp_server.status = "unknown"
             mcp_server.last_health_check = datetime.now()
             mcp_server.health_check_error = str(e)
@@ -1483,10 +1483,10 @@ if MCP_AVAILABLE:
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error creating mcp server: {e!s}")
+            verbose_proxy_logger.exception("Error creating mcp server: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error creating mcp server: {e!s}"},
+                detail={"error": f"Error creating mcp server: {e}"},
             )
 
         # Registry refresh is best-effort: the row is already committed, so a
@@ -1498,7 +1498,7 @@ if MCP_AVAILABLE:
             await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"MCP server {new_mcp_server.server_id} created but in-memory registry refresh failed: {e!s}"
+                "MCP server %s created but in-memory registry refresh failed: %s", new_mcp_server.server_id, e
             )
 
         return _redact_mcp_credentials(new_mcp_server)
@@ -1559,10 +1559,10 @@ if MCP_AVAILABLE:
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error caching temporary mcp server: {e!s}")
+            verbose_proxy_logger.exception("Error caching temporary mcp server: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error caching temporary mcp server: {e!s}"},
+                detail={"error": f"Error caching temporary mcp server: {e}"},
             )
 
         return _redact_mcp_credentials(temp_record)
@@ -2566,7 +2566,7 @@ if MCP_AVAILABLE:
             await proxy_config.save_config(new_config=config)
 
             verbose_proxy_logger.debug(
-                f"Updated public mcp servers to: {litellm.public_mcp_servers} by user: {user_api_key_dict.user_id}"
+                "Updated public mcp servers to: %s by user: %s", litellm.public_mcp_servers, user_api_key_dict.user_id
             )
 
             return {
@@ -2577,7 +2577,7 @@ if MCP_AVAILABLE:
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error making agent public: {e}")
+            verbose_proxy_logger.exception("Error making agent public: %s", e)
             raise HTTPException(status_code=500, detail=str(e))
 
     # --- MCP Discovery ---
@@ -2598,7 +2598,7 @@ if MCP_AVAILABLE:
             with open(_MCP_REGISTRY_PATH, "r") as f:
                 data: dict[str, Any] = json.load(f)
         except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to load MCP registry from {_MCP_REGISTRY_PATH}: {e}")
+            verbose_proxy_logger.warning("Failed to load MCP registry from %s: %s", _MCP_REGISTRY_PATH, e)
             data = {"servers": []}
         _mcp_registry_cache = data
         return data
@@ -2685,7 +2685,7 @@ if MCP_AVAILABLE:
         try:
             return _load_openapi_registry()
         except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to load OpenAPI registry from {_OPENAPI_REGISTRY_PATH}: {e}")
+            verbose_proxy_logger.warning("Failed to load OpenAPI registry from %s: %s", _OPENAPI_REGISTRY_PATH, e)
             return {"apis": []}
 
     # ---------------------------------------------------------------------------

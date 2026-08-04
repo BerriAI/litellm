@@ -441,7 +441,7 @@ async def _handle_stream_message(
                                     "message": getattr(
                                         proxy_exc,
                                         "message",
-                                        f"Streaming error: {proxy_exc!s}",
+                                        f"Streaming error: {proxy_exc}",
                                     ),
                                 },
                             }
@@ -468,7 +468,7 @@ async def _handle_stream_message(
                         obj = normalize_stream_event(obj, served_version, request_id=request_id)
                     yield json.dumps(obj) + "\n"
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
+            verbose_proxy_logger.exception("Error streaming A2A response: %s", e)
             if (
                 use_proxy_hooks
                 and proxy_logging_obj is not None
@@ -491,7 +491,7 @@ async def _handle_stream_message(
                         "id": request_id,
                         "error": {
                             "code": -32603,
-                            "message": f"Streaming error: {e!s}",
+                            "message": f"Streaming error: {e}",
                         },
                     }
                 )
@@ -561,13 +561,13 @@ async def get_agent_card(
         served_version = _served_version(agent, request)
         agent_card = normalize_agent_card(agent_card, served_version)
 
-        verbose_proxy_logger.debug(f"Returning agent card for '{agent_id}' with proxy URL: {proxy_url}")
+        verbose_proxy_logger.debug("Returning agent card for '%s' with proxy URL: %s", agent_id, proxy_url)
         return JSONResponse(content=agent_card)
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting agent card: {e}")
+        verbose_proxy_logger.exception("Error getting agent card: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -615,7 +615,7 @@ async def invoke_agent_a2a(
         body = await request.json()
         request_data = body
 
-        verbose_proxy_logger.debug(f"A2A request for agent '{agent_id}': {body}")
+        verbose_proxy_logger.debug("A2A request for agent '%s': %s", agent_id, body)
 
         # Validate JSON-RPC format
         if body.get("jsonrpc") != "2.0":
@@ -690,7 +690,9 @@ async def invoke_agent_a2a(
         if not agent_url and not custom_llm_provider:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
 
-        verbose_proxy_logger.info(f"Proxying A2A request to agent '{agent_id}' at {agent_url or 'completion-bridge'}")
+        verbose_proxy_logger.info(
+            "Proxying A2A request to agent '%s' at %s", agent_id, agent_url or "completion-bridge"
+        )
 
         # Set up data dict for litellm processing
         if "metadata" not in body:
@@ -965,7 +967,7 @@ async def invoke_agent_a2a(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error invoking agent: {e}")
+        verbose_proxy_logger.exception("Error invoking agent: %s", e)
         try:
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -974,4 +976,4 @@ async def invoke_agent_a2a(
             )
         except Exception:
             pass
-        return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e!s}", 500)
+        return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)

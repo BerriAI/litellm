@@ -499,7 +499,7 @@ class RouterBudgetLimiting(CustomLogger):
                 spend_key=spend_key, response_cost=response_cost, ttl=ttl_for_increment
             )
 
-        verbose_router_logger.debug(f"Incremented spend for {spend_key} by {response_cost}")
+        verbose_router_logger.debug("Incremented spend for %s by %s", spend_key, response_cost)
 
     async def periodic_sync_in_memory_spend_with_redis(self):
         """
@@ -514,7 +514,7 @@ class RouterBudgetLimiting(CustomLogger):
                     DEFAULT_REDIS_SYNC_INTERVAL
                 )  # Wait for DEFAULT_REDIS_SYNC_INTERVAL seconds before next sync
             except Exception as e:
-                verbose_router_logger.error(f"Error in periodic sync task: {e!s}")
+                verbose_router_logger.error("Error in periodic sync task: %s", e)
                 await asyncio.sleep(
                     DEFAULT_REDIS_SYNC_INTERVAL
                 )  # Still wait DEFAULT_REDIS_SYNC_INTERVAL seconds on error before retrying
@@ -545,7 +545,7 @@ class RouterBudgetLimiting(CustomLogger):
             self.redis_increment_operation_queue = []
 
         except Exception as e:
-            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {e!s}")
+            verbose_router_logger.error("Error syncing in-memory cache with Redis: %s", e)
 
     async def _sync_in_memory_spend_with_redis(self):
         """
@@ -597,10 +597,10 @@ class RouterBudgetLimiting(CustomLogger):
                 for key, value in redis_values.items():
                     if value is not None:
                         await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=float(value))
-                        verbose_router_logger.debug(f"Updated in-memory cache for {key}: {value}")
+                        verbose_router_logger.debug("Updated in-memory cache for %s: %s", key, value)
 
         except Exception as e:
-            verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {e!s}")
+            verbose_router_logger.error("Error syncing in-memory cache with Redis: %s", e)
 
     def _get_budget_config_for_deployment(
         self,
@@ -639,7 +639,7 @@ class RouterBudgetLimiting(CustomLogger):
                 litellm_params=provider_resolution_params,
             )
         except Exception:
-            verbose_router_logger.error(f"Error getting LLM provider for deployment: {deployment}")
+            verbose_router_logger.error("Error getting LLM provider for deployment: %s", deployment)
             return None
         return custom_llm_provider
 
@@ -772,7 +772,7 @@ class RouterBudgetLimiting(CustomLogger):
                     )
                 )
 
-            verbose_router_logger.debug(f"Initalized Provider budget config: {self.provider_budget_config}")
+            verbose_router_logger.debug("Initalized Provider budget config: %s", self.provider_budget_config)
 
     def _init_deployment_budgets(
         self,
@@ -788,7 +788,10 @@ class RouterBudgetLimiting(CustomLogger):
             _budget_duration = _litellm_params.get("budget_duration")
 
             verbose_router_logger.debug(
-                f"Init Deployment Budget: max_budget: {_max_budget}, budget_duration: {_budget_duration}, model_id: {_model_id}"
+                "Init Deployment Budget: max_budget: %s, budget_duration: %s, model_id: %s",
+                _max_budget,
+                _budget_duration,
+                _model_id,
             )
             if _max_budget is not None and _budget_duration is not None and _model_id is not None:
                 _budget_config = GenericBudgetInfo(
@@ -799,7 +802,7 @@ class RouterBudgetLimiting(CustomLogger):
                     self.deployment_budget_config = {}
                 self.deployment_budget_config[_model_id] = _budget_config
 
-        verbose_router_logger.debug(f"Initialized Deployment Budget Config: {self.deployment_budget_config}")
+        verbose_router_logger.debug("Initialized Deployment Budget Config: %s", self.deployment_budget_config)
 
     def register_deployment_budget(
         self,
@@ -837,4 +840,4 @@ class RouterBudgetLimiting(CustomLogger):
             )
             self.tag_budget_config[_tag] = _generic_budget_config
 
-        verbose_router_logger.debug(f"Initialized Tag Budget Config: {self.tag_budget_config}")
+        verbose_router_logger.debug("Initialized Tag Budget Config: %s", self.tag_budget_config)

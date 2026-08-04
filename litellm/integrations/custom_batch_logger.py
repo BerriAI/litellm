@@ -47,7 +47,7 @@ class CustomBatchLogger(CustomLogger):
     async def periodic_flush(self):
         while True:
             await asyncio.sleep(self.flush_interval)
-            verbose_logger.debug(f"CustomLogger periodic flush after {self.flush_interval} seconds")
+            verbose_logger.debug("CustomLogger periodic flush after %s seconds", self.flush_interval)
             await self.flush_queue()
 
     async def flush_queue(self):

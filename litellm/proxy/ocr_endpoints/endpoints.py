@@ -55,7 +55,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
         form = await request.form()
     except Exception as e:
         raise ValueError(
-            f"Failed to parse multipart form data: {e!s}. "
+            f"Failed to parse multipart form data: {e}. "
             "When using curl with --form/-F, do NOT set the Content-Type header "
             "manually — curl will set it automatically with the required boundary."
         )
@@ -96,9 +96,10 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
             data[field_name] = field_value
 
     verbose_proxy_logger.debug(
-        f"OCR multipart form request parsed - model: {data.get('model')}, "
-        f"document_type: {document['type']}, "
-        f"filename: {uploaded_file.filename}"
+        "OCR multipart form request parsed - model: %s, document_type: %s, filename: %s",
+        data.get("model"),
+        document["type"],
+        uploaded_file.filename,
     )
 
     return data

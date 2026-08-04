@@ -178,7 +178,7 @@ class RealTimeStreaming:
                 # Catch-all base object so unknown/new event names never raise.
                 typed_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)  # type: ignore
         except Exception as e:
-            verbose_logger.debug(f"Error parsing message for logging: {e}")
+            verbose_logger.debug("Error parsing message for logging: %s", e)
             self.messages.append(message_obj)  # type: ignore[arg-type]
             return
         self.messages.append(typed_obj)
@@ -213,7 +213,7 @@ class RealTimeStreaming:
                 if tools and isinstance(tools, list):
                     self.session_tools = tools
                 # GA: session.type is required; log it for traceability but no action needed
-                verbose_logger.debug(f"Realtime session.type: {session.get('type')}")
+                verbose_logger.debug("Realtime session.type: %s", session.get("type"))
                 if session.get("type") == "transcription":
                     self._is_transcription_session = True
         except (json.JSONDecodeError, AttributeError, TypeError):
@@ -981,7 +981,7 @@ class RealTimeStreaming:
                     try:
                         await self._handle_provider_config_message(raw_response)
                     except Exception as e:
-                        verbose_logger.exception(f"Error processing backend message, skipping: {e}")
+                        verbose_logger.exception("Error processing backend message, skipping: %s", e)
                         continue
                 else:
                     event = self._parse_backend_event(raw_response)
@@ -1008,9 +1008,9 @@ class RealTimeStreaming:
                     await self.websocket.send_text(json.dumps(translated))
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
-            verbose_logger.exception(f"Connection closed in backend to client send messages - {e}")
+            verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
         except Exception as e:
-            verbose_logger.exception(f"Error in backend to client send messages: {e}")
+            verbose_logger.exception("Error in backend to client send messages: %s", e)
         finally:
             await self.log_messages()
 
@@ -1404,7 +1404,7 @@ class RealTimeStreaming:
                     self._guardrail_turn_detection_update_sent = True
 
         except Exception as e:
-            verbose_logger.debug(f"Error in client ack messages: {e}")
+            verbose_logger.debug("Error in client ack messages: %s", e)
 
     async def bidirectional_forward(self):
         forward_task = asyncio.create_task(self.backend_to_client_send_messages())

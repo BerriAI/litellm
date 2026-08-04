@@ -2157,7 +2157,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # dict.get("texts", []) would return None if the key exists with a None value.
         texts = inputs.get("texts") or []
         try:
-            verbose_proxy_logger.debug(f"Bedrock Guardrail: Applying guardrail to {len(texts)} text(s)")
+            verbose_proxy_logger.debug("Bedrock Guardrail: Applying guardrail to %s text(s)", len(texts))
 
             if input_type == "request":
                 incremental_result = await self._apply_incremental_request_scan(
@@ -2266,4 +2266,4 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             raise
         except Exception as e:
             verbose_proxy_logger.error("Bedrock Guardrail: Failed to apply guardrail: %s", str(e))
-            raise Exception(f"Bedrock guardrail failed: {e!s}")
+            raise Exception(f"Bedrock guardrail failed: {e}")

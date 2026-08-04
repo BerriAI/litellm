@@ -55,7 +55,7 @@ def _start_profiling(profile_sampling_rate: float) -> None:
         if _profiler is None:
             _profiler = cProfile.Profile()
             _profiler.enable()
-            verbose_proxy_logger.info(f"Profiling started with sampling rate: {profile_sampling_rate}")
+            verbose_proxy_logger.info("Profiling started with sampling rate: %s", profile_sampling_rate)
 
 
 def _start_profiling_for_request(profile_sampling_rate: float) -> bool:
@@ -77,9 +77,9 @@ def _save_stats(profile_file: PathLib) -> None:
             _profiler.dump_stats(str(profile_file))
             # Re-enable profiler to continue profiling
             _profiler.enable()
-            verbose_proxy_logger.debug(f"Profiling stats saved to {profile_file}")
+            verbose_proxy_logger.debug("Profiling stats saved to %s", profile_file)
         except Exception as e:
-            verbose_proxy_logger.error(f"Error saving profiling stats: {e}")
+            verbose_proxy_logger.error("Error saving profiling stats: %s", e)
             # Make sure profiler is re-enabled even if there's an error
             try:
                 _profiler.enable()
@@ -178,7 +178,7 @@ def wrap_function_with_line_profiler(module: Any, function_name: str) -> bool:
     try:
         original_function = getattr(module, function_name, None)
         if original_function is None:
-            verbose_proxy_logger.warning(f"Function {function_name} not found in module {module.__name__}")
+            verbose_proxy_logger.warning("Function %s not found in module %s", function_name, module.__name__)
             return False
 
         # Store original function if not already wrapped
@@ -189,10 +189,10 @@ def wrap_function_with_line_profiler(module: Any, function_name: str) -> bool:
         profiled_function = _line_profiler(original_function)
         setattr(module, function_name, profiled_function)
 
-        verbose_proxy_logger.info(f"Wrapped {module.__name__}.{function_name} with line_profiler")
+        verbose_proxy_logger.info("Wrapped %s.%s with line_profiler", module.__name__, function_name)
         return True
     except Exception as e:
-        verbose_proxy_logger.error(f"Error wrapping {function_name} with line_profiler: {e}")
+        verbose_proxy_logger.error("Error wrapping %s with line_profiler: %s", function_name, e)
         return False
 
 
@@ -226,7 +226,7 @@ def wrap_function_directly(func: Callable) -> Callable:
         _line_profiler.add_function(func)
         profiled_function = _line_profiler(func)
 
-    verbose_proxy_logger.info(f"Wrapped function {func.__name__} with line_profiler")
+    verbose_proxy_logger.info("Wrapped function %s with line_profiler", func.__name__)
     return profiled_function
 
 
@@ -251,7 +251,7 @@ def collect_line_profiler_stats(output_file: str | None = None) -> None:
                 # Save to file
                 output_path = PathLib(output_file)
                 _line_profiler.dump_stats(str(output_path))
-                verbose_proxy_logger.info(f"Line profiler stats saved to {output_path}")
+                verbose_proxy_logger.info("Line profiler stats saved to %s", output_path)
             else:
                 # Print to stdout
                 from io import StringIO
@@ -261,7 +261,7 @@ def collect_line_profiler_stats(output_file: str | None = None) -> None:
                 stats_output = stream.getvalue()
                 verbose_proxy_logger.info("Line profiler stats:\n" + stats_output)
         except Exception as e:
-            verbose_proxy_logger.error(f"Error collecting line profiler stats: {e}")
+            verbose_proxy_logger.error("Error collecting line profiler stats: %s", e)
 
 
 def register_shutdown_handler(output_file: str | None = None) -> None:
@@ -282,4 +282,4 @@ def register_shutdown_handler(output_file: str | None = None) -> None:
         collect_line_profiler_stats(output_file=output_file)
 
     atexit.register(shutdown_handler)
-    verbose_proxy_logger.debug(f"Registered line_profiler shutdown handler for {output_file}")
+    verbose_proxy_logger.debug("Registered line_profiler shutdown handler for %s", output_file)

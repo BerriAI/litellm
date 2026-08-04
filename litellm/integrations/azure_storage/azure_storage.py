@@ -54,7 +54,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             super().__init__(**kwargs, flush_lock=self.flush_lock)
         except Exception as e:
             verbose_logger.exception(
-                f"AzureBlobStorageLogger: Got exception on init AzureBlobStorageLogger client {e!s}"
+                "AzureBlobStorageLogger: Got exception on init AzureBlobStorageLogger client %s", e
             )
             raise e
 
@@ -79,7 +79,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.log_queue.append(standard_logging_payload)
 
         except Exception as e:
-            verbose_logger.exception(f"AzureBlobStorageLogger Layer Error - {e!s}")
+            verbose_logger.exception("AzureBlobStorageLogger Layer Error - %s", e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -101,7 +101,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
 
             self.log_queue.append(standard_logging_payload)
         except Exception as e:
-            verbose_logger.exception(f"AzureBlobStorageLogger Layer Error - {e!s}")
+            verbose_logger.exception("AzureBlobStorageLogger Layer Error - %s", e)
 
     async def async_send_batch(self):
         """
@@ -124,7 +124,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 await self.async_upload_payload_to_azure_blob_storage(payload=payload)
 
         except Exception as e:
-            verbose_logger.exception(f"AzureBlobStorageLogger Error sending batch API - {e!s}")
+            verbose_logger.exception("AzureBlobStorageLogger Error sending batch API - %s", e)
 
     async def async_upload_payload_to_azure_blob_storage(self, payload: StandardLoggingPayload):
         """
@@ -150,16 +150,16 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 await self._append_data(async_client, base_url, json_payload)
                 await self._flush_data(async_client, base_url, len(payload_bytes))
 
-                verbose_logger.debug(f"Successfully uploaded log to Azure Blob Storage: {filename}")
+                verbose_logger.debug("Successfully uploaded log to Azure Blob Storage: %s", filename)
 
         except Exception as e:
-            verbose_logger.exception(f"Error uploading to Azure Blob Storage: {e!s}")
+            verbose_logger.exception("Error uploading to Azure Blob Storage: %s", e)
             raise e
 
     async def _create_file(self, client: AsyncHTTPHandler, base_url: str):
         """Helper method to create the file resource"""
         try:
-            verbose_logger.debug(f"Creating file resource at: {base_url}")
+            verbose_logger.debug("Creating file resource at: %s", base_url)
             headers = {
                 "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
                 "Content-Length": "0",
@@ -169,13 +169,13 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             response.raise_for_status()
             verbose_logger.debug("Successfully created file resource")
         except Exception as e:
-            verbose_logger.exception(f"Error creating file resource: {e!s}")
+            verbose_logger.exception("Error creating file resource: %s", e)
             raise
 
     async def _append_data(self, client: AsyncHTTPHandler, base_url: str, json_payload: str):
         """Helper method to append data to the file"""
         try:
-            verbose_logger.debug(f"Appending data to file: {base_url}")
+            verbose_logger.debug("Appending data to file: %s", base_url)
             headers = {
                 "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
                 "Content-Type": "application/json",
@@ -189,13 +189,13 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             response.raise_for_status()
             verbose_logger.debug("Successfully appended data")
         except Exception as e:
-            verbose_logger.exception(f"Error appending data: {e!s}")
+            verbose_logger.exception("Error appending data: %s", e)
             raise
 
     async def _flush_data(self, client: AsyncHTTPHandler, base_url: str, position: int):
         """Helper method to flush the data"""
         try:
-            verbose_logger.debug(f"Flushing data at position {position}")
+            verbose_logger.debug("Flushing data at position %s", position)
             headers = {
                 "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
                 "Content-Length": "0",
@@ -205,7 +205,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             response.raise_for_status()
             verbose_logger.debug("Successfully flushed data")
         except Exception as e:
-            verbose_logger.exception(f"Error flushing data: {e!s}")
+            verbose_logger.exception("Error flushing data: %s", e)
             raise
 
     ####### Helper methods to managing Authentication to Azure Storage #######
@@ -229,7 +229,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             )
             # Token typically expires in 1 hour
             self.token_expiry = datetime.now() + timedelta(hours=1)
-            verbose_logger.debug(f"New token will expire at {self.token_expiry}")
+            verbose_logger.debug("New token will expire at %s", self.token_expiry)
 
     def get_azure_ad_token_from_azure_storage(
         self,
@@ -324,7 +324,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             # check if the directory exists
             if not await directory_client.exists():
                 await directory_client.create_directory()
-                verbose_logger.debug(f"Created directory: {today}")
+                verbose_logger.debug("Created directory: %s", today)
 
             # Create a file client
             file_name = f"{payload.get('id') or str(uuid.uuid4())}.json"
@@ -342,7 +342,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             # Flush the content to finalize the file
             await file_client.flush_data(position=len(content), offset=0)
 
-            verbose_logger.debug(f"Successfully uploaded and wrote to {today}/{file_name}")
+            verbose_logger.debug("Successfully uploaded and wrote to %s/%s", today, file_name)
 
         except Exception as e:
-            verbose_logger.exception(f"Error occurred: {e!s}")
+            verbose_logger.exception("Error occurred: %s", e)

@@ -137,7 +137,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         # (create_session, get_session, list_sessions, delete_session, etc.)
         endpoint = f"{base_url}/v1beta1/{resource_path}:streamQuery"
 
-        verbose_logger.debug(f"Vertex Agent Engine URL: {endpoint}")
+        verbose_logger.debug("Vertex Agent Engine URL: %s", endpoint)
         return endpoint
 
     def _get_auth_headers(
@@ -155,7 +155,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             project_id=vertex_project,
         )
 
-        verbose_logger.debug(f"Vertex Agent Engine: Authenticated for project {project_id}")
+        verbose_logger.debug("Vertex Agent Engine: Authenticated for project %s", project_id)
 
         return {
             "Authorization": f"Bearer {access_token}",
@@ -219,7 +219,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             "input": input_data,
         }
 
-        verbose_logger.debug(f"Vertex Agent Engine payload: {payload}")
+        verbose_logger.debug("Vertex Agent Engine payload: %s", payload)
         return payload
 
     def validate_environment(
@@ -270,7 +270,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                 total_tokens=total_tokens,
             )
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {e!s}")
+            verbose_logger.warning("Failed to calculate token usage: %s", e)
             return None
 
     def transform_response(
@@ -295,11 +295,11 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """
         try:
             content_type = raw_response.headers.get("content-type", "").lower()
-            verbose_logger.debug(f"Vertex Agent Engine response Content-Type: {content_type}")
+            verbose_logger.debug("Vertex Agent Engine response Content-Type: %s", content_type)
 
             # Parse the SSE response
             response_text = raw_response.text
-            verbose_logger.debug(f"Response (first 500 chars): {response_text[:500]}")
+            verbose_logger.debug("Response (first 500 chars): %s", response_text[:500])
 
             # Extract content from SSE stream
             content = ""
@@ -335,9 +335,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Vertex Agent Engine response: {e!s}")
+            verbose_logger.error("Error processing Vertex Agent Engine response: %s", e)
             raise VertexAgentEngineError(
-                message=f"Error processing response: {e!s}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 

@@ -89,7 +89,7 @@ class PassThroughStreamingHandler:
 
                     yield chunk
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in chunk_processor: {e!s}")
+            verbose_proxy_logger.error("Error in chunk_processor: %s", e)
             raise
         finally:
             # GeneratorExit (raised on client disconnect) is not caught by
@@ -115,7 +115,7 @@ class PassThroughStreamingHandler:
                         )
                     )
                 except Exception as e:
-                    verbose_proxy_logger.error(f"Error scheduling chunk_processor logging: {e!s}")
+                    verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
@@ -165,7 +165,7 @@ class PassThroughStreamingHandler:
                 **kwargs,
             )
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in _route_streaming_logging_to_handler: {e!s}")
+            verbose_proxy_logger.error("Error in _route_streaming_logging_to_handler: %s", e)
 
     @staticmethod
     def _build_passthrough_logging_result(

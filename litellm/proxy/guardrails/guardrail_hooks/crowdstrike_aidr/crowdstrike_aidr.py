@@ -275,7 +275,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         # Pass relevant kwargs to the parent class
         super().__init__(guardrail_name=guardrail_name, **kwargs)
         verbose_proxy_logger.debug(
-            f"Initialized CrowdStrike AIDR Guardrail: name={guardrail_name}, api_base={self.api_base}"
+            "Initialized CrowdStrike AIDR Guardrail: name=%s, api_base=%s", guardrail_name, self.api_base
         )
 
     async def _call_crowdstrike_aidr_guard(
@@ -306,7 +306,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         }
 
         verbose_proxy_logger.debug(
-            f"CrowdStrike AIDR Guardrail ({hook_name}): Calling endpoint {endpoint} with payload: {payload}"
+            "CrowdStrike AIDR Guardrail (%s): Calling endpoint %s with payload: %s", hook_name, endpoint, payload
         )
 
         response = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
@@ -317,7 +317,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
         if result.blocked:
             verbose_proxy_logger.warning(
-                f"CrowdStrike AIDR Guardrail ({hook_name}): Request blocked. Response: {result}"
+                "CrowdStrike AIDR Guardrail (%s): Request blocked. Response: %s", hook_name, result
             )
             raise HTTPException(
                 status_code=400,  # Bad Request, indicating violation
@@ -327,7 +327,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                 },
             )
         verbose_proxy_logger.debug(
-            f"CrowdStrike AIDR Guardrail ({hook_name}): Request passed. Response: {result.detectors}"
+            "CrowdStrike AIDR Guardrail (%s): Request passed. Response: %s", hook_name, result.detectors
         )
 
         return result
@@ -396,7 +396,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        verbose_proxy_logger.debug(f"CrowdStrike AIDR Guardrail: Applying guardrail to {input_type}")
+        verbose_proxy_logger.debug("CrowdStrike AIDR Guardrail: Applying guardrail to %s", input_type)
 
         # Extract inputs
         texts = inputs.get("texts", [])

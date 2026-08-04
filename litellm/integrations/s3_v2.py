@@ -64,12 +64,12 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             _masker = SensitiveDataMasker()
             if s3_callback_params_override is not None:
                 verbose_logger.debug(
-                    f"in init s3 logger (audit override) - {_masker.mask_dict(dict(s3_callback_params_override))}"
+                    "in init s3 logger (audit override) - %s", _masker.mask_dict(dict(s3_callback_params_override))
                 )
             else:
                 verbose_logger.debug(
-                    f"in init s3 logger - s3_callback_params "
-                    f"{_masker.mask_dict(dict(litellm.s3_callback_params or {}))}"
+                    "in init s3 logger - s3_callback_params %s",
+                    _masker.mask_dict(dict(litellm.s3_callback_params or {})),
                 )
 
             # Initialize S3 params first to get the correct s3_verify value
@@ -98,11 +98,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_server_side_encryption=s3_server_side_encryption,
                 s3_sse_kms_key_id=s3_sse_kms_key_id,
             )
-            verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
+            verbose_logger.debug("s3 logger using endpoint url %s", s3_endpoint_url)
 
             # IMPORTANT
             # Create httpx client AFTER _init_s3_params so we have the correct s3_verify value
-            verbose_logger.debug(f"s3_v2 logger creating async httpx client with s3_verify={self.s3_verify}")
+            verbose_logger.debug("s3_v2 logger creating async httpx client with s3_verify=%s", self.s3_verify)
             self.async_httpx_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback,
                 params={"ssl_verify": self.s3_verify},
@@ -111,7 +111,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
 
-            verbose_logger.debug(f"s3 flush interval: {s3_flush_interval}, s3 batch size: {s3_batch_size}")
+            verbose_logger.debug("s3 flush interval: %s, s3 batch size: %s", s3_flush_interval, s3_batch_size)
             # Call CustomLogger's __init__
             CustomBatchLogger.__init__(
                 self,
@@ -125,7 +125,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             BaseAWSLLM.__init__(self)
 
         except Exception as e:
-            print_verbose(f"Got exception on init s3 client {e!s}")
+            print_verbose(f"Got exception on init s3 client {e}")
             raise e
 
     def _init_s3_params(
@@ -259,7 +259,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
     async def _async_log_event_base(self, kwargs, response_obj, start_time, end_time):
         try:
-            verbose_logger.debug(f"s3 Logging - Enters logging function for model {kwargs}")
+            verbose_logger.debug("s3 Logging - Enters logging function for model %s", kwargs)
 
             s3_batch_logging_element = self.create_s3_batch_logging_element(
                 start_time=start_time,
@@ -284,7 +284,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 self.batch_size,
             )
         except Exception as e:
-            verbose_logger.exception(f"s3 Layer Error - {e!s}")
+            verbose_logger.exception("s3 Layer Error - %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
@@ -313,8 +313,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 aws_sts_endpoint=self.s3_aws_sts_endpoint,
             )
 
-            verbose_logger.debug(f"s3_v2 logger - uploading data to s3 - {batch_logging_element.s3_object_key}")
-            verbose_logger.debug(f"s3_v2 logger - s3_verify setting: {self.s3_verify}")
+            verbose_logger.debug("s3_v2 logger - uploading data to s3 - %s", batch_logging_element.s3_object_key)
+            verbose_logger.debug("s3_v2 logger - s3_verify setting: %s", self.s3_verify)
 
             # Prepare the URL
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
@@ -374,16 +374,19 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 if response.status_code in (500, 503) and attempt < max_retries - 1:
                     wait_time = 2**attempt  # 1s, 2s
                     verbose_logger.warning(
-                        f"S3 upload returned {response.status_code}, retrying in {wait_time}s "
-                        f"(attempt {attempt + 1}/{max_retries}) "
-                        f"key={batch_logging_element.s3_object_key}"
+                        "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
+                        response.status_code,
+                        wait_time,
+                        attempt + 1,
+                        max_retries,
+                        batch_logging_element.s3_object_key,
                     )
                     await asyncio.sleep(wait_time)
                     continue
                 response.raise_for_status()
                 break
         except Exception as e:
-            verbose_logger.exception(f"Error uploading to s3: {e!s}")
+            verbose_logger.exception("Error uploading to s3: %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_send_batch(self):
@@ -395,7 +398,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
         Raises: Does not raise an exception, will only verbose_logger.exception()
         """
-        verbose_logger.debug(f"s3_v2 logger - sending batch of {len(self.log_queue)}")
+        verbose_logger.debug("s3_v2 logger - sending batch of %s", len(self.log_queue))
         if not self.log_queue:
             return
 
@@ -447,7 +450,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
         s3_file_name = litellm.utils.get_logging_id(start_time, standard_logging_payload) or ""
         verbose_logger.debug(
-            f"Creating s3 file with prefix_components={prefix_components},prefix_path={prefix_path} and {s3_file_name}"
+            "Creating s3 file with prefix_components=%s,prefix_path=%s and %s",
+            prefix_components,
+            prefix_path,
+            s3_file_name,
         )
         s3_object_key = get_s3_object_key(
             s3_path=cast(str | None, self.s3_path) or "",
@@ -455,7 +461,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             start_time=start_time,
             s3_file_name=s3_file_name,
         )
-        verbose_logger.debug(f"s3_object_key={s3_object_key}")
+        verbose_logger.debug("s3_object_key=%s", s3_object_key)
 
         s3_object_download_filename = (
             f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{standard_logging_payload['id']}.json"
@@ -479,7 +485,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         try:
-            verbose_logger.debug(f"s3_v2 logger - uploading data to s3 - {batch_logging_element.s3_object_key}")
+            verbose_logger.debug("s3_v2 logger - uploading data to s3 - %s", batch_logging_element.s3_object_key)
             credentials: Credentials = self.get_credentials(
                 aws_access_key_id=self.s3_aws_access_key_id,
                 aws_secret_access_key=self.s3_aws_secret_access_key,
@@ -548,16 +554,19 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 if response.status_code in (500, 503) and attempt < max_retries - 1:
                     wait_time = 2**attempt  # 1s, 2s
                     verbose_logger.warning(
-                        f"S3 upload returned {response.status_code}, retrying in {wait_time}s "
-                        f"(attempt {attempt + 1}/{max_retries}) "
-                        f"key={batch_logging_element.s3_object_key}"
+                        "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
+                        response.status_code,
+                        wait_time,
+                        attempt + 1,
+                        max_retries,
+                        batch_logging_element.s3_object_key,
                     )
                     time.sleep(wait_time)
                     continue
                 response.raise_for_status()
                 break
         except Exception as e:
-            verbose_logger.exception(f"Error uploading to s3: {e!s}")
+            verbose_logger.exception("Error uploading to s3: %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
 
     async def _download_object_from_s3(self, s3_object_key: str) -> dict | None:
@@ -596,7 +605,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 aws_sts_endpoint=self.s3_aws_sts_endpoint,
             )
 
-            verbose_logger.debug(f"s3_v2 logger - downloading data from s3 - {s3_object_key}")
+            verbose_logger.debug("s3_v2 logger - downloading data from s3 - %s", s3_object_key)
 
             # Prepare the URL
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{s3_object_key}"
@@ -642,7 +651,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             return response.json()
 
         except Exception as e:
-            verbose_logger.exception(f"Error downloading from S3: {e!s}")
+            verbose_logger.exception("Error downloading from S3: %s", e)
             return None
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
@@ -666,5 +675,5 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             downloaded_object = await self._download_object_from_s3(object_key)
             return downloaded_object
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving object {object_key} from cold storage: {e!s}")
+            verbose_logger.exception("Error retrieving object %s from cold storage: %s", object_key, e)
             return None

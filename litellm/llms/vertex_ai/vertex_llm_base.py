@@ -766,7 +766,7 @@ class VertexBase:
             The original error if reauthentication fails
         """
         verbose_logger.debug(
-            f"Handling reauthentication for project_id: {project_id}. Clearing cache and retrying once."
+            "Handling reauthentication for project_id: %s. Clearing cache and retrying once.", project_id
         )
 
         # Clear the cached credentials
@@ -782,8 +782,10 @@ class VertexBase:
             )
         except Exception as retry_error:
             verbose_logger.error(
-                f"Reauthentication retry failed for project_id: {project_id}. "
-                f"Original error: {error!s}. Retry error: {retry_error!s}"
+                "Reauthentication retry failed for project_id: %s. Original error: %s. Retry error: %s",
+                project_id,
+                error,
+                retry_error,
             )
             # Re-raise the original error for better context
             raise error
@@ -799,7 +801,7 @@ class VertexBase:
         Async reauthentication retry that stays within the per-key async lock.
         """
         verbose_logger.debug(
-            f"Handling async reauthentication for project_id: {project_id}. Clearing cache and retrying once."
+            "Handling async reauthentication for project_id: %s. Clearing cache and retrying once.", project_id
         )
 
         self._credentials_project_mapping.pop(credential_cache_key, None)
@@ -836,8 +838,10 @@ class VertexBase:
             return _credentials.token, project_id
         except Exception as retry_error:
             verbose_logger.error(
-                f"Async reauthentication retry failed for project_id: {project_id}. "
-                f"Original error: {error!s}. Retry error: {retry_error!s}"
+                "Async reauthentication retry failed for project_id: %s. Original error: %s. Retry error: %s",
+                project_id,
+                error,
+                retry_error,
             )
             raise error
 
@@ -870,10 +874,10 @@ class VertexBase:
         credential_cache_key = (cache_credentials, project_id)
         _credentials: GoogleCredentialsObject | None = None
 
-        verbose_logger.debug(f"Checking cached credentials for project_id: {project_id}")
+        verbose_logger.debug("Checking cached credentials for project_id: %s", project_id)
 
         if credential_cache_key in self._credentials_project_mapping:
-            verbose_logger.debug(f"Cached credentials found for project_id: {project_id}.")
+            verbose_logger.debug("Cached credentials found for project_id: %s.", project_id)
             # Retrieve both credentials and cached project_id
             cached_entry = self._credentials_project_mapping[credential_cache_key]
             verbose_logger.debug("cached_entry: %s", cached_entry)
@@ -890,14 +894,15 @@ class VertexBase:
 
         else:
             verbose_logger.debug(
-                f"Credential cache key not found for project_id: {project_id}, loading new credentials"
+                "Credential cache key not found for project_id: %s, loading new credentials", project_id
             )
 
             try:
                 _credentials, credential_project_id = self.load_auth(credentials=credentials, project_id=project_id)
             except Exception as e:
                 verbose_logger.exception(
-                    f"Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {e!s}"
+                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: %s",
+                    e,
                 )
                 raise e
 

@@ -84,7 +84,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                f"litellm.proxy.hooks.batch_redis_get.py::async_pre_call_hook(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.batch_redis_get.py::async_pre_call_hook(): Exception occured - %s", e
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 

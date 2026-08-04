@@ -128,7 +128,7 @@ class GalileoObserve(CustomLogger):
         except Exception as e:
             return IntegrationHealthCheckStatus(
                 status="unhealthy",
-                error_message=f"Galileo health check failed: {e!s}",
+                error_message=f"Galileo health check failed: {e}",
             )
 
     async def async_set_galileo_headers(self) -> None:

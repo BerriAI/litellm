@@ -88,6 +88,36 @@ commands:
             rm -f /tmp/uv-install.sh
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
             export PATH="$HOME/.local/bin:$PATH"
+  install_rust:
+    description: "Install pinned rustup (1.28.2) and Rust toolchain (1.97.1) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself."
+    steps:
+      - run:
+          name: Install Rust (rustup 1.28.2, toolchain 1.97.1)
+          command: |
+            case "$(uname -m)" in
+              x86_64)
+                RUSTUP_TRIPLE=x86_64-unknown-linux-gnu
+                RUSTUP_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+                ;;
+              aarch64)
+                RUSTUP_TRIPLE=aarch64-unknown-linux-gnu
+                RUSTUP_SHA256=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c
+                ;;
+              *)
+                echo "install_rust: unsupported architecture $(uname -m)" >&2
+                exit 1
+                ;;
+            esac
+            curl -sSLf -o /tmp/rustup-init \
+              "https://static.rust-lang.org/rustup/archive/1.28.2/${RUSTUP_TRIPLE}/rustup-init"
+            echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c -
+            chmod +x /tmp/rustup-init
+            /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.97.1
+            rm -f /tmp/rustup-init
+            echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
+            export PATH="$HOME/.cargo/bin:$PATH"
+            rustc --version
+            cargo --version
   start_postgres:
     description: "Start a postgres-db container on port 5432 and wait until it accepts connections."
     parameters:
@@ -163,6 +193,26 @@ commands:
             done
             echo "fake OpenAI endpoint did not become ready" >&2
             exit 1
+  start_cost_center_service:
+    description: "Start the stand-in cost center validation service (tests/store_model_in_db_tests/cost_center_service.py) on host port 9414 and wait until healthy. The proxy's team-metadata validator (team_metadata_validator_e2e.py, impl 'http') reaches it via TEAM_METADATA_VALIDATION_SERVICE_URL=http://host.docker.internal:9414/validate. Run after uv deps are synced."
+    steps:
+      - run:
+          name: Start cost center validation service
+          background: true
+          command: |
+            uv run --no-sync python tests/store_model_in_db_tests/cost_center_service.py --host 0.0.0.0 --port 9414
+      - run:
+          name: Wait for cost center validation service
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:9414/health >/dev/null 2>&1; then
+                echo "cost center validation service is up"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "cost center validation service did not become ready" >&2
+            exit 1
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -178,6 +228,7 @@ commands:
       - checkout
       - setup_google_dns
       - install_uv
+      - install_rust
       - restore_cache:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
@@ -292,6 +343,7 @@ jobs:
       - checkout
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Build the wheel
           environment:
@@ -324,6 +376,7 @@ jobs:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -397,6 +450,7 @@ jobs:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -471,6 +525,7 @@ jobs:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -522,6 +577,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -588,6 +644,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -628,6 +685,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -669,6 +727,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -702,6 +761,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - restore_cache:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
@@ -752,6 +812,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - restore_cache:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
@@ -803,6 +864,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -836,6 +898,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - restore_cache:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
@@ -882,6 +945,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -928,6 +992,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -970,6 +1035,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1016,6 +1082,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1063,6 +1130,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - restore_cache:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
@@ -1103,6 +1171,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1148,6 +1217,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1192,6 +1262,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1224,6 +1295,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1267,6 +1339,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1311,6 +1384,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1355,6 +1429,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1386,6 +1461,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1432,6 +1508,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1477,6 +1554,7 @@ jobs:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1527,6 +1605,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1551,6 +1630,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1577,6 +1657,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1678,6 +1759,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1773,6 +1855,7 @@ jobs:
           at: ~/project
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1861,6 +1944,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -1944,6 +2028,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -2076,6 +2161,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -2162,6 +2248,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -2258,12 +2345,14 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
       - start_fake_openai_endpoint
+      - start_cost_center_service
       - attach_workspace:
           at: ~/project
       - run:
@@ -2283,11 +2372,13 @@ jobs:
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
+              -e TEAM_METADATA_VALIDATION_SERVICE_URL=http://host.docker.internal:9414/validate \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LITELLM_LOG=ERROR \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
+              -v $(pwd)/litellm/proxy/example_config_yaml/team_metadata_validator_e2e.py:/app/team_metadata_validator_e2e.py \
               litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000
@@ -2333,6 +2424,7 @@ jobs:
       - setup_google_dns
       # Remove Docker CLI installation since it's already available in machine executor
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -2414,6 +2506,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -2553,6 +2646,7 @@ jobs:
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
+      - install_rust
       - run:
           name: Install Dependencies
           command: |
@@ -2743,6 +2837,7 @@ jobs:
           category: client
       - setup_google_dns
       - install_uv
+      - install_rust
       - restore_cache:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}
@@ -2885,6 +2980,7 @@ jobs:
           category: client
       - setup_google_dns
       - install_uv
+      - install_rust
       - restore_cache:
           keys:
             - v1-uv-cache-{{ checksum "uv.lock" }}

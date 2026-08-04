@@ -245,10 +245,10 @@ class ManusFilesConfig(BaseFilesConfig):
                 response_json = initial_response_data
             else:
                 # Log raw response for debugging
-                verbose_logger.debug(f"Manus raw response text: {raw_response.text}")
+                verbose_logger.debug("Manus raw response text: %s", raw_response.text)
                 response_json = raw_response.json()
 
-            verbose_logger.debug(f"Manus file response: {response_json}")
+            verbose_logger.debug("Manus file response: %s", response_json)
 
             # Parse created_at timestamp
             created_at_str = response_json.get("created_at", "")
@@ -279,8 +279,8 @@ class ManusFilesConfig(BaseFilesConfig):
                 status_details=response_json.get("status_details"),
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing Manus file response: {e!s}")
-            raise ValueError(f"Error parsing Manus file response: {e!s}")
+            verbose_logger.exception("Error parsing Manus file response: %s", e)
+            raise ValueError(f"Error parsing Manus file response: {e}")
 
     def transform_retrieve_file_request(
         self,

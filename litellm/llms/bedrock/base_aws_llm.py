@@ -816,7 +816,10 @@ class BaseAWSLLM:
         import boto3
 
         verbose_logger.debug(
-            f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
+            "IN Web Identity Token: %s | Role Name: %s | Session Name: %s",
+            aws_web_identity_token,
+            aws_role_name,
+            aws_session_name,
         )
 
         # get_secret() expands environment-variable references (an os.environ/<VAR>
@@ -932,7 +935,8 @@ class BaseAWSLLM:
 
         if sts_response["PackedPolicySize"] > BEDROCK_MAX_POLICY_SIZE:
             verbose_logger.warning(
-                f"The policy size is greater than 75% of the allowed size, PackedPolicySize: {sts_response['PackedPolicySize']}"
+                "The policy size is greater than 75%% of the allowed size, PackedPolicySize: %s",
+                sts_response["PackedPolicySize"],
             )
 
         with tracer.trace("boto3.Session(**iam_creds_dict)"):
@@ -970,7 +974,7 @@ class BaseAWSLLM:
             sts_client = boto3.client("sts", **irsa_sts_kwargs)
 
         # Manually assume the IRSA role with the session name
-        verbose_logger.debug(f"Manually assuming IRSA role {irsa_role_arn} with session {aws_session_name}")
+        verbose_logger.debug("Manually assuming IRSA role %s with session %s", irsa_role_arn, aws_session_name)
         irsa_response = sts_client.assume_role_with_web_identity(
             RoleArn=irsa_role_arn,
             RoleSessionName=aws_session_name,
@@ -994,13 +998,13 @@ class BaseAWSLLM:
         try:
             caller_identity = sts_client_with_creds.get_caller_identity()
             verbose_logger.debug(
-                f"Current identity after manual IRSA assumption: {caller_identity.get('Arn', 'unknown')}"
+                "Current identity after manual IRSA assumption: %s", caller_identity.get("Arn", "unknown")
             )
         except Exception as e:
-            verbose_logger.debug(f"Failed to get caller identity: {e}")
+            verbose_logger.debug("Failed to get caller identity: %s", e)
 
         # Now assume the target role
-        verbose_logger.debug(f"Attempting to assume target role: {aws_role_name} with session: {aws_session_name}")
+        verbose_logger.debug("Attempting to assume target role: %s with session: %s", aws_role_name, aws_session_name)
         assume_role_params = {
             "RoleArn": aws_role_name,
             "RoleSessionName": aws_session_name,
@@ -1035,12 +1039,12 @@ class BaseAWSLLM:
         # Get current caller identity for debugging
         try:
             caller_identity = sts_client.get_caller_identity()
-            verbose_logger.debug(f"Current IRSA identity: {caller_identity.get('Arn', 'unknown')}")
+            verbose_logger.debug("Current IRSA identity: %s", caller_identity.get("Arn", "unknown"))
         except Exception as e:
-            verbose_logger.debug(f"Failed to get caller identity: {e}")
+            verbose_logger.debug("Failed to get caller identity: %s", e)
 
         # Assume the role
-        verbose_logger.debug(f"Attempting to assume role: {aws_role_name} with session: {aws_session_name}")
+        verbose_logger.debug("Attempting to assume role: %s with session: %s", aws_role_name, aws_session_name)
         assume_role_params = {
             "RoleArn": aws_role_name,
             "RoleSessionName": aws_session_name,
@@ -1142,7 +1146,7 @@ class BaseAWSLLM:
         if web_identity_token_file and irsa_role_arn and aws_access_key_id is None and aws_secret_access_key is None:
             # For cross-account role assumption with specific session names,
             # we need to manually assume the IRSA role first with the correct session name
-            verbose_logger.debug(f"IRSA detected: using web identity token from {web_identity_token_file}")
+            verbose_logger.debug("IRSA detected: using web identity token from %s", web_identity_token_file)
 
             try:
                 # Check if we need to do cross-account role assumption
@@ -1168,13 +1172,13 @@ class BaseAWSLLM:
                 return self._extract_credentials_and_ttl(sts_response)
 
             except Exception as e:
-                verbose_logger.debug(f"Failed to assume role via IRSA: {e}")
+                verbose_logger.debug("Failed to assume role via IRSA: %s", e)
                 if "AccessDenied" in str(e) and "is not authorized to perform: sts:AssumeRole" in str(e):
                     # Provide a more helpful error message for trust policy issues
                     verbose_logger.error(
-                        f"Access denied when trying to assume role {aws_role_name}. "
-                        f"Please ensure the trust policy of {aws_role_name} allows "
-                        f"the current role to assume it. Current identity: check logs with verbose mode."
+                        "Access denied when trying to assume role %s. Please ensure the trust policy of %s allows the current role to assume it. Current identity: check logs with verbose mode.",
+                        aws_role_name,
+                        aws_role_name,
                     )
                 # Re-raise the exception instead of falling through
                 raise

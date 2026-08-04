@@ -178,7 +178,7 @@ class QdrantSemanticCache(BaseCache):
             if response.status_code not in (200, 201):
                 print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {response.text}")
         except Exception as exc:
-            print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {exc!s}")
+            print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {exc}")
 
     def _payload_matches_cache_key(self, payload: dict, key: str) -> bool:
         # Pre-isolation points stored only prompt + response with no cache-key

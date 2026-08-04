@@ -68,10 +68,10 @@ class CustomMicrosoftSSO(MicrosoftSSO):
 
         if custom_authorization_endpoint or custom_token_endpoint or custom_userinfo_endpoint:
             verbose_proxy_logger.debug(
-                f"Using custom Microsoft SSO endpoints - "
-                f"authorization: {authorization_endpoint}, "
-                f"token: {token_endpoint}, "
-                f"userinfo: {userinfo_endpoint}"
+                "Using custom Microsoft SSO endpoints - authorization: %s, token: %s, userinfo: %s",
+                authorization_endpoint,
+                token_endpoint,
+                userinfo_endpoint,
             )
 
         return DiscoveryDocument(

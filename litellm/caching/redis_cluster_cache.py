@@ -100,9 +100,9 @@ class RedisClusterCache(RedisCache):
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.error(f"Redis Cluster connection test failed: {e!s}")
+            verbose_logger.error("Redis Cluster connection test failed: %s", e)
             return {
                 "status": "failed",
-                "message": f"Redis Cluster connection failed: {e!s}",
+                "message": f"Redis Cluster connection failed: {e}",
                 "error": str(e),
             }

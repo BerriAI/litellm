@@ -69,7 +69,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         rate_limit_type: Literal["key", "model_per_key", "user", "customer", "team"],
         values_to_update_in_cache: list[tuple[Any, Any]],
     ) -> dict:
-        verbose_proxy_logger.info(f"Current Usage of {rate_limit_type} in this minute: {current}")
+        verbose_proxy_logger.info("Current Usage of %s in this minute: %s", rate_limit_type, current)
         if current is None:
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case — at least one dimension is set to 0 (effectively
@@ -776,7 +776,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )  # save in cache for up to 1 min.
         except Exception as e:
-            verbose_proxy_logger.exception(f"Inside Parallel Request Limiter: An exception occurred - {e!s}")
+            verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 
     async def get_internal_user_object(
         self,

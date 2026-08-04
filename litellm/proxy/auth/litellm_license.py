@@ -26,7 +26,7 @@ class LicenseCheck:
 
     def __init__(self) -> None:
         self.license_str = os.getenv("LITELLM_LICENSE", None)
-        verbose_proxy_logger.debug(f"License Str value - {self.license_str}")
+        verbose_proxy_logger.debug("License Str value - %s", self.license_str)
         self.http_handler = HTTPHandler(timeout=NON_LLM_CONNECTION_TIMEOUT)
         self._premium_check_logged = False
         self.public_key = None
@@ -48,11 +48,13 @@ class LicenseCheck:
             else:
                 self.public_key = None
         except Exception as e:
-            verbose_proxy_logger.error(f"Error reading public key: {e!s}")
+            verbose_proxy_logger.error("Error reading public key: %s", e)
 
     def _verify(self, license_str: str) -> bool:
         verbose_proxy_logger.debug(
-            f"litellm.proxy.auth.litellm_license.py::_verify - Checking license against {self.base_url}/verify_license - {license_str}"
+            "litellm.proxy.auth.litellm_license.py::_verify - Checking license against %s/verify_license - %s",
+            self.base_url,
+            license_str,
         )
         url = f"{self.base_url}/verify_license/{license_str}"
 
@@ -79,12 +81,14 @@ class LicenseCheck:
             assert isinstance(premium, bool)
 
             verbose_proxy_logger.debug(
-                f"litellm.proxy.auth.litellm_license.py::_verify - License={license_str} is premium={premium}"
+                "litellm.proxy.auth.litellm_license.py::_verify - License=%s is premium=%s", license_str, premium
             )
             return premium
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License={license_str} via api. - {e!s}"
+                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License=%s via api. - %s",
+                license_str,
+                e,
             )
             return False
 
@@ -96,7 +100,8 @@ class LicenseCheck:
         try:
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    f"litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License={self.license_str}"
+                    "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License=%s",
+                    self.license_str,
                 )
 
             if self.license_str is None:
@@ -104,7 +109,8 @@ class LicenseCheck:
 
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    f"litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - {self.license_str}"
+                    "litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - %s",
+                    self.license_str,
                 )
                 self._premium_check_logged = True
 
@@ -187,6 +193,7 @@ class LicenseCheck:
 
         except Exception as e:
             verbose_proxy_logger.debug(
-                f"litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - {e!s}"
+                "litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - %s",
+                e,
             )
             return False

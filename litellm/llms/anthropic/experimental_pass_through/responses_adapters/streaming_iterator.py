@@ -300,7 +300,7 @@ class AnthropicResponsesStreamWrapper:
         except StopAsyncIteration:
             pass
         except Exception as e:
-            verbose_logger.error(f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}")
+            verbose_logger.error("AnthropicResponsesStreamWrapper error: %s\n%s", e, traceback.format_exc())
 
         # Drain any remaining queued chunks
         if self._chunk_queue:

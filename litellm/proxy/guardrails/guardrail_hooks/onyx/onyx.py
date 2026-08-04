@@ -59,7 +59,7 @@ class OnyxGuardrail(CustomGuardrail):
             raise ValueError("ONYX_API_KEY environment variable is not set")
         self.optional_params = kwargs
         super().__init__(**kwargs)
-        verbose_proxy_logger.info(f"OnyxGuard initialized with server: {self.api_base}")
+        verbose_proxy_logger.info("OnyxGuard initialized with server: %s", self.api_base)
 
     async def _validate_with_guard_server(
         self,
@@ -87,7 +87,7 @@ class OnyxGuardrail(CustomGuardrail):
             detection_message = "Unknown violation"
             if "violated_rules" in result:
                 detection_message = ", ".join(result["violated_rules"])
-            verbose_proxy_logger.warning(f"Request blocked by Onyx Guard. Violations: {detection_message}.")
+            verbose_proxy_logger.warning("Request blocked by Onyx Guard. Violations: %s.", detection_message)
             raise HTTPException(
                 status_code=400,
                 detail=f"Request blocked by Onyx Guard. Violations: {detection_message}.",
@@ -118,7 +118,8 @@ class OnyxGuardrail(CustomGuardrail):
                 payload = parsed.get("response", {})
             except Exception as e:
                 verbose_proxy_logger.error(
-                    f"Error in converting request_data to ModelResponse: {e!s}",
+                    "Error in converting request_data to ModelResponse: %s",
+                    e,
                     extra={
                         "conversation_id": conversation_id,
                         "input_type": input_type,
@@ -133,7 +134,8 @@ class OnyxGuardrail(CustomGuardrail):
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                f"Error in apply_guardrail guard: {e!s}",
+                "Error in apply_guardrail guard: %s",
+                e,
                 extra={"conversation_id": conversation_id, "input_type": input_type},
             )
             return inputs

@@ -333,7 +333,8 @@ def get_azure_ad_token(
             verbose_logger.debug("Azure AD Token Provider could not be used.")
         except Exception as e:
             verbose_logger.error(
-                f"Error calling Azure AD token provider: {e!s}. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential"
+                "Error calling Azure AD token provider: %s. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential",
+                e,
             )
             raise e
 
@@ -351,7 +352,7 @@ def get_azure_ad_token(
         try:
             token = azure_ad_token_provider()
             if not isinstance(token, str):
-                verbose_logger.error(f"Azure AD token provider returned non-string value: {type(token)}")
+                verbose_logger.error("Azure AD token provider returned non-string value: %s", type(token))
                 raise TypeError(f"Azure AD token must be a string, got {type(token)}")
             else:
                 azure_ad_token = token
@@ -359,8 +360,8 @@ def get_azure_ad_token(
             # Re-raise TypeError directly
             raise
         except Exception as e:
-            verbose_logger.error(f"Error calling Azure AD token provider: {e!s}")
-            raise RuntimeError(f"Failed to get Azure AD token: {e!s}") from e
+            verbose_logger.error("Error calling Azure AD token provider: %s", e)
+            raise RuntimeError(f"Failed to get Azure AD token: {e}") from e
 
     return azure_ad_token
 
@@ -393,7 +394,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             verbose_logger.debug("Successfully obtained Azure AD token provider using DefaultAzureCredential")
             return azure_ad_token_provider
         except Exception as e:
-            verbose_logger.debug(f"DefaultAzureCredential failed: {e!s}")
+            verbose_logger.debug("DefaultAzureCredential failed: %s", e)
             return None
 
     def get_azure_openai_client(
@@ -481,7 +482,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 if "http_client" in azure_client_params:
                     v1_params["http_client"] = azure_client_params["http_client"]
 
-                verbose_logger.debug(f"Using Azure v1 API with base_url: {v1_params['base_url']}")
+                verbose_logger.debug("Using Azure v1 API with base_url: %s", v1_params["base_url"])
 
                 if _is_async is True:
                     openai_client = AsyncOpenAI(**v1_params)  # type: ignore
@@ -508,6 +509,8 @@ class BaseAzureLLM(BaseOpenAILLM):
             openai_client=openai_client,
             client_initialization_params=client_initialization_params,
             client_type="azure",
+            litellm_owned_client=client is None
+            and self.owns_wrapped_http_client(azure_client_params.get("http_client")),
         )
         return openai_client
 
@@ -580,7 +583,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             # only show first 5 chars of api_key
             _api_key = _api_key[:8] + "*" * 15
         verbose_logger.debug(
-            f"Initializing Azure OpenAI Client for {model_name}, Api Base: {api_base!s}, Api Key:{_api_key}"
+            "Initializing Azure OpenAI Client for %s, Api Base: %s, Api Key:%s", model_name, api_base, _api_key
         )
         azure_client_params = {
             "api_key": api_key,

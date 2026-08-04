@@ -58,7 +58,7 @@ class CooldownCache:
 
             return cooldown_key, cooldown_data
         except Exception as e:
-            verbose_logger.error(f"CooldownCache::_common_add_cooldown_logic - Exception occurred - {e!s}")
+            verbose_logger.error("CooldownCache::_common_add_cooldown_logic - Exception occurred - %s", e)
             raise e
 
     def add_deployment_to_cooldown(
@@ -92,7 +92,7 @@ class CooldownCache:
                 ttl=_cooldown_time,
             )
         except Exception as e:
-            verbose_logger.error(f"CooldownCache::add_deployment_to_cooldown - Exception occurred - {e!s}")
+            verbose_logger.error("CooldownCache::add_deployment_to_cooldown - Exception occurred - %s", e)
             raise e
 
     @staticmethod

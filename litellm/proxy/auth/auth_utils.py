@@ -529,10 +529,11 @@ async def pre_db_read_auth_checks(
         _allowed_routes = general_settings["allowed_routes"]
         if premium_user is not True:
             verbose_proxy_logger.error(
-                f"Trying to set allowed_routes. This is an Enterprise feature. {CommonProxyErrors.not_premium_user.value}"
+                "Trying to set allowed_routes. This is an Enterprise feature. %s",
+                CommonProxyErrors.not_premium_user.value,
             )
         if route not in _allowed_routes:
-            verbose_proxy_logger.error(f"Route {route} not in allowed_routes={_allowed_routes}")
+            verbose_proxy_logger.error("Route %s not in allowed_routes=%s", route, _allowed_routes)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access forbidden: Route {route} not allowed",
@@ -582,7 +583,7 @@ def route_in_additonal_public_routes(current_route: str):
 
         return False
     except Exception as e:
-        verbose_proxy_logger.error(f"route_in_additonal_public_routes: {e!s}")
+        verbose_proxy_logger.error("route_in_additonal_public_routes: %s", e)
         return False
 
 
@@ -619,7 +620,7 @@ def get_request_route(request: Request) -> str:
         return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
-            f"error on get_request_route: {e!s}, defaulting to request.url.path={request.url.path}"
+            "error on get_request_route: %s, defaulting to request.url.path=%s", e, request.url.path
         )
         return str(request.url.path)
 
@@ -639,7 +640,7 @@ def get_request_route_template(request: Request) -> str | None:
         template = getattr(route, "path", None)
         return template if isinstance(template, str) and template else None
     except Exception as e:
-        verbose_proxy_logger.debug(f"error on get_request_route_template: {e!s}")
+        verbose_proxy_logger.debug("error on get_request_route_template: %s", e)
         return None
 
 
@@ -781,7 +782,8 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
         # Check if premium user
         if premium_user is not True:
             verbose_proxy_logger.warning(
-                f"using max_request_size_mb - not checking -  this is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
+                "using max_request_size_mb - not checking -  this is an enterprise only feature. %s",
+                CommonProxyErrors.not_premium_user.value,
             )
             return True
 
@@ -791,7 +793,7 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
         if content_length:
             header_size = int(content_length)
             header_size_mb = bytes_to_mb(bytes_value=header_size)
-            verbose_proxy_logger.debug(f"content_length request size in MB={header_size_mb}")
+            verbose_proxy_logger.debug("content_length request size in MB=%s", header_size_mb)
 
             if header_size_mb > max_request_size_mb:
                 raise ProxyException(
@@ -806,7 +808,7 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
             body_size = len(body)
             request_size_mb = bytes_to_mb(bytes_value=body_size)
 
-            verbose_proxy_logger.debug(f"request body request size in MB={request_size_mb}")
+            verbose_proxy_logger.debug("request body request size in MB=%s", request_size_mb)
             if request_size_mb > max_request_size_mb:
                 raise ProxyException(
                     message=f"Request size is too large. Request size is {request_size_mb} MB. Max size is {max_request_size_mb} MB",
@@ -841,12 +843,13 @@ async def check_response_size_is_safe(response: Any) -> bool:
         # Check if premium user
         if premium_user is not True:
             verbose_proxy_logger.warning(
-                f"using max_response_size_mb - not checking -  this is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
+                "using max_response_size_mb - not checking -  this is an enterprise only feature. %s",
+                CommonProxyErrors.not_premium_user.value,
             )
             return True
 
         response_size_mb = bytes_to_mb(bytes_value=sys.getsizeof(response))
-        verbose_proxy_logger.debug(f"response size in MB={response_size_mb}")
+        verbose_proxy_logger.debug("response size in MB=%s", response_size_mb)
         if response_size_mb > max_response_size_mb:
             raise ProxyException(
                 message=f"Response size is too large. Response size is {response_size_mb} MB. Max size is {max_response_size_mb} MB",

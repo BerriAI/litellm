@@ -216,7 +216,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             try:
                 judge_result = await self._run_judge(messages, response_text)
             except Exception as judge_err:
-                verbose_logger.warning(f"llm_as_a_judge guardrail: judge call failed, failing open. Error: {judge_err}")
+                verbose_logger.warning(
+                    "llm_as_a_judge guardrail: judge call failed, failing open. Error: %s", judge_err
+                )
                 status = "guardrail_failed_to_respond"
                 return inputs
 
@@ -263,7 +265,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_logger.warning(f"llm_as_a_judge guardrail unexpected error: {e}")
+            verbose_logger.warning("llm_as_a_judge guardrail unexpected error: %s", e)
             return inputs
         finally:
             self.add_standard_logging_guardrail_information_to_request_data(

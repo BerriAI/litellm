@@ -111,13 +111,19 @@ def cost_per_second(model: str, custom_llm_provider: str | None, duration: float
     ## Speech / Audio cost calculation
     if "output_cost_per_second" in model_info and model_info["output_cost_per_second"] is not None:
         verbose_logger.debug(
-            f"For model={model} - output_cost_per_second: {model_info.get('output_cost_per_second')}; duration: {duration}"
+            "For model=%s - output_cost_per_second: %s; duration: %s",
+            model,
+            model_info.get("output_cost_per_second"),
+            duration,
         )
         ## COST PER SECOND ##
         completion_cost = model_info["output_cost_per_second"] * duration
     elif "input_cost_per_second" in model_info and model_info["input_cost_per_second"] is not None:
         verbose_logger.debug(
-            f"For model={model} - input_cost_per_second: {model_info.get('input_cost_per_second')}; duration: {duration}"
+            "For model=%s - input_cost_per_second: %s; duration: %s",
+            model,
+            model_info.get("input_cost_per_second"),
+            duration,
         )
         ## COST PER SECOND ##
         prompt_cost = model_info["input_cost_per_second"] * duration
@@ -199,19 +205,23 @@ def video_generation_cost(
     video_cost_per_second = model_info.get("output_cost_per_video_per_second")
     if video_cost_per_second is not None:
         verbose_logger.debug(
-            f"For model={model} - output_cost_per_video_per_second: {video_cost_per_second}; duration: {duration_seconds}"
+            "For model=%s - output_cost_per_video_per_second: %s; duration: %s",
+            model,
+            video_cost_per_second,
+            duration_seconds,
         )
         return video_cost_per_second * duration_seconds
 
     output_cost_per_second = _video_output_cost_per_second(model_info, video_resolution)
     if output_cost_per_second is not None:
         verbose_logger.debug(
-            f"For model={model} - output_cost_per_second: {output_cost_per_second}; duration: {duration_seconds}"
+            "For model=%s - output_cost_per_second: %s; duration: %s", model, output_cost_per_second, duration_seconds
         )
         return output_cost_per_second * duration_seconds
 
     # If no cost information found, return 0
     verbose_logger.warning(
-        f"No cost information found for video model {model}. Please add pricing to model_prices_and_context_window.json"
+        "No cost information found for video model %s. Please add pricing to model_prices_and_context_window.json",
+        model,
     )
     return 0.0

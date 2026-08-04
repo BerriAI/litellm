@@ -29,7 +29,7 @@ class TogetherAIConfig(OpenAIGPTConfig):
         try:
             supports_fc = supports_function_calling(model, custom_llm_provider="together_ai")
         except Exception as e:
-            verbose_logger.debug(f"Error getting supported openai params: {e}")
+            verbose_logger.debug("Error getting supported openai params: %s", e)
 
         optional_params = super().get_supported_openai_params(model)
         if supports_fc is not True:

@@ -68,12 +68,12 @@ def _normalize_thresholds(thresholds: dict[str, float] | None) -> dict[str, floa
 def _parse_lar1_metadata(request_kwargs: dict) -> LAR1Metadata:
     lar1_raw = request_kwargs.get("metadata", {}).get("lar1", {})
     if not isinstance(lar1_raw, dict):
-        verbose_router_logger.warning(f"[LAR-1] Invalid lar1 metadata type: {type(lar1_raw).__name__}. Using defaults")
+        verbose_router_logger.warning("[LAR-1] Invalid lar1 metadata type: %s. Using defaults", type(lar1_raw).__name__)
         return LAR1Metadata()
     try:
         return LAR1Metadata.model_validate(lar1_raw)
     except ValidationError as exc:
-        verbose_router_logger.warning(f"[LAR-1] Invalid lar1 metadata: {exc}. Using defaults")
+        verbose_router_logger.warning("[LAR-1] Invalid lar1 metadata: %s. Using defaults", exc)
         return LAR1Metadata()
 
 
@@ -123,11 +123,11 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         if selected is None:
             return None
         if exact_match:
-            verbose_router_logger.info(f"[LAR-1] confidence={confidence} -> {target}")
+            verbose_router_logger.info("[LAR-1] confidence=%s -> %s", confidence, target)
         else:
             actual_type = selected.get("model_info", {}).get("type", "unknown")
             verbose_router_logger.warning(
-                f"[LAR-1] No deployment for type '{target}', fallback to deployment type '{actual_type}'"
+                "[LAR-1] No deployment for type '%s', fallback to deployment type '%s'", target, actual_type
             )
         return selected
 

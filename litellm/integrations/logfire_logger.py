@@ -35,7 +35,7 @@ class LogfireLogger:
             if logfire.DEFAULT_LOGFIRE_INSTANCE.config.send_to_logfire:
                 logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
         except Exception as e:
-            print_verbose(f"Got exception on init logfire client {e!s}")
+            print_verbose(f"Got exception on init logfire client {e}")
             raise e
 
     def _get_span_config(self, payload) -> SpanConfig:
@@ -90,7 +90,7 @@ class LogfireLogger:
         try:
             import logfire
 
-            verbose_logger.debug(f"logfire Logging - Enters logging function for model {kwargs}")
+            verbose_logger.debug("logfire Logging - Enters logging function for model %s", kwargs)
 
             if not response_obj:
                 response_obj = {}
@@ -159,4 +159,4 @@ class LogfireLogger:
 
             print_verbose(f"Logfire Layer Logging - final response object: {response_obj}")
         except Exception as e:
-            verbose_logger.debug(f"Logfire Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.debug("Logfire Layer Error - %s\n%s", e, traceback.format_exc())

@@ -163,7 +163,7 @@ class NomaGuardrail(CustomGuardrail):
         try:
             asyncio.create_task(coro)
         except Exception as e:
-            verbose_proxy_logger.error(f"Failed to create background Noma task: {e!s}")
+            verbose_proxy_logger.error("Failed to create background Noma task: %s", e)
 
     async def _process_user_message_check(
         self,
@@ -233,7 +233,7 @@ class NomaGuardrail(CustomGuardrail):
             if anonymized_content:
                 # Replace the user message content with anonymized version
                 self._replace_user_message_content(request_data, anonymized_content)
-                verbose_proxy_logger.debug(f"Noma guardrail anonymized user message: {anonymized_content}")
+                verbose_proxy_logger.debug("Noma guardrail anonymized user message: %s", anonymized_content)
                 return anonymized_content
 
         await self._check_verdict(USER_ROLE, json.dumps(input_items), response_json)
@@ -309,7 +309,7 @@ class NomaGuardrail(CustomGuardrail):
             if anonymized_content:
                 # Replace the LLM response content with anonymized version
                 self._replace_llm_response_content(response, anonymized_content)
-                verbose_proxy_logger.debug(f"Noma guardrail anonymized LLM response: {anonymized_content}")
+                verbose_proxy_logger.debug("Noma guardrail anonymized LLM response: %s", anonymized_content)
                 return anonymized_content
 
         await self._check_verdict(ASSISTANT_ROLE, content, response_json)
@@ -348,7 +348,7 @@ class NomaGuardrail(CustomGuardrail):
             return "guardrail_failed_to_respond"
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error determining NOMA guardrail status: {e!s}")
+            verbose_proxy_logger.error("Error determining NOMA guardrail status: %s", e)
             return "guardrail_failed_to_respond"
 
     def _should_only_sensitive_data_failed(self, classification_obj: dict) -> bool:
@@ -513,7 +513,7 @@ class NomaGuardrail(CustomGuardrail):
         try:
             await self._process_user_message_check(request_data, user_auth)
         except Exception as e:
-            verbose_proxy_logger.error(f"Noma background user message check failed: {e!s}")
+            verbose_proxy_logger.error("Noma background user message check failed: %s", e)
 
     async def _check_llm_response_background(
         self,
@@ -525,7 +525,7 @@ class NomaGuardrail(CustomGuardrail):
         try:
             await self._process_llm_response_check(request_data, response, user_auth)
         except Exception as e:
-            verbose_proxy_logger.error(f"Noma background response check failed: {e!s}")
+            verbose_proxy_logger.error("Noma background response check failed: %s", e)
 
     async def _handle_verdict_background(
         self,
@@ -547,7 +547,7 @@ class NomaGuardrail(CustomGuardrail):
                 msg = f"Noma guardrail allowed {type} message: {message}"
                 verbose_proxy_logger.info(msg)
         except Exception as e:
-            verbose_proxy_logger.error(f"Noma background verdict handling failed: {e!s}")
+            verbose_proxy_logger.error("Noma background verdict handling failed: %s", e)
 
     async def async_pre_call_hook(
         self,
@@ -570,7 +570,7 @@ class NomaGuardrail(CustomGuardrail):
             try:
                 self._create_background_noma_check(self._check_user_message_background(data, user_api_key_dict))
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to start background Noma pre-call check: {e!s}")
+                verbose_proxy_logger.error("Failed to start background Noma pre-call check: %s", e)
             return data
 
         try:
@@ -594,7 +594,7 @@ class NomaGuardrail(CustomGuardrail):
                 event_type=GuardrailEventHooks.pre_call,
             )
 
-            verbose_proxy_logger.error(f"Noma pre-call hook failed: {e!s}")
+            verbose_proxy_logger.error("Noma pre-call hook failed: %s", e)
 
             if self.block_failures:
                 raise
@@ -618,7 +618,7 @@ class NomaGuardrail(CustomGuardrail):
             try:
                 self._create_background_noma_check(self._check_user_message_background(data, user_api_key_dict))
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to start background Noma moderation check: {e!s}")
+                verbose_proxy_logger.error("Failed to start background Noma moderation check: %s", e)
             return data
 
         try:
@@ -642,7 +642,7 @@ class NomaGuardrail(CustomGuardrail):
                 event_type=GuardrailEventHooks.during_call,
             )
 
-            verbose_proxy_logger.error(f"Noma moderation hook failed: {e!s}")
+            verbose_proxy_logger.error("Noma moderation hook failed: %s", e)
 
             if self.block_failures:
                 raise
@@ -665,7 +665,7 @@ class NomaGuardrail(CustomGuardrail):
                     self._check_llm_response_background(data, response, user_api_key_dict)
                 )
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to start background Noma post-call check: {e!s}")
+                verbose_proxy_logger.error("Failed to start background Noma post-call check: %s", e)
             return response
 
         try:
@@ -689,7 +689,7 @@ class NomaGuardrail(CustomGuardrail):
                 event_type=GuardrailEventHooks.post_call,
             )
 
-            verbose_proxy_logger.error(f"Noma post-call hook failed: {e!s}")
+            verbose_proxy_logger.error("Noma post-call hook failed: %s", e)
             if self.block_failures:
                 raise
             return response
@@ -828,7 +828,7 @@ class NomaGuardrail(CustomGuardrail):
             except Exception as e:
                 if self.block_failures:
                     raise
-                verbose_proxy_logger.error(f"Noma streaming post-call hook failed: {e!s}")
+                verbose_proxy_logger.error("Noma streaming post-call hook failed: %s", e)
                 for chunk in all_chunks:
                     yield chunk
                 return

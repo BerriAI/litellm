@@ -74,7 +74,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
                 return dict_reasoning_item
             except Exception as e:
-                verbose_logger.debug(f"Failed to create ResponseReasoningItem, falling back to manual filtering: {e}")
+                verbose_logger.debug("Failed to create ResponseReasoningItem, falling back to manual filtering: %s", e)
                 # Fallback: manually filter out known None fields
                 filtered_item = {
                     k: v
@@ -252,7 +252,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         delete_url = self._construct_url_for_response_id_in_path(api_base=api_base, response_id=response_id)
 
         data: dict = {}
-        verbose_logger.debug(f"delete response url={delete_url}")
+        verbose_logger.debug("delete response url=%s", delete_url)
         return delete_url, data
 
     #########################################################
@@ -273,7 +273,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         get_url = self._construct_url_for_response_id_in_path(api_base=api_base, response_id=response_id)
         data: dict = {}
-        verbose_logger.debug(f"get response url={get_url}")
+        verbose_logger.debug("get response url=%s", get_url)
         return get_url, data
 
     def transform_list_input_items_request(
@@ -302,7 +302,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             params["limit"] = limit
         if order is not None:
             params["order"] = order
-        verbose_logger.debug(f"list input items url={url}")
+        verbose_logger.debug("list input items url=%s", url)
         return url, params
 
     #########################################################
@@ -329,7 +329,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
 
         data: dict = {}
-        verbose_logger.debug(f"cancel response url={cancel_url}")
+        verbose_logger.debug("cancel response url=%s", cancel_url)
         return cancel_url, data
 
     def transform_cancel_response_api_response(

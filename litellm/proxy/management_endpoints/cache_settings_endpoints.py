@@ -63,7 +63,7 @@ _REDACTED_VALUE = "***REDACTED***"
 _URL_OVERRIDDEN_CONNECTION_FIELDS: frozenset = frozenset({"host", "port", "db", "password", "username"})
 
 
-def _resolve_cache_url_precedence(settings: Mapping[str, Any]) -> dict[str, Any]:
+def _resolve_cache_url_precedence(settings: Mapping[str, object]) -> dict[str, Any]:
     """Return cache settings with the url-vs-discrete-fields ambiguity resolved.
 
     When a full ``url`` is supplied it wins: the discrete
@@ -80,7 +80,7 @@ def _resolve_cache_url_precedence(settings: Mapping[str, Any]) -> dict[str, Any]
     return {k: v for k, v in settings.items() if k not in _URL_OVERRIDDEN_CONNECTION_FIELDS}
 
 
-def _parse_stored_settings(cache_settings_value: object) -> dict[str, Any]:
+def _parse_stored_settings(cache_settings_value: object) -> dict[str, object]:
     """Normalize a stored cache_settings blob to a dict.
 
     The prisma column comes back as either a JSON string or an already-parsed
@@ -91,7 +91,7 @@ def _parse_stored_settings(cache_settings_value: object) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _overlay_environment(stored: Mapping[str, Any]) -> dict[str, Any]:
+def _overlay_environment(stored: Mapping[str, object]) -> dict[str, object]:
     """Fill connection fields from the REDIS_* environment the cache actually reads.
 
     A response cache pointed at Redis resolves host/port/password/etc. from the
@@ -113,7 +113,7 @@ def _overlay_environment(stored: Mapping[str, Any]) -> dict[str, Any]:
     return effective
 
 
-def _redact_credentials(settings: Mapping[str, Any]) -> dict[str, Any]:
+def _redact_credentials(settings: Mapping[str, object]) -> dict[str, object]:
     """Replace credential-bearing values with a fixed marker, keeping the rest.
 
     The marker is unambiguous on the way back in: an admin who edits an
@@ -164,7 +164,7 @@ def _target_repr(value: object) -> str:
     return str(value)
 
 
-def _saved_secret_is_reusable(incoming: Mapping[str, Any], saved: Mapping[str, Any]) -> bool:
+def _saved_secret_is_reusable(incoming: Mapping[str, object], saved: Mapping[str, object]) -> bool:
     """Whether a stored credential may be restored for this request.
 
     A stored secret belongs to the stored connection target, so it is reused only
@@ -197,7 +197,7 @@ def _saved_secret_is_reusable(incoming: Mapping[str, Any], saved: Mapping[str, A
     return True
 
 
-def _merge_over_saved(incoming: Mapping[str, Any], saved: Mapping[str, Any]) -> dict[str, Any]:
+def _merge_over_saved(incoming: Mapping[str, object], saved: Mapping[str, object]) -> dict[str, Any]:
     """Keep the stored secret behind any credential the caller echoed back redacted or omitted.
 
     GET returns credentials as the marker and the form never re-prefills a
@@ -239,7 +239,7 @@ def _merge_over_saved(incoming: Mapping[str, Any], saved: Mapping[str, Any]) -> 
     return merged
 
 
-def _redact_settings(settings: Mapping[str, Any] | None) -> dict[str, Any]:
+def _redact_settings(settings: Mapping[str, object] | None) -> dict[str, object]:
     """Replace every value in a settings map with a fixed marker.
 
     Cache config carries Redis credentials (passwords, connection strings).
@@ -268,8 +268,8 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 async def _emit_cache_settings_audit_log(
     *,
     action: AUDIT_ACTIONS,
-    before_settings: Mapping[str, Any] | None,
-    after_settings: Mapping[str, Any] | None,
+    before_settings: Mapping[str, object] | None,
+    after_settings: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
 ) -> None:
@@ -313,17 +313,17 @@ class CacheSettingsManager:
     Tracks last cache params to avoid unnecessary reinitialization.
     """
 
-    _last_cache_params: dict[str, Any] | None = None
+    _last_cache_params: dict[str, object] | None = None
 
     @staticmethod
-    def _cache_params_equal(params1: dict[str, Any], params2: dict[str, Any]) -> bool:
+    def _cache_params_equal(params1: dict[str, object], params2: dict[str, object]) -> bool:
         """
         Compare two cache parameter dictionaries for equality.
         Normalizes values and filters out UI-only fields.
         """
 
         # Normalize by removing None values and UI-only fields
-        def normalize(params: dict[str, Any]) -> dict[str, Any]:
+        def normalize(params: dict[str, object]) -> dict[str, object]:
             normalized = {}
             for k, v in params.items():
                 if k == "redis_type":  # Skip UI-only field
@@ -386,11 +386,12 @@ class CacheSettingsManager:
                 verbose_proxy_logger.info("Cache settings initialized from database")
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.management_endpoints.cache_settings_endpoints.py::CacheSettingsManager::init_cache_settings_in_db - {e!s}"
+                "litellm.proxy.management_endpoints.cache_settings_endpoints.py::CacheSettingsManager::init_cache_settings_in_db - %s",
+                e,
             )
 
     @staticmethod
-    def update_cache_params(cache_params: dict[str, Any]):
+    def update_cache_params(cache_params: dict[str, object]):
         """
         Update the last cache params after initialization.
         Called after cache settings are updated via the API.
@@ -400,12 +401,12 @@ class CacheSettingsManager:
 
 class CacheSettingsResponse(BaseModel):
     fields: list[CacheSettingsField] = Field(description="List of all configurable cache settings with metadata")
-    current_values: dict[str, Any] = Field(description="Current values of cache settings")
+    current_values: dict[str, object] = Field(description="Current values of cache settings")
     redis_type_descriptions: dict[str, str] = Field(description="Descriptions for each Redis type option")
 
 
 class CacheTestRequest(BaseModel):
-    cache_settings: dict[str, Any] = Field(description="Cache settings to test connection with")
+    cache_settings: dict[str, object] = Field(description="Cache settings to test connection with")
 
 
 class CacheTestResponse(BaseModel):
@@ -415,7 +416,7 @@ class CacheTestResponse(BaseModel):
 
 
 class CacheSettingsUpdateRequest(BaseModel):
-    cache_settings: dict[str, Any] = Field(description="Cache settings to save")
+    cache_settings: dict[str, object] = Field(description="Cache settings to save")
 
 
 @router.get(
@@ -441,7 +442,7 @@ async def get_cache_settings(
         cache_fields = [field.model_copy(deep=True) for field in CACHE_SETTINGS_FIELDS]
 
         # Read the stored settings (decrypted); an env-only cache has none.
-        stored: dict[str, Any] = {}
+        stored: dict[str, object] = {}
         if prisma_client is not None:
             cache_config = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
             if cache_config is not None and cache_config.cache_settings:
@@ -480,8 +481,8 @@ async def get_cache_settings(
             redis_type_descriptions=REDIS_TYPE_DESCRIPTIONS,
         )
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching cache settings: {e!s}")
-        raise HTTPException(status_code=500, detail=f"Error fetching cache settings: {e!s}")
+        verbose_proxy_logger.error("Error fetching cache settings: %s", e)
+        raise HTTPException(status_code=500, detail=f"Error fetching cache settings: {e}")
 
 
 @router.post(
@@ -507,7 +508,7 @@ async def test_cache_connection(
         # A credential the form left untouched arrives redacted; resolve it back
         # to the stored secret so the test connects with the real password. A
         # lookup failure must not block the test, so fall back to no stored row.
-        saved_settings: dict[str, Any] = {}
+        saved_settings: dict[str, object] = {}
         if prisma_client is not None:
             try:
                 existing_row = await CacheConfigRepository(prisma_client).table.find_unique(
@@ -539,10 +540,10 @@ async def test_cache_connection(
         return CacheTestResponse(**result)
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error testing cache connection: {e!s}")
+        verbose_proxy_logger.error("Error testing cache connection: %s", e)
         return CacheTestResponse(
             status="failed",
-            message=f"Cache connection test failed: {e!s}",
+            message=f"Cache connection test failed: {e}",
             error=str(e),
         )
 
@@ -590,8 +591,8 @@ async def update_cache_settings(
         # Read the stored row first: its decrypted values back any credential the
         # caller echoed back redacted, and its key set drives the audit diff.
         existing_row = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
-        before_settings: dict[str, Any] | None = None
-        saved_settings: dict[str, Any] = {}
+        before_settings: dict[str, object] | None = None
+        saved_settings: dict[str, object] = {}
         if existing_row is not None and existing_row.cache_settings:
             before_settings = _parse_stored_settings(existing_row.cache_settings)
             saved_settings = proxy_config._decrypt_db_variables(variables_dict=before_settings)
@@ -652,5 +653,5 @@ async def update_cache_settings(
             "settings": _redact_credentials(cache_settings),
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating cache settings: {e!s}")
-        raise HTTPException(status_code=500, detail=f"Error updating cache settings: {e!s}")
+        verbose_proxy_logger.error("Error updating cache settings: %s", e)
+        raise HTTPException(status_code=500, detail=f"Error updating cache settings: {e}")

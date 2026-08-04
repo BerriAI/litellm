@@ -173,7 +173,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         if total_weight > 1.0:
             normalized = {k: v / total_weight for k, v in weights.items()}
-            verbose_proxy_logger.debug(f"Normalized over-allocated priorities: {weights} -> {normalized}")
+            verbose_proxy_logger.debug("Normalized over-allocated priorities: %s -> %s", weights, normalized)
             return normalized
 
         return weights
@@ -282,7 +282,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return max_saturation
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error checking saturation for {model}: {e!s}")
+            verbose_proxy_logger.error("Error checking saturation for %s: %s", model, e)
             # Fail open: assume not saturated on error
             return 0.0
 
@@ -454,7 +454,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
-        verbose_proxy_logger.debug(f"Atomic check+increment response: {json.dumps(atomic_response, indent=2)}")
+        verbose_proxy_logger.debug("Atomic check+increment response: %s", json.dumps(atomic_response, indent=2))
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
@@ -518,8 +518,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 None,
             )
             verbose_proxy_logger.error(
-                f"Dynamic rate limiter: OVER_LIMIT response with unknown "
-                f"descriptor_key(s) — refusing request. response={atomic_response}"
+                "Dynamic rate limiter: OVER_LIMIT response with unknown descriptor_key(s) — refusing request. response=%s",
+                atomic_response,
             )
             raise ProxyRateLimitError(
                 detail={
@@ -610,7 +610,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # Get model configuration
         model_group_info: ModelGroupInfo | None = self.llm_router.get_model_group_info(model_group=model)
         if model_group_info is None:
-            verbose_proxy_logger.debug(f"No model group info for {model}, allowing request")
+            verbose_proxy_logger.debug("No model group info for %s, allowing request", model)
             return None
 
         try:
@@ -640,7 +640,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in dynamic rate limiter: {e!s}, allowing request")
+            verbose_proxy_logger.error("Error in dynamic rate limiter: %s, allowing request", e)
             # Fail open on unexpected errors
             return None
 
@@ -676,7 +676,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return response
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in dynamic rate limiter v3 post-call hook: {e!s}")
+            verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -786,9 +786,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 SAFE_PRIORITIES = {"low", "medium", "high", "default"}
                 logged_priority = key_priority if key_priority in SAFE_PRIORITIES else "REDACTED"
                 verbose_proxy_logger.debug(
-                    f"[Dynamic Rate Limiter] Incremented tokens by {total_tokens} for "
-                    f"model={model_group}, priority={logged_priority}"
+                    "[Dynamic Rate Limiter] Incremented tokens by %s for model=%s, priority=%s",
+                    total_tokens,
+                    model_group,
+                    logged_priority,
                 )
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in dynamic rate limiter success event: {e!s}")
+            verbose_proxy_logger.exception("Error in dynamic rate limiter success event: %s", e)

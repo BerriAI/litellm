@@ -123,7 +123,7 @@ class AimGuardrail(CustomGuardrail):
         elif action_type == "anonymize_action":
             return self._anonymize_request(res, data)
         else:
-            verbose_proxy_logger.error(f"Aim: {action_type} action")
+            verbose_proxy_logger.error("Aim: %s action", action_type)
         return data
 
     @staticmethod
@@ -328,7 +328,7 @@ class AimGuardrail(CustomGuardrail):
                         from litellm.proxy.proxy_server import StreamingCallbackError
 
                         raise StreamingCallbackError(blocking_message)
-                    verbose_proxy_logger.error(f"Unknown message received from AIM: {result}")
+                    verbose_proxy_logger.error("Unknown message received from AIM: %s", result)
                     return
 
     async def forward_the_stream_to_aim(

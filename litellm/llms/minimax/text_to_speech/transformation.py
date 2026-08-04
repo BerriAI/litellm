@@ -353,7 +353,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 except Exception as e:
                     raise MinimaxException(
                         status_code=500,
-                        message=f"Failed to decode audio data: {e!s}",
+                        message=f"Failed to decode audio data: {e}",
                         headers=dict(raw_response.headers),
                     )
 
@@ -378,7 +378,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         except json.JSONDecodeError as e:
             raise MinimaxException(
                 status_code=500,
-                message=f"Failed to parse MiniMax response: {e!s}",
+                message=f"Failed to parse MiniMax response: {e}",
                 headers=dict(raw_response.headers),
             )
         except Exception as e:
@@ -386,7 +386,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 raise
             raise MinimaxException(
                 status_code=500,
-                message=f"Error processing MiniMax response: {e!s}",
+                message=f"Error processing MiniMax response: {e}",
                 headers=dict(raw_response.headers),
             )
 

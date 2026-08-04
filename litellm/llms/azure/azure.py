@@ -684,7 +684,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             except json.JSONDecodeError as json_error:
                 raise AzureOpenAIError(
                     status_code=raw_response.status_code or 500,
-                    message=f"Failed to parse raw Azure embedding response: {json_error!s}",
+                    message=f"Failed to parse raw Azure embedding response: {json_error}",
                 ) from json_error
             if isinstance(response, str):
                 raise AzureOpenAIError(

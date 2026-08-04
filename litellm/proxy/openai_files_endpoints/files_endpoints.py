@@ -208,7 +208,7 @@ async def route_create_file(
             original_id = response.id
             encoded_id = encode_file_id_with_model(file_id=original_id, model=model)
             response.id = encoded_id
-            verbose_proxy_logger.debug(f"Encoded file ID: {original_id} -> {encoded_id} (model: {model})")
+            verbose_proxy_logger.debug("Encoded file ID: %s -> %s (model: %s)", original_id, encoded_id, model)
 
         return response
 
@@ -549,7 +549,7 @@ async def create_file(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.create_file(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_file(): Exception occured - %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -558,7 +558,7 @@ async def create_file(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -690,7 +690,7 @@ async def get_file_content(
                         )
                     except ValueError as e:
                         raise ProxyException(
-                            message=f"Storage backend error: {e!s}",
+                            message=f"Storage backend error: {e}",
                             type="invalid_request_error",
                             param="file_id",
                             code=400,
@@ -845,7 +845,7 @@ async def get_file_content(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.retrieve_file_content(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.retrieve_file_content(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -855,7 +855,7 @@ async def get_file_content(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -1032,7 +1032,7 @@ async def get_file(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.retrieve_file(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.retrieve_file(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -1042,7 +1042,7 @@ async def get_file(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -1238,7 +1238,7 @@ async def delete_file(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.delete_file(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.delete_file(): Exception occured - %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -1247,7 +1247,7 @@ async def delete_file(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -1337,7 +1337,7 @@ async def list_files(
                 **data,  # type: ignore
             )
 
-            verbose_proxy_logger.debug(f"Listed files using model: {model_used}")
+            verbose_proxy_logger.debug("Listed files using model: %s", model_used)
 
         elif target_model_names and isinstance(target_model_names, str):
             target_model_names_list = target_model_names.split(",")
@@ -1427,7 +1427,7 @@ async def list_files(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.list_files(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.list_files(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -1437,7 +1437,7 @@ async def list_files(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),

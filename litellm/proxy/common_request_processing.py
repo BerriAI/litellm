@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -53,6 +54,7 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
@@ -384,6 +386,39 @@ async def _authorize_response_file_search_vector_stores(
         )
 
 
+async def _resolve_per_request_model_group_alias(
+    requested_model: object,
+    router_settings: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+) -> str | None:
+    """
+    Resolve ``router_settings.model_group_alias`` coming from a key or team.
+
+    The Router only ever resolves aliases from its own instance attribute, which
+    holds the global config map and is shared across requests, so a per-request
+    map has to be applied here instead of being forwarded to the Router.
+
+    Model access was authorized against the requested group, so the target is
+    authorized in its own right before the rewrite; a key that may not call the
+    target gets the usual 403 rather than being quietly served it.
+
+    Returns the target model group, or None when no alias applies.
+    """
+    if not isinstance(requested_model, str):
+        return None
+    target = resolve_model_group_alias(router_settings.get("model_group_alias"), requested_model)
+    if target is None or target == requested_model:
+        return None
+    await can_key_call_resolved_model(
+        model=target,
+        llm_model_list=llm_router.model_list,
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    return target
+
+
 async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
     """Parses an event line and returns an error code if present, else None."""
     event_line = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
@@ -404,7 +439,7 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
                         error_code = int(error_code_raw)
                     except ValueError:
                         verbose_proxy_logger.warning(
-                            f"Error code is a string but not a valid integer: {error_code_raw}"
+                            "Error code is a string but not a valid integer: %s", error_code_raw
                         )
                         # Not a valid integer string, treat as if no valid code was found for this check
 
@@ -412,7 +447,7 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
                 elif error_code_raw is not None:  # Log if original code was present but not valid
-                    verbose_proxy_logger.warning(f"Error has invalid or non-convertible code: {error_code_raw}")
+                    verbose_proxy_logger.warning("Error has invalid or non-convertible code: %s", error_code_raw)
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
@@ -609,7 +644,8 @@ async def create_response(
                     # Should return standard JSON error response instead of SSE format
                     final_status_code = error_code_from_chunk
                     verbose_proxy_logger.debug(
-                        f"Error detected in first stream chunk. Returning JSON error response with status code: {final_status_code}"
+                        "Error detected in first stream chunk. Returning JSON error response with status code: %s",
+                        final_status_code,
                     )
 
                     # Parse error content
@@ -628,7 +664,7 @@ async def create_response(
                         headers=headers,
                     )
             except Exception as e:
-                verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
+                verbose_proxy_logger.debug("Error parsing first chunk value: %s", e)
 
     except _ClientDisconnectedBeforeFirstChunk:
         # Client vanished during the time-to-first-token wait; the upstream
@@ -659,7 +695,7 @@ async def create_response(
         )
     except Exception as e:
         # Unexpected error consuming first chunk.
-        verbose_proxy_logger.exception(f"Error consuming first chunk from generator: {e}")
+        verbose_proxy_logger.exception("Error consuming first chunk from generator: %s", e)
 
         # Preserve status code from HTTPException (e.g., guardrail blocks)
         error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -908,7 +944,7 @@ def _log_llm_api_exception(e: Exception) -> None:
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
         )
         return
-    verbose_proxy_logger.exception(f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {e!s}")
+    verbose_proxy_logger.exception("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", e)
 
 
 async def _cancel_llm_call_on_client_disconnect(
@@ -1048,7 +1084,7 @@ class ProxyBaseLLMRequestProcessing:
         try:
             return {key: str(value) for key, value in headers.items() if value not in exclude_values}
         except Exception as e:
-            verbose_proxy_logger.error(f"Error setting custom headers: {e}")
+            verbose_proxy_logger.error("Error setting custom headers: %s", e)
             return {}
 
     @staticmethod
@@ -1285,6 +1321,35 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
 
+        # Apply hierarchical router_settings (Key > Team)
+        # Global router_settings are already on the Router object itself.
+        # This sits with the other alias rewrites, and ahead of the guardrail
+        # merge and the pre-call hooks, so everything that keys off the model
+        # group -- model-level guardrails, per-model budgets and rate limits,
+        # the logging object -- sees the group that will actually serve.
+        if llm_router is not None and proxy_config is not None:
+            from litellm.proxy.proxy_server import prisma_client
+
+            router_settings = await proxy_config._get_hierarchical_router_settings(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+            # If router_settings found (from key or team), apply them
+            # Pass settings as per-request overrides instead of creating a new Router
+            # This avoids expensive Router instantiation on each request
+            if router_settings is not None:
+                self.data["router_settings_override"] = router_settings
+                alias_target = await _resolve_per_request_model_group_alias(
+                    requested_model=self.data.get("model"),
+                    router_settings=router_settings,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_router=llm_router,
+                )
+                if alias_target is not None:
+                    self.data["model"] = alias_target
+
         self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
@@ -1338,23 +1403,6 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             call_type=route_type,  # type: ignore
         )
-
-        # Apply hierarchical router_settings (Key > Team)
-        # Global router_settings are already on the Router object itself.
-        if llm_router is not None and proxy_config is not None:
-            from litellm.proxy.proxy_server import prisma_client
-
-            router_settings = await proxy_config._get_hierarchical_router_settings(
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-            # If router_settings found (from key or team), apply them
-            # Pass settings as per-request overrides instead of creating a new Router
-            # This avoids expensive Router instantiation on each request
-            if router_settings is not None:
-                self.data["router_settings_override"] = router_settings
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
@@ -2696,7 +2744,7 @@ class ProxyBaseLLMRequestProcessing:
                 status_code=http_status_error.response.status_code,
                 detail={"error": error_text},
             )
-        error_msg = f"{e!s}"
+        error_msg = f"{e}"
         # Check for AttributeError in the exception chain.
         # The AttributeError may be wrapped in multiple layers
         # (e.g. AttributeError -> OpenAIException -> APIConnectionError),
@@ -2898,7 +2946,7 @@ class ProxyBaseLLMRequestProcessing:
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.async_data_generator(): Exception occured - {e!s}"
+                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
             )
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -2908,13 +2956,14 @@ class ProxyBaseLLMRequestProcessing:
             if transformed_exception is not None:
                 e = transformed_exception
             verbose_proxy_logger.debug(
-                f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
+                "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+                e,
             )
 
             if isinstance(e, HTTPException):
                 raise e
             error_traceback = _redact_string(traceback.format_exc())
-            error_msg = f"{e!s}\n\n{error_traceback}"
+            error_msg = f"{e}\n\n{error_traceback}"
             proxy_exception = ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),

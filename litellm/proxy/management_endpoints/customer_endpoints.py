@@ -103,7 +103,7 @@ async def block_user(data: BlockUsers):
 
         return {"blocked_users": records}
     except Exception as e:
-        verbose_proxy_logger.error(f"An error occurred - {e!s}")
+        verbose_proxy_logger.error("An error occurred - %s", e)
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -377,7 +377,8 @@ async def new_end_user(
         # It should have been converted to object_permission_id by _set_object_permission
         if "object_permission" in new_end_user_obj:
             verbose_proxy_logger.warning(
-                f"object_permission still in new_end_user_obj after _set_object_permission: {new_end_user_obj.get('object_permission')}"
+                "object_permission still in new_end_user_obj after _set_object_permission: %s",
+                new_end_user_obj.get("object_permission"),
             )
             new_end_user_obj.pop("object_permission", None)
 
@@ -390,7 +391,7 @@ async def new_end_user(
         return _to_customer_response(end_user_record)
     except Exception as e:
         verbose_proxy_logger.exception(
-            f"litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - {e!s}"
+            "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - %s", e
         )
         if "Unique constraint failed on the fields: (`user_id`)" in str(e):
             raise ProxyException(
@@ -455,7 +456,7 @@ async def end_user_info(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            f"litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occured - {e!s}"
+            "litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occured - %s", e
         )
         raise handle_exception_on_proxy(e)
 
@@ -613,7 +614,8 @@ async def update_end_user(
         # It should have been converted to object_permission_id by handle_update_object_permission_common
         if "object_permission" in update_end_user_table_data:
             verbose_proxy_logger.warning(
-                f"object_permission still in update_end_user_table_data: {update_end_user_table_data.get('object_permission')}"
+                "object_permission still in update_end_user_table_data: %s",
+                update_end_user_table_data.get("object_permission"),
             )
             update_end_user_table_data.pop("object_permission", None)
 
@@ -627,7 +629,7 @@ async def update_end_user(
             )
             if response is None:
                 raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")
-            verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
+            verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
             return _to_customer_response(response)
         else:
@@ -636,7 +638,7 @@ async def update_end_user(
         # update based on remaining passed in values
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.update_end_user(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_end_user(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -701,7 +703,7 @@ async def delete_end_user(
             response = await EndUserRepository(prisma_client).table.delete_many(
                 where={"user_id": {"in": data.user_ids}}
             )
-            verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
+            verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
             return DeleteCustomersResponse(
                 deleted_customers=response,
                 message="Successfully deleted customers with ids: " + str(data.user_ids),
@@ -711,7 +713,7 @@ async def delete_end_user(
 
         # update based on remaining passed in values
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.delete_end_user(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.delete_end_user(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -767,7 +769,7 @@ async def list_end_user(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            f"litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {e!s}"
+            "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - %s", e
         )
         raise handle_exception_on_proxy(e)
 

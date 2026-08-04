@@ -52,7 +52,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
             json_object = json.loads(buffer.strip())
             json_objects.append(json_object)
         except json.JSONDecodeError as e:
-            verbose_logger.error(f"error parsing final buffer: {buffer[:100]}..., error: {e}")
+            verbose_logger.error("error parsing final buffer: %s..., error: %s", buffer[:100], e)
             raise e
 
     return json_objects
@@ -128,7 +128,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
             # that followed it). Returning the partial `output` would silently
             # drop those rows; return the unchanged original so the provider
             # rejects the batch loudly instead of accepting a truncated one.
-            verbose_logger.error(f"error parsing trailing batch content: {buffer[:100]}...")
+            verbose_logger.error("error parsing trailing batch content: %s...", buffer[:100])
             if hasattr(source, "seek"):
                 try:
                     source.seek(0)  # type: ignore[attr-defined]

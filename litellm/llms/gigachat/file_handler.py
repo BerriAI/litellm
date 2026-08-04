@@ -97,7 +97,7 @@ def upload_file_sync(
 
     # Check cache
     if url_hash in _file_cache:
-        verbose_logger.debug(f"Image found in cache: {url_hash[:16]}...")
+        verbose_logger.debug("Image found in cache: %s...", url_hash[:16])
         return _file_cache[url_hash]
 
     try:
@@ -107,7 +107,7 @@ def upload_file_sync(
             content_bytes, content_type, ext = parsed
             verbose_logger.debug("Decoded base64 image")
         else:
-            verbose_logger.debug(f"Downloading image from URL: {image_url[:80]}...")
+            verbose_logger.debug("Downloading image from URL: %s...", image_url[:80])
             content_bytes, content_type, ext = _download_image_sync(image_url)
 
         filename = f"{uuid.uuid4()}.{ext}"
@@ -133,12 +133,12 @@ def upload_file_sync(
         file_id = result.get("id")
         if file_id:
             _file_cache[url_hash] = file_id
-            verbose_logger.debug(f"File uploaded successfully, file_id: {file_id}")
+            verbose_logger.debug("File uploaded successfully, file_id: %s", file_id)
 
         return file_id
 
     except Exception as e:
-        verbose_logger.error(f"Error uploading file to GigaChat: {e}")
+        verbose_logger.error("Error uploading file to GigaChat: %s", e)
         return None
 
 
@@ -162,7 +162,7 @@ async def upload_file_async(
 
     # Check cache
     if url_hash in _file_cache:
-        verbose_logger.debug(f"Image found in cache: {url_hash[:16]}...")
+        verbose_logger.debug("Image found in cache: %s...", url_hash[:16])
         return _file_cache[url_hash]
 
     try:
@@ -172,7 +172,7 @@ async def upload_file_async(
             content_bytes, content_type, ext = parsed
             verbose_logger.debug("Decoded base64 image")
         else:
-            verbose_logger.debug(f"Downloading image from URL: {image_url[:80]}...")
+            verbose_logger.debug("Downloading image from URL: %s...", image_url[:80])
             content_bytes, content_type, ext = await _download_image_async(image_url)
 
         filename = f"{uuid.uuid4()}.{ext}"
@@ -201,10 +201,10 @@ async def upload_file_async(
         file_id = result.get("id")
         if file_id:
             _file_cache[url_hash] = file_id
-            verbose_logger.debug(f"File uploaded successfully, file_id: {file_id}")
+            verbose_logger.debug("File uploaded successfully, file_id: %s", file_id)
 
         return file_id
 
     except Exception as e:
-        verbose_logger.error(f"Error uploading file to GigaChat: {e}")
+        verbose_logger.error("Error uploading file to GigaChat: %s", e)
         return None

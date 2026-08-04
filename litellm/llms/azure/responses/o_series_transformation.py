@@ -68,7 +68,7 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         # If drop_params is enabled, remove temperature parameter for O-series models
         if drop_params and "temperature" in mapped_params:
             verbose_logger.debug(
-                f"Dropping unsupported parameter 'temperature' for Azure OpenAI O-series responses API model {model}"
+                "Dropping unsupported parameter 'temperature' for Azure OpenAI O-series responses API model %s", model
             )
             mapped_params.pop("temperature", None)
 

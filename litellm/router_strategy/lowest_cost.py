@@ -91,7 +91,7 @@ class LowestCostLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.router_strategy.lowest_cost.py::log_success_event(): Exception occured - {e!s}"
+                "litellm.router_strategy.lowest_cost.py::log_success_event(): Exception occured - %s", e
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -170,7 +170,7 @@ class LowestCostLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
     async def async_get_available_deployments(
@@ -269,7 +269,11 @@ class LowestCostLoggingHandler(CustomLogger):
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
             verbose_router_logger.debug(
-                f"item_cost: {item_cost}, item_tpm: {item_tpm}, item_rpm: {item_rpm}, model_id: {_deployment.get('model_info', {}).get('id')}"
+                "item_cost: %s, item_tpm: %s, item_rpm: %s, model_id: %s",
+                item_cost,
+                item_tpm,
+                item_rpm,
+                _deployment.get("model_info", {}).get("id"),
             )
 
             # -------------- #

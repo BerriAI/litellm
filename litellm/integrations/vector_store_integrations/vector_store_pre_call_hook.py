@@ -124,7 +124,7 @@ class VectorStorePreCallHook(CustomLogger):
                     },
                 )
 
-                verbose_logger.debug(f"search_response: {search_response}")
+                verbose_logger.debug("search_response: %s", search_response)
 
                 # Store search results for later use in citations
                 all_search_results.append(search_response)
@@ -137,7 +137,7 @@ class VectorStorePreCallHook(CustomLogger):
                 # Get the number of results for logging
                 num_results = 0
                 num_results = len(search_response.get("data", []) or [])
-                verbose_logger.debug(f"Vector store search completed. Added context from {num_results} results")
+                verbose_logger.debug("Vector store search completed. Added context from %s results", num_results)
 
             # Store search results as-is (already in OpenAI-compatible format)
             if litellm_logging_obj and all_search_results:
@@ -146,7 +146,7 @@ class VectorStorePreCallHook(CustomLogger):
             return model, modified_messages, non_default_params
 
         except Exception as e:
-            verbose_logger.exception(f"Error in VectorStorePreCallHook: {e!s}")
+            verbose_logger.exception("Error in VectorStorePreCallHook: %s", e)
             # Return original parameters on error
             return model, messages, non_default_params
 
@@ -243,14 +243,14 @@ class VectorStorePreCallHook(CustomLogger):
                 verbose_logger.debug("No litellm_logging_obj in request_data")
                 return None
 
-            verbose_logger.debug(f"model_call_details keys: {list(litellm_logging_obj.model_call_details.keys())}")
+            verbose_logger.debug("model_call_details keys: %s", list(litellm_logging_obj.model_call_details.keys()))
 
             # Get search results from model_call_details (already in OpenAI format)
             search_results: list[VectorStoreSearchResponse] | None = litellm_logging_obj.model_call_details.get(
                 "search_results"
             )
 
-            verbose_logger.debug(f"Search results found: {search_results is not None}")
+            verbose_logger.debug("Search results found: %s", search_results is not None)
 
             if not search_results:
                 verbose_logger.debug("No search results found")
@@ -269,13 +269,13 @@ class VectorStorePreCallHook(CustomLogger):
                         # Set the provider_specific_fields
                         setattr(choice.message, "provider_specific_fields", provider_fields)
 
-            verbose_logger.debug(f"Added {len(search_results)} search results to response")
+            verbose_logger.debug("Added %s search results to response", len(search_results))
 
             # Return modified response
             return response
 
         except Exception as e:
-            verbose_logger.exception(f"Error adding search results to response: {e!s}")
+            verbose_logger.exception("Error adding search results to response: %s", e)
             # Don't fail the request if search results fail to be added
             return None
 
@@ -297,7 +297,7 @@ class VectorStorePreCallHook(CustomLogger):
             # Get search results from model_call_details (already in OpenAI format)
             search_results: list[VectorStoreSearchResponse] | None = request_data.get("search_results")
 
-            verbose_logger.debug(f"Search results found for streaming chunk: {search_results is not None}")
+            verbose_logger.debug("Search results found for streaming chunk: %s", search_results is not None)
 
             if not search_results:
                 verbose_logger.debug("No search results found for streaming chunk")
@@ -316,12 +316,12 @@ class VectorStorePreCallHook(CustomLogger):
                         # Set the provider_specific_fields
                         choice.delta.provider_specific_fields = provider_fields
 
-            verbose_logger.debug(f"Added {len(search_results)} search results to streaming chunk")
+            verbose_logger.debug("Added %s search results to streaming chunk", len(search_results))
 
             # Return modified chunk
             return response_chunk
 
         except Exception as e:
-            verbose_logger.exception(f"Error adding search results to streaming chunk: {e!s}")
+            verbose_logger.exception("Error adding search results to streaming chunk: %s", e)
             # Don't fail the request if search results fail to be added
             return response_chunk

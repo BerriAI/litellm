@@ -191,7 +191,7 @@ async def list_budgets(
         raise
     except Exception as e:  # noqa: BLE001  # a driver error answers as a problem document, not the OpenAI error shape
         verbose_proxy_logger.exception(
-            f"litellm.proxy.management_endpoints.management_v1.budgets.list_budgets(): Exception occured - {e!s}"
+            "litellm.proxy.management_endpoints.management_v1.budgets.list_budgets(): Exception occured - %s", e
         )
         raise ManagementProblem(
             ProblemDetail(

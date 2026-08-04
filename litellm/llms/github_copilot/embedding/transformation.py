@@ -75,7 +75,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
 
-            verbose_logger.debug(f"GitHub Copilot Embedding API: Successfully configured headers for model {model}")
+            verbose_logger.debug("GitHub Copilot Embedding API: Successfully configured headers for model %s", model)
 
             return merged_headers
 

@@ -101,7 +101,7 @@ class ExpiredUISessionKeyCleanupManager:
                     e,
                 )
                 return 0
-            verbose_proxy_logger.error(f"Expired UI session key cleanup failed: {e}")
+            verbose_proxy_logger.error("Expired UI session key cleanup failed: %s", e)
             return 0
         finally:
             if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:

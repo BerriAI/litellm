@@ -74,7 +74,7 @@ async def async_raise_no_deployment_exception(
     """
     Raises a RouterRateLimitError if no deployment is found for the given model.
     """
-    verbose_router_logger.info(f"get_available_deployment for model: {model}, No deployment available")
+    verbose_router_logger.info("get_available_deployment for model: %s, No deployment available", model)
     model_ids = litellm_router_instance.get_model_ids(model_name=model)
     _cooldown_time = litellm_router_instance.cooldown_cache.get_min_cooldown(
         model_ids=model_ids, parent_otel_span=parent_otel_span
@@ -84,7 +84,7 @@ async def async_raise_no_deployment_exception(
         parent_otel_span=parent_otel_span,
     )
     verbose_router_logger.info(
-        f"No deployment found for model: {model}, cooldown_list with debug info: {_cooldown_list}"
+        "No deployment found for model: %s, cooldown_list with debug info: %s", model, _cooldown_list
     )
 
     cooldown_list_ids = [cooldown_model[0] for cooldown_model in (_cooldown_list or [])]

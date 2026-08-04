@@ -245,7 +245,7 @@ class DatabricksBase:
         except requests.RequestException as e:
             raise DatabricksException(
                 status_code=500,
-                message=f"OAuth M2M token request failed: {e!s}",
+                message=f"OAuth M2M token request failed: {e}",
             )
 
         if response.status_code != 200:
@@ -386,7 +386,7 @@ class DatabricksBase:
         headers["User-Agent"] = self._build_user_agent(custom_user_agent)
 
         # Debug logging with redaction (never log actual tokens)
-        verbose_logger.debug(f"Databricks request headers: {self.redact_headers_for_logging(headers)}")
+        verbose_logger.debug("Databricks request headers: %s", self.redact_headers_for_logging(headers))
 
         if endpoint_type == "chat_completions" and custom_endpoint is not True:
             api_base = f"{api_base}/chat/completions"

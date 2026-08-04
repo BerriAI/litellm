@@ -147,7 +147,7 @@ class AutoRouter(CustomLogger):
 
         message_content = self._extract_text_from_messages(messages)
         route_choice: RouteChoice | list[RouteChoice] | None = routelayer(text=message_content)
-        verbose_router_logger.debug(f"route_choice: {route_choice}")
+        verbose_router_logger.debug("route_choice: %s", route_choice)
         if isinstance(route_choice, RouteChoice):
             model = route_choice.name or self.default_model
         elif isinstance(route_choice, list):

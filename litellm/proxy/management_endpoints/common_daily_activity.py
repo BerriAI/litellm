@@ -96,6 +96,9 @@ class DailySpendRecord(Protocol):
     def prompt_caching_savings_spend(self) -> float: ...
 
     @property
+    def autorouter_savings_spend(self) -> float: ...
+
+    @property
     def api_requests(self) -> int: ...
 
     @property
@@ -135,6 +138,7 @@ class _GroupingSetsRow(SimpleNamespace):
     compression_saved_tokens: int | None
     compression_savings_spend: float | None
     prompt_caching_savings_spend: float | None
+    autorouter_savings_spend: float | None
     api_requests: int | None
     successful_requests: int | None
     failed_requests: int | None
@@ -158,6 +162,7 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.compression_saved_tokens += record.compression_saved_tokens or 0
     existing_metrics.compression_savings_spend += record.compression_savings_spend or 0
     existing_metrics.prompt_caching_savings_spend += record.prompt_caching_savings_spend or 0
+    existing_metrics.autorouter_savings_spend += record.autorouter_savings_spend or 0
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
@@ -590,6 +595,7 @@ def _build_aggregated_sql_query(
             SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
             SUM(compression_savings_spend)::float AS compression_savings_spend,
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
+            SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests
@@ -732,6 +738,7 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
         compression_saved_tokens=record.compression_saved_tokens or 0,
         compression_savings_spend=record.compression_savings_spend or 0,
         prompt_caching_savings_spend=record.prompt_caching_savings_spend or 0,
+        autorouter_savings_spend=record.autorouter_savings_spend or 0,
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
@@ -986,6 +993,7 @@ async def get_daily_activity(
                 total_compression_saved_tokens=metadata_metrics.compression_saved_tokens,
                 total_compression_savings_spend=metadata_metrics.compression_savings_spend,
                 total_prompt_caching_savings_spend=metadata_metrics.prompt_caching_savings_spend,
+                total_autorouter_savings_spend=metadata_metrics.autorouter_savings_spend,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,
@@ -993,10 +1001,10 @@ async def get_daily_activity(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching daily activity: {e!s}")
+        verbose_proxy_logger.exception("Error fetching daily activity: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to fetch analytics: {e!s}"},
+            detail={"error": f"Failed to fetch analytics: {e}"},
         )
 
 
@@ -1075,6 +1083,7 @@ async def get_daily_activity_aggregated(
                 total_compression_saved_tokens=aggregated["totals"].compression_saved_tokens,
                 total_compression_savings_spend=aggregated["totals"].compression_savings_spend,
                 total_prompt_caching_savings_spend=aggregated["totals"].prompt_caching_savings_spend,
+                total_autorouter_savings_spend=aggregated["totals"].autorouter_savings_spend,
                 page=1,
                 total_pages=1,
                 has_more=False,
@@ -1082,8 +1091,8 @@ async def get_daily_activity_aggregated(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching aggregated daily activity: {e!s}")
+        verbose_proxy_logger.exception("Error fetching aggregated daily activity: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to fetch analytics: {e!s}"},
+            detail={"error": f"Failed to fetch analytics: {e}"},
         )

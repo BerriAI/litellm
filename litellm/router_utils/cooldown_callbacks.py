@@ -34,7 +34,8 @@ async def router_cooldown_event_callback(
     _deployment = litellm_router_instance.get_deployment(model_id=deployment_id)
     if _deployment is None:
         verbose_logger.warning(
-            f"in router_cooldown_event_callback but _deployment is None for deployment_id={deployment_id}. Doing nothing"
+            "in router_cooldown_event_callback but _deployment is None for deployment_id=%s. Doing nothing",
+            deployment_id,
         )
         return
     _litellm_params = _deployment["litellm_params"]

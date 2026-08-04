@@ -490,7 +490,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     parallel_request_limiter=self,
                 )
             except Exception as e:
-                verbose_proxy_logger.debug(f"Could not load batch rate limiter: {e!s}")
+                verbose_proxy_logger.debug("Could not load batch rate limiter: %s", e)
         return self._batch_rate_limiter
 
     def _get_current_time(self) -> datetime:
@@ -579,9 +579,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         total_estimated = estimated_input_tokens + max_tokens_estimate
 
         verbose_proxy_logger.debug(
-            f"TPM reservation estimate: input={estimated_input_tokens}, "
-            f"max_tokens={max_tokens_estimate} (explicit={explicit_max_tokens is not None}), "
-            f"total={total_estimated}"
+            "TPM reservation estimate: input=%s, max_tokens=%s (explicit=%s), total=%s",
+            estimated_input_tokens,
+            max_tokens_estimate,
+            explicit_max_tokens is not None,
+            total_estimated,
         )
 
         return total_estimated
@@ -808,7 +810,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
-                verbose_proxy_logger.warning(f"Redis Lua script failed for hash tag {hash_tag}: {e!s}")
+                verbose_proxy_logger.warning("Redis Lua script failed for hash tag %s: %s", hash_tag, e)
                 # Fallback to in-memory cache for this group
                 group_cache_values = await self.in_memory_cache_sliding_window(
                     keys=group_keys,
@@ -1055,7 +1057,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                     counts = [max(0, int(value)) for value in raw_counts]
                 except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror, never a 500
-                    verbose_proxy_logger.warning(f"parallel_count_script failed, using local mirror: {e!s}")
+                    verbose_proxy_logger.warning("parallel_count_script failed, using local mirror: %s", e)
                     counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
             else:
                 counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
@@ -1085,7 +1087,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ],
                 )
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to in-memory enforcement, never a 500
-                verbose_proxy_logger.warning(f"parallel_acquire_script failed, falling back to in-memory gauge: {e!s}")
+                verbose_proxy_logger.warning("parallel_acquire_script failed, falling back to in-memory gauge: %s", e)
                 async with self._check_and_increment_lock:
                     return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
             if int(raw[0]) == 1:
@@ -1212,9 +1214,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
-                verbose_proxy_logger.warning(
-                    f"parallel_release_script failed, falling back to in-memory release: {e!s}"
-                )
+                verbose_proxy_logger.warning("parallel_release_script failed, falling back to in-memory release: %s", e)
 
         async with self._check_and_increment_lock:
             for counter_key in counter_keys:
@@ -1389,12 +1389,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # to its pre-call state, then fall back to in-memory for the
                 # whole call (counters there are independent of Redis).
                 verbose_proxy_logger.error(
-                    f"atomic_check_and_increment_by_n: Redis Lua execution "
-                    f"failed ({type(e).__name__}: {e}). Refunding "
-                    f"{len(applied)} prior descriptors and falling back to "
-                    f"in-memory enforcement — counters will diverge from "
-                    f"Redis until window expires (window_size="
-                    f"{self.window_size}s)."
+                    "atomic_check_and_increment_by_n: Redis Lua execution failed (%s: %s). Refunding %s prior descriptors and falling back to in-memory enforcement — counters will diverge from Redis until window expires (window_size=%ss).",
+                    type(e).__name__,
+                    e,
+                    len(applied),
+                    self.window_size,
                 )
                 await self._refund_applied_descriptor_groups(applied)
                 flat_meta: list[dict[str, Any]] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
@@ -1436,7 +1435,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 except Exception as e:
                     verbose_proxy_logger.warning(
-                        f"Failed to refund {entry['counter_key']} on cross-descriptor rollback: {e}"
+                        "Failed to refund %s on cross-descriptor rollback: %s", entry["counter_key"], e
                     )
 
     def _build_atomic_response(
@@ -2229,18 +2228,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
                 if failure_count > DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE:
                     verbose_proxy_logger.debug(
-                        f"[Dynamic Rate Limit] Deployment {deployment_id} has {failure_count} failures "
-                        f"in current minute - enforcing rate limits for model {model}"
+                        "[Dynamic Rate Limit] Deployment %s has %s failures in current minute - enforcing rate limits for model %s",
+                        deployment_id,
+                        failure_count,
+                        model,
                     )
                     return True
 
             verbose_proxy_logger.debug(
-                f"[Dynamic Rate Limit] No failures detected for model {model} - allowing dynamic exceeding"
+                "[Dynamic Rate Limit] No failures detected for model %s - allowing dynamic exceeding", model
             )
             return False
 
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error checking model failure status: {e!s}, defaulting to enforce limits")
+            verbose_proxy_logger.debug("Error checking model failure status: %s, defaulting to enforce limits", e)
             # Fail safe: enforce limits if we can't check
             return True
 
@@ -2575,7 +2576,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     if stored_response is not None:
                         stored_response["statuses"].extend(tpm_response["statuses"])
 
-                    verbose_proxy_logger.debug(f"TPM tokens reserved: {estimated_tokens} for model {requested_model}")
+                    verbose_proxy_logger.debug(
+                        "TPM tokens reserved: %s for model %s", estimated_tokens, requested_model
+                    )
 
     def _create_pipeline_operations(
         self,
@@ -2706,8 +2709,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 ttl_value = op["ttl"] if op["ttl"] is not None else 0
 
                 verbose_proxy_logger.debug(
-                    f"Executing TTL-preserving increment for key={op['key']}, "
-                    f"increment={op['increment_value']}, ttl={ttl_value}"
+                    "Executing TTL-preserving increment for key=%s, increment=%s, ttl=%s",
+                    op["key"],
+                    op["increment_value"],
+                    ttl_value,
                 )
                 keys.append(op["key"])
                 args.extend([op["increment_value"], ttl_value])
@@ -2742,11 +2747,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             await self._execute_token_increment_script(pipeline_operations)
 
             verbose_proxy_logger.debug(
-                f"Successfully executed TTL-preserving increment for {len(pipeline_operations)} keys"
+                "Successfully executed TTL-preserving increment for %s keys", len(pipeline_operations)
             )
 
         except Exception as e:
-            verbose_proxy_logger.warning(f"TTL preservation failed, falling back to regular pipeline: {e!s}")
+            verbose_proxy_logger.warning("TTL preservation failed, falling back to regular pipeline: %s", e)
             # Fallback to regular pipeline on error
             await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                 increment_list=pipeline_operations,
@@ -2952,9 +2957,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         if reserved_tokens > 0 and total_tokens < reserved_tokens:
             verbose_proxy_logger.debug(
-                f"Releasing unused TPM budget on success: "
-                f"reserved={reserved_tokens}, actual={total_tokens}, "
-                f"release={reserved_tokens - total_tokens}"
+                "Releasing unused TPM budget on success: reserved=%s, actual=%s, release=%s",
+                reserved_tokens,
+                total_tokens,
+                reserved_tokens - total_tokens,
             )
         pipeline_operations.extend(
             self._build_reservation_aware_tpm_ops(
@@ -3003,7 +3009,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in rate limit success event: {e!s}")
+            verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
 
     async def async_logging_hook(
         self,
@@ -3097,7 +3103,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if stash is not None and not stash.reservation_released:
                 reserved_tokens = stash.reserved_tokens
             if stash is not None and reserved_tokens > 0:
-                verbose_proxy_logger.debug(f"Releasing reserved TPM tokens on failure: {reserved_tokens}")
+                verbose_proxy_logger.debug("Releasing reserved TPM tokens on failure: %s", reserved_tokens)
                 # Refund only against the scopes the reservation actually
                 # charged. _build_reservation_aware_tpm_ops with
                 # actual_tokens=0 emits -reserved on reserved scopes and 0
@@ -3120,7 +3126,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if stash is not None and reserved_tokens > 0:
                 stash.reservation_released = True
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in rate limit failure event: {e!s}")
+            verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
     async def async_release_max_parallel_requests_on_disconnect(
         self,
@@ -3185,7 +3191,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in rate limit post-call hook: {e!s}")
+            verbose_proxy_logger.exception("Error in rate limit post-call hook: %s", e)
 
     async def async_post_call_failure_hook(
         self,
@@ -3233,12 +3239,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_tokens=reserved_tokens,
             )
             if ops:
-                verbose_proxy_logger.debug(f"Releasing reserved TPM tokens on proxy-level rejection: {reserved_tokens}")
+                verbose_proxy_logger.debug(
+                    "Releasing reserved TPM tokens on proxy-level rejection: %s", reserved_tokens
+                )
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                     increment_list=ops,
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
             stash.reservation_released = True
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error releasing TPM reservation on post-call failure: {e}")
+            verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
         return

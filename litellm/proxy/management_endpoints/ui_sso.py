@@ -443,7 +443,7 @@ def build_cli_sso_attribution_metadata(
     metadata: dict[str, Any] = {}
     for source_claim, dest_key in claim_map:
         if not _is_safe_cli_sso_metadata_dest_key(dest_key):
-            verbose_proxy_logger.debug(f"Skipping unsafe CLI SSO metadata destination key: {dest_key}")
+            verbose_proxy_logger.debug("Skipping unsafe CLI SSO metadata destination key: %s", dest_key)
             continue
 
         raw_value = _extract_sso_claim_value(result=result, claim_path=source_claim)
@@ -504,11 +504,12 @@ async def _persist_cli_sso_user_metadata(
             data={"metadata": merged_metadata},
         )
         verbose_proxy_logger.info(
-            f"Persisted CLI SSO attribution metadata for user {user_id}: "
-            f"{list(_flatten_cli_sso_metadata_for_poll(attribution_metadata).keys())}"
+            "Persisted CLI SSO attribution metadata for user %s: %s",
+            user_id,
+            list(_flatten_cli_sso_metadata_for_poll(attribution_metadata).keys()),
         )
     except Exception as e:
-        verbose_proxy_logger.error(f"Failed to persist CLI SSO attribution metadata for user {user_id}: {e}")
+        verbose_proxy_logger.error("Failed to persist CLI SSO attribution metadata for user %s: %s", user_id, e)
 
 
 def _cli_poll_attribution_metadata_from_session(
@@ -745,13 +746,15 @@ def determine_role_from_groups(
             role_groups = role_mappings.roles[role]
             if isinstance(role_groups, list) and user_groups_set.intersection(set(role_groups)):
                 verbose_proxy_logger.debug(
-                    f"User groups {user_groups} matched role '{role.value}' via groups: {role_groups}"
+                    "User groups %s matched role '%s' via groups: %s", user_groups, role.value, role_groups
                 )
                 return role
 
     # No matching groups found, return default_role
     verbose_proxy_logger.debug(
-        f"User groups {user_groups} did not match any role mappings, using default_role: {role_mappings.default_role}"
+        "User groups %s did not match any role mappings, using default_role: %s",
+        user_groups,
+        role_mappings.default_role,
     )
     return role_mappings.default_role
 
@@ -827,7 +830,7 @@ def process_sso_jwt_access_token(
                 if user_groups:
                     user_role = determine_role_from_groups(user_groups, role_mappings)
                     verbose_proxy_logger.debug(
-                        f"Determined role '{user_role}' from access token groups '{user_groups}' using role_mappings"
+                        "Determined role '%s' from access token groups '%s' using role_mappings", user_role, user_groups
                     )
                 elif role_mappings.default_role:
                     user_role = role_mappings.default_role
@@ -839,7 +842,7 @@ def process_sso_jwt_access_token(
                 if user_role_from_token is not None:
                     user_role = get_litellm_user_role(user_role_from_token)
                     verbose_proxy_logger.debug(
-                        f"Extracted role '{user_role}' from access token field '{generic_user_role_attribute_name}'"
+                        "Extracted role '%s' from access token field '%s'", user_role, generic_user_role_attribute_name
                     )
 
             if user_role is not None:
@@ -847,7 +850,7 @@ def process_sso_jwt_access_token(
                     result["user_role"] = user_role
                 else:
                     setattr(result, "user_role", user_role)
-                verbose_proxy_logger.debug(f"Set user_role='{user_role}' from JWT access token")
+                verbose_proxy_logger.debug("Set user_role='%s' from JWT access token", user_role)
 
         return access_token_payload
 
@@ -976,7 +979,7 @@ async def google_login(
         )
         is True
     ):
-        verbose_proxy_logger.info(f"Redirecting to SSO login for {redirect_url}")
+        verbose_proxy_logger.info("Redirecting to SSO login for %s", redirect_url)
         sso_redirect = await SSOAuthenticationHandler.get_sso_login_redirect(
             redirect_url=redirect_url,
             microsoft_client_id=microsoft_client_id,
@@ -1031,7 +1034,9 @@ def generic_response_convertor(
     generic_user_extra_attributes = os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None)
 
     verbose_proxy_logger.debug(
-        f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
+        " generic_user_id_attribute_name: %s\n generic_user_email_attribute_name: %s",
+        generic_user_id_attribute_name,
+        generic_user_email_attribute_name,
     )
 
     all_teams = []
@@ -1048,7 +1053,9 @@ def generic_response_convertor(
         if team_ids_from_db_mapping:
             all_teams.extend(team_ids_from_db_mapping)
             verbose_proxy_logger.debug(
-                f"Loaded team_ids from DB team_mappings.team_ids_jwt_field='{team_mappings.team_ids_jwt_field}': {team_ids_from_db_mapping}"
+                "Loaded team_ids from DB team_mappings.team_ids_jwt_field='%s': %s",
+                team_mappings.team_ids_jwt_field,
+                team_ids_from_db_mapping,
             )
     else:
         team_ids = jwt_handler.get_all_jwt_team_ids(cast(dict, response))
@@ -1080,13 +1087,15 @@ def generic_response_convertor(
         if user_groups:
             user_role = determine_role_from_groups(user_groups, role_mappings)
             verbose_proxy_logger.debug(
-                f"Determined role '{user_role.value if user_role else None}' from groups '{user_groups}' using role_mappings"
+                "Determined role '%s' from groups '%s' using role_mappings",
+                user_role.value if user_role else None,
+                user_groups,
             )
         else:
             # No groups found, use default_role
             user_role = role_mappings.default_role
             verbose_proxy_logger.debug(
-                f"No groups found in '{group_claim}', using default_role: {role_mappings.default_role}"
+                "No groups found in '%s', using default_role: %s", group_claim, role_mappings.default_role
             )
 
     # Fallback to existing logic if role_mappings not used
@@ -1097,7 +1106,9 @@ def generic_response_convertor(
             if role is not None:
                 user_role = role
                 verbose_proxy_logger.debug(
-                    f"Found valid LitellmUserRoles '{role.value}' from SSO attribute '{generic_user_role_attribute_name}'"
+                    "Found valid LitellmUserRoles '%s' from SSO attribute '%s'",
+                    role.value,
+                    generic_user_role_attribute_name,
                 )
 
     # Build extra_fields dict from GENERIC_USER_EXTRA_ATTRIBUTES if specified
@@ -1163,9 +1174,12 @@ def _setup_generic_sso_env_vars(
         )
 
     verbose_proxy_logger.debug(
-        f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
+        "authorization_endpoint: %s\ntoken_endpoint: %s\nuserinfo_endpoint: %s",
+        generic_authorization_endpoint,
+        generic_token_endpoint,
+        generic_userinfo_endpoint,
     )
-    verbose_proxy_logger.debug(f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n")
+    verbose_proxy_logger.debug("GENERIC_REDIRECT_URI: %s\nGENERIC_CLIENT_ID: %s\n", redirect_url, generic_client_id)
 
     return (
         generic_client_secret,
@@ -1201,11 +1215,11 @@ async def _setup_team_mappings() -> Optional["TeamMappings"]:
 
                 if team_mappings and team_mappings.team_ids_jwt_field:
                     verbose_proxy_logger.debug(
-                        f"Loaded team_mappings with team_ids_jwt_field: '{team_mappings.team_ids_jwt_field}'"
+                        "Loaded team_mappings with team_ids_jwt_field: '%s'", team_mappings.team_ids_jwt_field
                     )
     except Exception as e:
         verbose_proxy_logger.debug(
-            f"Could not load team_mappings from database: {e}. Continuing with config-based team mapping."
+            "Could not load team_mappings from database: %s. Continuing with config-based team mapping.", e
         )
 
     return team_mappings
@@ -1232,10 +1246,10 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
                     role_mappings = role_mappings_data
 
                 if role_mappings:
-                    verbose_proxy_logger.debug(f"Loaded role_mappings for provider '{role_mappings.provider}'")
+                    verbose_proxy_logger.debug("Loaded role_mappings for provider '%s'", role_mappings.provider)
     except Exception as e:
         verbose_proxy_logger.debug(
-            f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
+            "Could not load role_mappings from database: %s. Continuing with existing role logic.", e
         )
 
     generic_role_mappings = os.getenv("GENERIC_ROLE_MAPPINGS_ROLES", None)
@@ -1257,12 +1271,12 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
 
                 role_mappings = RoleMappings(**role_mappings_data)
                 verbose_proxy_logger.debug(
-                    f"Loaded role_mappings from environments for provider '{role_mappings.provider}'."
+                    "Loaded role_mappings from environments for provider '%s'.", role_mappings.provider
                 )
                 return role_mappings
         except TypeError as e:
             verbose_proxy_logger.warning(
-                f"Error decoding role mappings from environment variables: {e}. Continuing with existing role logic."
+                "Error decoding role mappings from environment variables: %s. Continuing with existing role logic.", e
             )
     return role_mappings
 
@@ -1534,7 +1548,7 @@ async def create_team_member_add_task(team_id, user_info):
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
     except Exception as e:
-        verbose_proxy_logger.debug(f"[Non-Blocking] Error trying to add sso user to db: {e}")
+        verbose_proxy_logger.debug("[Non-Blocking] Error trying to add sso user to db: %s", e)
 
 
 async def add_missing_team_member(user_info: NewUserResponse | LiteLLM_UserTable, sso_teams: list[str]):
@@ -1552,7 +1566,7 @@ async def add_missing_team_member(user_info: NewUserResponse | LiteLLM_UserTable
     try:
         await asyncio.gather(*tasks)
     except Exception as e:
-        verbose_proxy_logger.debug(f"[Non-Blocking] Error trying to add sso user to db: {e}")
+        verbose_proxy_logger.debug("[Non-Blocking] Error trying to add sso user to db: %s", e)
 
 
 def get_disabled_non_admin_personal_key_creation():
@@ -1583,7 +1597,7 @@ async def get_existing_user_info_from_db(
             sso_user_id=user_id,
         )
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error getting user object: {e}")
+        verbose_proxy_logger.debug("Error getting user object: %s", e)
         user_info = None
 
     return user_info
@@ -1629,7 +1643,7 @@ async def get_user_info_from_db(
                 break
 
         verbose_proxy_logger.debug(
-            f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
+            "user_info: %s; litellm.default_internal_user_params: %s", user_info, litellm.default_internal_user_params
         )
 
         # Upsert SSO User to LiteLLM DB
@@ -1648,7 +1662,7 @@ async def get_user_info_from_db(
 
         return user_info
     except Exception as e:
-        verbose_proxy_logger.exception(f"[Non-Blocking] Error trying to add sso user to db: {e}")
+        verbose_proxy_logger.exception("[Non-Blocking] Error trying to add sso user to db: %s", e)
 
     return None
 
@@ -1660,8 +1674,8 @@ def _should_use_role_from_sso_response(sso_role: str | None) -> bool:
 
     if not is_valid_litellm_user_role(sso_role):
         verbose_proxy_logger.debug(
-            f"SSO role '{sso_role}' is not a valid LiteLLM user role. "
-            "Ignoring role from SSO response. See LitellmUserRoles enum for valid roles."
+            "SSO role '%s' is not a valid LiteLLM user role. Ignoring role from SSO response. See LitellmUserRoles enum for valid roles.",
+            sso_role,
         )
         return False
     return True
@@ -1694,7 +1708,7 @@ def _build_sso_user_update_data(
         # Only include if it's a valid LiteLLM role
         if _should_use_role_from_sso_response(sso_role_str):
             update_data["user_role"] = sso_role_str
-            verbose_proxy_logger.info(f"Updating user {user_id} role from SSO: {sso_role_str}")
+            verbose_proxy_logger.info("Updating user %s role from SSO: %s", user_id, sso_role_str)
 
     return update_data
 
@@ -1726,7 +1740,7 @@ async def _sync_user_role_from_jwt_role_map(
     if mapped_role is None:
         return
 
-    verbose_proxy_logger.info(f"SSO jwt_litellm_role_map matched role: {mapped_role.value}")
+    verbose_proxy_logger.info("SSO jwt_litellm_role_map matched role: %s", mapped_role.value)
 
     # Update user_defined_values so downstream code uses the mapped role
     if user_defined_values is not None:
@@ -1762,7 +1776,7 @@ def apply_user_info_values_to_sso_user_defined_values(
 
     if _should_use_role_from_sso_response(sso_role):
         # SSO provided a valid role, keep it and log that we're using it
-        verbose_proxy_logger.info(f"Using SSO role: {sso_role} (DB role was: {db_role})")
+        verbose_proxy_logger.info("Using SSO role: %s (DB role was: %s)", sso_role, db_role)
     else:
         # SSO didn't provide a valid role, fall back to DB role or default
         if user_info is None or user_info.user_role is None:
@@ -1770,7 +1784,7 @@ def apply_user_info_values_to_sso_user_defined_values(
             verbose_proxy_logger.debug("No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY")
         else:
             user_defined_values["user_role"] = user_info.user_role
-            verbose_proxy_logger.debug(f"Using DB role: {user_info.user_role}")
+            verbose_proxy_logger.debug("Using DB role: %s", user_info.user_role)
 
     # Preserve the user's existing models from the database
     if user_info is not None and hasattr(user_info, "models") and user_info.models:
@@ -1803,13 +1817,13 @@ async def check_and_update_if_proxy_admin_id(user_role: str, user_id: str, prism
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request, state: str | None = None):
     """Verify login"""
-    verbose_proxy_logger.info(f"Starting SSO callback with state: {state}")
+    verbose_proxy_logger.info("Starting SSO callback with state: %s", state)
 
     oauth_error = request.query_params.get("error")
     if oauth_error:
         oauth_error_description = request.query_params.get("error_description")
         verbose_proxy_logger.warning(
-            f"SSO callback received OAuth error: {oauth_error}, description: {oauth_error_description}"
+            "SSO callback received OAuth error: %s, description: %s", oauth_error, oauth_error_description
         )
         raise HTTPException(
             status_code=401,
@@ -1861,7 +1875,7 @@ async def auth_callback(request: Request, state: str | None = None):
         )
     redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(request=request, sso_callback_route="sso/callback")
 
-    verbose_proxy_logger.info(f"Redirecting to {redirect_url}")
+    verbose_proxy_logger.info("Redirecting to %s", redirect_url)
     result = None
     if google_client_id is not None:
         result = await GoogleSSOHandler.get_google_callback_response(
@@ -2044,7 +2058,7 @@ async def _fetch_cli_sso_team_details(
                     }
                 )
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching team details for CLI SSO session: {e}")
+        verbose_proxy_logger.error("Error fetching team details for CLI SSO session: %s", e)
     return team_details
 
 
@@ -2111,7 +2125,7 @@ async def _complete_cli_sso_callback_session(
     _set_cli_sso_flow(login_id=key, cache=cli_sso_session_cache, flow=flow)
 
     verbose_proxy_logger.info(
-        f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
+        "Stored CLI SSO session for user: %s, teams: %s, num_teams: %s", user_info.user_id, teams, len(teams)
     )
     verify_url = get_custom_url(
         request_base_url=str(request.base_url),
@@ -2165,7 +2179,7 @@ async def cli_sso_callback(
             result=result_non_none,
             generic_client_id=os.getenv("GENERIC_CLIENT_ID", None),
         )
-        verbose_proxy_logger.debug(f"parsed_openid_result: {parsed_openid_result}")
+        verbose_proxy_logger.debug("parsed_openid_result: %s", parsed_openid_result)
         user_defined_values = await _build_cli_sso_user_defined_values(
             result=result_non_none,
             parsed_openid_result=parsed_openid_result,
@@ -2196,8 +2210,8 @@ async def cli_sso_callback(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error with CLI SSO callback: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process CLI SSO: {e!s}")
+        verbose_proxy_logger.error("Error with CLI SSO callback: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to process CLI SSO: {e}")
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
@@ -2236,7 +2250,11 @@ async def cli_poll_key(
             user_id = session_data["user_id"]
 
             verbose_proxy_logger.info(
-                f"CLI poll: user={user_id}, team_id={team_id}, user_teams={user_teams}, num_teams={len(user_teams)}"
+                "CLI poll: user=%s, team_id=%s, user_teams=%s, num_teams=%s",
+                user_id,
+                team_id,
+                user_teams,
+                len(user_teams),
             )
 
             # If no team_id provided and user has teams, return teams list for selection
@@ -2244,7 +2262,7 @@ async def cli_poll_key(
             # clients we return rich team details (id + alias); older clients
             # can continue to rely on the simple "teams" list.
             if team_id is None and len(user_teams) > 1:
-                verbose_proxy_logger.info(f"Returning teams list for user {user_id} to select from: {user_teams}")
+                verbose_proxy_logger.info("Returning teams list for user %s to select from: %s", user_id, user_teams)
                 # Best-effort construction of team_details if it wasn't
                 # already cached for some reason.
                 team_details_response: list[dict[str, Any]] | None = None
@@ -2298,7 +2316,7 @@ async def cli_poll_key(
             # Delete cache entry (single-use)
             cli_sso_session_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
 
-            verbose_proxy_logger.info(f"CLI JWT generated for user: {user_id}, team: {team_id}")
+            verbose_proxy_logger.info("CLI JWT generated for user: %s, team: %s", user_id, team_id)
             poll_response = {
                 "status": "ready",
                 "key": jwt_token,
@@ -2319,8 +2337,8 @@ async def cli_poll_key(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error polling for CLI JWT: {e}")
-        raise HTTPException(status_code=500, detail=f"Error checking session status: {e!s}")
+        verbose_proxy_logger.error("Error polling for CLI JWT: %s", e)
+        raise HTTPException(status_code=500, detail=f"Error checking session status: {e}")
 
 
 async def insert_sso_user(
@@ -2337,7 +2355,7 @@ async def insert_sso_user(
     Returns:
         Tuple[str, str]: User ID and User Role
     """
-    verbose_proxy_logger.debug(f"Inserting SSO user into DB. User values: {user_defined_values}")
+    verbose_proxy_logger.debug("Inserting SSO user into DB. User values: %s", user_defined_values)
     if result_openid is None:
         raise ValueError("result_openid is None")
     if isinstance(result_openid, dict):
@@ -2357,7 +2375,7 @@ async def insert_sso_user(
             preserved_role = sso_role
             user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
             user_defined_values["user_role"] = preserved_role  # Restore preserved role
-            verbose_proxy_logger.debug(f"Preserved SSO-extracted role '{preserved_role}'")
+            verbose_proxy_logger.debug("Preserved SSO-extracted role '%s'", preserved_role)
         else:
             # SSO didn't provide a valid role, apply all defaults including role
             user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
@@ -2671,7 +2689,9 @@ class SSOAuthenticationHandler:
                 redirect_uri=redirect_url,
             )
             verbose_proxy_logger.info(
-                f"In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: {redirect_url}\nGOOGLE_CLIENT_ID: {google_client_id}"
+                "In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: %s\nGOOGLE_CLIENT_ID: %s",
+                redirect_url,
+                google_client_id,
             )
             with google_sso:
                 return await google_sso.get_login_redirect(state=state)
@@ -2733,10 +2753,13 @@ class SSOAuthenticationHandler:
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
             verbose_proxy_logger.debug(
-                f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
+                "authorization_endpoint: %s\ntoken_endpoint: %s\nuserinfo_endpoint: %s",
+                generic_authorization_endpoint,
+                generic_token_endpoint,
+                generic_userinfo_endpoint,
             )
             verbose_proxy_logger.debug(
-                f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
+                "GENERIC_REDIRECT_URI: %s\nGENERIC_CLIENT_ID: %s\n", redirect_url, generic_client_id
             )
             discovery = DiscoveryDocument(
                 authorization_endpoint=generic_authorization_endpoint,
@@ -2992,7 +3015,7 @@ class SSOAuthenticationHandler:
                 )
             return user_info
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error upserting SSO user into LiteLLM DB: {e}")
+            verbose_proxy_logger.exception("Error upserting SSO user into LiteLLM DB: %s", e)
             return user_info
 
     @staticmethod
@@ -3075,11 +3098,11 @@ class SSOAuthenticationHandler:
             )
         try:
             team_obj = await TeamRepository(prisma_client).table.find_first(where={"team_id": litellm_team_id})
-            verbose_proxy_logger.debug(f"Team object: {team_obj}")
+            verbose_proxy_logger.debug("Team object: %s", team_obj)
 
             # only create a new team if it doesn't exist
             if team_obj:
-                verbose_proxy_logger.debug(f"Team already exists: {litellm_team_id} - {litellm_team_name}")
+                verbose_proxy_logger.debug("Team already exists: %s - %s", litellm_team_id, litellm_team_name)
                 return
 
             team_request: NewTeamRequest = NewTeamRequest(
@@ -3104,7 +3127,7 @@ class SSOAuthenticationHandler:
                 ),
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error creating Litellm Team: {e}")
+            verbose_proxy_logger.exception("Error creating Litellm Team: %s", e)
 
     @staticmethod
     def _cast_and_deepcopy_litellm_default_team_params(
@@ -3188,7 +3211,7 @@ class SSOAuthenticationHandler:
             if _user_role is not None:
                 # Convert enum to string if needed
                 user_role = _user_role.value if isinstance(_user_role, LitellmUserRoles) else _user_role
-                verbose_proxy_logger.debug(f"Extracted user_role from SSO result: {user_role}")
+                verbose_proxy_logger.debug("Extracted user_role from SSO result: %s", user_role)
 
         # generic client id - override with custom attribute name if specified
         if generic_client_id is not None and result is not None:
@@ -3252,7 +3275,7 @@ class SSOAuthenticationHandler:
         user_email = parsed_openid_result.get("user_email")
         user_id = parsed_openid_result.get("user_id")
         user_role = parsed_openid_result.get("user_role")
-        verbose_proxy_logger.info(f"SSO callback result: {result}")
+        verbose_proxy_logger.info("SSO callback result: %s", result)
 
         user_info = None
         user_id_models: list = []
@@ -3318,7 +3341,7 @@ class SSOAuthenticationHandler:
                 "Unable to map user identity to known values. 'user_defined_values' is None. File an issue - https://github.com/BerriAI/litellm/issues"
             )
 
-        verbose_proxy_logger.info(f"user_defined_values for creating ui key: {user_defined_values}")
+        verbose_proxy_logger.info("user_defined_values for creating ui key: %s", user_defined_values)
 
         response = await generate_key_helper_fn(
             request_type="key",
@@ -3346,7 +3369,7 @@ class SSOAuthenticationHandler:
                 user_role=user_role, user_id=user_id, prisma_client=prisma_client
             )
 
-        verbose_proxy_logger.debug(f"user_role: {user_role}; ui_access_mode: {ui_access_mode}")
+        verbose_proxy_logger.debug("user_role: %s; ui_access_mode: %s", user_role, ui_access_mode)
         ## CHECK IF ROLE ALLOWED TO USE PROXY ##
         is_admin_only_access = check_is_admin_only_access(ui_access_mode or {})
         if is_admin_only_access:
@@ -3412,7 +3435,7 @@ class SSOAuthenticationHandler:
 
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"
-        verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
+        verbose_proxy_logger.info("Redirecting to %s", litellm_dashboard_ui)
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
         redirect_response.set_cookie(key="token", value=jwt_token)
         return redirect_response
@@ -4012,7 +4035,7 @@ class MicrosoftSSOHandler:
 
         # Extract app roles from the id_token JWT
         app_roles = MicrosoftSSOHandler.get_app_roles_from_id_token(id_token=microsoft_sso.id_token)
-        verbose_proxy_logger.debug(f"Extracted app roles from id_token: {app_roles}")
+        verbose_proxy_logger.debug("Extracted app roles from id_token: %s", app_roles)
 
         # Combine groups and app roles
         user_role: LitellmUserRoles | None = None
@@ -4022,10 +4045,10 @@ class MicrosoftSSOHandler:
                 role = get_litellm_user_role(role_str)
                 if role is not None:
                     user_role = role
-                    verbose_proxy_logger.debug(f"Found valid LitellmUserRoles '{role.value}' in app_roles")
+                    verbose_proxy_logger.debug("Found valid LitellmUserRoles '%s' in app_roles", role.value)
                     break
 
-        verbose_proxy_logger.debug(f"Combined team_ids (groups + app roles): {user_team_ids}")
+        verbose_proxy_logger.debug("Combined team_ids (groups + app roles): %s", user_team_ids)
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
@@ -4047,7 +4070,7 @@ class MicrosoftSSOHandler:
         user_role: LitellmUserRoles | None,
     ) -> CustomOpenID:
         response = response or {}
-        verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
+        verbose_proxy_logger.debug("Microsoft SSO Callback Response: %s", response)
         openid_response = CustomOpenID(
             email=normalize_email(response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail")),
             display_name=response.get(MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE),
@@ -4058,7 +4081,7 @@ class MicrosoftSSOHandler:
             team_ids=team_ids,
             user_role=user_role,
         )
-        verbose_proxy_logger.debug(f"Microsoft SSO OpenID Response: {openid_response}")
+        verbose_proxy_logger.debug("Microsoft SSO OpenID Response: %s", openid_response)
         return openid_response
 
     @staticmethod
@@ -4091,14 +4114,14 @@ class MicrosoftSSOHandler:
             roles = decoded_token.get("app_roles", []) or decoded_token.get("roles", [])
 
             if roles and isinstance(roles, list):
-                verbose_proxy_logger.debug(f"Found {len(roles)} app role(s) in id_token: {roles}")
+                verbose_proxy_logger.debug("Found %s app role(s) in id_token: %s", len(roles), roles)
                 return roles
             else:
                 verbose_proxy_logger.debug("No app roles found in id_token or roles claim is not a list")
                 return []
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error extracting app roles from id_token: {e}")
+            verbose_proxy_logger.error("Error extracting app roles from id_token: %s", e)
             return []
 
     @staticmethod
@@ -4130,7 +4153,7 @@ class MicrosoftSSOHandler:
                     async_client=async_client,
                     access_token=access_token,
                 )
-                verbose_proxy_logger.debug(f"Service principal group IDs: {service_principal_group_ids}")
+                verbose_proxy_logger.debug("Service principal group IDs: %s", service_principal_group_ids)
                 if len(service_principal_group_ids) > 0:
                     await MicrosoftSSOHandler.create_litellm_teams_from_service_principal_team_ids(
                         service_principal_teams=service_principal_teams,
@@ -4151,7 +4174,8 @@ class MicrosoftSSOHandler:
 
             if next_link is not None and page_count >= MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
                 verbose_proxy_logger.warning(
-                    f"Reached maximum page limit of {MicrosoftSSOHandler.MAX_GRAPH_API_PAGES}. Some groups may not be included."
+                    "Reached maximum page limit of %s. Some groups may not be included.",
+                    MicrosoftSSOHandler.MAX_GRAPH_API_PAGES,
                 )
 
             # If service_principal_group_ids is not empty, only return group_ids that are in both all_group_ids and service_principal_group_ids
@@ -4161,7 +4185,7 @@ class MicrosoftSSOHandler:
             return all_group_ids
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error getting user groups from Microsoft Graph API: {e}")
+            verbose_proxy_logger.error("Error getting user groups from Microsoft Graph API: %s", e)
             return []
 
     @staticmethod
@@ -4238,7 +4262,7 @@ class MicrosoftSSOHandler:
         while next_link is not None and page_count < MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
             response = await async_client.get(next_link, headers=headers)
             response_json = response.json()
-            verbose_proxy_logger.debug(f"Response from service principal app role assigned to: {response_json}")
+            verbose_proxy_logger.debug("Response from service principal app role assigned to: %s", response_json)
 
             for _object in response_json.get("value", []):
                 if _object.get("principalType") == "Group":
@@ -4257,7 +4281,8 @@ class MicrosoftSSOHandler:
 
         if next_link is not None and page_count >= MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
             verbose_proxy_logger.warning(
-                f"Reached maximum page limit of {MicrosoftSSOHandler.MAX_GRAPH_API_PAGES}. Some service principal group assignments may not be included."
+                "Reached maximum page limit of %s. Some service principal group assignments may not be included.",
+                MicrosoftSSOHandler.MAX_GRAPH_API_PAGES,
             )
 
         return group_ids, service_principal_teams
@@ -4271,13 +4296,13 @@ class MicrosoftSSOHandler:
 
         When a user sets a `SERVICE_PRINCIPAL_ID` in the env, litellm will fetch groups under that service principal and create Litellm Teams from them
         """
-        verbose_proxy_logger.debug(f"Creating Litellm Teams from Service Principal Teams: {service_principal_teams}")
+        verbose_proxy_logger.debug("Creating Litellm Teams from Service Principal Teams: %s", service_principal_teams)
         for service_principal_team in service_principal_teams:
             litellm_team_id: str | None = service_principal_team.get("principalId")
             litellm_team_name: str | None = service_principal_team.get("principalDisplayName")
             if not litellm_team_id:
                 verbose_proxy_logger.debug(
-                    f"Skipping team creation for {litellm_team_name} because it has no principalId"
+                    "Skipping team creation for %s because it has no principalId", litellm_team_name
                 )
                 continue
 
@@ -4479,7 +4504,7 @@ async def debug_sso_callback(request: Request):
                     # Try to convert to string or another JSON serializable format
                     filtered_result[key] = str(value)
                 except Exception as e:
-                    filtered_result[key] = f"Complex value (not displayable): {e!s}"
+                    filtered_result[key] = f"Complex value (not displayable): {e}"
 
     # Defense-in-depth: ensure no bearer tokens leak into the rendered HTML even if
     # a non-conforming IdP places them in its userinfo response.

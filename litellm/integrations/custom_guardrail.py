@@ -864,7 +864,7 @@ class CustomGuardrail(CustomLogger):
 
         if premium_user is not True:
             verbose_logger.warning(
-                f"Trying to use premium guardrail without premium user {CommonProxyErrors.not_premium_user.value}"
+                "Trying to use premium guardrail without premium user %s", CommonProxyErrors.not_premium_user.value
             )
             return False
         return True
@@ -1028,7 +1028,7 @@ class CustomGuardrail(CustomLogger):
             else:
                 guardrail_response = "allow"
 
-        verbose_logger.debug(f"Guardrail response: {response}")
+        verbose_logger.debug("Guardrail response: %s", response)
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,

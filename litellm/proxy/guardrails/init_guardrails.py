@@ -86,7 +86,7 @@ def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:
         router_guardrail_list.append(router_guardrail)
 
     llm_router.guardrail_list = router_guardrail_list
-    verbose_proxy_logger.debug(f"Populated router guardrail_list with {len(router_guardrail_list)} guardrails")
+    verbose_proxy_logger.debug("Populated router guardrail_list with %s guardrails", len(router_guardrail_list))
 
 
 ### LEGACY IMPLEMENTATION ###
@@ -97,7 +97,7 @@ def initialize_guardrails(
     litellm_settings: dict,
 ) -> dict[str, GuardrailItem]:
     try:
-        verbose_proxy_logger.debug(f"validating  guardrails passed {guardrails_config}")
+        verbose_proxy_logger.debug("validating  guardrails passed %s", guardrails_config)
         global all_guardrails
         for item in guardrails_config:
             """
@@ -141,5 +141,5 @@ def initialize_guardrails(
 
         return litellm.guardrail_name_config_map
     except Exception as e:
-        verbose_proxy_logger.exception(f"error initializing guardrails {e!s}")
+        verbose_proxy_logger.exception("error initializing guardrails %s", e)
         raise e

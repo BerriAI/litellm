@@ -68,7 +68,7 @@ class DynamicRateLimiterCache:
             await self.cache.async_set_cache_sadd(key=key_name, value=value, ttl=self.ttl)
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.hooks.dynamic_rate_limiter.py::async_set_cache_sadd(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.dynamic_rate_limiter.py::async_set_cache_sadd(): Exception occured - %s", e
             )
             raise e
 
@@ -106,7 +106,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             weight: float = 1
             if litellm.priority_reservation is None or priority not in litellm.priority_reservation:
                 verbose_proxy_logger.error(
-                    f"Priority Reservation not set. priority={priority}, but litellm.priority_reservation is {litellm.priority_reservation}."
+                    "Priority Reservation not set. priority=%s, but litellm.priority_reservation is %s.",
+                    priority,
+                    litellm.priority_reservation,
                 )
             elif priority is not None and litellm.priority_reservation is not None:
                 if os.getenv("LITELLM_LICENSE", None) is None:
@@ -172,7 +174,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             )
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.hooks.dynamic_rate_limiter.py::check_available_usage: Exception occurred - {e!s}"
+                "litellm.proxy.hooks.dynamic_rate_limiter.py::check_available_usage: Exception occurred - %s", e
             )
             return None, None, None, None, None
 
@@ -263,6 +265,6 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             )
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.hooks.dynamic_rate_limiter.py::async_post_call_success_hook(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.dynamic_rate_limiter.py::async_post_call_success_hook(): Exception occured - %s", e
             )
             return response

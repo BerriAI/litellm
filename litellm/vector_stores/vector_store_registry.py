@@ -235,7 +235,7 @@ class VectorStoreRegistry:
                         self.add_vector_store_to_registry(vector_store=db_vector_store)
                         return db_vector_store
             except Exception as e:
-                verbose_logger.debug(f"Error fetching vector store from database: {e!s}")
+                verbose_logger.debug("Error fetching vector store from database: %s", e)
 
         return None
 
@@ -341,12 +341,13 @@ class VectorStoreRegistry:
                     if db_vector_store is None:
                         # Vector store was deleted from database, remove from cache
                         verbose_logger.debug(
-                            f"Vector store {vector_store_id} found in memory but deleted from database, removing from cache"
+                            "Vector store %s found in memory but deleted from database, removing from cache",
+                            vector_store_id,
                         )
                         self.delete_vector_store_from_registry(vector_store_id=vector_store_id)
                         vector_store = None
                 except Exception as e:
-                    verbose_logger.debug(f"Error verifying vector store {vector_store_id} in database: {e!s}")
+                    verbose_logger.debug("Error verifying vector store %s in database: %s", vector_store_id, e)
 
             # Fall back to database if not found in memory (or was deleted)
             if vector_store is None and prisma_client is not None:
@@ -355,7 +356,7 @@ class VectorStoreRegistry:
                         vector_store_id=vector_store_id, prisma_client=prisma_client
                     )
                 except Exception as e:
-                    verbose_logger.debug(f"Error fetching vector store {vector_store_id} from database: {e!s}")
+                    verbose_logger.debug("Error fetching vector store %s from database: %s", vector_store_id, e)
 
             if vector_store is not None:
                 # Create a copy to avoid modifying the registry

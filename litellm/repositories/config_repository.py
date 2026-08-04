@@ -197,7 +197,7 @@ class ConfigRepository:
 
             param_name = response.param_name
             param_value = response.param_value
-            verbose_proxy_logger.debug(f"param_name={param_name}, param_value={param_value}")
+            verbose_proxy_logger.debug("param_name=%s, param_value=%s", param_name, param_value)
 
             if param_name is not None and param_value is not None:
                 config = self._update_config_fields(

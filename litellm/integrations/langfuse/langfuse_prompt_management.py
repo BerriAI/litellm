@@ -317,7 +317,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.exception(f"Langfuse Layer Error - Exception occurred while logging success event: {e!s}")
+            verbose_logger.exception("Langfuse Layer Error - Exception occurred while logging success event: %s", e)
             self.handle_callback_failure(callback_name="langfuse")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -347,5 +347,5 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.exception(f"Langfuse Layer Error - Exception occurred while logging failure event: {e!s}")
+            verbose_logger.exception("Langfuse Layer Error - Exception occurred while logging failure event: %s", e)
             self.handle_callback_failure(callback_name="langfuse")

@@ -127,7 +127,7 @@ async def run_async_fallback(
         try:
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
-            verbose_router_logger.info(f"Falling back to model_group = {mask_sensitive_structure(mg)}")
+            verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
             if isinstance(mg, str):
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
@@ -190,7 +190,7 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Error in log_success_fallback_event: {e!s}")
+            verbose_router_logger.error("Error in log_success_fallback_event: %s", e)
 
 
 async def log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
@@ -218,7 +218,7 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Error in log_failure_fallback_event: {e!s}")
+            verbose_router_logger.error("Error in log_failure_fallback_event: %s", e)
 
 
 def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:

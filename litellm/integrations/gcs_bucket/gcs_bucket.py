@@ -76,7 +76,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             await self.log_queue.put(GCSLogQueueItem(payload=logging_payload, kwargs=kwargs, response_obj=response_obj))
 
         except Exception as e:
-            verbose_logger.exception(f"GCS Bucket logging error: {e!s}")
+            verbose_logger.exception("GCS Bucket logging error: %s", e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -95,7 +95,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             await self.log_queue.put(GCSLogQueueItem(payload=logging_payload, kwargs=kwargs, response_obj=response_obj))
 
         except Exception as e:
-            verbose_logger.exception(f"GCS Bucket logging error: {e!s}")
+            verbose_logger.exception("GCS Bucket logging error: %s", e)
 
     def _drain_queue_batch(self) -> list[GCSLogQueueItem]:
         """
@@ -218,7 +218,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         except Exception as e:
             success_count = 0
             error_count = len(items)
-            verbose_logger.exception(f"GCS Bucket error logging batch payload to GCS bucket: {e!s}")
+            verbose_logger.exception("GCS Bucket error logging batch payload to GCS bucket: %s", e)
             return (success_count, error_count)
 
     async def _send_individual_logs(self, items: list[GCSLogQueueItem]) -> None:
@@ -255,7 +255,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 logging_payload=item["payload"],
             )
         except Exception as e:
-            verbose_logger.exception(f"GCS Bucket error logging individual payload to GCS bucket: {e!s}")
+            verbose_logger.exception("GCS Bucket error logging individual payload to GCS bucket: %s", e)
 
     async def async_send_batch(self):
         """
@@ -336,7 +336,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                     loaded_response = json.loads(response)
                     return loaded_response
             except Exception as e:
-                verbose_logger.debug(f"Failed to fetch payload for date {date_str}: {e!s}")
+                verbose_logger.debug("Failed to fetch payload for date %s: %s", date_str, e)
                 continue
 
         return None
@@ -370,7 +370,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         while True:
             await asyncio.sleep(self.flush_interval)
-            verbose_logger.debug(f"GCS Bucket periodic flush after {self.flush_interval} seconds")
+            verbose_logger.debug("GCS Bucket periodic flush after %s seconds", self.flush_interval)
             await self.flush_queue()
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:

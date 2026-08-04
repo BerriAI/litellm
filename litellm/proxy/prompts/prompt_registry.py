@@ -51,7 +51,7 @@ def get_prompt_initializer_from_integrations():
             module_path = f"litellm.integrations.{item}"
             try:
                 # Import the module
-                verbose_proxy_logger.debug(f"Discovering prompt integrations in: {module_path}")
+                verbose_proxy_logger.debug("Discovering prompt integrations in: %s", module_path)
 
                 module = importlib.import_module(module_path)
 
@@ -61,22 +61,22 @@ def get_prompt_initializer_from_integrations():
                     if isinstance(registry, dict):
                         discovered_initializers.update(registry)
                         verbose_proxy_logger.debug(
-                            f"Found prompt_initializer_registry in {module_path}: {list(registry.keys())}"
+                            "Found prompt_initializer_registry in %s: %s", module_path, list(registry.keys())
                         )
 
             except ImportError as e:
-                verbose_proxy_logger.error(f"Could not import {module_path}: {e}")
+                verbose_proxy_logger.error("Could not import %s: %s", module_path, e)
                 continue
             except Exception as e:
-                verbose_proxy_logger.error(f"Error processing {module_path}: {e}")
+                verbose_proxy_logger.error("Error processing %s: %s", module_path, e)
                 continue
 
         verbose_proxy_logger.debug(
-            f"Discovered {len(discovered_initializers)} prompt initializers: {list(discovered_initializers.keys())}"
+            "Discovered %s prompt initializers: %s", len(discovered_initializers), list(discovered_initializers.keys())
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error discovering prompt initializers: {e}")
+        verbose_proxy_logger.error("Error discovering prompt initializers: %s", e)
 
     return discovered_initializers
 

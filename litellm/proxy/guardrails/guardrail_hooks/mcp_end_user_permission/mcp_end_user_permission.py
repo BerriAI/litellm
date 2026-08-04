@@ -80,7 +80,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         if allowed_mcp_servers is None:
             return inputs  # No restrictions → pass through unchanged
 
-        verbose_proxy_logger.debug(f"MCP guardrail: end user restricted to MCP servers: {allowed_mcp_servers}")
+        verbose_proxy_logger.debug("MCP guardrail: end user restricted to MCP servers: %s", allowed_mcp_servers)
 
         filtered_tools = []
         removed_tools = []
@@ -97,13 +97,14 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
             else:
                 removed_tools.append(tool_name)
                 verbose_proxy_logger.warning(
-                    f"MCP guardrail: removing tool '{tool_name}' "
-                    f"(server: '{server_name}') — not in end user's allowed servers"
+                    "MCP guardrail: removing tool '%s' (server: '%s') — not in end user's allowed servers",
+                    tool_name,
+                    server_name,
                 )
 
         if removed_tools:
             verbose_proxy_logger.debug(
-                f"MCP guardrail: removed {len(removed_tools)} unauthorized MCP tool(s): {removed_tools}"
+                "MCP guardrail: removed %s unauthorized MCP tool(s): %s", len(removed_tools), removed_tools
             )
             inputs["tools"] = filtered_tools
 
@@ -162,7 +163,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
                 route="/mcp",
             )
         except Exception as e:
-            verbose_proxy_logger.warning(f"MCP guardrail: failed to fetch end_user_object for '{end_user_id}': {e}")
+            verbose_proxy_logger.warning("MCP guardrail: failed to fetch end_user_object for '%s': %s", end_user_id, e)
             return None
 
     # ------------------------------------------------------------------

@@ -185,15 +185,15 @@ class PolicyRegistry:
             try:
                 policy = self._parse_policy(policy_name, policy_data)
                 self._policies[policy_name] = policy
-                verbose_proxy_logger.debug(f"Loaded policy: {policy_name}")
+                verbose_proxy_logger.debug("Loaded policy: %s", policy_name)
             except Exception as e:
-                verbose_proxy_logger.error(f"Error loading policy '{policy_name}': {e!s}")
-                raise ValueError(f"Invalid policy '{policy_name}': {e!s}") from e
+                verbose_proxy_logger.error("Error loading policy '%s': %s", policy_name, e)
+                raise ValueError(f"Invalid policy '{policy_name}': {e}") from e
 
         self._config_policies = dict(self._policies)
         self._sources = {policy_name: "config" for policy_name in self._policies}
         self._initialized = True
-        verbose_proxy_logger.info(f"Loaded {len(self._policies)} policies")
+        verbose_proxy_logger.info("Loaded %s policies", len(self._policies))
 
     def _parse_policy(self, policy_name: str, policy_data: dict[str, Any]) -> Policy:
         """
@@ -336,7 +336,7 @@ class PolicyRegistry:
         if source == "config":
             self._config_policies = {**self._config_policies, policy_name: policy}
         self._initialized = True
-        verbose_proxy_logger.debug(f"Added/updated policy: {policy_name}")
+        verbose_proxy_logger.debug("Added/updated policy: %s", policy_name)
 
     def remove_policy(self, policy_name: str) -> bool:
         """
@@ -355,11 +355,11 @@ class PolicyRegistry:
         if config_fallback is not None:
             self._policies[policy_name] = config_fallback
             self._sources = {**self._sources, policy_name: "config"}
-            verbose_proxy_logger.debug(f"Removed policy: {policy_name}; restored config-defined version")
+            verbose_proxy_logger.debug("Removed policy: %s; restored config-defined version", policy_name)
             return True
         del self._policies[policy_name]
         self._sources = {name: source for name, source in self._sources.items() if name != policy_name}
-        verbose_proxy_logger.debug(f"Removed policy: {policy_name}")
+        verbose_proxy_logger.debug("Removed policy: %s", policy_name)
         return True
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -432,8 +432,8 @@ class PolicyRegistry:
 
             return _row_to_policy_db_response(created_policy)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error adding policy to DB: {e}")
-            raise Exception(f"Error adding policy to DB: {e!s}")
+            verbose_proxy_logger.exception("Error adding policy to DB: %s", e)
+            raise Exception(f"Error adding policy to DB: {e}")
 
     async def update_policy_in_db(
         self,
@@ -496,8 +496,8 @@ class PolicyRegistry:
 
             return _row_to_policy_db_response(updated_policy)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error updating policy in DB: {e}")
-            raise Exception(f"Error updating policy in DB: {e!s}")
+            verbose_proxy_logger.exception("Error updating policy in DB: %s", e)
+            raise Exception(f"Error updating policy in DB: {e}")
 
     async def delete_policy_from_db(
         self,
@@ -546,8 +546,8 @@ class PolicyRegistry:
 
             return result
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error deleting policy from DB: {e}")
-            raise Exception(f"Error deleting policy from DB: {e!s}")
+            verbose_proxy_logger.exception("Error deleting policy from DB: %s", e)
+            raise Exception(f"Error deleting policy from DB: {e}")
 
     async def get_policy_by_id_from_db(
         self,
@@ -572,8 +572,8 @@ class PolicyRegistry:
 
             return _row_to_policy_db_response(policy)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting policy from DB: {e}")
-            raise Exception(f"Error getting policy from DB: {e!s}")
+            verbose_proxy_logger.exception("Error getting policy from DB: %s", e)
+            raise Exception(f"Error getting policy from DB: {e}")
 
     def get_policy_by_id_for_request(self, policy_id: str) -> tuple[str, Policy] | None:
         """
@@ -619,8 +619,8 @@ class PolicyRegistry:
 
             return [_row_to_policy_db_response(p) for p in policies]
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting policies from DB: {e}")
-            raise Exception(f"Error getting policies from DB: {e!s}")
+            verbose_proxy_logger.exception("Error getting policies from DB: %s", e)
+            raise Exception(f"Error getting policies from DB: {e}")
 
     async def sync_policies_from_db(
         self,
@@ -653,7 +653,8 @@ class PolicyRegistry:
             }
             for policy_name in set(db_policies) & set(self._config_policies):
                 verbose_proxy_logger.warning(
-                    f"Policy '{policy_name}' is defined in both config.yaml and the DB; the DB version takes precedence"
+                    "Policy '%s' is defined in both config.yaml and the DB; the DB version takes precedence",
+                    policy_name,
                 )
             config_sources: Mapping[str, Literal["db", "config"]] = {name: "config" for name in self._config_policies}
             db_sources: Mapping[str, Literal["db", "config"]] = {name: "db" for name in db_policies}
@@ -683,13 +684,14 @@ class PolicyRegistry:
 
             self._initialized = True
             verbose_proxy_logger.info(
-                f"Synced {len(production)} production policies and {len(non_production)} "
-                "draft/published (by ID) from DB to in-memory registry "
-                f"({len(self._config_policies)} config-defined policies preserved)"
+                "Synced %s production policies and %s draft/published (by ID) from DB to in-memory registry (%s config-defined policies preserved)",
+                len(production),
+                len(non_production),
+                len(self._config_policies),
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error syncing policies from DB: {e}")
-            raise Exception(f"Error syncing policies from DB: {e!s}")
+            verbose_proxy_logger.exception("Error syncing policies from DB: %s", e)
+            raise Exception(f"Error syncing policies from DB: {e}")
 
     async def resolve_guardrails_from_db(
         self,
@@ -741,8 +743,8 @@ class PolicyRegistry:
 
             return sorted(resolved_policy.guardrails)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error resolving guardrails from DB: {e}")
-            raise Exception(f"Error resolving guardrails from DB: {e!s}")
+            verbose_proxy_logger.exception("Error resolving guardrails from DB: %s", e)
+            raise Exception(f"Error resolving guardrails from DB: {e}")
 
     async def get_versions_by_policy_name(
         self,
@@ -771,8 +773,8 @@ class PolicyRegistry:
                 total_count=len(versions),
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting versions: {e}")
-            raise Exception(f"Error getting versions: {e!s}")
+            verbose_proxy_logger.exception("Error getting versions: %s", e)
+            raise Exception(f"Error getting versions: {e}")
 
     async def create_new_version(
         self,
@@ -857,8 +859,8 @@ class PolicyRegistry:
             created = await _policy_table(prisma_client).create(data=data)
             return _row_to_policy_db_response(created)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error creating new version: {e}")
-            raise Exception(f"Error creating new version: {e!s}")
+            verbose_proxy_logger.exception("Error creating new version: %s", e)
+            raise Exception(f"Error creating new version: {e}")
 
     async def update_version_status(
         self,
@@ -962,8 +964,8 @@ class PolicyRegistry:
 
             return _row_to_policy_db_response(updated)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error updating version status: {e}")
-            raise Exception(f"Error updating version status: {e!s}")
+            verbose_proxy_logger.exception("Error updating version status: %s", e)
+            raise Exception(f"Error updating version status: {e}")
 
     async def compare_versions(
         self,
@@ -1015,8 +1017,8 @@ class PolicyRegistry:
                 field_diffs=field_diffs,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error comparing versions: {e}")
-            raise Exception(f"Error comparing versions: {e!s}")
+            verbose_proxy_logger.exception("Error comparing versions: %s", e)
+            raise Exception(f"Error comparing versions: {e}")
 
     async def delete_all_versions(
         self,
@@ -1046,8 +1048,8 @@ class PolicyRegistry:
                 }
             return {"message": message}
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error deleting all versions: {e}")
-            raise Exception(f"Error deleting all versions: {e!s}")
+            verbose_proxy_logger.exception("Error deleting all versions: %s", e)
+            raise Exception(f"Error deleting all versions: {e}")
 
 
 # Global singleton instance

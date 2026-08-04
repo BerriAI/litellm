@@ -940,7 +940,7 @@ async def _common_key_generation_helper(
         data = apply_enterprise_key_management_params(data, team_table)
     except Exception as e:
         verbose_proxy_logger.debug(
-            f"litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {e!s}"
+            "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - %s", e
         )
 
     # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
@@ -1693,7 +1693,7 @@ async def generate_key_fn(
                     check_db_only=True,
                 )
             except Exception as e:
-                verbose_proxy_logger.debug(f"Error getting team object in `/key/generate`: {e}")
+                verbose_proxy_logger.debug("Error getting team object in `/key/generate`: %s", e)
                 # For non-admin callers, team must exist (LIT-1884)
                 if not _is_proxy_admin:
                     raise HTTPException(
@@ -1732,7 +1732,7 @@ async def generate_key_fn(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.generate_key_fn(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -1866,7 +1866,7 @@ async def generate_service_account_key_fn(
                 check_db_only=True,
             )
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error getting team object in `/key/generate`: {e}")
+            verbose_proxy_logger.debug("Error getting team object in `/key/generate`: %s", e)
             team_table = None
 
     if team_table is not None:
@@ -1935,7 +1935,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - {e!s}"
+            "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - %s", e
         )
 
     non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
@@ -2054,7 +2054,7 @@ async def _handle_update_object_permission(
     # Add the object_permission_id to data_json if one was created/updated
     if object_permission_id is not None:
         data_json["object_permission_id"] = object_permission_id
-        verbose_proxy_logger.debug(f"updated object_permission_id: {object_permission_id}")
+        verbose_proxy_logger.debug("updated object_permission_id: %s", object_permission_id)
 
     return data_json
 
@@ -2799,10 +2799,10 @@ async def update_key_fn(
         return {"key": key, **response["data"]}
         # update based on remaining passed in values
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.update_key_fn(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -2937,7 +2937,7 @@ async def bulk_update_keys(
             )
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Failed to update key {key_update_item.key}: {e}")
+            verbose_proxy_logger.exception("Failed to update key %s: %s", key_update_item.key, e)
 
             if isinstance(e, HTTPException):
                 error_detail = e.detail
@@ -3177,7 +3177,7 @@ async def bulk_update_team_keys(
 
         except Exception as e:
             # Log the hashed prefix — `token` may be a raw sk-... and ERROR logs persist.
-            verbose_proxy_logger.exception(f"Failed to update key {db_token[:12]}... in team {data.team_id}: {e}")
+            verbose_proxy_logger.exception("Failed to update key %s... in team %s: %s", db_token[:12], data.team_id, e)
             failed_updates.append(
                 _build_failed_team_key_update(
                     token=token,
@@ -3307,7 +3307,7 @@ async def delete_key_fn(
             litellm_changed_by = None
 
         ## only allow user to delete keys they own
-        verbose_proxy_logger.debug(f"user_api_key_dict.user_role: {user_api_key_dict.user_role}")
+        verbose_proxy_logger.debug("user_api_key_dict.user_role: %s", user_api_key_dict.user_role)
 
         num_keys_to_be_deleted = 0
         deleted_keys = []
@@ -3340,7 +3340,7 @@ async def delete_key_fn(
                 param="keys",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        verbose_proxy_logger.debug(f"/key/delete - deleted_keys={number_deleted_keys}")
+        verbose_proxy_logger.debug("/key/delete - deleted_keys=%s", number_deleted_keys)
 
         try:
             assert num_keys_to_be_deleted == len(deleted_keys)
@@ -3353,7 +3353,7 @@ async def delete_key_fn(
             )
 
         verbose_proxy_logger.debug(
-            f"/keys/delete - cache after delete: {user_api_key_cache.in_memory_cache.cache_dict}"
+            "/keys/delete - cache after delete: %s", user_api_key_cache.in_memory_cache.cache_dict
         )
 
         asyncio.create_task(
@@ -3368,7 +3368,7 @@ async def delete_key_fn(
 
         return {"deleted_keys": deleted_keys}
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.delete_key_fn(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.delete_key_fn(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -3908,7 +3908,7 @@ async def generate_key_helper_fn(
                     # If it's not valid JSON/YAML, keep as is or set to empty dict
                     key_data["router_settings"] = {}
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise e
@@ -4115,7 +4115,7 @@ async def delete_verification_tokens(
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
         verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server.delete_verification_tokens(): Exception occured - {e!s}"
+            "litellm.proxy.proxy_server.delete_verification_tokens(): Exception occured - %s", e
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
@@ -4387,10 +4387,10 @@ async def _rotate_master_key(
                     },
                 )
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to re-encrypt credential {cred.credential_name}: {e!s}")
+                verbose_proxy_logger.error("Failed to re-encrypt credential %s: %s", cred.credential_name, e)
                 # Continue with next credential instead of failing entire rotation
                 continue
-        verbose_proxy_logger.debug(f"Successfully re-encrypted {len(credentials)} credentials with new master key")
+        verbose_proxy_logger.debug("Successfully re-encrypted %s credentials with new master key", len(credentials))
 
 
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -5448,10 +5448,10 @@ async def list_keys(
         return response
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error in list_keys: {e}")
+        verbose_proxy_logger.exception("Error in list_keys: %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"error({e!s})"),
+                message=getattr(e, "detail", f"error({e})"),
                 type=ProxyErrorTypes.internal_server_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -5587,8 +5587,12 @@ async def key_aliases(
 
         total_pages = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(
-            f"key_aliases: page={page}, size={size}, search={search!r}, "
-            f"total_count={total_count}, total_pages={total_pages}"
+            "key_aliases: page=%s, size=%s, search=%r, total_count=%s, total_pages=%s",
+            page,
+            size,
+            search,
+            total_count,
+            total_pages,
         )
 
         return {
@@ -5600,10 +5604,10 @@ async def key_aliases(
         }
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error in key_aliases: {e}")
+        verbose_proxy_logger.exception("Error in key_aliases: %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"error({e!s})"),
+                message=getattr(e, "detail", f"error({e})"),
                 type=ProxyErrorTypes.internal_server_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -5781,7 +5785,7 @@ def _build_key_filter_conditions(
     if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES:
         where = {"AND": [where, _build_expires_where_clause(expires_filter, datetime.now(timezone.utc))]}
 
-    verbose_proxy_logger.debug(f"Filter conditions: {where}")
+    verbose_proxy_logger.debug("Filter conditions: %s", where)
     return where
 
 
@@ -5852,7 +5856,7 @@ async def _list_key_helper(
     # Calculate skip for pagination
     skip = (page - 1) * size
 
-    verbose_proxy_logger.debug(f"Pagination: skip={skip}, take={size}")
+    verbose_proxy_logger.debug("Pagination: skip=%s, take=%s", skip, size)
 
     order_by: dict[str, str] | None = (
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
@@ -5892,7 +5896,7 @@ async def _list_key_helper(
             include={"object_permission": True},
         )
 
-    verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
+    verbose_proxy_logger.debug("Fetched %s keys", len(keys))
 
     # Get total count of keys
     if use_deleted_table:
@@ -5904,7 +5908,7 @@ async def _list_key_helper(
             where=where  # type: ignore
         )
 
-    verbose_proxy_logger.debug(f"Total count of keys: {total_count}")
+    verbose_proxy_logger.debug("Total count of keys: %s", total_count)
 
     # Calculate total pages
     total_pages = -(-total_count // size)  # Ceiling division
@@ -6340,7 +6344,7 @@ async def key_health(
 
     except Exception as e:
         raise ProxyException(
-            message=f"Key health check failed: {e!s}",
+            message=f"Key health check failed: {e}",
             type=ProxyErrorTypes.internal_server_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -6425,7 +6429,7 @@ async def test_key_logging(
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,
             status="unhealthy",
-            details=f"Logging test failed: {e!s}",
+            details=f"Logging test failed: {e}",
         )
 
     await asyncio.sleep(2)  # wait for callbacks to run, callbacks use batching so wait for the flush event
@@ -6556,5 +6560,5 @@ def validate_model_max_budget(model_max_budget: dict | None) -> None:
                 BudgetConfig(**_info)
     except Exception as e:
         raise ValueError(
-            f"Invalid model_max_budget: {e!s}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
+            f"Invalid model_max_budget: {e}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
         )

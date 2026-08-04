@@ -1,5 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
-import { serializeKeywordTierRules } from "./complexity_router_keywords";
+import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -15,6 +15,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextWindowSize: number | undefined;
   classifierContextPerTurnChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
+  sessionAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
   semanticMatchingEnabled: boolean;
@@ -35,6 +36,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_window_size?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
+  session_affinity: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -56,6 +58,12 @@ export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
   return `Select a model for the following tier(s): ${missing.join(", ")}`;
 };
 
+export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
+  const emptyRows = emptyKeywordTierRuleIndexes(keywordTierRules);
+  if (emptyRows.length === 0) return null;
+  return `Add at least one keyword to keyword rule(s): ${emptyRows.map((index) => index + 1).join(", ")}`;
+};
+
 export const getSemanticConfigError = ({
   semanticMatchingEnabled,
   embeddingModel,
@@ -66,8 +74,6 @@ export const getSemanticConfigError = ({
   if (!semanticMatchingEnabled) return null;
   if (!embeddingModel) return "Select an embedding model to use semantic keyword matching";
   if (keywordTierRules.length === 0) return "Add at least one keyword tier rule to use semantic keyword matching";
-  if (keywordTierRules.some((rule) => !rule.keywords.some((keyword) => keyword.trim())))
-    return "Every keyword tier rule needs at least one keyword";
   return null;
 };
 
@@ -78,6 +84,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextWindowSize,
   classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
+  sessionAffinity,
   customTechnicalKeywords,
   keywordTierRules,
   semanticMatchingEnabled,
@@ -91,7 +98,6 @@ export const buildComplexityRouterConfig = ({
   returnRawModelName,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
-  // Trim keywords and drop empty ones; drop any rule left with no keywords. Clicking
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
 
   return {
@@ -110,6 +116,7 @@ export const buildComplexityRouterConfig = ({
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),
+    session_affinity: sessionAffinity,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,

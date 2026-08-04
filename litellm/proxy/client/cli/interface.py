@@ -20,7 +20,7 @@ def styled_prompt():
             click.echo("\n" * 3)
     except Exception as e:
         # Fallback if we can't get terminal size
-        verbose_logger.debug(f"Error getting terminal size: {e}")
+        verbose_logger.debug("Error getting terminal size: %s", e)
         click.echo("\n" * 3)
 
     # ASCII box drawing characters

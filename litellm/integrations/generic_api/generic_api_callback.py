@@ -42,7 +42,7 @@ def load_compatible_callbacks() -> dict:
         with open(json_path, "r") as f:
             return json.load(f)
     except Exception as e:
-        verbose_logger.warning(f"Error loading generic_api_compatible_callbacks.json: {e!s}")
+        verbose_logger.warning("Error loading generic_api_compatible_callbacks.json: %s", e)
         return {}
 
 
@@ -124,7 +124,7 @@ class GenericAPILogger(CustomBatchLogger):
         #########################################################
         if callback_name:
             if is_callback_compatible(callback_name):
-                verbose_logger.debug(f"Loading configuration for callback: {callback_name}")
+                verbose_logger.debug("Loading configuration for callback: %s", callback_name)
                 callback_config = get_callback_config(callback_name)
 
                 # Use config from JSON if not explicitly provided
@@ -145,7 +145,7 @@ class GenericAPILogger(CustomBatchLogger):
                         log_format = callback_config["log_format"]
             else:
                 verbose_logger.warning(
-                    f"callback_name '{callback_name}' not found in generic_api_compatible_callbacks.json"
+                    "callback_name '%s' not found in generic_api_compatible_callbacks.json", callback_name
                 )
 
         #########################################################
@@ -177,7 +177,12 @@ class GenericAPILogger(CustomBatchLogger):
         self.log_format: LOG_FORMAT_TYPES = log_format or "json_array"
 
         verbose_logger.debug(
-            f"in init GenericAPILogger, callback_name: {self.callback_name}, endpoint {self.endpoint}, headers {self.headers}, event_types: {self.event_types}, log_format: {self.log_format}"
+            "in init GenericAPILogger, callback_name: %s, endpoint %s, headers %s, event_types: %s, log_format: %s",
+            self.callback_name,
+            self.endpoint,
+            self.headers,
+            self.event_types,
+            self.log_format,
         )
 
         #########################################################
@@ -214,7 +219,7 @@ class GenericAPILogger(CustomBatchLogger):
                         key, value = item.split("=", 1)
                         headers_dict[key.strip()] = value.strip()
             except Exception as e:
-                verbose_logger.warning(f"Error parsing headers from environment variables: {e!s}")
+                verbose_logger.warning("Error parsing headers from environment variables: %s", e)
 
         # 2. Update with litellm generic headers if available
         if litellm.generic_logger_headers:
@@ -308,7 +313,7 @@ class GenericAPILogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Generic API Logger Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -339,7 +344,7 @@ class GenericAPILogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Generic API Logger Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
 
     async def async_send_batch(self):
         """
@@ -355,7 +360,7 @@ class GenericAPILogger(CustomBatchLogger):
                 return
 
             verbose_logger.debug(
-                f"Generic API Logger - about to flush {len(self.log_queue)} events in '{self.log_format}' format"
+                "Generic API Logger - about to flush %s events in '%s' format", len(self.log_queue), self.log_format
             )
 
             if self.log_format == "single":
@@ -371,11 +376,13 @@ class GenericAPILogger(CustomBatchLogger):
                 # Log results
                 for idx, result in enumerate(responses):
                     if isinstance(result, Exception):
-                        verbose_logger.exception(f"Generic API Logger - Error sending log {idx}: {result}")
+                        verbose_logger.exception("Generic API Logger - Error sending log %s: %s", idx, result)
                     else:
                         # result is a Response object
                         verbose_logger.debug(
-                            f"Generic API Logger - sent log {idx}, status: {result.status_code}"  # type: ignore
+                            "Generic API Logger - sent log %s, status: %s",
+                            idx,
+                            result.status_code,  # type: ignore
                         )
             else:
                 # Format the payload based on log_format
@@ -390,12 +397,14 @@ class GenericAPILogger(CustomBatchLogger):
                 response = await self._post_with_retries(data=data)
 
                 verbose_logger.debug(
-                    f"Generic API Logger - sent batch to {self.endpoint}, "
-                    f"status: {response.status_code}, format: {self.log_format}"
+                    "Generic API Logger - sent batch to %s, status: %s, format: %s",
+                    self.endpoint,
+                    response.status_code,
+                    self.log_format,
                 )
 
         except Exception as e:
-            verbose_logger.exception(f"Generic API Logger Error sending batch - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Generic API Logger Error sending batch - %s\n%s", e, traceback.format_exc())
         finally:
             self.log_queue.clear()
 
@@ -405,7 +414,7 @@ class GenericAPILogger(CustomBatchLogger):
 
         Returns a dict of the payload to send to the Generic API Endpoint
         """
-        verbose_logger.debug(f"GenericAPILogger Logging - Enters logging function for model {kwargs}")
+        verbose_logger.debug("GenericAPILogger Logging - Enters logging function for model %s", kwargs)
 
         # construct payload to send custom logger
         # follows the same params as langfuse.py

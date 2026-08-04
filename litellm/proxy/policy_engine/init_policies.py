@@ -124,7 +124,7 @@ async def init_policies(
     Raises:
         ValueError: If fail_on_error is True and validation errors are found
     """
-    verbose_proxy_logger.info(f"Initializing {len(policies_config)} policies...")
+    verbose_proxy_logger.info("Initializing %s policies...", len(policies_config))
 
     # Print policies to console on startup
     _print_policies_on_startup(policies_config, policy_attachments_config)
@@ -146,13 +146,13 @@ async def init_policies(
     if validation_result.errors:
         for error in validation_result.errors:
             verbose_proxy_logger.error(
-                f"Policy validation error in '{error.policy_name}': [{error.error_type}] {error.message}"
+                "Policy validation error in '%s': [%s] %s", error.policy_name, error.error_type, error.message
             )
 
     if validation_result.warnings:
         for warning in validation_result.warnings:
             verbose_proxy_logger.warning(
-                f"Policy validation warning in '{warning.policy_name}': [{warning.error_type}] {warning.message}"
+                "Policy validation warning in '%s': [%s] %s", warning.policy_name, warning.error_type, warning.message
             )
 
     # Fail if there are errors and fail_on_error is True
@@ -165,18 +165,18 @@ async def init_policies(
     # Load policies into registry (even with warnings)
     try:
         policy_registry.load_policies(policies_config)
-        verbose_proxy_logger.info(f"Successfully loaded {len(policies_config)} policies")
+        verbose_proxy_logger.info("Successfully loaded %s policies", len(policies_config))
     except Exception as e:
-        verbose_proxy_logger.error(f"Failed to load policies: {e!s}")
+        verbose_proxy_logger.error("Failed to load policies: %s", e)
         raise
 
     # Load attachments if provided
     if policy_attachments_config:
         try:
             attachment_registry.load_attachments(policy_attachments_config)
-            verbose_proxy_logger.info(f"Successfully loaded {len(policy_attachments_config)} policy attachments")
+            verbose_proxy_logger.info("Successfully loaded %s policy attachments", len(policy_attachments_config))
         except Exception as e:
-            verbose_proxy_logger.error(f"Failed to load policy attachments: {e!s}")
+            verbose_proxy_logger.error("Failed to load policy attachments: %s", e)
             raise
 
     return validation_result

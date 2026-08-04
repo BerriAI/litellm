@@ -66,7 +66,7 @@ class SkillPromptInjectionHandler:
                             return f"## Skill: {skill.display_title or skill.skill_id}\n\n{content}"
         except Exception as e:
             verbose_logger.warning(
-                f"SkillPromptInjectionHandler: Error extracting content from skill {skill.skill_id}: {e}"
+                "SkillPromptInjectionHandler: Error extracting content from skill %s: %s", skill.skill_id, e
             )
 
         return skill.instructions
@@ -111,14 +111,16 @@ class SkillPromptInjectionHandler:
                     normalized = posixpath.normpath(clean_path)
                     if normalized.startswith("..") or posixpath.isabs(normalized):
                         verbose_logger.warning(
-                            f"SkillPromptInjectionHandler: Skipping entry with invalid path in skill {skill.skill_id}: {name}"
+                            "SkillPromptInjectionHandler: Skipping entry with invalid path in skill %s: %s",
+                            skill.skill_id,
+                            name,
                         )
                         continue
 
                     files[normalized] = zf.read(name)
         except Exception as e:
             verbose_logger.warning(
-                f"SkillPromptInjectionHandler: Error extracting files from skill {skill.skill_id}: {e}"
+                "SkillPromptInjectionHandler: Error extracting files from skill %s: %s", skill.skill_id, e
             )
 
         return files

@@ -24,6 +24,10 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
 from litellm.integrations.otel.model.semconv import Metric
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.litellm_core_utils.service_tier_utils import (
+    get_requested_service_tier,
+    get_served_service_tier,
+)
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
@@ -74,6 +78,11 @@ PREPROCESSING_DURATION_MS_ATTRIBUTE = "litellm.preprocessing.duration_ms"
 TEAM_METADATA_ATTRIBUTE = "litellm.team.metadata"
 MODEL_GROUP_ATTRIBUTE = "litellm.model_group"
 PROVIDER_MODEL_ATTRIBUTE = "litellm.provider.model"
+# semconv names the service tier attributes under the openai namespace, but every
+# provider that reports a tier (OpenAI, Anthropic, Bedrock, Groq, Vertex) uses the
+# same request param and response field, so both keys carry all of them.
+REQUEST_SERVICE_TIER_ATTRIBUTE = "gen_ai.openai.request.service_tier"
+RESPONSE_SERVICE_TIER_ATTRIBUTE = "gen_ai.openai.response.service_tier"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -1411,6 +1420,23 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if provider_model:
             self.safe_set_attribute(span=span, key=PROVIDER_MODEL_ATTRIBUTE, value=provider_model)
 
+    def _set_service_tier_attributes(
+        self,
+        span: Span,
+        standard_logging_payload: StandardLoggingPayload,
+    ) -> None:
+        """Stamp the tier the caller asked for and the tier the provider reports it
+        served, so tier usage is segmentable in traces. Both are optional: a caller
+        may not name a tier, and streaming responses carry no served tier.
+        """
+        requested_tier = get_requested_service_tier(standard_logging_payload)
+        if requested_tier is not None:
+            self.safe_set_attribute(span=span, key=REQUEST_SERVICE_TIER_ATTRIBUTE, value=requested_tier)
+
+        served_tier = get_served_service_tier(standard_logging_payload)
+        if served_tier is not None:
+            self.safe_set_attribute(span=span, key=RESPONSE_SERVICE_TIER_ATTRIBUTE, value=served_tier)
+
     @staticmethod
     def _team_metadata_json(value: Any, allowed_keys: list[str]) -> str | None:
         """JSON-serialize only the allowlisted sub-keys of a team's metadata.
@@ -2310,6 +2336,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     value=response_obj.get("model"),
                 )
 
+            self._set_service_tier_attributes(span=span, standard_logging_payload=standard_logging_payload)
+
             usage = response_obj and response_obj.get("usage")
             if usage:
                 self.safe_set_attribute(
@@ -2688,7 +2716,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         )
                 except json.JSONDecodeError:
                     verbose_logger.debug(
-                        f"litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - {_raw_response}"
+                        "litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - %s",
+                        _raw_response,
                     )
 
                     self.safe_set_attribute(

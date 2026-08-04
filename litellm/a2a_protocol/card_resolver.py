@@ -148,13 +148,13 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
         last_error = None
         for path in paths:
             try:
-                verbose_logger.debug(f"Attempting to fetch agent card from {self.base_url}{path}")
+                verbose_logger.debug("Attempting to fetch agent card from %s%s", self.base_url, path)
                 return await super().get_agent_card(
                     relative_card_path=path,
                     http_kwargs=http_kwargs,
                 )
             except Exception as e:
-                verbose_logger.debug(f"Failed to fetch agent card from {self.base_url}{path}: {e}")
+                verbose_logger.debug("Failed to fetch agent card from %s%s: %s", self.base_url, path, e)
                 last_error = e
                 continue
 

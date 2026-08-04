@@ -98,4 +98,4 @@ class LiteLLMDatabase:
             # This prevents schema mismatch errors when data types vary across rows
             return pl.DataFrame(db_response, infer_schema_length=None)
         except Exception as e:
-            raise Exception(f"Error retrieving usage data: {e!s}")
+            raise Exception(f"Error retrieving usage data: {e}")

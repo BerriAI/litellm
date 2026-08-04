@@ -1723,7 +1723,7 @@ def parse_tool_call_arguments(
         if context:
             error_parts.append(f"({context})")
 
-        error_message = " ".join(error_parts) + f". Error: {original_error!s}. Arguments: {arguments}"
+        error_message = " ".join(error_parts) + f". Error: {original_error}. Arguments: {arguments}"
 
         raise ValueError(error_message) from original_error
 

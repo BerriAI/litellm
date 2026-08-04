@@ -147,7 +147,7 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {e!s}")
+            verbose_logger.error("LiteLLM Cache: Excepton async add_cache: %s", e)
             raise e
 
     def get_cache(
@@ -347,7 +347,7 @@ class DualCache(BaseCache):
             if self.redis_cache is not None and local_only is False:
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton async add_cache: {e!s}")
+            verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
 
     # async_batch_set_cache
     async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs):
@@ -366,7 +366,7 @@ class DualCache(BaseCache):
                     cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton async add_cache: {e!s}")
+            verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
 
     async def async_increment_cache(
         self,

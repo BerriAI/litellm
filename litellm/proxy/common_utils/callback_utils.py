@@ -61,7 +61,7 @@ def initialize_callbacks_on_proxy(
     )
     from litellm.proxy.proxy_server import prisma_client
 
-    verbose_proxy_logger.debug(f"{blue_color_code}initializing callbacks={value} on proxy{reset_color_code}")
+    verbose_proxy_logger.debug("%sinitializing callbacks=%s on proxy%s", blue_color_code, value, reset_color_code)
     if isinstance(value, list):
         imported_list: list[Any] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
@@ -298,7 +298,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(callback)
             else:
                 verbose_proxy_logger.debug(
-                    f"{blue_color_code} attempting to import custom calback={callback} {reset_color_code}"
+                    "%s attempting to import custom calback=%s %s", blue_color_code, callback, reset_color_code
                 )
                 imported_list.append(
                     get_instance_fn(
@@ -322,7 +322,7 @@ def initialize_callbacks_on_proxy(
                 config_file_path=config_file_path,
             )
         ]
-    verbose_proxy_logger.debug(f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}")
+    verbose_proxy_logger.debug("%s Initialized Callbacks - %s %s", blue_color_code, litellm.callbacks, reset_color_code)
 
 
 def get_model_group_from_litellm_kwargs(kwargs: dict) -> str | None:

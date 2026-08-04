@@ -72,7 +72,7 @@ class PostHogLogger(CustomBatchLogger):
             super().__init__(**kwargs, flush_lock=None, batch_size=POSTHOG_MAX_BATCH_SIZE)
 
         except Exception as e:
-            verbose_logger.exception(f"PostHog: Got exception on init PostHog client {e!s}")
+            verbose_logger.exception("PostHog: Got exception on init PostHog client %s", e)
             raise e
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -107,7 +107,7 @@ class PostHogLogger(CustomBatchLogger):
                 verbose_logger.debug("PostHog: Sync event successfully sent")
 
         except Exception as e:
-            verbose_logger.exception(f"PostHog Sync Layer Error - {e!s}")
+            verbose_logger.exception("PostHog Sync Layer Error - %s", e)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -115,7 +115,7 @@ class PostHogLogger(CustomBatchLogger):
             self._ensure_async_setup()  # Lazy initialization
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
         except Exception as e:
-            verbose_logger.exception(f"PostHog Layer Error - {e!s}")
+            verbose_logger.exception("PostHog Layer Error - %s", e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -123,7 +123,7 @@ class PostHogLogger(CustomBatchLogger):
             self._ensure_async_setup()  # Lazy initialization
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
         except Exception as e:
-            verbose_logger.exception(f"PostHog Layer Error - {e!s}")
+            verbose_logger.exception("PostHog Layer Error - %s", e)
 
     async def _log_async_event(self, kwargs, response_obj=None, start_time=0.0, end_time=0.0):
         # Note: response_obj, start_time, end_time not used - all data comes from kwargs
@@ -132,7 +132,7 @@ class PostHogLogger(CustomBatchLogger):
 
         # Store event with its credentials for batch sending
         self.log_queue.append({"event": event_payload, "api_key": api_key, "api_url": api_url})
-        verbose_logger.debug(f"PostHog, event added to queue. Will flush in {self.flush_interval} seconds...")
+        verbose_logger.debug("PostHog, event added to queue. Will flush in %s seconds...", self.flush_interval)
 
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
@@ -328,7 +328,7 @@ class PostHogLogger(CustomBatchLogger):
             if not self.log_queue:
                 return
 
-            verbose_logger.debug(f"PostHog: Sending batch of {len(self.log_queue)} events")
+            verbose_logger.debug("PostHog: Sending batch of %s events", len(self.log_queue))
 
             if self.is_mock_mode:
                 verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
@@ -363,11 +363,11 @@ class PostHogLogger(CustomBatchLogger):
                     )
 
             if self.is_mock_mode:
-                verbose_logger.debug(f"[POSTHOG MOCK] Batch of {len(self.log_queue)} events successfully mocked")
+                verbose_logger.debug("[POSTHOG MOCK] Batch of %s events successfully mocked", len(self.log_queue))
             else:
-                verbose_logger.debug(f"PostHog: Batch of {len(self.log_queue)} events successfully sent")
+                verbose_logger.debug("PostHog: Batch of %s events successfully sent", len(self.log_queue))
         except Exception as e:
-            verbose_logger.exception(f"PostHog Error sending batch API - {e!s}")
+            verbose_logger.exception("PostHog Error sending batch API - %s", e)
 
     def _ensure_async_setup(self):
         if not self._async_initialized:
@@ -377,7 +377,7 @@ class PostHogLogger(CustomBatchLogger):
                 self._async_initialized = True
                 verbose_logger.debug("PostHog: Async components initialized")
             except Exception as e:
-                verbose_logger.error(f"PostHog: Failed to initialize async components: {e!s}")
+                verbose_logger.error("PostHog: Failed to initialize async components: %s", e)
                 raise
 
     def _extract_metadata(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -408,7 +408,7 @@ class PostHogLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        verbose_logger.debug(f"PostHog: Flushing {len(self.log_queue)} remaining events on exit")
+        verbose_logger.debug("PostHog: Flushing %s remaining events on exit", len(self.log_queue))
 
         try:
             # Group events by credentials (same logic as async_send_batch)
@@ -436,13 +436,13 @@ class PostHogLogger(CustomBatchLogger):
                 response.raise_for_status()
 
                 if response.status_code != 200:
-                    verbose_logger.error(f"PostHog: Failed to flush on exit - status {response.status_code}")
+                    verbose_logger.error("PostHog: Failed to flush on exit - status %s", response.status_code)
 
             if self.is_mock_mode:
-                verbose_logger.debug(f"[POSTHOG MOCK] Successfully flushed {len(self.log_queue)} events on exit")
+                verbose_logger.debug("[POSTHOG MOCK] Successfully flushed %s events on exit", len(self.log_queue))
             else:
-                verbose_logger.debug(f"PostHog: Successfully flushed {len(self.log_queue)} events on exit")
+                verbose_logger.debug("PostHog: Successfully flushed %s events on exit", len(self.log_queue))
             self.log_queue.clear()
 
         except Exception as e:
-            verbose_logger.error(f"PostHog: Error flushing events on exit: {e!s}")
+            verbose_logger.error("PostHog: Error flushing events on exit: %s", e)

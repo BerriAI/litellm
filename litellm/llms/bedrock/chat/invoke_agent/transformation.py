@@ -212,12 +212,12 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                             }
                             events.append(parsed_event)
                         except json.JSONDecodeError as e:
-                            verbose_logger.warning(f"Failed to parse trace event JSON: {e}")
+                            verbose_logger.warning("Failed to parse trace event JSON: %s", e)
                 else:
-                    verbose_logger.debug(f"Unknown event type: {event_type}")
+                    verbose_logger.debug("Unknown event type: %s", event_type)
 
             except Exception as e:
-                verbose_logger.error(f"Error processing event: {e}")
+                verbose_logger.error("Error processing event: %s", e)
                 continue
 
         return events
@@ -226,11 +226,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         """Extract message content from an AWS event, adapted from AWSEventStreamDecoder."""
         try:
             response_dict = event.to_response_dict()
-            verbose_logger.debug(f"Response dict: {response_dict}")
+            verbose_logger.debug("Response dict: %s", response_dict)
 
             # Use the same response shape parsing as the existing decoder
             parsed_response = parser.parse(response_dict, self._get_response_stream_shape())
-            verbose_logger.debug(f"Parsed response: {parsed_response}")
+            verbose_logger.debug("Parsed response: %s", parsed_response)
 
             if response_dict["status_code"] != 200:
                 decoded_body = response_dict["body"].decode()
@@ -259,7 +259,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                 return chunk.decode()
 
         except Exception as e:
-            verbose_logger.debug(f"Error parsing message from event: {e}")
+            verbose_logger.debug("Error parsing message from event: %s", e)
             return None
 
     def _extract_headers_from_event(self, event) -> InvokeAgentEventHeaders:
@@ -275,7 +275,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                 message_type=headers.get(":message-type", ""),
             )
         except Exception as e:
-            verbose_logger.debug(f"Error extracting headers: {e}")
+            verbose_logger.debug("Error extracting headers: %s", e)
             return InvokeAgentEventHeaders(event_type="", content_type="", message_type="")
 
     def _get_response_stream_shape(self):
@@ -302,7 +302,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                         decoded_content = base64.b64decode(encoded_bytes).decode("utf-8")
                         response_parts.append(decoded_content)
                     except Exception as e:
-                        verbose_logger.warning(f"Failed to decode chunk content: {e}")
+                        verbose_logger.warning("Failed to decode chunk content: %s", e)
 
         return "".join(response_parts)
 
@@ -324,7 +324,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             if not trace_data:
                 continue
 
-            verbose_logger.debug(f"Trace event: {trace_data}")
+            verbose_logger.debug("Trace event: %s", trace_data)
 
             # Extract usage from pre-processing trace
             self._extract_and_update_preprocessing_usage(
@@ -443,11 +443,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         try:
             # Get the raw binary content
             raw_content = raw_response.content
-            verbose_logger.debug(f"Processing {len(raw_content)} bytes of AWS event stream data")
+            verbose_logger.debug("Processing %s bytes of AWS event stream data", len(raw_content))
 
             # Parse the AWS event stream format
             events = self._parse_aws_event_stream(raw_content)
-            verbose_logger.debug(f"Parsed {len(events)} events from stream")
+            verbose_logger.debug("Parsed %s events from stream", len(events))
 
             # Extract response content from chunk events
             content = self._extract_response_content(events)
@@ -464,9 +464,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             )
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Bedrock Invoke Agent response: {e!s}")
+            verbose_logger.error("Error processing Bedrock Invoke Agent response: %s", e)
             raise BedrockError(
-                message=f"Error processing response: {e!s}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 

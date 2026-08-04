@@ -550,7 +550,7 @@ async def acompletion(
 
     # Log shared session usage
     if shared_session is not None:
-        verbose_logger.debug(f"🔄 SHARED SESSION: acompletion called with shared_session (ID: {id(shared_session)})")
+        verbose_logger.debug("🔄 SHARED SESSION: acompletion called with shared_session (ID: %s)", id(shared_session))
     else:
         verbose_logger.debug("🔄 NO SHARED SESSION: acompletion called without shared_session")
 
@@ -1020,7 +1020,7 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
 
     except Exception as e:
-        verbose_logger.debug(f"Error getting model info: {e}")
+        verbose_logger.debug("Error getting model info: %s", e)
 
         if model.startswith("responses/"):  # handle azure models - `azure/responses/<deployment-name>`
             model = model.replace("responses/", "")
@@ -2867,7 +2867,7 @@ def _complete_cohere_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     )
 
     cohere_route = CohereModelInfo.get_cohere_route(model)
-    verbose_logger.debug(f"Cohere route: {cohere_route}")
+    verbose_logger.debug("Cohere route: %s", cohere_route)
     # Set API base based on route
     if cohere_route == "v2":
         api_base = api_base or litellm.api_base or get_secret_str("COHERE_API_BASE") or "https://api.cohere.com/v2/chat"
@@ -2884,8 +2884,8 @@ def _complete_cohere_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     if extra_headers is not None:
         headers.update(extra_headers)
 
-    verbose_logger.debug(f"Model: {model}, API Base: {api_base}")
-    verbose_logger.debug(f"Provider Config: {provider_config}")
+    verbose_logger.debug("Model: %s, API Base: %s", model, api_base)
+    verbose_logger.debug("Provider Config: %s", provider_config)
     return base_llm_http_handler.completion(
         model=model,
         stream=stream,
@@ -5048,7 +5048,7 @@ def completion(  # type: ignore
             proxy_headers = litellm.proxy_auth.get_auth_headers()
             headers.update(proxy_headers)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get proxy auth headers: {e}")
+            verbose_logger.warning("Failed to get proxy auth headers: %s", e)
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
@@ -6017,7 +6017,7 @@ def embedding(
             proxy_headers = litellm.proxy_auth.get_auth_headers()
             headers.update(proxy_headers)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get proxy auth headers: {e}")
+            verbose_logger.warning("Failed to get proxy auth headers: %s", e)
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
@@ -8355,7 +8355,7 @@ async def ahealth_check(
 
         if mode is None:
             return {
-                "error": f"error:{e!s}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
+                "error": f"error:{e}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
                 "exception": e,
             }
 
@@ -8721,7 +8721,7 @@ def stream_chunk_builder(
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
         return response
     except Exception as e:
-        verbose_logger.exception(f"litellm.main.py::stream_chunk_builder() - Exception occurred - {e!s}")
+        verbose_logger.exception("litellm.main.py::stream_chunk_builder() - Exception occurred - %s", e)
         raise litellm.APIError(
             status_code=500,
             message="Error building chunks for logging/streaming usage calculation",
@@ -8811,7 +8811,7 @@ async def acount_tokens(
                 if result is not None and not result.error:
                     return result
     except Exception as e:
-        verbose_logger.debug(f"Provider token counting failed for model={model}, falling back to local: {e}")
+        verbose_logger.debug("Provider token counting failed for model=%s, falling back to local: %s", model, e)
 
     # Fallback to local tiktoken-based token counting
     fallback_messages = messages or []

@@ -80,17 +80,20 @@ def get_modified_max_tokens(
         )  # give at least a 10 token buffer. token counting can be imprecise.
 
         input_tokens += int(token_buffer)
-        verbose_logger.debug(f"max_output_tokens: {max_output_tokens}, user_max_tokens: {user_max_tokens}")
+        verbose_logger.debug("max_output_tokens: %s, user_max_tokens: %s", max_output_tokens, user_max_tokens)
         ## CASE 1: model input + output can't exceed X - happens when max input = max output, e.g. gpt-3.5-turbo
         if _model_info["max_input_tokens"] == max_output_tokens:
-            verbose_logger.debug(f"input_tokens: {input_tokens}, max_output_tokens: {max_output_tokens}")
+            verbose_logger.debug("input_tokens: %s, max_output_tokens: %s", input_tokens, max_output_tokens)
             if input_tokens > max_output_tokens:
                 pass  # allow call to fail normally - don't set max_tokens to negative.
             elif (
                 user_max_tokens + input_tokens > max_output_tokens
             ):  # we can still modify to keep it positive but below the limit
                 verbose_logger.debug(
-                    f"MODIFYING MAX TOKENS - user_max_tokens={user_max_tokens}, input_tokens={input_tokens}, max_output_tokens={max_output_tokens}"
+                    "MODIFYING MAX TOKENS - user_max_tokens=%s, input_tokens=%s, max_output_tokens=%s",
+                    user_max_tokens,
+                    input_tokens,
+                    max_output_tokens,
                 )
                 user_max_tokens = int(max_output_tokens - input_tokens)
         ## CASE 2: user_max_tokens> model max output tokens
@@ -98,13 +101,17 @@ def get_modified_max_tokens(
             user_max_tokens = max_output_tokens
 
         verbose_logger.debug(
-            f"litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - user_max_tokens: {user_max_tokens}"
+            "litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - user_max_tokens: %s",
+            user_max_tokens,
         )
 
         return user_max_tokens
     except Exception as e:
         verbose_logger.debug(
-            f"litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - Error while checking max token limit: {e!s}\nmodel={model}, base_model={base_model}"
+            "litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - Error while checking max token limit: %s\nmodel=%s, base_model=%s",
+            e,
+            model,
+            base_model,
         )
         return user_max_tokens
 
@@ -280,7 +287,7 @@ def calculate_img_tokens(
         int: The number of tokens for the image.
     """
     if use_default_image_token_count:
-        verbose_logger.debug(f"Using default image token count: {DEFAULT_IMAGE_TOKEN_COUNT}")
+        verbose_logger.debug("Using default image token count: %s", DEFAULT_IMAGE_TOKEN_COUNT)
         return DEFAULT_IMAGE_TOKEN_COUNT
     if mode == "low" or mode == "auto":
         return base_tokens
@@ -367,7 +374,7 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
-    verbose_logger.debug(f"messages in token_counter: {messages}, text in token_counter: {text}")
+    verbose_logger.debug("messages in token_counter: %s, text in token_counter: %s", messages, text)
     if text is not None and messages is not None:
         raise ValueError("text and messages cannot both be set")
     if use_default_image_token_count is None:

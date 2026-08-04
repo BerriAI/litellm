@@ -51,7 +51,7 @@ class GetAnthropicBetaHeadersConfig:
             )
             return content
         except Exception as e:
-            verbose_logger.error(f"Failed to load local beta headers config: {e}")
+            verbose_logger.error("Failed to load local beta headers config: %s", e)
             # Return empty config as fallback
             return {
                 "anthropic": {},
@@ -246,7 +246,9 @@ def filter_and_transform_beta_headers(
 
         # Check if header is in the mapping
         if header not in provider_mapping:
-            verbose_logger.debug(f"Dropping unknown beta header '{header}' for provider '{provider}' (not in mapping)")
+            verbose_logger.debug(
+                "Dropping unknown beta header '%s' for provider '%s' (not in mapping)", header, provider
+            )
             continue
 
         # Get the mapped header value
@@ -254,7 +256,7 @@ def filter_and_transform_beta_headers(
 
         # Skip if header is unsupported (null value)
         if mapped_header is None:
-            verbose_logger.debug(f"Dropping unsupported beta header '{header}' for provider '{provider}'")
+            verbose_logger.debug("Dropping unsupported beta header '%s' for provider '%s'", header, provider)
             continue
 
         # Add the mapped header

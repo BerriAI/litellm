@@ -536,7 +536,7 @@ def _map_anthropic_exception(
             llm_provider="anthropic",
         )
     if hasattr(original_exception, "status_code"):
-        verbose_logger.debug(f"status_code: {original_exception.status_code}")
+        verbose_logger.debug("status_code: %s", original_exception.status_code)
         if original_exception.status_code == 401:
             raise AuthenticationError(
                 message=f"AnthropicException - {error_str}",
@@ -679,7 +679,7 @@ def _map_replicate_exception(
             )
     raise APIError(
         status_code=500,
-        message=f"ReplicateException - {original_exception!s}",
+        message=f"ReplicateException - {original_exception}",
         llm_provider="replicate",
         model=model,
         request=httpx.Request(
@@ -1752,7 +1752,7 @@ def _map_aleph_alpha_exception(
             response=getattr(original_exception, "response", None),
         )
     elif hasattr(original_exception, "status_code"):
-        verbose_logger.debug(f"status code: {original_exception.status_code}")
+        verbose_logger.debug("status code: %s", original_exception.status_code)
         if original_exception.status_code == 401:
             raise AuthenticationError(
                 message=f"AlephAlphaException - {original_exception.message}",
@@ -2459,7 +2459,7 @@ def exception_type(  # type: ignore
         ):  # deal with edge-case invalid request error bug in openai-python sdk
             exception_mapping_worked = True
             raise BadRequestError(
-                message=f"{exception_provider} BadRequestError : This can happen due to missing AZURE_API_VERSION: {original_exception!s}",
+                message=f"{exception_provider} BadRequestError : This can happen due to missing AZURE_API_VERSION: {original_exception}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=getattr(original_exception, "response", None),
@@ -2478,7 +2478,7 @@ def exception_type(  # type: ignore
                 )
             else:
                 raise APIConnectionError(
-                    message=f"{original_exception!s}\n{_redact_string(traceback.format_exc())}",
+                    message=f"{original_exception}\n{_redact_string(traceback.format_exc())}",
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
@@ -2526,7 +2526,9 @@ def exception_logging(
             model_call_details["exception"] = exception
         model_call_details["additional_args"] = additional_args
         # User Logging -> if you pass in a custom logging function or want to use sentry breadcrumbs
-        verbose_logger.debug(f"Logging Details: logger_fn - {logger_fn} | callable(logger_fn) - {callable(logger_fn)}")
+        verbose_logger.debug(
+            "Logging Details: logger_fn - %s | callable(logger_fn) - %s", logger_fn, callable(logger_fn)
+        )
         if logger_fn and callable(logger_fn):
             try:
                 logger_fn(
@@ -2534,11 +2536,11 @@ def exception_logging(
                 )  # Expectation: any logger function passed in by the user should accept a dict object
             except Exception:
                 verbose_logger.debug(
-                    f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", traceback.format_exc()
                 )
     except Exception:
         verbose_logger.debug(
-            f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
+            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", traceback.format_exc()
         )
 
 

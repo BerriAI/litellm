@@ -126,7 +126,9 @@ class ModelResponseIterator:
         except StopIteration:
             raise StopIteration
         except ValueError as e:
-            verbose_logger.debug(f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here.")
+            verbose_logger.debug(
+                "Error parsing chunk: %s,\nReceived chunk: %s. Defaulting to empty chunk here.", e, chunk
+            )
             return GenericStreamingChunk(
                 text="",
                 is_finished=False,
@@ -171,7 +173,9 @@ class ModelResponseIterator:
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
-            verbose_logger.debug(f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here.")
+            verbose_logger.debug(
+                "Error parsing chunk: %s,\nReceived chunk: %s. Defaulting to empty chunk here.", e, chunk
+            )
             return GenericStreamingChunk(
                 text="",
                 is_finished=False,

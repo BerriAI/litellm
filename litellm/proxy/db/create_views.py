@@ -238,7 +238,7 @@ async def should_create_missing_views(db: _db) -> bool:
 
     result = await db.query_raw(query=sql_query)
 
-    verbose_logger.debug(f"Estimated Row count of LiteLLM_SpendLogs = {result}")
+    verbose_logger.debug("Estimated Row count of LiteLLM_SpendLogs = %s", result)
     if (
         result
         and isinstance(result, list)

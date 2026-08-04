@@ -168,7 +168,7 @@ class LangFlowConfig(BaseConfig):
         if session_id:
             payload["session_id"] = session_id
 
-        verbose_logger.debug(f"LangFlow request payload: {payload}")
+        verbose_logger.debug("LangFlow request payload: %s", payload)
         return payload
 
     def _extract_content_from_response(self, response_json: dict) -> str | None:
@@ -235,7 +235,7 @@ class LangFlowConfig(BaseConfig):
                 status_code=raw_response.status_code,
             )
 
-        verbose_logger.debug(f"LangFlow response: {response_json}")
+        verbose_logger.debug("LangFlow response: %s", response_json)
 
         content = self._extract_content_from_response(response_json)
         if content is None:
@@ -265,7 +265,7 @@ class LangFlowConfig(BaseConfig):
             )
             setattr(model_response, "usage", usage)
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {e}")
+            verbose_logger.warning("Failed to calculate token usage: %s", e)
 
         return model_response
 

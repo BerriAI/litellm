@@ -138,7 +138,7 @@ class RedisSemanticCache(BaseCache):
                 cache_vectorizer=cache_vectorizer,
             )
         except Exception as e:
-            verbose_logger.error(f"Redis semantic-cache index build failed: {e}")
+            verbose_logger.error("Redis semantic-cache index build failed: %s", e)
             raise
 
     @classmethod
@@ -364,7 +364,7 @@ class RedisSemanticCache(BaseCache):
             try:
                 cached_response = ast.literal_eval(cached_response)
             except (ValueError, SyntaxError) as e:
-                print_verbose(f"Error parsing cached response: {e!s}")
+                print_verbose(f"Error parsing cached response: {e}")
                 return None
 
         return cached_response
@@ -403,7 +403,7 @@ class RedisSemanticCache(BaseCache):
                 store_kwargs["ttl"] = int(ttl)
             self.llmcache.store(prompt, value_str, **store_kwargs)
         except Exception as e:
-            print_verbose(f"Error setting {value_str or value} in the Redis semantic cache: {e!s}")
+            print_verbose(f"Error setting {value_str or value} in the Redis semantic cache: {e}")
 
     def get_cache(self, key: str, **kwargs) -> Any:
         """
@@ -468,7 +468,7 @@ class RedisSemanticCache(BaseCache):
 
             return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
-            print_verbose(f"Error retrieving from Redis semantic cache: {e!s}")
+            print_verbose(f"Error retrieving from Redis semantic cache: {e}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
     async def _get_async_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> list[float]:
@@ -505,8 +505,8 @@ class RedisSemanticCache(BaseCache):
                 )
             return embedding_response["data"][0]["embedding"]
         except Exception as e:
-            print_verbose(f"Error generating async embedding: {e!s}")
-            raise ValueError(f"Failed to generate embedding: {e!s}") from e
+            print_verbose(f"Error generating async embedding: {e}")
+            raise ValueError(f"Failed to generate embedding: {e}") from e
 
     async def async_set_cache(self, key: str, value: Any, **kwargs) -> None:
         """
@@ -546,7 +546,7 @@ class RedisSemanticCache(BaseCache):
                 **store_kwargs,
             )
         except Exception as e:
-            print_verbose(f"Error in async_set_cache: {e!s}")
+            print_verbose(f"Error in async_set_cache: {e}")
 
     async def async_get_cache(self, key: str, **kwargs) -> Any:
         """
@@ -612,7 +612,7 @@ class RedisSemanticCache(BaseCache):
 
             return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
-            print_verbose(f"Error in async_get_cache: {e!s}")
+            print_verbose(f"Error in async_get_cache: {e}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
     async def _index_info(self) -> dict[str, Any]:
@@ -639,4 +639,4 @@ class RedisSemanticCache(BaseCache):
                 tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
             await asyncio.gather(*tasks)
         except Exception as e:
-            print_verbose(f"Error in async_set_cache_pipeline: {e!s}")
+            print_verbose(f"Error in async_set_cache_pipeline: {e}")

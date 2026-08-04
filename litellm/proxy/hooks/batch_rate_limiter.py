@@ -256,7 +256,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if skip_providers:
             batch_provider = self._resolve_batch_provider(self._get_batch_routing_model(data))
             if batch_provider and batch_provider in skip_providers:
-                verbose_proxy_logger.debug(f"Skipping batch input file processing for provider={batch_provider}")
+                verbose_proxy_logger.debug("Skipping batch input file processing for provider=%s", batch_provider)
                 return True, None
 
         descriptors = self._create_batch_rate_limit_descriptors(
@@ -592,15 +592,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # in the access log instead of getting buried in error noise.
             if e.status_code == 403:
                 verbose_proxy_logger.warning(
-                    f"Batch rejected: caller not authorized for a model named in {file_id}: {e.detail}"
+                    "Batch rejected: caller not authorized for a model named in %s: %s", file_id, e.detail
                 )
             else:
                 verbose_proxy_logger.error(
-                    f"Batch input file rejected for {file_id}: status={e.status_code} detail={e.detail}"
+                    "Batch input file rejected for %s: status=%s detail=%s", file_id, e.status_code, e.detail
                 )
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error counting input file usage for {file_id}: {e!s}")
+            verbose_proxy_logger.error("Error counting input file usage for %s: %s", file_id, e)
             raise
 
     async def _enforce_batch_file_model_access(
@@ -704,7 +704,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     detail={
                         "error": (
                             "Batch input file references a model the caller is "
-                            f"not authorized to use: model={model_to_check}, reason={e!s}"
+                            f"not authorized to use: model={model_to_check}, reason={e}"
                         )
                     },
                 )
@@ -734,7 +734,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
         except ImportError as e:
             raise ValueError(
-                f"Cannot import proxy_server dependencies: {e!s}. Managed files require proxy_server to be initialized."
+                f"Cannot import proxy_server dependencies: {e}. Managed files require proxy_server to be initialized."
             )
 
         # Get the managed files hook
@@ -791,7 +791,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         # Only handle batch creation
         if call_type != "acreate_batch":
             verbose_proxy_logger.debug(
-                f"Batch rate limiter: Not handling batch creation rate limiting for call type: {call_type}"
+                "Batch rate limiter: Not handling batch creation rate limiting for call type: %s", call_type
             )
             return data
 
@@ -814,7 +814,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             custom_llm_provider = data.get("custom_llm_provider", "openai")
 
             # Count tokens and requests from input file
-            verbose_proxy_logger.debug(f"Counting tokens from batch input file: {input_file_id}")
+            verbose_proxy_logger.debug("Counting tokens from batch input file: %s", input_file_id)
             batch_usage = await self.count_input_file_usage(
                 file_id=input_file_id,
                 custom_llm_provider=custom_llm_provider,
@@ -823,7 +823,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             )
 
             verbose_proxy_logger.debug(
-                f"Batch input file usage - Tokens: {batch_usage.total_tokens}, Requests: {batch_usage.request_count}"
+                "Batch input file usage - Tokens: %s, Requests: %s", batch_usage.total_tokens, batch_usage.request_count
             )
 
             # Store batch usage in data for later reference
@@ -846,6 +846,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Re-raise HTTP exceptions (rate limit exceeded)
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in batch rate limiting: {e!s}", exc_info=True)
+            verbose_proxy_logger.error("Error in batch rate limiting: %s", e, exc_info=True)
             # Don't block the request if rate limiting fails
             return data

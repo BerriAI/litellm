@@ -915,19 +915,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
             for callback_obj in all_callbacks:
                 if hasattr(callback_obj, "increment_callback_logging_failure"):
-                    verbose_logger.debug(f"Incrementing callback failure metric for {callback_name}")
+                    verbose_logger.debug("Incrementing callback failure metric for %s", callback_name)
                     callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
                     return
 
             verbose_logger.debug(
-                f"No callback with increment_callback_logging_failure method found for {callback_name}. "
-                "Ensure 'prometheus' is in your callbacks config."
+                "No callback with increment_callback_logging_failure method found for %s. Ensure 'prometheus' is in your callbacks config.",
+                callback_name,
             )
 
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.debug(f"Error in handle_callback_failure for {callback_name}: {e!s}")
+            verbose_logger.debug("Error in handle_callback_failure for %s: %s", callback_name, e)
 
     async def _strip_base64_from_messages(
         self,
@@ -946,7 +946,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         raw_messages: Any = payload.get("messages", [])
         messages: list[Any] = raw_messages if isinstance(raw_messages, list) else []
-        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
+        verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
 
         if messages:
             payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
@@ -958,7 +958,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 if isinstance(content, list):
                     total_items += len(content)
 
-        verbose_logger.debug(f"[CustomLogger] Completed base64 strip; retained {total_items} content items")
+        verbose_logger.debug("[CustomLogger] Completed base64 strip; retained %s content items", total_items)
         return payload
 
     def _strip_base64_from_messages_sync(
@@ -978,7 +978,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         raw_messages: Any = payload.get("messages", [])
         messages: list[Any] = raw_messages if isinstance(raw_messages, list) else []
-        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
+        verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
 
         if messages:
             payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
@@ -990,7 +990,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 if isinstance(content, list):
                     total_items += len(content)
 
-        verbose_logger.debug(f"[CustomLogger] Completed base64 strip; retained {total_items} content items")
+        verbose_logger.debug("[CustomLogger] Completed base64 strip; retained %s content items", total_items)
         return payload
 
     def _redact_base64(
@@ -1001,12 +1001,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> Any:
         """Recursively redact inline base64 from any nested structure with a max recursion depth limit."""
         if depth > max_depth:
-            verbose_logger.warning(f"[CustomLogger] Max recursion depth {max_depth} reached while redacting base64")
+            verbose_logger.warning("[CustomLogger] Max recursion depth %s reached while redacting base64", max_depth)
             return "[MAX_DEPTH_REACHED]"
 
         if isinstance(value, str):
             if _BASE64_INLINE_PATTERN.search(value):
-                verbose_logger.debug(f"[CustomLogger] Redacted inline base64 string: {value[:40]}...")
+                verbose_logger.debug("[CustomLogger] Redacted inline base64 string: %s...", value[:40])
                 return _BASE64_INLINE_PATTERN.sub("[BASE64_REDACTED]", value)
             return value
 

@@ -117,7 +117,7 @@ class LagoLogger(CustomLogger):
             }
         }
 
-        verbose_logger.debug(f"\033[91mLogged Lago Object:\n{returned_val}\033[0m\n")
+        verbose_logger.debug("\x1b[91mLogged Lago Object:\n%s\x1b[0m\n", returned_val)
         return returned_val
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -149,7 +149,7 @@ class LagoLogger(CustomLogger):
         except Exception as e:
             error_response = getattr(e, "response", None)
             if error_response is not None and hasattr(error_response, "text"):
-                verbose_logger.debug(f"\nError Message: {error_response.text}")
+                verbose_logger.debug("\nError Message: %s", error_response.text)
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -184,8 +184,8 @@ class LagoLogger(CustomLogger):
 
             response.raise_for_status()
 
-            verbose_logger.debug(f"Logged Lago Object: {response.text}")
+            verbose_logger.debug("Logged Lago Object: %s", response.text)
         except Exception as e:
             if response is not None and hasattr(response, "text"):
-                verbose_logger.debug(f"\nError Message: {response.text}")
+                verbose_logger.debug("\nError Message: %s", response.text)
             raise e
