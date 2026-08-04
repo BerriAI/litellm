@@ -9208,6 +9208,59 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_get_config_list_includes_background_health_check_settings(monkeypatch):
+    """Related to #35064: the background health check settings must be discoverable
+    via /config/list so they render on the Admin UI General Settings table. This
+    requires both the ConfigGeneralSettings field and the allowed_args entry."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        expected = {
+            "background_health_checks": "Boolean",
+            "health_check_interval": "Integer",
+            "health_check_concurrency": "Integer",
+            "health_check_skip_disabled_background_models": "Boolean",
+        }
+        for field_name, field_type in expected.items():
+            assert field_name in fields, f"{field_name} missing from /config/list"
+            assert fields[field_name]["field_type"] == field_type
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_health_check_interval_rejects_non_positive_values():
+    """A dashboard user must not be able to set health_check_interval to zero or a
+    negative value, since the background health loop skips non-positive intervals
+    and models would silently stop being checked."""
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    assert ConfigGeneralSettings(health_check_interval=60).health_check_interval == 60
+    assert ConfigGeneralSettings().health_check_interval == 300
+    with pytest.raises(Exception):
+        ConfigGeneralSettings(health_check_interval=0)
+    with pytest.raises(Exception):
+        ConfigGeneralSettings(health_check_interval=-5)
+
+
 def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
     """The throttle fraction is a litellm_settings scalar surfaced on the General
     Settings table as a Float field so it sits with the other global limits; it

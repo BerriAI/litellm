@@ -2344,7 +2344,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)",
     )
     background_health_checks: bool | None = Field(None, description="run health checks in background")
-    health_check_interval: int = Field(300, description="background health check interval in seconds")
+    health_check_interval: int = Field(
+        300,
+        gt=0,
+        description="background health check interval in seconds",
+    )
     health_check_concurrency: int | None = Field(
         None,
         description=(
