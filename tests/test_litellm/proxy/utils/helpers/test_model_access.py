@@ -418,7 +418,6 @@ def _access_group_key(team_id="team-1", team_models=None, key_access_group_ids=N
 
 
 def _patch_team_access_groups(monkeypatch, access_group_ids, group_models):
-    """Stub the unified access group DB boundary used by the listing."""
     team_lookups = []
     resolved_for = []
 
@@ -446,12 +445,6 @@ def _patch_team_access_groups(monkeypatch, access_group_ids, group_models):
 async def test_get_available_models_for_user_includes_team_access_group_models(
     monkeypatch,
 ):
-    """
-    Regression: a team restricted to `model-a` that is assigned an access group
-    granting `model-b` must see `model-b` in /v1/models. Before the fix the
-    listing only consulted team.models, so `model-b` was missing even though the
-    team key could call it.
-    """
     _team_lookups, resolved_for = _patch_team_access_groups(
         monkeypatch, access_group_ids=["ag-1"], group_models=["model-b"]
     )
@@ -480,7 +473,6 @@ async def test_get_available_models_for_user_includes_team_access_group_models(
 async def test_get_available_models_for_user_access_group_models_are_deduped(
     monkeypatch,
 ):
-    """A model granted both directly and via an access group is listed once."""
     _patch_team_access_groups(
         monkeypatch, access_group_ids=["ag-1"], group_models=["model-a", "model-b"]
     )
@@ -502,7 +494,6 @@ async def test_get_available_models_for_user_access_group_models_are_deduped(
 async def test_get_available_models_for_user_includes_key_access_group_models(
     monkeypatch,
 ):
-    """Models from an access group that authorizes the key are also listed."""
     _patch_team_access_groups(
         monkeypatch, access_group_ids=[], group_models=[]
     )
@@ -533,7 +524,6 @@ async def test_get_available_models_for_user_includes_key_access_group_models(
 async def test_get_available_models_for_user_without_access_groups_is_unchanged(
     monkeypatch,
 ):
-    """A team with no access groups still lists exactly its own models."""
     _patch_team_access_groups(
         monkeypatch, access_group_ids=[], group_models=["should-not-appear"]
     )
@@ -555,7 +545,6 @@ async def test_get_available_models_for_user_without_access_groups_is_unchanged(
 async def test_get_available_models_for_user_only_model_access_groups_skips_expansion(
     monkeypatch,
 ):
-    """only_model_access_groups returns router access group names, not access group members."""
     _patch_team_access_groups(
         monkeypatch, access_group_ids=["ag-1"], group_models=["model-b"]
     )

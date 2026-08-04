@@ -6443,10 +6443,6 @@ async def _get_team_access_group_ids(
     user_api_key_cache: Optional["UserApiKeyCache"],
     proxy_logging_obj: Optional["ProxyLogging"],
 ) -> tuple[str, ...]:
-    """
-    Access group ids assigned to the caller's team, using the already resolved
-    team object when available and otherwise looking the team up (cache backed).
-    """
     from litellm.proxy.auth.auth_checks import get_team_object
 
     if team_object is not None:
@@ -6480,14 +6476,6 @@ async def _get_models_from_unified_access_groups(
     user_api_key_cache: Optional["UserApiKeyCache"],
     proxy_logging_obj: Optional["ProxyLogging"],
 ) -> tuple[str, ...]:
-    """
-    Model names granted through unified access groups (LiteLLM_AccessGroupTable)
-    assigned to the caller's team or key.
-
-    Mirrors the auth-time resolution in can_team_access_model and
-    _key_access_group_grants_model, so a model the caller can successfully call
-    is not missing from the listing.
-    """
     from litellm.proxy.auth.auth_checks import (
         _get_models_from_access_groups,
         get_authorized_resources_from_key_access_groups,
