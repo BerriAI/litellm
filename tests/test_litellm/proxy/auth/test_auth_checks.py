@@ -1167,7 +1167,8 @@ def test_log_budget_lookup_failure_dry_run():
         err = Exception("column 'policies' does not exist in prisma schema")
         _log_budget_lookup_failure("user", err)
         mock_logger.error.assert_called_once()
-        call_msg = mock_logger.error.call_args[0][0]
+        error_args = mock_logger.error.call_args[0]
+        call_msg = error_args[0] % error_args[1:]
         assert "user" in call_msg
         assert "cache will not be populated" in call_msg
         assert "policies" in call_msg or "prisma" in call_msg

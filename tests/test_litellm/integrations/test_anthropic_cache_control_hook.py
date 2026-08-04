@@ -339,7 +339,8 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
 
                 # Verify that warning was called with the expected message
                 mock_logger.warning.assert_called_once()
-                warning_call = mock_logger.warning.call_args[0][0]
+                warning_args = mock_logger.warning.call_args[0]
+                warning_call = warning_args[0] % warning_args[1:]
 
                 # Check that the warning message contains the expected information
                 assert "AnthropicCacheControlHook: Provided index 10 is out of bounds" in warning_call
@@ -405,7 +406,8 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
 
                 # Verify that warning was called with the expected message
                 mock_logger.warning.assert_called_once()
-                warning_call = mock_logger.warning.call_args[0][0]
+                warning_args = mock_logger.warning.call_args[0]
+                warning_call = warning_args[0] % warning_args[1:]
 
                 # Check that the warning message contains the original negative index
                 assert "AnthropicCacheControlHook: Provided index -5 is out of bounds" in warning_call

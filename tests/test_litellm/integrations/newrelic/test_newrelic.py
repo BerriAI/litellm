@@ -268,8 +268,9 @@ class TestParseBoolEnv:
             assert mock_warn.call_count == 2
             # Warning should mention the variable name and the raw value
             for call in mock_warn.call_args_list:
-                assert "MY_VAR" in call.args[0]
-                assert repr(raw) in call.args[0]
+                rendered = call.args[0] % call.args[1:]
+                assert "MY_VAR" in rendered
+                assert repr(raw) in rendered
 
 
 # ---------------------------------------------------------------------------

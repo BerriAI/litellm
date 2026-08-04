@@ -1106,12 +1106,12 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
             assert result.outcomes["failing"].tag == "internal"
 
             # Verify failure logging
-            mock_logger.exception.assert_any_call(
-                "Error getting tools from server failing_server: Server connection failed"
-            )
+            rendered_exceptions = [c.args[0] % c.args[1:] for c in mock_logger.exception.call_args_list]
+            assert "Error getting tools from server failing_server: Server connection failed" in rendered_exceptions
 
             # Verify success logging
-            mock_logger.info.assert_any_call("Successfully fetched 1 tools total from all MCP servers")
+            rendered_infos = [c.args[0] % c.args[1:] for c in mock_logger.info.call_args_list]
+            assert "Successfully fetched 1 tools total from all MCP servers" in rendered_infos
 
 
 @pytest.mark.asyncio
@@ -1201,15 +1201,13 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
             assert result.outcomes["failing2"].tag == "internal"
 
             # Verify failure logging for both servers
-            mock_logger.exception.assert_any_call(
-                "Error getting tools from server failing_server1: Server failing_server1 connection failed"
-            )
-            mock_logger.exception.assert_any_call(
-                "Error getting tools from server failing_server2: Server failing_server2 connection failed"
-            )
+            rendered_exceptions = [c.args[0] % c.args[1:] for c in mock_logger.exception.call_args_list]
+            assert "Error getting tools from server failing_server1: Server failing_server1 connection failed" in rendered_exceptions
+            assert "Error getting tools from server failing_server2: Server failing_server2 connection failed" in rendered_exceptions
 
             # Verify total logging
-            mock_logger.info.assert_any_call("Successfully fetched 0 tools total from all MCP servers")
+            rendered_infos = [c.args[0] % c.args[1:] for c in mock_logger.info.call_args_list]
+            assert "Successfully fetched 0 tools total from all MCP servers" in rendered_infos
 
 
 @pytest.mark.asyncio

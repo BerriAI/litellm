@@ -554,7 +554,7 @@ class TestMCPClientResolvedAuth:
 
 def _all_logged_messages(mock_logger):
     return " ".join(
-        str(call.args[0])
+        str(call.args[0]) % tuple(call.args[1:]) if len(call.args) > 1 else str(call.args[0])
         for level in ("info", "debug", "warning", "error", "exception")
         for call in getattr(mock_logger, level).call_args_list
         if call.args

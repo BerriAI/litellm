@@ -150,7 +150,7 @@ def test_invalid_fallback_type_returns_empty_list():
         )
 
         assert result == []
-        mock_logger.warning.assert_called_once_with("Unknown fallback_type: invalid")
+        mock_logger.warning.assert_called_once_with("Unknown fallback_type: %s", "invalid")
 
 
 def test_exception_handling_returns_empty_list():
@@ -171,7 +171,8 @@ def test_exception_handling_returns_empty_list():
 
             assert result == []
             mock_logger.error.assert_called_once()
-            error_call_args = mock_logger.error.call_args[0][0]
+            error_args = mock_logger.error.call_args[0]
+            error_call_args = error_args[0] % error_args[1:]
             assert (
                 "Error getting fallbacks for model claude-4-sonnet" in error_call_args
             )
