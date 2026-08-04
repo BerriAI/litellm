@@ -2161,7 +2161,11 @@ if MCP_AVAILABLE:
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
+                    # Do not include the allowed-server configs here: they carry
+                    # credential material (authentication_token, client_secret,
+                    # AWS secrets) that must not leak to the caller. The caller
+                    # only needs to know they lack permission.
+                    detail="User not allowed to call this tool.",
                 )
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
