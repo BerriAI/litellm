@@ -431,17 +431,22 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         supports_function_calling_value = self._get_model_cost_capability(
             model=model, capability="supports_function_calling"
         )
+        supports_tool_choice_value = self._get_model_cost_capability(model=model, capability="supports_tool_choice")
         supports_reasoning_value = self._get_model_cost_capability(model=model, capability="supports_reasoning")
         supports_vision_value = self._get_model_cost_capability(model=model, capability="supports_vision")
         supports_pdf_input_value = self._get_model_cost_capability(model=model, capability="supports_pdf_input")
 
         provider_specific_model_info: ProviderSpecificModelInfo = {
             "supports_function_calling": True,
+            "supports_tool_choice": True,
             "supports_prompt_caching": True,  # https://docs.fireworks.ai/guides/prompt-caching
         }
 
         if supports_function_calling_value is not None:
             provider_specific_model_info["supports_function_calling"] = supports_function_calling_value
+
+        if supports_tool_choice_value is not None:
+            provider_specific_model_info["supports_tool_choice"] = supports_tool_choice_value
 
         # Only include supports_reasoning if True
         if supports_reasoning_value:
