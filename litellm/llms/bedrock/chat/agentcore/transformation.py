@@ -186,7 +186,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return session_id
 
         # Generate a session ID with 33+ characters
-        generated_id = f"litellm-session-{uuid.uuid4()!s}"
+        generated_id = f"litellm-session-{uuid.uuid4()}"
         verbose_logger.debug(f"Generated new session ID: {generated_id}")
         return generated_id
 
@@ -370,7 +370,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 total_tokens=total_tokens,
             )
         except Exception as e:
-            verbose_logger.warning(f"Failed to calculate token usage: {e!s}")
+            verbose_logger.warning(f"Failed to calculate token usage: {e}")
             return None
 
     def _parse_json_response(self, response_json: dict) -> AgentCoreParsedResponse:
@@ -1023,9 +1023,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Bedrock AgentCore response: {e!s}")
+            verbose_logger.error(f"Error processing Bedrock AgentCore response: {e}")
             raise BedrockError(
-                message=f"Error processing response: {e!s}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 

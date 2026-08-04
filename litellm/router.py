@@ -115,6 +115,7 @@ from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
     filter_team_based_models,
     filter_web_search_deployments,
+    resolve_model_group_alias,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -1720,7 +1721,7 @@ class Router:
 
             return _deployment_copy
         except Exception as e:
-            verbose_router_logger.debug(f"Error occurred while printing deployment - {e!s}")
+            verbose_router_logger.debug(f"Error occurred while printing deployment - {e}")
             raise e
 
     ### COMPLETION, EMBEDDING, IMG GENERATION FUNCTIONS
@@ -1828,7 +1829,7 @@ class Router:
 
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.completion(model={model_name})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.completion(model={model_name})\033[31m Exception {e}\033[0m")
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
@@ -1923,7 +1924,7 @@ class Router:
             finally:
                 loop.close()
         except Exception as e:
-            verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {e!s}")
+            verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {e}")
 
     # fmt: off
 
@@ -2754,7 +2755,7 @@ class Router:
                 **silent_kwargs,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {e!s}")
+            verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {e}")
 
     async def _acompletion(
         self, model: str, messages: list[dict[str, str]], **kwargs
@@ -2907,7 +2908,7 @@ class Router:
                 self._set_failed_deployment_id_on_exception(e, deployment)
             raise e
         except Exception as e:
-            verbose_router_logger.info(f"litellm.acompletion(model={model_name})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.acompletion(model={model_name})\033[31m Exception {e}\033[0m")
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             # Set per-deployment num_retries on exception for retry logic
@@ -3696,7 +3697,7 @@ class Router:
             verbose_router_logger.info(f"litellm.image_generation(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.image_generation(model={model_name})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.image_generation(model={model_name})\033[31m Exception {e}\033[0m")
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -3780,7 +3781,7 @@ class Router:
             verbose_router_logger.info(f"litellm.aimage_generation(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.aimage_generation(model={model_name})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.aimage_generation(model={model_name})\033[31m Exception {e}\033[0m")
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -3884,7 +3885,7 @@ class Router:
             verbose_router_logger.info(f"litellm.atranscription(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.atranscription(model={model_name})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.atranscription(model={model_name})\033[31m Exception {e}\033[0m")
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -3998,7 +3999,7 @@ class Router:
             verbose_router_logger.info(f"litellm.aspeech(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.aspeech(model={model_name})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.aspeech(model={model_name})\033[31m Exception {e}\033[0m")
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -4056,7 +4057,7 @@ class Router:
             verbose_router_logger.info(f"litellm.arerank(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.arerank(model={model_name})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.arerank(model={model_name})\033[31m Exception {e}\033[0m")
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -4190,7 +4191,7 @@ class Router:
             verbose_router_logger.info(f"litellm.atext_completion(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.atext_completion(model={model})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.atext_completion(model={model})\033[31m Exception {e}\033[0m")
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -4280,7 +4281,7 @@ class Router:
             verbose_router_logger.info(f"litellm.aadapter_completion(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.aadapter_completion(model={model})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.aadapter_completion(model={model})\033[31m Exception {e}\033[0m")
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -4539,9 +4540,7 @@ class Router:
 
             return response
         except Exception as e:
-            verbose_router_logger.info(
-                f"ageneric_api_call_with_fallbacks(model={model})\033[31m Exception {e!s}\033[0m"
-            )
+            verbose_router_logger.info(f"ageneric_api_call_with_fallbacks(model={model})\033[31m Exception {e}\033[0m")
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -4661,7 +4660,7 @@ class Router:
             verbose_router_logger.info(f"{handler_name}(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"{handler_name}(model={model})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"{handler_name}(model={model})\033[31m Exception {e}\033[0m")
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -4726,7 +4725,7 @@ class Router:
             verbose_router_logger.info(f"litellm.embedding(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.embedding(model={model_name})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.embedding(model={model_name})\033[31m Exception {e}\033[0m")
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -4813,7 +4812,7 @@ class Router:
             verbose_router_logger.info(f"litellm.aembedding(model={model_name})\033[32m 200 OK\033[0m")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.aembedding(model={model_name})\033[31m Exception {e!s}\033[0m")
+            verbose_router_logger.info(f"litellm.aembedding(model={model_name})\033[31m Exception {e}\033[0m")
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -4966,7 +4965,7 @@ class Router:
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm.acreate_file(model={model}, {kwargs})\033[31m Exception {e!s}\033[0m"
+                f"litellm.acreate_file(model={model}, {kwargs})\033[31m Exception {e}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -5061,9 +5060,7 @@ class Router:
 
             return response
         except Exception as e:
-            verbose_router_logger.exception(
-                f"litellm.avector_store_create(model={model})\033[31m Exception {e!s}\033[0m"
-            )
+            verbose_router_logger.exception(f"litellm.avector_store_create(model={model})\033[31m Exception {e}\033[0m")
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -5178,7 +5175,7 @@ class Router:
             return response  # type: ignore
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm._acreate_batch(model={model}, {kwargs})\033[31m Exception {e!s}\033[0m"
+                f"litellm._acreate_batch(model={model}, {kwargs})\033[31m Exception {e}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -5400,7 +5397,7 @@ class Router:
             return response  # type: ignore
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm._acancel_batch(model={model}, {kwargs})\033[31m Exception {e!s}\033[0m"
+                f"litellm._acancel_batch(model={model}, {kwargs})\033[31m Exception {e}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -6948,7 +6945,7 @@ class Router:
 
         except Exception as e:
             verbose_router_logger.debug(
-                f"litellm.router.Router::deployment_callback_on_success(): Exception occured - {e!s}"
+                f"litellm.router.Router::deployment_callback_on_success(): Exception occured - {e}"
             )
 
     def sync_deployment_callback_on_success(
@@ -9014,7 +9011,7 @@ class Router:
                     custom_llm_provider=litellm_params.custom_llm_provider,
                 )
             except litellm.exceptions.BadRequestError as e:
-                verbose_router_logger.error(f"litellm.router.py::get_model_group_info() - {e!s}")
+                verbose_router_logger.error(f"litellm.router.py::get_model_group_info() - {e}")
 
             if model_info is None:
                 supported_openai_params = litellm.get_supported_openai_params(
@@ -10228,7 +10225,7 @@ class Router:
                             )
                         except Exception as e:
                             verbose_router_logger.error(
-                                f"litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {e!s}"
+                                f"litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {e}"
                             )
                             return _returned_deployments
                     if input_tokens > max_input_tokens:
@@ -10239,7 +10236,7 @@ class Router:
                         )
                         continue
             except Exception as e:
-                verbose_router_logger.exception(f"An error occurs - {e!s}")
+                verbose_router_logger.exception(f"An error occurs - {e}")
 
             model_id = _model_info.get("id", "")
             ## RPM CHECK ##
@@ -10335,16 +10332,7 @@ class Router:
         - str, the litellm model name
         - None, if model is not in model group alias
         """
-        if model not in self.model_group_alias:
-            return None
-
-        _item = self.model_group_alias[model]
-        if isinstance(_item, str):
-            model = _item
-        else:
-            model = _item["model"]
-
-        return model
+        return resolve_model_group_alias(self.model_group_alias, model)
 
     def _get_deployment_by_litellm_model(self, model: str) -> list:
         """
@@ -11623,7 +11611,7 @@ class Router:
                 if model_id is not None:
                     self._update_usage(model_id, parent_otel_span)  # update in-memory cache for tracking
         except Exception as e:
-            verbose_router_logger.error(f"Error in _track_deployment_metrics: {e!s}")
+            verbose_router_logger.error(f"Error in _track_deployment_metrics: {e}")
 
     def get_num_retries_from_retry_policy(self, exception: Exception, model_group: str | None = None):
         return _get_num_retries_from_retry_policy(

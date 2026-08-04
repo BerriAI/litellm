@@ -212,7 +212,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 self._refund_io_token_reservation_if_any()
             raise
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.pre_call_check: {e!s}")
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.pre_call_check: {e}")
             # Don't fail the request if rate limit check fails
             return deployment
 
@@ -300,7 +300,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 await self._async_refund_io_token_reservation_if_any(parent_otel_span=parent_otel_span)
             raise
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_pre_call_check: {e!s}")
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_pre_call_check: {e}")
             # Don't fail the request if rate limit check fails
             return deployment
 
@@ -360,7 +360,7 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_log_success_event: {e!s}")
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_log_success_event: {e}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.litellm_core_utils.core_helpers import (
@@ -418,7 +418,7 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.log_success_event: {e!s}")
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.log_success_event: {e}")
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         with contextlib.suppress(Exception):

@@ -815,6 +815,6 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 "response": None,
                 "error": {
                     "code": "transformation_error",
-                    "message": f"Failed to transform response: {e!s}",
+                    "message": f"Failed to transform response: {e}",
                 },
             }

@@ -308,7 +308,7 @@ class _ProxyDBLogger(CustomLogger):
                         f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                     )
         except Exception as e:
-            error_msg = f"Error in tracking cost callback - {e!s}\n Traceback:{traceback.format_exc()}"
+            error_msg = f"Error in tracking cost callback - {e}\n Traceback:{traceback.format_exc()}"
             model = kwargs.get("model", "")
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
             litellm_metadata = kwargs.get("litellm_params", {}).get("litellm_metadata", {})

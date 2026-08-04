@@ -316,8 +316,8 @@ async def get_agents(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.agent_endpoints.get_agents(): Exception occurred - {e!s}")
-        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e!s}"})
+        verbose_proxy_logger.exception(f"litellm.proxy.agent_endpoints.get_agents(): Exception occurred - {e}")
+        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
 
 
 #### CRUD ENDPOINTS FOR AGENTS ####

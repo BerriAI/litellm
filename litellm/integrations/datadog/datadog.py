@@ -171,7 +171,7 @@ class DataDogLogger(
                 batch_size=_resolve_dd_batch_size(),
             )
         except Exception as e:
-            verbose_logger.exception(f"Datadog: Got exception on init Datadog client {e!s}")
+            verbose_logger.exception(f"Datadog: Got exception on init Datadog client {e}")
             raise e
 
     def _get_datadog_params(self) -> dict:
@@ -257,7 +257,7 @@ class DataDogLogger(
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Datadog Layer Error - {e}\n{traceback.format_exc()}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -265,7 +265,7 @@ class DataDogLogger(
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Datadog Layer Error - {e}\n{traceback.format_exc()}")
 
     async def async_post_call_failure_hook(
         self,
@@ -340,7 +340,7 @@ class DataDogLogger(
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
         except Exception as e:
-            verbose_logger.exception(f"Datadog: async_post_call_failure_hook - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Datadog: async_post_call_failure_hook - {e}\n{traceback.format_exc()}")
         return None
 
     async def async_send_batch(self):
@@ -380,7 +380,7 @@ class DataDogLogger(
 
         except Exception as e:
             self.log_queue = batch_to_send + self.log_queue
-            verbose_logger.exception(f"Datadog Error sending batch API - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Datadog Error sending batch API - {e}\n{traceback.format_exc()}")
 
     async def _send_with_413_split(self, batch: list) -> list:
         """
@@ -411,7 +411,7 @@ class DataDogLogger(
                 if isinstance(e, MaskedHTTPStatusError) and e.status_code == 413:
                     response = e.response
                 else:
-                    verbose_logger.exception(f"Datadog Error sending batch API - {e!s}")
+                    verbose_logger.exception(f"Datadog Error sending batch API - {e}")
                     return self._undelivered(chunk, pending)
 
             if response.status_code == 413:
@@ -515,7 +515,7 @@ class DataDogLogger(
             )
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Datadog Layer Error - {e}\n{traceback.format_exc()}")
 
     async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
         dd_payload = self.create_datadog_logging_payload(

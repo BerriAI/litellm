@@ -3286,8 +3286,15 @@ agentic_loop_internal_litellm_params = [
     "_code_interpreter_interception_converted_stream",
 ]
 
+# Proxy-owned callback credentials, stamped from admin-configured team/key callback
+# settings. Listed in all_litellm_params for the same reason as the agentic-loop
+# fields above: an unrecognized top-level key is swept into extra_body and sent to
+# the provider.
+TRUSTED_CALLBACK_VARS_FIELD = "litellm_trusted_callback_vars"
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
+    + [TRUSTED_CALLBACK_VARS_FIELD]
     + [
         "metadata",
         "litellm_metadata",

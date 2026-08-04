@@ -104,7 +104,7 @@ def get_modified_max_tokens(
         return user_max_tokens
     except Exception as e:
         verbose_logger.debug(
-            f"litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - Error while checking max token limit: {e!s}\nmodel={model}, base_model={base_model}"
+            f"litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - Error while checking max token limit: {e}\nmodel={model}, base_model={base_model}"
         )
         return user_max_tokens
 

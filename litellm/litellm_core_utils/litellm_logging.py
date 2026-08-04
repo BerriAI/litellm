@@ -167,6 +167,9 @@ from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
+    get_trusted_callback_params,
+)
+from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
 )
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
@@ -199,7 +202,7 @@ try:
         EnterpriseStandardLoggingPayloadSetup
     )
 except Exception as e:
-    verbose_logger.debug(f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {e!s}")
+    verbose_logger.debug(f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {e}")
     GenericAPILogger = CustomLogger  # type: ignore
     ResendEmailLogger = CustomLogger  # type: ignore
     SendGridEmailLogger = CustomLogger  # type: ignore
@@ -362,6 +365,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
+        self._trusted_callback_vars: tuple[tuple[str, str], ...] = get_trusted_callback_params(kwargs)
 
         # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
         # so team-scoped credentials are available for callback initialization)
@@ -459,9 +463,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 # pass only the relevant dynamic params as custom_logger_init_args.
                 _custom_logger_init_args: dict | None = None
                 if callback == "datadog":
-                    _custom_logger_init_args = {
-                        k: v for k, v in self.standard_callback_dynamic_params.items() if k.startswith("dd_")
-                    }
+                    # dd_* params are blocked from standard_callback_dynamic_params
+                    # (request-level security); only the proxy-stamped team/key
+                    # callback vars are admin-configured and trusted.
+                    _custom_logger_init_args = {k: v for k, v in self._trusted_callback_vars if k.startswith("dd_")}
 
                 callback_class = _init_custom_logger_compatible_class(
                     callback,  # type: ignore[arg-type]
@@ -968,7 +973,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         error=str(e),
                     )
                     _metadata["raw_request"] = f"Unable to Log \
-                        raw request: {e!s}"
+                        raw request: {e}"
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -976,7 +981,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     )  # Expectation: any logger function passed in by the user should accept a dict object
                 except Exception as e:
                     verbose_logger.exception(
-                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e!s}"
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e}"
                     )
 
             self.model_call_details["api_call_start_time"] = datetime.datetime.now()
@@ -1036,14 +1041,14 @@ class Logging(LiteLLMLoggingBaseClass):
                             callback_func=callback,
                         )
                 except Exception as e:
-                    verbose_logger.exception(f"litellm.Logging.pre_call(): Exception occured - {e!s}")
+                    verbose_logger.exception(f"litellm.Logging.pre_call(): Exception occured - {e}")
                     verbose_logger.debug(
                         f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
                     )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e!s}")
+            verbose_logger.exception(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e}")
             verbose_logger.error(f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}")
             if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
@@ -1159,7 +1164,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     )  # Expectation: any logger function passed in by the user should accept a dict object
                 except Exception as e:
                     verbose_logger.exception(
-                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e!s}"
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e}"
                     )
             original_response = redact_message_input_output_from_logging(
                 model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
@@ -1196,7 +1201,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                 except Exception as e:
                     verbose_logger.exception(
-                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while post-call logging with integrations {e!s}"
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while post-call logging with integrations {e}"
                     )
                     verbose_logger.debug(
                         f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
@@ -1204,7 +1209,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e!s}")
+            verbose_logger.exception(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e}")
 
     async def async_post_mcp_tool_call_hook(
         self,
@@ -1244,7 +1249,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if response is not None:
                         response_obj = self._parse_post_mcp_call_hook_response(response=response)
             except Exception as e:
-                verbose_logger.exception(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e!s}")
+                verbose_logger.exception(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {e}")
         return response_obj
 
     def _parse_post_mcp_call_hook_response(self, response: MCPPostCallResponseObject | None) -> Any:
@@ -1889,7 +1894,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             return start_time, end_time, result
         except Exception as e:
-            raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {e!s}")
+            raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {e}")
 
     def _is_recognized_call_type_for_logging(
         self,
@@ -2378,7 +2383,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         pass
         except Exception as e:
             verbose_logger.exception(
-                f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {e!s}",
+                f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {e}",
             )
 
     async def async_success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
@@ -2694,7 +2699,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     break  # Only increment once
 
         except Exception as e:
-            verbose_logger.debug(f"Error in _handle_callback_failure: {e!s}")
+            verbose_logger.debug(f"Error in _handle_callback_failure: {e}")
 
     def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
         if start_time is None:
@@ -2931,14 +2936,14 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 except Exception as e:
                     print_verbose(
-                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {e!s}"
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {e}"
                     )
                     print_verbose(f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}")
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
         except Exception as e:
             verbose_logger.exception(
-                f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging {e!s}"
+                f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging {e}"
             )
 
     async def async_failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
@@ -2995,7 +3000,7 @@ class Logging(LiteLLMLoggingBaseClass):
             except Exception as e:
                 verbose_logger.exception(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure \
-                        logging {e!s}\nCallback={callback}"
+                        logging {e}\nCallback={callback}"
                 )
                 # Track callback logging failures in Prometheus
                 self._handle_callback_failure(callback=callback)
@@ -5426,7 +5431,7 @@ def get_standard_logging_object_payload(
 
         return payload
     except Exception as e:
-        verbose_logger.exception(f"Error creating standard logging object - {e!s}")
+        verbose_logger.exception(f"Error creating standard logging object - {e}")
         return None
 
 
