@@ -17,7 +17,7 @@ the model that served the turn, and a rollup row has already summed across
 models. This is the same reason ``savings.py`` prices in the spend writer.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from functools import reduce
@@ -461,7 +461,7 @@ def merge_deltas(left: TurnDelta, right: TurnDelta) -> TurnDelta:
     )
 
 
-def fold_session(state: SessionState, turns: tuple[TurnFacts, ...], rates: RateLookup = cache_rates) -> TurnDelta:
+def fold_session(state: SessionState, turns: Sequence[TurnFacts], rates: RateLookup = cache_rates) -> TurnDelta:
     """Fold an interval of one session's turns onto its prior state, oldest first.
 
     Ordering happens here rather than at arrival because completion order is not

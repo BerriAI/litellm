@@ -48,11 +48,19 @@ MAX_CACHED_SESSIONS = 10_000
 SESSIONS_PER_STATEMENT = 1_000
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _Pending:
+    """One session's staged turns, appended to in place the way ``ToolDiscoveryQueue`` stages items.
+
+    Rebuilding this as a frozen value per turn would copy every turn already
+    staged, so a caller reusing one ``session_id`` would pay for the whole
+    interval on each request. It is mutated only under the queue's lock and
+    drained wholesale on flush, so nothing observes it mid-append.
+    """
+
     router_kind: str
     baseline_model: str | None
-    turns: tuple[TurnFacts, ...]
+    turns: list[TurnFacts]  # mutable-ok: appended per turn under the lock, drained wholesale on flush
 
 
 _Chunk = Mapping[SessionKey, _Pending]
@@ -145,23 +153,22 @@ class AutoRouterSessionQueue:
             if self._staged_turns >= self._max_staged_turns:
                 _warn_staging_full(self._max_staged_turns)
                 return
-            self._stage(key, router_kind, baseline_model, (turn,))
+            self._stage(key, router_kind, baseline_model, [turn])  # mutable-ok: becomes this session's staging buffer
 
-    def _stage(
-        self, key: SessionKey, router_kind: str, baseline_model: str | None, turns: tuple[TurnFacts, ...]
-    ) -> None:
+    def _stage(self, key: SessionKey, router_kind: str, baseline_model: str | None, turns: list[TurnFacts]) -> None:
         """Add turns to whatever this session already has staged; callers hold the lock.
 
         Arriving turns and a replayed batch stage identically, because the fold
         sorts by start time and so does not care which of the two came first.
         """
-        current = self._pending.get(key)
-        self._pending[key] = _Pending(
-            router_kind=router_kind,
-            baseline_model=baseline_model or (current.baseline_model if current is not None else None),
-            turns=(current.turns if current is not None else ()) + turns,
-        )
         self._staged_turns += len(turns)
+        current = self._pending.get(key)
+        if current is None:
+            self._pending[key] = _Pending(router_kind=router_kind, baseline_model=baseline_model, turns=turns)
+            return
+        current.router_kind = router_kind
+        current.baseline_model = baseline_model or current.baseline_model
+        current.turns.extend(turns)
 
     async def flush(self, prisma_client: "PrismaClient") -> int:
         """Fold and write every staged session. Returns rows written.

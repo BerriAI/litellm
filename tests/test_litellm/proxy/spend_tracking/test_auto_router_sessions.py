@@ -580,6 +580,41 @@ class TestFlushDurability:
 
 
 @pytest.mark.asyncio
+class TestStagingCostsTheSamePerTurn:
+    """Staging must not re-copy the turns already staged for that session.
+
+    Rebuilding the buffer per turn is quadratic in the length of a session, so a
+    caller reusing one `session_id` pays for the whole interval on every request
+    while holding the queue's lock.
+    """
+
+    async def test_a_turn_is_appended_to_the_existing_buffer_not_a_fresh_copy(self):
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        queue = AutoRouterSessionQueue()
+        key = ("s1", "g")
+        await queue.record_turn(key, "complexity", None, _turn_at(0))
+        buffer = queue._pending[key].turns
+
+        for at in (60, 120, 180):
+            await queue.record_turn(key, "complexity", None, _turn_at(at))
+
+        assert queue._pending[key].turns is buffer
+        assert [turn.started_at for turn in buffer] == [0, 60, 120, 180]
+
+    async def test_a_long_session_still_folds_every_turn_it_staged(self):
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable()
+        queue = AutoRouterSessionQueue()
+        for at in range(500):
+            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at * 60))
+
+        assert await queue.flush(_RecordingPrisma(table)) == 1
+        assert table.upserts[0][1]["create"]["turns"] == 500
+
+
+@pytest.mark.asyncio
 class TestStagingIsBounded:
     """`session_id` is caller-controlled, so what is held between flushes needs a ceiling."""
 
