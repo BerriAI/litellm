@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
+    LITELLM_PROXY_ADMIN_NAME,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
@@ -489,7 +490,7 @@ class CheckBatchCost:
             function_id=str(uuid.uuid4()),
         )
 
-        creator_user_id = job.created_by
+        creator_user_id = job.created_by or LITELLM_PROXY_ADMIN_NAME
         user_info = await self._get_user_info(batch_id, job.created_by)
 
         logging_obj.update_environment_variables(
@@ -502,6 +503,7 @@ class CheckBatchCost:
                 },
                 "metadata": {
                     "user_api_key_user_id": creator_user_id,
+                    "user_api_key_team_id": job.team_id,
                     **user_info,
                 },
             },

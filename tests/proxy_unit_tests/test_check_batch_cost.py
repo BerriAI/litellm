@@ -1400,3 +1400,157 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
 
         decoded = _is_base64_encoded_unified_file_id(output_file_id)
         assert get_models_from_unified_file_id(decoded) == [self._PUBLIC_MODEL_GROUP]
+
+
+class TestCheckBatchCostSpendAttribution:
+    """A completed batch must emit a spend event the proxy DB logger will actually write.
+
+    Regression coverage for GH #35358: batches created by a virtual key without a
+    ``user_id`` land in LiteLLM_ManagedObjectTable with ``created_by=None``. The poller
+    used to forward that None straight into the logging metadata, so
+    ``_should_track_cost_callback`` saw no key/user/team/end-user and
+    ``_PROXY_track_cost_callback`` silently dropped the row while ``batch_processed``
+    still flipped to True.
+    """
+
+    @pytest.fixture
+    def check_batch_cost_instance(self):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+        prisma_client = MagicMock()
+        prisma_client.db = MagicMock()
+        prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=0)
+        prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook.return_value = None
+
+        return CheckBatchCost(
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+            llm_router=MagicMock(),
+        )
+
+    @staticmethod
+    def _stage_completed_job(instance, created_by, team_id):
+        from litellm.types.utils import LiteLLMBatch
+
+        job = MagicMock()
+        job.id = "job-1"
+        job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        job.created_by = created_by
+        job.team_id = team_id
+        instance.prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[job])
+
+        response = LiteLLMBatch(
+            id="batch-456",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-123",
+            object="batch",
+            status="completed",
+            output_file_id="file-output-123",
+        )
+        instance.llm_router.aretrieve_batch = AsyncMock(return_value=response)
+        instance.llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+
+        deployment = MagicMock()
+        deployment.litellm_params.custom_llm_provider = "openai"
+        deployment.litellm_params.model = "gpt-4"
+        deployment.model_info.model_dump.return_value = {}
+        instance.llm_router.get_deployment = MagicMock(return_value=deployment)
+
+    async def _capture_spend_event(self, instance, created_by, team_id):
+        """Run one poll cycle and return the kwargs the async success callbacks receive."""
+        from unittest.mock import patch
+
+        import litellm
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.types.utils import Usage
+
+        captured: list[dict] = []
+
+        class _CaptureLogger(CustomLogger):
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                captured.append(kwargs)
+
+        self._stage_completed_job(instance, created_by=created_by, team_id=team_id)
+
+        file_content = MagicMock()
+        file_content.content = b'{"id":"req-1"}'
+        capture_logger = _CaptureLogger()
+        litellm.logging_callback_manager.add_litellm_async_success_callback(capture_logger)
+        try:
+            with (
+                patch(
+                    _IS_B64,
+                    side_effect=lambda object_id: (
+                        "llm_model_id,model-123;llm_batch_id,batch-456;"
+                        if object_id == "dW5pZmllZF9iYXRjaF9pZA=="
+                        else None
+                    ),
+                ),
+                patch(
+                    "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                    return_value="model-123",
+                ),
+                patch(
+                    "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                    return_value="batch-456",
+                ),
+                patch("litellm.files.main.afile_content", new_callable=AsyncMock, return_value=file_content),
+                patch("litellm.batches.batch_utils._get_file_content_as_dictionary", return_value=[{"id": "req-1"}]),
+                patch(
+                    "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                    new_callable=AsyncMock,
+                    return_value=(0.01, Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15), ["gpt-4"]),
+                ),
+                patch(
+                    "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                    return_value=("gpt-4", "openai", None, None),
+                ),
+            ):
+                await instance.check_batch_cost()
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(capture_logger)
+
+        assert len(captured) == 1, "completed batch must emit exactly one async success event"
+        return captured[0]
+
+    @staticmethod
+    def _is_tracked_by_proxy_db_logger(kwargs: dict) -> bool:
+        """Mirror how _PROXY_track_cost_callback decides whether to write the spend row."""
+        from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+        from litellm.proxy.hooks.proxy_track_cost_callback import _should_track_cost_callback
+
+        metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+        return _should_track_cost_callback(
+            user_api_key=metadata.get("user_api_key"),
+            user_id=metadata.get("user_api_key_user_id"),
+            team_id=metadata.get("user_api_key_team_id"),
+            end_user_id=None,
+            call_type=kwargs.get("call_type"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_null_created_by_still_emits_a_billable_spend_event(self, check_batch_cost_instance):
+        kwargs = await self._capture_spend_event(check_batch_cost_instance, created_by=None, team_id=None)
+
+        assert kwargs["standard_logging_object"]["response_cost"] == 0.01
+        assert self._is_tracked_by_proxy_db_logger(kwargs) is True, (
+            "spend row would be dropped by _PROXY_track_cost_callback: nothing to attribute the batch cost to"
+        )
+        assert check_batch_cost_instance.prisma_client.db.litellm_managedobjecttable.update.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_creator_and_team_are_forwarded_for_budget_enforcement(self, check_batch_cost_instance):
+        from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+
+        kwargs = await self._capture_spend_event(check_batch_cost_instance, created_by="user-1", team_id="team-1")
+
+        metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+        assert metadata["user_api_key_user_id"] == "user-1"
+        assert metadata["user_api_key_team_id"] == "team-1"
+        assert self._is_tracked_by_proxy_db_logger(kwargs) is True
