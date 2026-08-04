@@ -11,7 +11,7 @@ aquery carries the completion response with real usage and cost.
 """
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -252,6 +252,116 @@ async def test_aquery_streaming_bills_sub_call_costs_into_final_event():
     standard_logging_object = recording_logger.success_events[0]["kwargs"]["standard_logging_object"]
     assert standard_logging_object["call_type"] == "aquery"
     assert standard_logging_object["response_cost"] >= 0.003
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filter_key", ["retrieval_filter", "filters"])
+async def test_aquery_forwards_retrieval_filter_to_vector_store_search(filter_key):
+    """
+    The retrieval_config filter (AWS Bedrock KB metadata filter) must reach the
+    vector store search call. Before the fix it was dropped, so Bedrock ran an
+    unfiltered Retrieve and returned documents from the wrong metadata partition.
+    Both the customer-facing `retrieval_filter` key and the typed `filters` alias
+    must be forwarded as the search `filters` argument.
+    """
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    retrieval_filter = {
+        "andAll": [
+            {"equals": {"key": "Technology", "value": "Blade"}},
+            {"equals": {"key": "Parameter", "value": "Nicotine"}},
+        ]
+    }
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page",
+            search_query="q",
+            data=[],
+        )
+    )
+
+    with patch("litellm.vector_stores.asearch", new=fake_search):
+        response = await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "most frequent causes of low nicotine"}],
+            retrieval_config={
+                "vector_store_id": "CBVFYF3MYF",
+                "custom_llm_provider": "bedrock",
+                "top_k": 50,
+                filter_key: retrieval_filter,
+            },
+            mock_response="answer",
+        )
+
+    assert isinstance(response, ModelResponse)
+    fake_search.assert_awaited_once()
+    assert fake_search.await_args.kwargs["filters"] == retrieval_filter
+    assert fake_search.await_args.kwargs["vector_store_id"] == "CBVFYF3MYF"
+    assert fake_search.await_args.kwargs["max_num_results"] == 50
+
+
+@pytest.mark.asyncio
+async def test_aquery_top_level_filters_kwarg_does_not_collide():
+    """
+    An SDK caller may pass a top-level `filters` kwarg (it used to flow to the
+    search via **kwargs). Now that the pipeline passes `filters` explicitly, the
+    top-level kwarg must be consumed rather than forwarded twice, otherwise
+    asearch raises TypeError for a duplicate keyword before any search runs.
+    """
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    top_level_filter = {"equals": {"key": "tenant", "value": "a"}}
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page",
+            search_query="q",
+            data=[],
+        )
+    )
+
+    with patch("litellm.vector_stores.asearch", new=fake_search):
+        response = await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
+            filters=top_level_filter,
+            mock_response="hi",
+        )
+
+    assert isinstance(response, ModelResponse)
+    fake_search.assert_awaited_once()
+    assert fake_search.await_args.kwargs["filters"] == top_level_filter
+    assert "filters" not in fake_search.await_args.kwargs.get("kwargs", {})
+
+
+@pytest.mark.asyncio
+async def test_aquery_without_filter_forwards_none():
+    """
+    When no filter is provided, the search call must receive filters=None rather
+    than a truthy default that would silently constrain an unfiltered query.
+    """
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page",
+            search_query="q",
+            data=[],
+        )
+    )
+
+    with patch("litellm.vector_stores.asearch", new=fake_search):
+        await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
+            mock_response="hi",
+        )
+
+    fake_search.assert_awaited_once()
+    assert fake_search.await_args.kwargs["filters"] is None
 
 
 def test_rag_call_types_are_registered():
