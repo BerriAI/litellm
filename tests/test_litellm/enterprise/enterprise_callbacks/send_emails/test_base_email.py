@@ -29,7 +29,6 @@ from litellm.constants import EMAIL_BUDGET_ALERT_TTL
 from litellm.constants import MAX_BUDGET_ALERT_TYPE
 from litellm.proxy.db.budget_alert_claim import (
     claim_budget_alert_slot,
-    delete_budget_alert_claims,
     release_budget_alert_slot,
 )
 
@@ -1397,7 +1396,7 @@ class _FakeBudgetAlertTable:
     one replica is visible to every other replica sharing this instance.
     """
 
-    _UNIQUE_FIELDS = ("entity_type", "entity_id", "alert_type", "threshold_pct")
+    _UNIQUE_FIELDS = ("token", "alert_type", "threshold_pct")
 
     def __init__(self):
         self.rows: list[dict] = []
@@ -1413,9 +1412,6 @@ class _FakeBudgetAlertTable:
                 actual = row.get(field)
                 if isinstance(expected, dict) and "not" in expected:
                     if actual == expected["not"]:
-                        break
-                elif isinstance(expected, dict) and "in" in expected:
-                    if actual not in expected["in"]:
                         break
                 elif actual != expected:
                     break
@@ -1650,16 +1646,14 @@ async def test_release_does_not_steal_a_claim_from_a_later_window(shared_alert_t
     """A slow failing send must only release the claim it actually took, or it
     deletes the row another replica has already taken over for a later window."""
     await claim_budget_alert_slot(
-        entity_type="key",
-        entity_id="hashed_key_1",
+        token="hashed_key_1",
         alert_type=MAX_BUDGET_ALERT_TYPE,
         threshold_pct=50,
         budget_window="later-window",
     )
 
     await release_budget_alert_slot(
-        entity_type="key",
-        entity_id="hashed_key_1",
+        token="hashed_key_1",
         alert_type=MAX_BUDGET_ALERT_TYPE,
         threshold_pct=50,
         budget_window="earlier-window",
@@ -1736,24 +1730,6 @@ async def test_max_budget_alert_sends_when_claim_table_is_unavailable(monkeypatc
                 )
 
     assert len(sends) == 2
-
-
-@pytest.mark.asyncio
-async def test_deleting_a_key_drops_its_claims_only(shared_alert_table):
-    """Claim rows outlive the key unless deletion sweeps them, and a stale row for a
-    recycled id would suppress a real alert."""
-    for entity_id in ("hashed_key_1", "hashed_key_2"):
-        await claim_budget_alert_slot(
-            entity_type="key",
-            entity_id=entity_id,
-            alert_type=MAX_BUDGET_ALERT_TYPE,
-            threshold_pct=50,
-            budget_window="|100.0",
-        )
-
-    await delete_budget_alert_claims(entity_type="key", entity_ids=("hashed_key_1",))
-
-    assert [r["entity_id"] for r in shared_alert_table.rows] == ["hashed_key_2"]
 
 
 @pytest.mark.asyncio

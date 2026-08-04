@@ -7,14 +7,15 @@ claim and sends its own copy of the same alert, and the claim is lost on restart
 This module records the claim in the database instead, so it is shared by all
 replicas and survives restarts.
 
-The claim is scoped to the entity's budget window: the budget period it belongs to
-plus the budget it was measured against. The alert therefore re-arms when the budget
-period rolls over or the budget itself is changed, rather than on a fixed TTL.
+The claim is scoped to the key's budget window: the budget period it belongs to
+plus the budget it was measured against. The alert therefore re-arms when the
+budget period rolls over or the budget itself is changed, rather than on a fixed
+TTL. Rows are removed by the schema's cascade when the key is deleted.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from litellm._logging import verbose_proxy_logger
@@ -34,24 +35,17 @@ def get_budget_window(budget_reset_at: datetime | None, max_budget: float | None
     return f"{period}|{max_budget}"
 
 
-def _claim_identity(
-    entity_type: str,
-    entity_id: str,
-    alert_type: str,
-    threshold_pct: int,
-) -> Mapping[str, str | int]:
+def _claim_identity(token: str, alert_type: str, threshold_pct: int) -> Mapping[str, str | int]:
     """The columns the unique constraint is built on, as a prisma query payload."""
     return {  # mutable-ok: prisma query payloads must be plain dicts
-        "entity_type": entity_type,
-        "entity_id": entity_id,
+        "token": token,
         "alert_type": alert_type,
         "threshold_pct": threshold_pct,
     }
 
 
 async def claim_budget_alert_slot(
-    entity_type: str,
-    entity_id: str,
+    token: str,
     alert_type: str,
     threshold_pct: int,
     budget_window: str,
@@ -76,7 +70,7 @@ async def claim_budget_alert_slot(
     if prisma_client is None:
         return True
 
-    identity = _claim_identity(entity_type, entity_id, alert_type, threshold_pct)
+    identity = _claim_identity(token, alert_type, threshold_pct)
 
     try:
         await prisma_client.db.litellm_budgetalertsent.create(
@@ -86,9 +80,8 @@ async def claim_budget_alert_slot(
     except Exception as e:  # noqa: BLE001  # best-effort dedup, any failure must fall through to sending
         if not PrismaDBExceptionHandler.is_unique_constraint_violation(e):
             verbose_proxy_logger.warning(
-                "Could not record budget alert claim for %s %s at %d%%, sending anyway: %s",
-                entity_type,
-                entity_id,
+                "Could not record budget alert claim for key %s at %d%%, sending anyway: %s",
+                token,
                 threshold_pct,
                 e,
             )
@@ -105,9 +98,8 @@ async def claim_budget_alert_slot(
         return int(rows_updated) > 0
     except Exception as e:  # noqa: BLE001  # best-effort dedup, any failure must fall through to sending
         verbose_proxy_logger.warning(
-            "Could not roll over budget alert claim for %s %s at %d%%, sending anyway: %s",
-            entity_type,
-            entity_id,
+            "Could not roll over budget alert claim for key %s at %d%%, sending anyway: %s",
+            token,
             threshold_pct,
             e,
         )
@@ -115,8 +107,7 @@ async def claim_budget_alert_slot(
 
 
 async def release_budget_alert_slot(
-    entity_type: str,
-    entity_id: str,
+    token: str,
     alert_type: str,
     threshold_pct: int,
     budget_window: str,
@@ -134,38 +125,16 @@ async def release_budget_alert_slot(
     if prisma_client is None:
         return
 
-    identity = _claim_identity(entity_type, entity_id, alert_type, threshold_pct)
+    identity = _claim_identity(token, alert_type, threshold_pct)
 
     try:
         await prisma_client.db.litellm_budgetalertsent.delete_many(
             where={**identity, "budget_window": budget_window}  # mutable-ok: prisma query payload
         )
     except Exception as e:  # noqa: BLE001  # releasing the claim is best-effort, it also expires with the window
-        verbose_proxy_logger.debug(
-            "Failed to release budget alert claim for %s %s at %d%%: %s",
-            entity_type,
-            entity_id,
+        verbose_proxy_logger.warning(
+            "Failed to release budget alert claim for key %s at %d%%: %s",
+            token,
             threshold_pct,
             e,
         )
-
-
-async def delete_budget_alert_claims(entity_type: str, entity_ids: Sequence[str]) -> None:
-    """
-    Drop the claim rows for entities that no longer exist, so deleting a key does
-    not leave its alert claims behind.
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None or not entity_ids:
-        return
-
-    try:
-        await prisma_client.db.litellm_budgetalertsent.delete_many(
-            where={  # mutable-ok: prisma query payload
-                "entity_type": entity_type,
-                "entity_id": {"in": tuple(entity_ids)},  # mutable-ok: prisma query payload
-            }
-        )
-    except Exception as e:  # noqa: BLE001  # cleanup is best-effort, it must never fail a deletion
-        verbose_proxy_logger.warning("Failed to delete budget alert claims for %s %s: %s", entity_type, entity_ids, e)

@@ -464,6 +464,7 @@ model LiteLLM_VerificationToken {
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
     jwt_key_mappings LiteLLM_JWTKeyMapping[]
+    budget_alerts_sent LiteLLM_BudgetAlertSent[]
 
     // SELECT COUNT(*) FROM (SELECT "public"."LiteLLM_VerificationToken"."token" FROM "public"."LiteLLM_VerificationToken" WHERE ("public"."LiteLLM_VerificationToken"."user_id" = $1 AND ("public"."LiteLLM_VerificationToken"."team_id" IS NULL OR "public"."LiteLLM_VerificationToken"."team_id" <> $2)) OFFSET $3 ) AS "sub"
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."user_id" = $1 OFFSET $2
@@ -1470,12 +1471,13 @@ model LiteLLM_WorkflowMessage {
 
 model LiteLLM_BudgetAlertSent {
   id            String   @id @default(uuid())
-  entity_type   String
-  entity_id     String
+  token         String
   alert_type    String
   threshold_pct Int
   budget_window String
   sent_at       DateTime @default(now())
 
-  @@unique([entity_type, entity_id, alert_type, threshold_pct])
+  verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token], onDelete: Cascade)
+
+  @@unique([token, alert_type, threshold_pct])
 }

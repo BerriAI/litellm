@@ -709,17 +709,6 @@ class BaseEmailLogger(CustomLogger):
         """
         return f"{cache_key}:{budget_window}"
 
-    @staticmethod
-    def _durable_claim_entity(user_info: CallInfo) -> tuple[str, str] | None:
-        """
-        (entity_type, entity_id) to key the durable claim on, or None when the alert
-        carries no stable identifier and can only be deduped in memory.
-        """
-        entity_id = user_info.token or user_info.user_id
-        if not entity_id:
-            return None
-        return user_info.event_group.value, entity_id
-
     async def _claim_max_budget_alert_send(
         self,
         cache: DualCache,
@@ -746,14 +735,11 @@ class BaseEmailLogger(CustomLogger):
         if send_count is not None and send_count > 1:
             return False
 
-        entity = self._durable_claim_entity(user_info)
-        if entity is None:
+        if not user_info.token:
             return True
 
-        entity_type, entity_id = entity
         return await claim_budget_alert_slot(
-            entity_type=entity_type,
-            entity_id=entity_id,
+            token=user_info.token,
             alert_type=alert_type,
             threshold_pct=threshold_pct,
             budget_window=budget_window,
@@ -773,13 +759,11 @@ class BaseEmailLogger(CustomLogger):
             cache, self._windowed_cache_key(cache_key, budget_window)
         )
 
-        entity = self._durable_claim_entity(user_info)
-        if entity is None:
+        if not user_info.token:
             return
-        entity_type, entity_id = entity
+
         await release_budget_alert_slot(
-            entity_type=entity_type,
-            entity_id=entity_id,
+            token=user_info.token,
             alert_type=alert_type,
             threshold_pct=threshold_pct,
             budget_window=budget_window,
