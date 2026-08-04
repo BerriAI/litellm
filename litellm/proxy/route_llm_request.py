@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
@@ -16,7 +16,7 @@ from litellm.router_utils.common_utils import _is_proxy_admin_request
 # (rather than deriving via ``dataclasses.fields(MockRouterTestingParams)`` at
 # import time) avoids a cyclic import: ``litellm.types.router`` imports
 # back into proxy modules before this module finishes loading.
-GATED_MOCK_PARAM_NAMES: tuple[str, ...] = (
+GATED_MOCK_PARAM_NAMES: Final[tuple[str, ...]] = (
     "mock_testing_fallbacks",
     "mock_testing_context_fallbacks",
     "mock_testing_content_policy_fallbacks",
@@ -25,7 +25,7 @@ GATED_MOCK_PARAM_NAMES: tuple[str, ...] = (
     "mock_delay",
 )
 
-MOCK_TESTING_CONFIG_KEY = "dangerously_allow_mock_testing_request_params"
+MOCK_TESTING_CONFIG_KEY: Final = "dangerously_allow_mock_testing_request_params"
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -37,15 +37,15 @@ else:
 
 def _route_user_config_request(data: dict, route_type: str):
     """Route a request using the user-provided router config."""
-    router_config = data.pop("user_config")
+    router_config: Final = data.pop("user_config")
 
     # Filter router_config to only include valid Router.__init__ arguments
     # This prevents TypeError when invalid parameters are stored in the database
-    valid_args = litellm.Router.get_valid_args()
-    filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
+    valid_args: Final = litellm.Router.get_valid_args()
+    filtered_config: Final = {k: v for k, v in router_config.items() if k in valid_args}
 
-    user_router = litellm.Router(**filtered_config)
-    ret_val = getattr(user_router, f"{route_type}")(**data)
+    user_router: Final = litellm.Router(**filtered_config)
+    ret_val: Final = getattr(user_router, f"{route_type}")(**data)
     user_router.discard()
     return ret_val
 
@@ -60,7 +60,7 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, te
         return
     if not isinstance(llm_router, litellm.Router):
         return
-    deployments = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
+    deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
     if llm_router._are_all_deployments_blocked(deployments):
         raise litellm.PermissionDeniedError(
             message="Model is blocked",
@@ -73,7 +73,7 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, te
         )
 
 
-ROUTE_ENDPOINT_MAPPING = {
+ROUTE_ENDPOINT_MAPPING: Final = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
     "aembedding": "/embeddings",
@@ -146,13 +146,13 @@ ROUTE_ENDPOINT_MAPPING = {
 
 class ProxyModelNotFoundError(HTTPException):
     def __init__(self, route: str, model_name: str):
-        detail = {
+        detail: Final = {
             "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
         }
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
-REQUIRED_BODY_PARAM_BY_ROUTE: Mapping[str, str] = {
+REQUIRED_BODY_PARAM_BY_ROUTE: Final[Mapping[str, str]] = {
     "acompletion": "messages",
     "aembedding": "input",
 }
@@ -160,14 +160,14 @@ REQUIRED_BODY_PARAM_BY_ROUTE: Mapping[str, str] = {
 
 class ProxyMissingRequiredParamError(HTTPException):
     def __init__(self, route: str, param: str):
-        detail = {"error": f"{route}: Missing required parameter: '{param}'."}
+        detail: Final = {"error": f"{route}: Missing required parameter: '{param}'."}
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
         self.type = "invalid_request_error"
         self.param = param
 
 
 def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    required_param = REQUIRED_BODY_PARAM_BY_ROUTE.get(route_type)
+    required_param: Final = REQUIRED_BODY_PARAM_BY_ROUTE.get(route_type)
     if required_param is None or data.get(required_param) is not None:
         return
     raise ProxyMissingRequiredParamError(
@@ -199,7 +199,7 @@ def raise_if_mock_testing_params_disallowed(data: Mapping[str, object], *, allow
     """
     if allowed:
         return
-    present = tuple(name for name in GATED_MOCK_PARAM_NAMES if name in data)
+    present: Final = tuple(name for name in GATED_MOCK_PARAM_NAMES if name in data)
     if present:
         raise MockTestingParamsDisabledError(params=present)
 
@@ -262,11 +262,11 @@ async def add_shared_session_to_data(data: dict) -> None:
 
         if session is not None and not session.closed:
             data["shared_session"] = session
-            verbose_proxy_logger.info(f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(session)})")
+            verbose_proxy_logger.info("SESSION REUSE: Attached shared aiohttp session to request (ID: %s)", id(session))
         elif session is not None and session.closed:
             # Session was created at startup but has since closed — recreate it
             # Use lock to prevent concurrent recreation (avoids session/connector leak)
-            lock = _get_shared_session_lock()
+            lock: Final = _get_shared_session_lock()
             async with lock:
                 # Double-check under lock — another coroutine may have already recreated it
                 session = proxy_server.shared_aiohttp_session
@@ -278,7 +278,7 @@ async def add_shared_session_to_data(data: dict) -> None:
                 # or closed — either way we need to recreate
                 if session is not None:
                     verbose_proxy_logger.warning(
-                        f"SESSION REUSE: Shared aiohttp session is closed (ID: {id(session)}), recreating..."
+                        "SESSION REUSE: Shared aiohttp session is closed (ID: %s), recreating...", id(session)
                     )
                 else:
                     verbose_proxy_logger.warning(
@@ -427,9 +427,9 @@ async def route_request(
 
     data.pop("enable_tag_filtering", None)
 
-    team_id = get_team_id_from_data(data)
-    router_model_names = llm_router.model_names if llm_router is not None else []
-    is_proxy_admin_without_team = team_id is None and _is_proxy_admin_request(data)
+    team_id: Final = get_team_id_from_data(data)
+    router_model_names: Final = llm_router.model_names if llm_router is not None else []
+    is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
@@ -453,7 +453,7 @@ async def route_request(
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
         else:
-            models = [model.strip() for model in data.pop("model").split(",")]
+            models: Final = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:
@@ -463,11 +463,11 @@ async def route_request(
         # Apply per-request router settings overrides from key/team config
         # Instead of creating a new Router (expensive), merge settings into kwargs
         # The Router already supports per-request overrides for these settings
-        override_settings = data.pop("router_settings_override")
+        override_settings: Final = data.pop("router_settings_override")
 
         # Settings that the Router accepts as per-request kwargs
         # These override the global router settings for this specific request
-        per_request_settings = [
+        per_request_settings: Final = [
             "fallbacks",
             "context_window_fallbacks",
             "content_policy_fallbacks",
@@ -506,14 +506,14 @@ async def route_request(
             "adelete_run",
         ]:
             # If a model is provided, get its credentials from the router
-            model = data.get("model")
+            model: Final = data.get("model")
             if model and llm_router:
                 try:
                     # Try to get deployment credentials for this model
                     deployment_creds = llm_router.get_deployment_credentials(model_id=model)
                     if not deployment_creds:
                         # Try by model group name
-                        deployment = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                        deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
                         if (
                             deployment
                             and deployment.litellm_params
@@ -581,7 +581,7 @@ async def route_request(
             # These endpoints don't need a model, use custom_llm_provider directly
             return getattr(litellm, f"{route_type}")(**data)
 
-        team_model_name = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
+        team_model_name: Final = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
         if team_model_name is not None:
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
@@ -661,7 +661,7 @@ async def route_request(
                     route_a2a_agent_request,
                 )
 
-                result = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
+                result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
                 if result is not None:
                     return result
                 # Fall through to raise exception below if result is None
@@ -670,7 +670,7 @@ async def route_request(
         return getattr(litellm, f"{route_type}")(**data)
 
     # if no route found then it's a bad request
-    route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
+    route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
     raise ProxyModelNotFoundError(
         route=route_name,
         model_name=data.get("model", ""),

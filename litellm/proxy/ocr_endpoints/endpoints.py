@@ -1,7 +1,7 @@
 #### OCR Endpoints #####
 
 import json
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import orjson
 from fastapi import APIRouter, Depends, Request, Response, UploadFile
@@ -13,7 +13,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 def _build_document_from_upload(
@@ -52,10 +52,10 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
         A dict with 'document', 'model', and any other OCR params.
     """
     try:
-        form = await request.form()
+        form: Final = await request.form()
     except Exception as e:
         raise ValueError(
-            f"Failed to parse multipart form data: {e!s}. "
+            f"Failed to parse multipart form data: {e}. "
             "When using curl with --form/-F, do NOT set the Content-Type header "
             "manually — curl will set it automatically with the required boundary."
         )
@@ -71,17 +71,17 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
 
     # Seek to start in case the file was already partially read by middleware
     await uploaded_file.seek(0)
-    file_content = await uploaded_file.read()
+    file_content: Final = await uploaded_file.read()
     if not file_content:
         raise ValueError("Uploaded file is empty")
 
-    document = _build_document_from_upload(
+    document: Final = _build_document_from_upload(
         file_content=file_content,
         filename=uploaded_file.filename,
         content_type=uploaded_file.content_type,
     )
 
-    data: dict[str, Any] = {"document": document}
+    data: Final[dict[str, Any]] = {"document": document}
 
     for field_name, field_value in form.items():
         if field_name in ("file", "document"):
@@ -96,9 +96,10 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
             data[field_name] = field_value
 
     verbose_proxy_logger.debug(
-        f"OCR multipart form request parsed - model: {data.get('model')}, "
-        f"document_type: {document['type']}, "
-        f"filename: {uploaded_file.filename}"
+        "OCR multipart form request parsed - model: %s, document_type: %s, filename: %s",
+        data.get("model"),
+        document["type"],
+        uploaded_file.filename,
     )
 
     return data
@@ -122,7 +123,7 @@ async def _parse_ocr_request(request: Request) -> dict[str, Any]:
     Returns:
         A dict suitable for passing to the OCR processing pipeline.
     """
-    content_type = request.headers.get("content-type", "")
+    content_type: Final = request.headers.get("content-type", "")
 
     if "multipart/form-data" in content_type.lower():
         return await _parse_multipart_form(request)
@@ -151,7 +152,7 @@ async def _parse_ocr_request(request: Request) -> dict[str, Any]:
         )
 
     try:
-        data = orjson.loads(body)
+        data: Final = orjson.loads(body)
     except orjson.JSONDecodeError as e:
         raise ValueError(
             f"Invalid JSON in request body: {e}. "
@@ -165,7 +166,7 @@ async def _parse_ocr_request(request: Request) -> dict[str, Any]:
     # caller is remote, so allowing a file-path string would let an
     # authenticated user read arbitrary files from the server's filesystem.
     # File uploads must go through multipart/form-data instead.
-    doc = data.get("document") if isinstance(data, dict) else None
+    doc: Final = data.get("document") if isinstance(data, dict) else None
     if isinstance(doc, dict) and doc.get("type") == "file":
         raise ValueError(
             "document type 'file' is not supported through the JSON API. "

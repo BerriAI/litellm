@@ -776,8 +776,14 @@ async def test_model_cost_map_reload_does_not_publish_config_change() -> None:
     original_model_cost = litellm.model_cost.copy()
     _set_redis_usage_cache(_FakeRedisCache(client))
     try:
-        with patch("litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map") as mock_get_map:
-            mock_get_map.return_value = {"gpt-5.2": {"input_cost_per_token": 0.001}}
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
+        with patch(
+            "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+            new=AsyncMock(
+                return_value=ModelCostMapReloaded(model_cost_map={"gpt-5.2": {"input_cost_per_token": 0.001}})
+            ),
+        ):
             await ProxyConfig()._check_and_reload_model_cost_map(prisma_client=prisma_client)
     finally:
         litellm.model_cost = original_model_cost

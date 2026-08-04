@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from typing_extensions import (
     Required,
@@ -756,7 +756,7 @@ class VertexPartnerProvider(str, Enum):
     claude = "claude"
 
 
-VERTEX_AI_PROVIDER_METADATA_FIELDS = (
+VERTEX_AI_PROVIDER_METADATA_FIELDS: Final = (
     "vertex_ai_grounding_metadata",
     "vertex_ai_url_context_metadata",
     "vertex_ai_safety_ratings",

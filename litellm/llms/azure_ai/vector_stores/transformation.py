@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -43,7 +43,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
         }
 
     def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
-        api_key = litellm_params.get("api_key")
+        api_key: Final = litellm_params.get("api_key")
         if api_key is None:
             raise ValueError("api_key is required")
 
@@ -54,7 +54,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
         }
 
     def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
-        basic_headers = self._base_validate_azure_environment(headers, litellm_params)
+        basic_headers: Final = self._base_validate_azure_environment(headers, litellm_params)
         basic_headers.update({"Content-Type": "application/json"})
         return basic_headers
 
@@ -72,7 +72,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
             return api_base.rstrip("/")
 
         # Get search service name from litellm_params
-        search_service_name = litellm_params.get("azure_search_service_name")
+        search_service_name: Final = litellm_params.get("azure_search_service_name")
 
         if not search_service_name:
             raise ValueError(
@@ -103,14 +103,14 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
             query = " ".join(query)
 
         # Get embedding model from litellm_params (required)
-        embedding_model = litellm_params.get("litellm_embedding_model")
+        embedding_model: Final = litellm_params.get("litellm_embedding_model")
         if not embedding_model:
             raise ValueError(
                 "embedding_model is required in litellm_params for Azure AI Search. "
                 "Example: litellm_params['embedding_model'] = 'azure/text-embedding-3-large'"
             )
 
-        embedding_config = litellm_params.get("litellm_embedding_config", {})
+        embedding_config: Final = litellm_params.get("litellm_embedding_config", {})
         if not embedding_config:
             raise ValueError(
                 "embedding_config is required in litellm_params for Azure AI Search. "
@@ -118,28 +118,28 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
             )
 
         # Get vector field name (defaults to contentVector)
-        vector_field = litellm_params.get("azure_search_vector_field", "contentVector")
+        vector_field: Final = litellm_params.get("azure_search_vector_field", "contentVector")
 
         # Get top_k (number of results to return)
-        top_k = vector_store_search_optional_params.get("top_k", 10)
+        top_k: Final = vector_store_search_optional_params.get("top_k", 10)
 
         # Generate embedding for the query using litellm.embeddings
         try:
-            embedding_response = litellm.embedding(
+            embedding_response: Final = litellm.embedding(
                 model=embedding_model,
                 input=[query],
                 **embedding_config,
             )
-            query_vector = embedding_response.data[0]["embedding"]
+            query_vector: Final = embedding_response.data[0]["embedding"]
         except Exception as e:
-            raise Exception(f"Failed to generate embedding for query: {e!s}")
+            raise Exception(f"Failed to generate embedding for query: {e}")
 
         # Azure AI Search endpoint for search
-        index_name = vector_store_id  # vector_store_id is the index name
-        url = f"{api_base}/indexes/{index_name}/docs/search?api-version=2024-07-01"
+        index_name: Final = vector_store_id  # vector_store_id is the index name
+        url: Final = f"{api_base}/indexes/{index_name}/docs/search?api-version=2024-07-01"
 
         # Build the request body for Azure AI Search with vector search
-        request_body = {
+        request_body: Final = {
             "search": "*",  # Get all documents (filtered by vector similarity)
             "vectorQueries": [
                 {
@@ -181,13 +181,13 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
         }
         """
         try:
-            response_json = response.json()
+            response_json: Final = response.json()
 
             # Extract results from Azure AI Search API response
-            results = response_json.get("value", [])
+            results: Final = response_json.get("value", [])
 
             # Transform results to standard format
-            search_results: list[VectorStoreSearchResult] = []
+            search_results: Final[list[VectorStoreSearchResult]] = []
             for result in results:
                 # Extract document ID
                 document_id = result.get("id", "")

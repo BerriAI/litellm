@@ -1,8 +1,6 @@
 import types
 from collections.abc import AsyncIterator, Iterator
-from typing import (
-    cast,
-)
+from typing import Final, cast
 
 import httpx  # type: ignore
 
@@ -48,10 +46,10 @@ from ..common_utils import (
     get_bedrock_tool_name,
 )
 
-bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(max_size_in_memory=50, default_ttl=600)
+bedrock_tool_name_mappings: Final[InMemoryCache] = InMemoryCache(max_size_in_memory=50, default_ttl=600)
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
-converse_config = AmazonConverseConfig()
+converse_config: Final = AmazonConverseConfig()
 
 
 class AmazonCohereChatConfig:
@@ -91,7 +89,7 @@ class AmazonCohereChatConfig:
         stop_sequences: str | None = None,
         raw_prompting: bool | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -177,7 +175,7 @@ async def make_call(
                 ),
             )  # Create a new client if none provided
 
-        response = await client.post(
+        response: Final = await client.post(
             api_base,
             headers=headers,
             data=data,
@@ -189,7 +187,7 @@ async def make_call(
             raise BedrockError(status_code=response.status_code, message=response.text)
 
         if fake_stream:
-            model_response: ModelResponse = litellm.AmazonConverseConfig()._transform_response(
+            model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
                 model=model,
                 response=response,
                 model_response=litellm.ModelResponse(),
@@ -229,7 +227,7 @@ async def make_call(
 
         return completion_stream
     except httpx.HTTPStatusError as err:
-        error_code = err.response.status_code
+        error_code: Final = err.response.status_code
         raise BedrockError(status_code=error_code, message=err.response.text)
     except httpx.TimeoutException:
         raise BedrockError(status_code=408, message="Timeout error occurred.")
@@ -261,7 +259,7 @@ def make_sync_call(
                 )
             )
 
-        response = client.post(
+        response: Final = client.post(
             api_base,
             headers=headers,
             data=signed_json_body if signed_json_body is not None else data,
@@ -273,7 +271,7 @@ def make_sync_call(
             raise BedrockError(status_code=response.status_code, message=response.text)
 
         if fake_stream:
-            model_response: ModelResponse = litellm.AmazonConverseConfig()._transform_response(
+            model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
                 model=model,
                 response=response,
                 model_response=litellm.ModelResponse(),
@@ -313,7 +311,7 @@ def make_sync_call(
 
         return completion_stream
     except httpx.HTTPStatusError as err:
-        error_code = err.response.status_code
+        error_code: Final = err.response.status_code
         raise BedrockError(status_code=error_code, message=err.response.text)
     except httpx.TimeoutException:
         raise BedrockError(status_code=408, message="Timeout error occurred.")
@@ -369,7 +367,7 @@ class AWSEventStreamDecoder:
         Translate the thinking blocks to a string
         """
 
-        thinking_blocks_list: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] = []
+        thinking_blocks_list: Final[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = []
         _thinking_block: Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock] | None = None
 
         if "text" in thinking_block:
@@ -391,7 +389,7 @@ class AWSEventStreamDecoder:
         """Initialize response_id from chunk data if not already set."""
         if self.response_id is None:
             if "messageStart" in chunk_data:
-                conversation_id = chunk_data["messageStart"].get("conversationId")
+                conversation_id: Final = chunk_data["messageStart"].get("conversationId")
                 if conversation_id:
                     self.response_id = f"chatcmpl-{conversation_id}"
             else:
@@ -415,8 +413,8 @@ class AWSEventStreamDecoder:
         if start_obj is not None:
             if "toolUse" in start_obj and start_obj["toolUse"] is not None:
                 ## check tool name was formatted by litellm
-                _response_tool_name = start_obj["toolUse"]["name"]
-                response_tool_name = get_bedrock_tool_name(response_tool_name=_response_tool_name)
+                _response_tool_name: Final = start_obj["toolUse"]["name"]
+                response_tool_name: Final = get_bedrock_tool_name(response_tool_name=_response_tool_name)
                 self._current_tool_name = response_tool_name
 
                 # When json_mode is True, suppress the internal json_tool_call
@@ -511,7 +509,7 @@ class AWSEventStreamDecoder:
             return tool_use
 
         self._current_tool_name = None
-        is_empty = self.check_empty_tool_call_args()
+        is_empty: Final = self.check_empty_tool_call_args()
         if is_empty:
             tool_use = {
                 "id": None,
@@ -530,7 +528,7 @@ class AWSEventStreamDecoder:
             # and use it as the consistent ID for all subsequent chunks.
             self._initialize_converse_response_id(chunk_data)
 
-            verbose_logger.debug(f"\n\nRaw Chunk: {chunk_data}\n\n")
+            verbose_logger.debug("\n\nRaw Chunk: %s\n\n", chunk_data)
             text = ""
             tool_use: ChatCompletionToolCallChunk | None = None
             finish_reason = ""
@@ -539,16 +537,16 @@ class AWSEventStreamDecoder:
             reasoning_content: str | None = None
             thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None = None
 
-            content_block_index = int(chunk_data.get("contentBlockIndex", 0))
+            content_block_index: Final = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
-                start_obj = ContentBlockStartEvent(**chunk_data["start"])
+                start_obj: Final = ContentBlockStartEvent(**chunk_data["start"])
                 (
                     tool_use,
                     provider_specific_fields,
                     thinking_blocks,
                 ) = self._handle_converse_start_event(start_obj)
             elif "delta" in chunk_data:
-                delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
+                delta_obj: Final = ContentBlockDeltaEvent(**chunk_data["delta"])
                 (
                     text,
                     tool_use,
@@ -563,11 +561,11 @@ class AWSEventStreamDecoder:
             elif "usage" in chunk_data:
                 usage = converse_config._transform_usage(chunk_data.get("usage", {}))
 
-            model_response_provider_specific_fields = {}
+            model_response_provider_specific_fields: Final = {}
             if "trace" in chunk_data:
-                trace = chunk_data.get("trace")
+                trace: Final = chunk_data.get("trace")
                 model_response_provider_specific_fields["trace"] = trace
-            response = ModelResponseStream(
+            response: Final = ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         finish_reason=finish_reason,
@@ -590,7 +588,7 @@ class AWSEventStreamDecoder:
 
             return response
         except Exception as e:
-            raise Exception(f"Received streaming error - {e!s}")
+            raise Exception(f"Received streaming error - {e}")
 
     def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream, dict]:
         text = ""
@@ -614,13 +612,13 @@ class AWSEventStreamDecoder:
         ######### /bedrock/invoke nova mappings ###############
         elif "contentBlockDelta" in chunk_data:
             # when using /bedrock/invoke/nova, the chunk_data is nested under "contentBlockDelta"
-            _chunk_data = chunk_data.get("contentBlockDelta", {})
+            _chunk_data: Final = chunk_data.get("contentBlockDelta", {})
             return self.converse_chunk_parser(chunk_data=_chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
             if len(chunk_data["outputs"]) == 1 and chunk_data["outputs"][0].get("text", None) is not None:
                 text = chunk_data["outputs"][0]["text"]
-            stop_reason = chunk_data.get("stop_reason", None)
+            stop_reason: Final = chunk_data.get("stop_reason", None)
             if stop_reason is not None:
                 is_finished = True
                 finish_reason = stop_reason
@@ -651,7 +649,7 @@ class AWSEventStreamDecoder:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
-        event_stream_buffer = EventStreamBuffer()
+        event_stream_buffer: Final = EventStreamBuffer()
         for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             for event in event_stream_buffer:
@@ -667,7 +665,7 @@ class AWSEventStreamDecoder:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
-        event_stream_buffer = EventStreamBuffer()
+        event_stream_buffer: Final = EventStreamBuffer()
         async for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             for event in event_stream_buffer:
@@ -677,7 +675,7 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
 
     def _parse_message_from_event(self, event) -> str | None:
-        response_stream_shape = get_bedrock_response_stream_shape()
+        response_stream_shape: Final = get_bedrock_response_stream_shape()
         if response_stream_shape is None:
             raise BedrockError(
                 status_code=500,
@@ -686,8 +684,8 @@ class AWSEventStreamDecoder:
                     "Ensure botocore is correctly installed."
                 ),
             )
-        response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, response_stream_shape)
+        response_dict: Final = event.to_response_dict()
+        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise build_bedrock_stream_error(response_dict, response_stream_shape)
@@ -777,7 +775,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         """
         tool_use: ChatCompletionToolCallChunk | None = None
         if self.json_mode is True and tool_calls is not None:
-            message = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
+            message: Final = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
             if message is not None:
                 text = message.content or ""
                 tool_use = None
@@ -787,10 +785,10 @@ class MockResponseIterator:  # for returning ai21 streaming responses
 
     def _chunk_parser(self, chunk_data: ModelResponse) -> GChunk:
         try:
-            chunk_usage: Usage = getattr(chunk_data, "usage")
+            chunk_usage: Final[Usage] = getattr(chunk_data, "usage")
             text = chunk_data.choices[0].message.content or ""  # type: ignore
             tool_use = None
-            _model_response_tool_call = cast(
+            _model_response_tool_call: Final = cast(
                 List[ChatCompletionMessageToolCall] | None,
                 cast(Choices, chunk_data.choices[0]).message.tool_calls,
             )
@@ -809,7 +807,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
                     ),
                     index=0,
                 )
-            processed_chunk = GChunk(
+            processed_chunk: Final = GChunk(
                 text=text,
                 tool_use=tool_use,
                 is_finished=True,

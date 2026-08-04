@@ -2,6 +2,8 @@
 Translate from OpenAI's `/v1/chat/completions` to LM Studio's `/chat/completions`
 """
 
+from typing import Final
+
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -12,7 +14,7 @@ class LMStudioChatConfig(OpenAIGPTConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("LM_STUDIO_API_BASE")  # type: ignore
-        dynamic_api_key = (
+        dynamic_api_key: Final = (
             api_key or get_secret_str("LM_STUDIO_API_KEY") or "fake-api-key"
         )  # LM Studio does not require an api key, but OpenAI client requires non-None value
         return api_base, dynamic_api_key

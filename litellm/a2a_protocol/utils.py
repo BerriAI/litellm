@@ -2,7 +2,7 @@
 Utility functions for A2A protocol.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -34,7 +34,7 @@ class A2ARequestUtils:
         else:
             parts = getattr(message, "parts", []) or []
 
-        text_parts: list[str] = []
+        text_parts: Final[list[str]] = []
         for part in parts:
             if isinstance(part, dict):
                 if part.get("kind") == "text":
@@ -56,7 +56,7 @@ class A2ARequestUtils:
         Returns:
             Text from response message parts
         """
-        result = response_dict.get("result", {})
+        result: Final = response_dict.get("result", {})
         if not isinstance(result, dict):
             return ""
 
@@ -66,7 +66,7 @@ class A2ARequestUtils:
         if result.get("kind") == "message":
             return A2ARequestUtils.extract_text_from_message(result)
 
-        message = result.get("message", {})
+        message: Final = result.get("message", {})
         return A2ARequestUtils.extract_text_from_message(message)
 
     @staticmethod
@@ -82,7 +82,7 @@ class A2ARequestUtils:
         Returns:
             The message object/dict or None
         """
-        params = getattr(request, "params", None)
+        params: Final = getattr(request, "params", None)
         if params is None:
             return None
         return getattr(params, "message", None)
@@ -128,14 +128,14 @@ class A2ARequestUtils:
         input_message = A2ARequestUtils.get_input_message_from_request(request)
         if input_message is not None and hasattr(input_message, "model_dump"):
             input_message = input_message.model_dump(mode="json")
-        input_text = A2ARequestUtils.extract_text_from_message(input_message)
-        prompt_tokens = A2ARequestUtils.count_tokens(input_text)
+        input_text: Final = A2ARequestUtils.extract_text_from_message(input_message)
+        prompt_tokens: Final = A2ARequestUtils.count_tokens(input_text)
 
         # Count output tokens
-        output_text = A2ARequestUtils.extract_text_from_response(response_dict)
-        completion_tokens = A2ARequestUtils.count_tokens(output_text)
+        output_text: Final = A2ARequestUtils.extract_text_from_response(response_dict)
+        completion_tokens: Final = A2ARequestUtils.count_tokens(output_text)
 
-        total_tokens = prompt_tokens + completion_tokens
+        total_tokens: Final = prompt_tokens + completion_tokens
 
         return prompt_tokens, completion_tokens, total_tokens
 

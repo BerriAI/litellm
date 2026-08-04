@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, TYPE_CHECKING, Union
 
 from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Required, TypedDict
@@ -316,7 +316,7 @@ def _normalize_a2a_jsonrpc_response(
     returned it. Backfill from the outbound request id so LiteLLM can surface the
     agent error instead of failing Pydantic validation.
     """
-    normalized = dict(response_dict)
+    normalized: Final = dict(response_dict)
     if normalized.get("id") is None and request_id is not None:
         normalized["id"] = str(request_id)
     return normalized

@@ -20,6 +20,7 @@ import uuid
 import weakref
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
 import jwt
@@ -52,10 +53,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 # The cache stores (fingerprint, token); anything else in the slot is treated as absent.
-_CACHED_ENTRY_ADAPTER: TypeAdapter[tuple[str, str]] = TypeAdapter(tuple[str, str])
+_CACHED_ENTRY_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[str, str])
 
-CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-CLIENT_ASSERTION_LIFETIME_SECONDS = 60
+CLIENT_ASSERTION_TYPE: Final = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+CLIENT_ASSERTION_LIFETIME_SECONDS: Final = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +81,7 @@ class TokenEndpointClient:
         client_auth: ClientAuth,
     ) -> Result[ExchangedToken, CredError]:
         try:
-            data = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
+            data: Final = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
         except (ValueError, TypeError, NotImplementedError, jwt.PyJWTError):
             verbose_proxy_logger.warning("MCP token endpoint %s: could not sign the client assertion", endpoint)
             return Error(
@@ -90,7 +91,7 @@ class TokenEndpointClient:
                 )
             )
         try:
-            raw = await _post_form(endpoint, data)
+            raw: Final = await _post_form(endpoint, data)
         except httpx.HTTPStatusError as exc:
             verbose_proxy_logger.warning(
                 "MCP token endpoint %s failed with status %s", endpoint, exc.response.status_code
@@ -114,7 +115,7 @@ class TokenEndpointClient:
             verbose_proxy_logger.warning("MCP token endpoint %s returned no response", endpoint)
             return Error(CredError.of_upstream_unavailable("token exchange failed: no response from token endpoint"))
         try:
-            parsed = _TokenEndpointResponse.model_validate(raw)
+            parsed: Final = _TokenEndpointResponse.model_validate(raw)
         except ValidationError:
             verbose_proxy_logger.warning("MCP token endpoint %s response missing access_token", endpoint)
             return Error(
@@ -191,7 +192,7 @@ class ExchangedTokenCache:
 
 
 def _cache_ttl_seconds(expires_in: int | None) -> int:
-    lifetime = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+    lifetime: Final = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
     return max(
         lifetime - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
         MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
@@ -230,7 +231,7 @@ def _client_auth_params(endpoint: str, client_id: str, client_auth: ClientAuth) 
 
 
 def _client_assertion(endpoint: str, client_id: str, auth: PrivateKeyJwtAuth) -> str:
-    now = int(time.time())
+    now: Final = int(time.time())
     return jwt.encode(
         {
             "iss": client_id,

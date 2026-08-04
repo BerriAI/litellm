@@ -1,3 +1,5 @@
+from typing import Final
+
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
@@ -32,7 +34,7 @@ class PassthroughEndpointRouter:
             api_base: The base URL of the pass-through endpoint
             api_key: The API key for the pass-through endpoint
         """
-        credential_name = self._get_credential_name_for_provider(
+        credential_name: Final = self._get_credential_name_for_provider(
             custom_llm_provider=custom_llm_provider,
             region_name=self._get_region_name_from_api_base(api_base=api_base, custom_llm_provider=custom_llm_provider),
         )
@@ -45,17 +47,19 @@ class PassthroughEndpointRouter:
         custom_llm_provider: str,
         region_name: str | None,
     ) -> str | None:
-        credential_name = self._get_credential_name_for_provider(
+        credential_name: Final = self._get_credential_name_for_provider(
             custom_llm_provider=custom_llm_provider,
             region_name=region_name,
         )
-        verbose_router_logger.debug(f"Pass-through llm endpoints router, looking for credentials for {credential_name}")
+        verbose_router_logger.debug(
+            "Pass-through llm endpoints router, looking for credentials for %s", credential_name
+        )
         if credential_name in self.credentials:
-            verbose_router_logger.debug(f"Found credentials for {credential_name}")
+            verbose_router_logger.debug("Found credentials for %s", credential_name)
             return self.credentials[credential_name]
         else:
-            verbose_router_logger.debug(f"No credentials found for {credential_name}, looking for env variable")
-            _env_variable_name = self._get_default_env_variable_name_passthrough_endpoint(
+            verbose_router_logger.debug("No credentials found for %s, looking for env variable", credential_name)
+            _env_variable_name: Final = self._get_default_env_variable_name_passthrough_endpoint(
                 custom_llm_provider=custom_llm_provider,
             )
             return get_secret_str(_env_variable_name)
@@ -108,14 +112,14 @@ class PassthroughEndpointRouter:
         Add the vertex credentials for the given project-id, location
         """
 
-        deployment_key = self._get_deployment_key(
+        deployment_key: Final = self._get_deployment_key(
             project_id=project_id,
             location=location,
         )
         if deployment_key is None:
             verbose_router_logger.debug("No deployment key found for project-id, location")
             return
-        vertex_pass_through_credentials = VertexPassThroughCredentials(
+        vertex_pass_through_credentials: Final = VertexPassThroughCredentials(
             vertex_project=project_id,
             vertex_location=location,
             vertex_credentials=vertex_credentials,
@@ -136,7 +140,7 @@ class PassthroughEndpointRouter:
         """
         if litellm.vector_store_registry is None:
             return None
-        vector_store_to_run: LiteLLM_ManagedVectorStore | None = (
+        vector_store_to_run: Final[LiteLLM_ManagedVectorStore | None] = (
             litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
                 vector_store_id=vector_store_id
             )
@@ -149,7 +153,7 @@ class PassthroughEndpointRouter:
         """
         Get the vertex credentials for the given project-id, location
         """
-        deployment_key = self._get_deployment_key(
+        deployment_key: Final = self._get_deployment_key(
             project_id=project_id,
             location=location,
         )

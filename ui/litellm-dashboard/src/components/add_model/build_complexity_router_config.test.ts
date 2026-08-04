@@ -1,5 +1,6 @@
 import {
   buildComplexityRouterConfig,
+  getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
   BuildComplexityRouterConfigParams,
@@ -19,6 +20,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierContextWindowSize: undefined,
   classifierContextPerTurnChars: undefined,
   classifierContextIncludeAssistantTurns: undefined,
+  sessionAffinity: false,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
@@ -35,7 +37,12 @@ const baseParams: BuildComplexityRouterConfigParams = {
 describe("buildComplexityRouterConfig", () => {
   it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
-    expect(config).toEqual({ tiers, classifier_type: "heuristic", escalation_keywords: ["LITELLM ESCALATE"] });
+    expect(config).toEqual({
+      tiers,
+      classifier_type: "heuristic",
+      session_affinity: false,
+      escalation_keywords: ["LITELLM ESCALATE"],
+    });
   });
 
   it("trims escalation keywords and drops blank entries", () => {
@@ -177,7 +184,7 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.keyword_tier_rules).toBeUndefined();
   });
 
-  it("trims keywords and drops rules left empty, so unfilled rows never 400 the backend", () => {
+  it("trims keywords but keeps rules left empty, so a dropped row can never pass for a saved one", () => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       keywordTierRules: [
@@ -187,17 +194,13 @@ describe("buildComplexityRouterConfig", () => {
       ],
     };
     const config = buildComplexityRouterConfig(params);
-    // r1 keeps only its real keyword (trimmed); r2 and r3 are dropped entirely.
-    expect(config.keyword_tier_rules).toEqual([{ keywords: ["deploy to k8s"], tier: "REASONING" }]);
-  });
-
-  it("omits keyword_tier_rules entirely when every rule is empty", () => {
-    const params: BuildComplexityRouterConfigParams = {
-      ...baseParams,
-      keywordTierRules: [{ id: "r1", keywords: ["", "  "], tier: "COMPLEX" }],
-    };
-    const config = buildComplexityRouterConfig(params);
-    expect(config.keyword_tier_rules).toBeUndefined();
+    // getKeywordTierRulesError blocks this submit; r2 and r3 survive here so the backend rejects
+    // them loudly rather than the caller's rows vanishing on a successful save.
+    expect(config.keyword_tier_rules).toEqual([
+      { keywords: ["deploy to k8s"], tier: "REASONING" },
+      { keywords: [], tier: "COMPLEX" },
+      { keywords: [], tier: "SIMPLE" },
+    ]);
   });
 
   it("omits adaptive fields when adaptive is disabled even if weights linger in state", () => {
@@ -217,6 +220,16 @@ describe("buildComplexityRouterConfig", () => {
   it("omits return_raw_model_name when disabled", () => {
     const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: false });
     expect(config.return_raw_model_name).toBeUndefined();
+  });
+
+  it("writes session_affinity=true so turning the toggle on overrides the backend's off-by-default", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinity: true });
+    expect(config.session_affinity).toBe(true);
+  });
+
+  it("writes session_affinity explicitly when off, so the stored config never relies on the backend default", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinity: false });
+    expect(config.session_affinity).toBe(false);
   });
 
   it("includes return_raw_model_name when enabled", () => {
@@ -302,21 +315,56 @@ describe("getSemanticConfigError", () => {
     ).toMatch(/keyword tier rule/i);
   });
 
-  it("errors when a rule has no non-empty keywords", () => {
-    const emptyRule = { id: "r2", keywords: ["", "  "], tier: "SIMPLE" as const };
-    expect(
-      getSemanticConfigError({
-        semanticMatchingEnabled: true,
-        embeddingModel: "voyage-3-5",
-        keywordTierRules: [emptyRule],
-      }),
-    ).toMatch(/at least one keyword/i);
-  });
-
   it("returns null when enabled with both an embedding model and rules", () => {
     expect(
       getSemanticConfigError({ semanticMatchingEnabled: true, embeddingModel: "voyage-3-5", keywordTierRules: [rule] }),
     ).toBeNull();
+  });
+});
+
+describe("getKeywordTierRulesError", () => {
+  it("returns null when every rule carries a keyword", () => {
+    expect(
+      getKeywordTierRulesError([
+        { id: "r1", keywords: ["invoice"], tier: "MEDIUM" },
+        { id: "r2", keywords: ["deploy to k8s"], tier: "REASONING" },
+      ]),
+    ).toBeNull();
+  });
+
+  it("returns null when there are no rules at all, since the section is optional", () => {
+    expect(getKeywordTierRulesError([])).toBeNull();
+  });
+
+  // The whole point of the ticket: the semantic toggle is off by default, and an unfilled row
+  // used to be discarded silently on an otherwise successful create.
+  it("rejects a row left empty while semantic matching is off", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: [], tier: "COMPLEX" }])).toBe(
+      "Add at least one keyword to keyword rule(s): 1",
+    );
+  });
+
+  it.each([
+    ["whitespace only", ["   "]],
+    ["blank strings, as an unfilled row between filled ones leaves behind", ["", " ", ""]],
+  ])("treats %s as empty rather than as a keyword", (_label, keywords) => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords, tier: "SIMPLE" }])).toMatch(/keyword rule\(s\): 1/);
+  });
+
+  // Row numbers have to survive rules that are fine, or the message points at the wrong input.
+  it("names each offending row by its position among all rules", () => {
+    expect(
+      getKeywordTierRulesError([
+        { id: "r1", keywords: ["invoice"], tier: "MEDIUM" },
+        { id: "r2", keywords: [], tier: "COMPLEX" },
+        { id: "r3", keywords: ["billing"], tier: "SIMPLE" },
+        { id: "r4", keywords: ["  "], tier: "REASONING" },
+      ]),
+    ).toBe("Add at least one keyword to keyword rule(s): 2, 4");
+  });
+
+  it("keeps a keyword whose surrounding whitespace is the only thing trimmed", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: ["  invoice  "], tier: "MEDIUM" }])).toBeNull();
   });
 });
 

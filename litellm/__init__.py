@@ -27,18 +27,19 @@ if os.getenv("LITELLM_MODE", "DEV") == "DEV":
     _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
 from typing import (
-    Callable,
-    List,
-    Optional,
-    Dict,
-    Union,
     Any,
-    Literal,
+    Callable,
+    Dict,
+    Final,
     get_args,
-    TYPE_CHECKING,
-    Tuple,
+    List,
+    Literal,
+    Optional,
     overload,
+    Tuple,
     Type,
+    TYPE_CHECKING,
+    Union,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
@@ -264,6 +265,7 @@ databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
+autorouter_savings_baseline_model: Optional[str] = None
 replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
 gdc_key: Optional[str] = None
@@ -680,12 +682,12 @@ def is_bedrock_pricing_only_model(key: str) -> bool:
         bool: True if the key matches the Bedrock pattern, False otherwise.
     """
     # Regex to match 'bedrock/<region>/<model>'
-    bedrock_pattern = re.compile(r"^bedrock/[a-zA-Z0-9_-]+/.+$")
+    bedrock_pattern: Final = re.compile(r"^bedrock/[a-zA-Z0-9_-]+/.+$")
 
     if "month-commitment" in key:
         return True
 
-    is_match = bedrock_pattern.match(key)
+    is_match: Final = bedrock_pattern.match(key)
     return is_match is not None
 
 
@@ -703,7 +705,7 @@ def is_openai_finetune_model(key: str) -> bool:
 
 
 def add_known_models(model_cost_map: Optional[Dict] = None):
-    _map = model_cost_map if model_cost_map is not None else model_cost
+    _map: Final = model_cost_map if model_cost_map is not None else model_cost
     for key, value in _map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
@@ -2139,11 +2141,11 @@ def __getattr__(name: str) -> Any:
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry
 
-    registry = _get_lazy_import_registry()
+    registry: Final = _get_lazy_import_registry()
 
     # Check if name is in registry and call the cached handler function
     if name in registry:
-        handler_func = registry[name]
+        handler_func: Final = registry[name]
         return handler_func(name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
@@ -2196,7 +2198,7 @@ def __getattr__(name: str) -> Any:
         return _globals["openaiOSeriesConfig"]
 
     # Lazy load other config instances
-    _config_instances = {
+    _config_instances: Final = {
         "openAIGPTConfig": "OpenAIGPTConfig",
         "openAIGPTAudioConfig": "OpenAIGPTAudioConfig",
         "openAIGPT5Config": "OpenAIGPT5Config",
@@ -2238,7 +2240,7 @@ def __getattr__(name: str) -> Any:
         # Check if already cached
         if "priority_reservation_settings" not in _globals:
             # Import the class and instantiate it
-            PriorityReservationSettings = __getattr__("PriorityReservationSettings")
+            PriorityReservationSettings: Final = __getattr__("PriorityReservationSettings")
             _globals["priority_reservation_settings"] = PriorityReservationSettings()
         return _globals["priority_reservation_settings"]
 
@@ -2250,7 +2252,7 @@ def __getattr__(name: str) -> Any:
         # Check if already cached
         if "logging_callback_manager" not in _globals:
             # Import the class and instantiate it
-            LoggingCallbackManager = __getattr__("LoggingCallbackManager")
+            LoggingCallbackManager: Final = __getattr__("LoggingCallbackManager")
             _globals["logging_callback_manager"] = LoggingCallbackManager()
         return _globals["logging_callback_manager"]
 

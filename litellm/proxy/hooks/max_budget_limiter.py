@@ -1,3 +1,5 @@
+from typing import Final
+
 from fastapi import HTTPException
 
 from litellm import verbose_logger
@@ -24,8 +26,8 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
     ):
         try:
             verbose_proxy_logger.debug("Inside Max Budget Limiter Pre-Call Hook")
-            max_budget = user_api_key_dict.user_max_budget
-            user_id = user_api_key_dict.user_id
+            max_budget: Final = user_api_key_dict.user_max_budget
+            user_id: Final = user_api_key_dict.user_id
 
             if max_budget is None or user_id is None:
                 return
@@ -44,13 +46,13 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
                 get_reserved_counter_keys,
             )
 
-            user_counter_key = f"spend:user:{user_id}"
+            user_counter_key: Final = f"spend:user:{user_id}"
             if user_counter_key in get_reserved_counter_keys(user_api_key_dict.budget_reservation):
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
 
-            curr_spend = await get_current_spend(
+            curr_spend: Final = await get_current_spend(
                 counter_key=user_counter_key,
                 fallback_spend=user_api_key_dict.user_spend or 0.0,
             )
@@ -75,5 +77,5 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             raise e
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.proxy.hooks.max_budget_limiter.py::async_pre_call_hook(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.max_budget_limiter.py::async_pre_call_hook(): Exception occured - %s", e
             )

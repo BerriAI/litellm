@@ -2,7 +2,7 @@ import json
 import os
 import time
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import httpx
 
@@ -37,7 +37,7 @@ class TextStreamer:
 
     def __next__(self):
         if self.index < len(self.text):
-            result = self.text[self.index]
+            result: Final = self.text[self.index]
             self.index += 1
             return result
         else:
@@ -48,7 +48,7 @@ class TextStreamer:
 
     async def __anext__(self):
         if self.index < len(self.text):
-            result = self.text[self.index]
+            result: Final = self.text[self.index]
             self.index += 1
             return result
         else:
@@ -56,7 +56,7 @@ class TextStreamer:
 
 
 def _get_client_cache_key(model: str, vertex_project: str | None, vertex_location: str | None):
-    _cache_key = f"{model}-{vertex_project}-{vertex_location}"
+    _cache_key: Final = f"{model}-{vertex_project}-{vertex_location}"
     return _cache_key
 
 
@@ -124,7 +124,7 @@ def completion(
         print_verbose(f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}")
 
         _cache_key = _get_client_cache_key(model=model, vertex_project=vertex_project, vertex_location=vertex_location)
-        _vertex_llm_model_object = _get_client_from_cache(client_cache_key=_cache_key)
+        _vertex_llm_model_object: Final = _get_client_from_cache(client_cache_key=_cache_key)
 
         # Load credentials - needed for both vertexai.init() and PredictionServiceClient
         from google.auth.credentials import Credentials
@@ -132,7 +132,7 @@ def completion(
         if vertex_credentials is not None and isinstance(vertex_credentials, str):
             import google.oauth2.service_account
 
-            json_obj = json.loads(vertex_credentials)
+            json_obj: Final = json.loads(vertex_credentials)
 
             creds = google.oauth2.service_account.Credentials.from_service_account_info(
                 json_obj,
@@ -152,7 +152,7 @@ def completion(
             )
 
         ## Load Config
-        config = litellm.VertexAIConfig.get_config()
+        config: Final = litellm.VertexAIConfig.get_config()
         for k, v in config.items():
             if k not in optional_params:
                 optional_params[k] = v
@@ -169,16 +169,16 @@ def completion(
 
         # vertexai does not use an API key, it looks for credentials.json in the environment
 
-        prompt = " ".join(
+        prompt: Final = " ".join(
             [message.get("content") for message in messages if isinstance(message.get("content", None), str)]
         )
 
         mode = ""
 
         request_str = ""
-        response_obj = None
+        response_obj: Final = None
         instances = None
-        client_options = {"api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"}
+        client_options: Final = {"api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"}
         fake_stream = False
         if model in litellm.vertex_language_models or model in litellm.vertex_vision_models:
             llm_model: Any = _vertex_llm_model_object or GenerativeModel(model)
@@ -227,7 +227,7 @@ def completion(
 
         # NOTE: async prediction and streaming under "private" mode isn't supported by aiplatform right now
         if acompletion is True:
-            data = {
+            data: Final = {
                 "llm_model": llm_model,
                 "mode": mode,
                 "prompt": prompt,
@@ -254,9 +254,9 @@ def completion(
 
         completion_response = None
 
-        stream = optional_params.pop("stream", None)  # See note above on handling streaming for vertex ai
+        stream: Final = optional_params.pop("stream", None)  # See note above on handling streaming for vertex ai
         if mode == "chat":
-            chat = llm_model.start_chat()
+            chat: Final = llm_model.start_chat()
             request_str += "chat = llm_model.start_chat()\n"
 
             if fake_stream is not True and stream is True:
@@ -454,7 +454,7 @@ async def async_completion(
         completion_response = None
         if mode == "chat":
             # chat-bison etc.
-            chat = llm_model.start_chat()
+            chat: Final = llm_model.start_chat()
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -597,7 +597,7 @@ async def async_streaming(
     """
     response: Any = None
     if mode == "chat":
-        chat = llm_model.start_chat()
+        chat: Final = llm_model.start_chat()
         optional_params.pop("stream", None)  # vertex ai raises an error when passing stream in optional params
         request_str += f"chat.send_message_streaming_async({prompt}, **{optional_params})\n"
         ## LOGGING
@@ -646,7 +646,7 @@ async def async_streaming(
             credentials=vertex_credentials,
         )
         request_str += f"llm_model = aiplatform.gapic.PredictionServiceAsyncClient(client_options={client_options}, credentials=...)\n"
-        endpoint_path = llm_model.endpoint_path(project=vertex_project, location=vertex_location, endpoint=model)
+        endpoint_path: Final = llm_model.endpoint_path(project=vertex_project, location=vertex_location, endpoint=model)
         request_str += f"client.predict(endpoint={endpoint_path}, instances={instances})\n"
         response_obj = await llm_model.predict(
             endpoint=endpoint_path,
@@ -681,7 +681,7 @@ async def async_streaming(
 
     logging_obj.post_call(input=prompt, api_key=None, original_response=response)
 
-    streamwrapper = CustomStreamWrapper(
+    streamwrapper: Final = CustomStreamWrapper(
         completion_stream=response,
         model=model,
         custom_llm_provider="vertex_ai",
