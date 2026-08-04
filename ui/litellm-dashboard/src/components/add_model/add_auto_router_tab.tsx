@@ -106,7 +106,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   }, [accessToken]);
 
   const {
-    data: modelInfo = [],
+    data,
     isLoading: modelsLoading,
     isError: modelsError,
     refetch: refetchModels,
@@ -115,6 +115,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     queryFn: () => fetchAvailableModels(accessToken),
     enabled: Boolean(accessToken),
   });
+  const modelInfo = React.useMemo(() => data ?? [], [data]);
+  // react-query keeps the last successful list around when a later refetch fails, so isError
+  // alone can't tell "never loaded" apart from "loaded, then a background refetch errored" - only
+  // the former leaves us with nothing trustworthy to verify a preset's models against.
+  const modelsUnverifiable = modelsError && data === undefined;
 
   const isAdmin = all_admin_roles.includes(userRole);
 
@@ -133,7 +138,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // makes the load-race (pick during loading, then discover a missing model) unrepresentable.
   const presetAvailability = (preset: AutoRouterPreset): PresetAvailability => {
     if (modelsLoading) return { kind: "loading" };
-    if (modelsError) return { kind: "unverifiable" };
+    if (modelsUnverifiable) return { kind: "unverifiable" };
     const missing = getMissingModelsInPreset(preset, availableModelSet);
     return missing.length > 0 ? { kind: "missing_models", models: missing } : { kind: "available" };
   };
@@ -372,7 +377,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             {showValidationErrors && !selectedPreset && (
               <div className="text-xs mt-1 text-red-500">Please select a template</div>
             )}
-            {modelsError && (
+            {modelsUnverifiable && (
               <div className="text-xs mt-1 text-red-500">
                 Could not load available models.{" "}
                 <button type="button" className="underline" onClick={() => refetchModels()}>

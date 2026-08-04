@@ -1,5 +1,5 @@
 import { renderWithProviders, screen, waitFor, testQueryClient } from "../../../tests/test-utils";
-import { fireEvent } from "@testing-library/react";
+import { act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
@@ -198,6 +198,31 @@ describe("AddAutoRouterTab", () => {
     openTemplateDropdown();
     await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
     expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2);
+  });
+
+  // react-query keeps the last successful list when a later refetch fails, so a background
+  // refetch error must not treat an already-verified, still-cached preset as unverifiable: the
+  // caller never sees a stale error message, and a preset they already picked stays submittable.
+  it("keeps a selected preset submit-reachable when a background refetch fails but cached models remain valid", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValueOnce(ALL_FAMILY_MODELS).mockRejectedValue(new Error("boom"));
+
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("Anthropic Family")!);
+
+    await act(async () => {
+      await testQueryClient.refetchQueries({ queryKey: ["availableModels", "autoRouter", "token"] });
+    });
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "resilient-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(NotificationManager.fromBackend).not.toHaveBeenCalledWith(
+      "This template's models are no longer available. Please reselect a template or switch to Custom.",
+    );
   });
 
   // The headline behavior: selecting a preset must pre-fill the tier config so the created
