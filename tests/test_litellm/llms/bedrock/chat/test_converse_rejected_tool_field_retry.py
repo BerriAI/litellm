@@ -247,11 +247,24 @@ _CONVERSE_OK = {
 }
 
 
+_DESCRIPTION_REJECTION = (
+    '{"message":"The model returned the following errors: '
+    'tools.0.custom.description: Extra inputs are not permitted"}'
+)
+
+
 class _RejectThenAcceptClient:
     """Fake transport: rejects the first body the way Bedrock does, accepts the second.
 
     Drives the real ``_send``/``_send_stream`` closures inside the handler rather than
     calling the retry wrapper directly, so the wiring at each call site is covered too.
+
+    The rejection names ``description`` rather than ``strict`` on purpose. Whether
+    ``strict`` reaches the wire depends on ``bedrock_converse_supports_strict_tools``,
+    which reads the model cost map, so keying this test on it would couple the wiring
+    under test to global pricing state that another test can change. ``description`` is
+    emitted by ``BedrockToolSpec`` unconditionally. Which field the provider dislikes is
+    irrelevant here; what is under test is that the closure retries and resends.
     """
 
     def __init__(self) -> None:
@@ -262,7 +275,7 @@ class _RejectThenAcceptClient:
         if len(self.posts) == 1:
             request = httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/x")
             raise httpx.HTTPStatusError(
-                "400", request=request, response=httpx.Response(400, text=_STRICT_REJECTION, request=request)
+                "400", request=request, response=httpx.Response(400, text=_DESCRIPTION_REJECTION, request=request)
             )
         return httpx.Response(200, json=_CONVERSE_OK)
 
@@ -327,6 +340,6 @@ async def test_async_streaming_closure_retries_and_resends_without_the_field() -
     await BedrockConverseLLM().async_streaming(**_converse_kwargs(async_client))
 
     assert len(async_client.posts) == 2
-    assert '"strict"' in async_client.posts[0]
-    assert '"strict"' not in async_client.posts[1]
+    assert '"description"' in async_client.posts[0]
+    assert '"description"' not in async_client.posts[1]
     assert '"get_weather"' in async_client.posts[1]
