@@ -13,8 +13,6 @@ from litellm.repositories.table_repositories import UISettingsRepository
 router = APIRouter()
 
 USER_BANNER_ROW_ID = "user_banner"
-USER_BANNER_CACHE_KEY = "user_banner:settings_dict"
-USER_BANNER_CACHE_TTL = 60
 USER_BANNER_MAX_MESSAGE_LENGTH = 4000
 
 UserBannerSeverity = Literal["info", "warning", "error"]
@@ -78,11 +76,7 @@ async def get_user_banner() -> UserBanner:
     Get the admin-published dashboard banner.
     Readable by any authenticated user; rendered on every dashboard page.
     """
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
-
-    cached = await user_api_key_cache.async_get_cache(key=USER_BANNER_CACHE_KEY)
-    if cached is not None:
-        return parse_user_banner(cached)
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         return UserBanner()
@@ -90,14 +84,7 @@ async def get_user_banner() -> UserBanner:
     db_record = await UISettingsRepository(prisma_client).table.find_unique(
         where={"id": USER_BANNER_ROW_ID}  # mutable-ok: prisma filters are plain dicts
     )
-    banner = parse_user_banner(db_record.ui_settings if db_record is not None else None)
-
-    await user_api_key_cache.async_set_cache(
-        key=USER_BANNER_CACHE_KEY,
-        value=banner.model_dump(),
-        ttl=USER_BANNER_CACHE_TTL,
-    )
-    return banner
+    return parse_user_banner(db_record.ui_settings if db_record is not None else None)
 
 
 @router.patch(
@@ -117,7 +104,6 @@ async def update_user_banner(
         create_config_audit_log,
         prisma_client,
         store_model_in_db,
-        user_api_key_cache,
     )
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -151,12 +137,6 @@ async def update_user_banner(
             "create": banner_row,
             "update": {"ui_settings": payload},  # mutable-ok: prisma upsert payloads are plain dicts
         },
-    )
-
-    await user_api_key_cache.async_set_cache(
-        key=USER_BANNER_CACHE_KEY,
-        value=banner.model_dump(),
-        ttl=USER_BANNER_CACHE_TTL,
     )
 
     asyncio.create_task(
