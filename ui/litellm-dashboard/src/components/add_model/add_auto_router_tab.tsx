@@ -76,6 +76,10 @@ const presetDisabledHint = (availability: PresetAvailability): string | null => 
 // caller-specific missing-model reason gets the alarming red treatment.
 const isPresetHintAlarming = (availability: PresetAvailability): boolean => availability.kind === "missing_models";
 
+// getAllPresets() already returns a stable, module-level array (see autorouter_presets.ts), so
+// this is resolved once at import time rather than re-called from inside the component every render.
+const presets = getAllPresets();
+
 // A one-line summary of what's configured, shown when the detailed section is collapsed so a
 // caller can see the shape of the config without opening it.
 const tierConfigSummary = (tiers: ComplexityTiers): string => {
@@ -159,7 +163,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   }));
 
   const availableModelSet = React.useMemo(() => new Set(modelInfo.map((m) => m.model_group)), [modelInfo]);
-  const presets = getAllPresets();
 
   // A preset's models can only be trusted against a successfully loaded list. Selection and the
   // greyed-out state derive from this one function, so a preset that cannot be selected can never
