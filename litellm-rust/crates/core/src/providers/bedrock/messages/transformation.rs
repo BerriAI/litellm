@@ -1,6 +1,7 @@
 use crate::error::CoreResult;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 use crate::messages::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
+use crate::providers::bedrock::constants::{AWS_REGION, AWS_REGION_NAME, DEFAULT_BEDROCK_REGION};
 pub struct BedrockMessagesConfig;
 
 pub const BEDROCK_MESSAGES_CONFIG: BedrockMessagesConfig = BedrockMessagesConfig;
@@ -28,11 +29,12 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
 
     fn signing_region(
         &self,
-        api_base: Option<&str>,
+        _api_base: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Option<String> {
-        let _ = (api_base, env_lookup);
-        todo!("resolve the AWS region the request is signed and routed for")
+        env_lookup(AWS_REGION_NAME)
+            .or_else(|| env_lookup(AWS_REGION))
+            .or_else(|| Some(DEFAULT_BEDROCK_REGION.to_string()))
     }
 
     fn resolve_api_key(
@@ -70,7 +72,9 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::bedrock::constants::{AWS_REGION, AWS_REGION_NAME};
+    use crate::providers::bedrock::constants::{
+        AWS_REGION, AWS_REGION_NAME, DEFAULT_BEDROCK_REGION,
+    };
     use serde_json::{Value, json};
 
     const ANTHROPIC_VERSION: &str = "bedrock-2023-05-31";
@@ -95,23 +99,26 @@ mod tests {
     }
 
     #[test]
-    fn api_base_region_wins_over_environment() {
-        let env = |key: &str| (key == AWS_REGION_NAME).then(|| "us-west-2".to_string());
+    fn signing_region_uses_aws_region_name_before_aws_region_and_ignores_api_base() {
+        let env = |key: &str| match key {
+            AWS_REGION_NAME => Some("us-west-2".to_string()),
+            AWS_REGION => Some("eu-west-1".to_string()),
+            _ => None,
+        };
         assert_eq!(
             BEDROCK_MESSAGES_CONFIG.signing_region(
                 Some("https://bedrock-runtime.ap-south-1.amazonaws.com"),
                 &env
             ),
-            Some("ap-south-1".to_string())
+            Some("us-west-2".to_string())
         );
     }
 
     #[test]
-    fn non_bedrock_api_base_does_not_supply_a_region() {
-        let env = |key: &str| (key == AWS_REGION).then(|| "eu-west-1".to_string());
+    fn signing_region_falls_back_to_default_bedrock_region() {
         assert_eq!(
-            BEDROCK_MESSAGES_CONFIG.signing_region(Some("http://127.0.0.1:8080"), &env),
-            Some("eu-west-1".to_string())
+            BEDROCK_MESSAGES_CONFIG.signing_region(None, &|_| None),
+            Some(DEFAULT_BEDROCK_REGION.to_string())
         );
     }
 
