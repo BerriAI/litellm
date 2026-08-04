@@ -84,6 +84,23 @@ def assertion_from_sso_login(id_token: object, refresh_token: object) -> SSOIden
     )
 
 
+def assertion_expired(assertion: SSOIdentityAssertion, now: datetime) -> bool:
+    """Whether the assertion's ``exp`` has passed at ``now``. An assertion carrying no expiry is
+    treated as usable and left for the IdP to reject, since the store records what the id_token
+    claimed rather than imposing a lifetime of its own. A naive ``expires_at`` is read as UTC so a
+    stored value that lost its offset compares instead of raising.
+
+    Lives beside the model rather than in either reader so the egress guard and the renewal
+    trigger judge the same field the same way; passing a ``now`` in the future is how a caller
+    asks "is this about to expire" without a second, driftable predicate.
+    """
+    expires_at = assertion.expires_at
+    if expires_at is None:
+        return False
+    normalized = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=timezone.utc)
+    return normalized <= now
+
+
 async def ema_assertion_retention_enabled() -> bool:
     """Whether any MCP server uses ``oauth2_id_jag``, evaluated per login so the gateway only
     retains bearer material while an EMA upstream exists to spend it on. Judged against the two
@@ -161,11 +178,13 @@ async def fetch_sso_identity_assertion(user_id: str) -> SSOIdentityAssertion | N
 
 
 class AssertionStoreUnavailable(Exception):
-    """Raised by ``fetch`` when the backing store is unreachable (e.g. the DB is down).
+    """Raised by ``fetch`` when the assertion cannot be read for a transient reason: the DB is
+    down, or the IdP behind a renewing store could not be reached.
 
     Distinct from returning ``None`` for "this user has no captured assertion": an outage must not
     read as a definite absence, which would tell the user to sign in again over a transient failure,
-    and it must not escape as an unhandled error on the egress or retry path. Mirrors
+    and it must not escape as an unhandled error on the egress or retry path. The message names the
+    real component for the operator log; callers get the reader's generic 503. Mirrors
     ``TokenStoreUnavailable`` on the sibling per-user OAuth store.
     """
 

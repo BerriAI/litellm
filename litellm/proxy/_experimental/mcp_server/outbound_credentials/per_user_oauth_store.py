@@ -31,11 +31,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
     TokenCacheBackend,
     TokenStoreUnavailable,
 )
-from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_distributed_lock import (
-    RedisDistributedLock,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_coordinator import (
-    RedisRefreshCoordinator,
+from litellm.proxy._experimental.mcp_server.outbound_credentials.runtime_refresh_coordinator import (
+    runtime_refresh_coordinator,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_cache_codec import (
     OAuthTokenCacheCodec,
@@ -131,23 +128,17 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
     )
     from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-    redis_cache = user_api_key_cache.redis_cache
-    if redis_cache is None:
+    coordinator = runtime_refresh_coordinator()
+    if coordinator is None:
         return None, None, False
     codec = OAuthTokenCacheCodec(
         encrypt_value_helper,
         lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
     )
-    # user_api_key_cache satisfies the AsyncCache slice (DualCache types ttl via **kwargs) and the
-    # Redis client from init_async_client() is partially typed - both are untyped-boundary casts.
+    # user_api_key_cache satisfies the AsyncCache slice (DualCache types ttl via **kwargs) - an
+    # untyped-boundary cast.
     cache: AsyncCache = user_api_key_cache  # pyright: ignore
-    redis_client = redis_cache.init_async_client()  # pyright: ignore
-    lock = RedisDistributedLock(
-        redis_client,  # pyright: ignore
-        namespace_key=redis_cache.check_and_fix_namespace,
-    )
     backend = DualCacheTokenCacheBackend(cache, codec)
-    coordinator = RedisRefreshCoordinator(lock)
     return backend, coordinator, True
 
 

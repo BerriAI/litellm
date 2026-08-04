@@ -9,9 +9,11 @@ returning the stub.
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import jwt as pyjwt
 import pytest
 from pydantic import SecretStr
 
@@ -41,6 +43,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
     TokenStoreUnavailable,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import (
+    RefreshingSSOAssertionStore,
+    SSOAssertionRefresher,
+    SSOClientConfig,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     AssertionStoreUnavailable,
@@ -558,6 +565,73 @@ async def test_id_jag_refuses_an_expired_stored_assertion_without_calling_the_id
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
     assert endpoint.calls == []
+
+
+@pytest.mark.asyncio
+async def test_id_jag_renews_an_expired_stored_assertion_instead_of_challenging():
+    """The unattended-agent case end to end: the user last signed in more than an id_token lifetime
+    ago, so without renewal this is the 412 above. With the renewing store wired the arm resolves,
+    and leg 1 asserts the renewed token rather than the one that ran out."""
+    renewed_id_token = pyjwt.encode(
+        {"iss": "https://idp.example.com", "sub": "alice", "exp": int(time.time()) + 3600},
+        "test-idp-signing-key-32-bytes-long-xxxx",
+        algorithm="HS256",
+    )
+    expired = SSOIdentityAssertion(
+        id_token=SecretStr("stale-id-token"),
+        refresh_token=SecretStr("rt_1"),
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    rows = {"alice": expired}
+
+    async def _read(user_id: str) -> SSOIdentityAssertion | None:
+        return rows.get(user_id)
+
+    async def _write(user_id: str, assertion: SSOIdentityAssertion) -> None:
+        rows[user_id] = assertion
+
+    class _Inner:
+        async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
+            return await _read(user_id)
+
+    class _Transport:
+        async def post(self, url, form, headers):
+            return Ok({"access_token": "at", "id_token": renewed_id_token})
+
+    refresher = SSOAssertionRefresher(
+        _Transport(),
+        client_config=lambda: SSOClientConfig(
+            token_endpoint="https://idp.example.com/token",
+            client_id="litellm",
+            client_secret=SecretStr("s"),
+            auth_method="client_secret_basic",
+        ),
+        read=_read,
+        write=_write,
+    )
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint,
+        sso_assertion_store=RefreshingSSOAssertionStore(
+            _Inner(), refresher, coordinator_factory=lambda: None
+        ),
+    )
+
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
+    )
+
+    assert isinstance(result, Ok)
+    _, _, leg1_params = endpoint.calls[0]
+    assert leg1_params["subject_token"] == renewed_id_token
+
+
+def test_the_resolver_defaults_to_the_renewing_assertion_store():
+    """A resolver built without collaborators is what production gets, so the default has to renew;
+    the plain database reader would strand every agent an id_token lifetime after its user's login."""
+    provider = UpstreamCredentialProvider()
+
+    assert isinstance(provider._sso_assertion_store, RefreshingSSOAssertionStore)  # noqa: SLF001  # the wiring is the assertion
 
 
 @pytest.mark.asyncio
