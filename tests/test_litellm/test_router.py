@@ -1839,6 +1839,85 @@ async def test_acompletion_streaming_iterator():
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_reraises_original_exception_when_available():
+    """Async: when the mid-stream MidStreamFallbackError wraps a real provider
+    exception (original_exception), the router must re-raise that original
+    exception instead of the internal wrapper, so the client sees the
+    specific error type/code (e.g. RateLimitError) rather than a generic
+    MidStreamFallbackError."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError, RateLimitError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+        set_verbose=True,
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    original_exception = RateLimitError(
+        message="rate limited",
+        llm_provider="vertex_ai",
+        model="gpt-4",
+    )
+    error = MidStreamFallbackError(
+        message="rate limited",
+        model="gpt-4",
+        llm_provider="openai",
+        original_exception=original_exception,
+        generated_content="Hello",
+    )
+
+    mock_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
+        MagicMock(choices=[MagicMock(delta=MagicMock(content=" there"))]),
+    ]
+
+    class AsyncIteratorWithError:
+        def __init__(self, items, error_after_index):
+            self.items = items
+            self.index = 0
+            self.error_after_index = error_after_index
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            if self.index == self.error_after_index:
+                raise error
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    mock_error_response = AsyncIteratorWithError(mock_chunks, 1)
+    setattr(mock_error_response, "model", "gpt-4")
+    setattr(mock_error_response, "custom_llm_provider", "openai")
+    setattr(mock_error_response, "logging_obj", MagicMock())
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_error_response,
+        messages=messages,
+        initial_kwargs=initial_kwargs,
+    )
+
+    with pytest.raises(RateLimitError) as exc_info:
+        async for _ in result:
+            pass
+    assert exc_info.value is original_exception
+    assert exc_info.value.type == "throttling_error"
+    assert exc_info.value.code == "429"
+
+
+@pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_edge_cases():
     """Test edge cases for _acompletion_streaming_iterator."""
     from unittest.mock import MagicMock
@@ -2130,6 +2209,70 @@ def test_completion_streaming_iterator_reraises_mid_chunk_error():
 
     with pytest.raises(MidStreamFallbackError):
         list(result)
+
+
+def test_completion_streaming_iterator_reraises_original_exception_when_available():
+    """Sync: when the mid-chunk MidStreamFallbackError wraps a real provider
+    exception (original_exception), the router must re-raise that original
+    exception instead of the internal wrapper, so the client sees the
+    specific error type/code (e.g. RateLimitError) rather than a generic
+    MidStreamFallbackError."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError, RateLimitError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    original_exception = RateLimitError(
+        message="rate limited",
+        llm_provider="vertex_ai",
+        model="gpt-4",
+    )
+    mid_chunk_error = MidStreamFallbackError(
+        message="rate limited",
+        model="gpt-4",
+        llm_provider="openai",
+        original_exception=original_exception,
+        generated_content="Hello, I am",
+        is_pre_first_chunk=False,
+    )
+
+    class SyncIteratorMidChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise mid_chunk_error
+
+    mock_response = SyncIteratorMidChunkError()
+
+    result = router._completion_streaming_iterator(
+        model_response=mock_response,
+        messages=messages,
+        initial_kwargs=initial_kwargs,
+    )
+
+    with pytest.raises(RateLimitError) as exc_info:
+        list(result)
+    assert exc_info.value is original_exception
+    assert exc_info.value.type == "throttling_error"
+    assert exc_info.value.code == "429"
 
 
 def test_completion_streaming_iterator_reraises_mid_chunk_error_with_no_text_content():
@@ -6353,6 +6496,20 @@ def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     reasoning_items_delta = Delta(reasoning_items=[{"type": "reasoning", "id": "rs_1"}])
     reasoning_items_chunk = _chunk(reasoning_items_delta)
     assert _stream_chunks_have_generated_content([reasoning_items_chunk]) is True
+
+    audio_delta = Delta(audio={"data": "abc123", "expires_at": 1234567890, "transcript": "hello"})
+    audio_chunk = _chunk(audio_delta)
+    assert _stream_chunks_have_generated_content([audio_chunk]) is True
+
+    images_delta = Delta(images=[{"image_url": {"url": "https://example.com/img.png"}, "index": 0, "type": "image_url"}])
+    images_chunk = _chunk(images_delta)
+    assert _stream_chunks_have_generated_content([images_chunk]) is True
+
+    annotations_delta = Delta(
+        annotations=[{"type": "url_citation", "url_citation": {"url": "https://example.com"}}]
+    )
+    annotations_chunk = _chunk(annotations_delta)
+    assert _stream_chunks_have_generated_content([annotations_chunk]) is True
 
 
 def test_get_configured_token_limits_reads_deployment_model_info():

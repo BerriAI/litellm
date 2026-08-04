@@ -320,6 +320,9 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
             or delta.get("reasoning_content")
             or delta.get("thinking_blocks")
             or delta.get("reasoning_items")
+            or delta.get("audio")
+            or delta.get("images")
+            or delta.get("annotations")
         ):
             return True
     return False
@@ -2115,6 +2118,8 @@ class Router:
                 if not e.is_pre_first_chunk and (
                     e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
                 ):
+                    if e.original_exception is not None:
+                        raise e.original_exception from e
                     raise
 
                 from litellm.main import stream_chunk_builder
@@ -2658,6 +2663,8 @@ class Router:
                 if not e.is_pre_first_chunk and (
                     e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
                 ):
+                    if e.original_exception is not None:
+                        raise e.original_exception from e
                     raise
 
                 from litellm.main import stream_chunk_builder
