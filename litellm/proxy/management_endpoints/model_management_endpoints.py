@@ -61,6 +61,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
+    validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -117,11 +118,20 @@ def _strategy_router_write_violation(
     An auto-router deployment's ``litellm_params.model`` (``auto_router/...``) is
     the discriminator the router loads it by; a write that mangles it makes the
     router drop the deployment silently under ``ignore_invalid_deployments``.
-    Only writes that supply ``litellm_params.model`` are judged, against the
-    merged (stored + incoming) params, so partial patches and restores of an
-    already-corrupted row stay legal. Returns the violation, or None.
+    Only writes that supply ``litellm_params.model`` are judged on the naming
+    contract, against the merged (stored + incoming) params, so partial patches
+    and restores of an already-corrupted row stay legal. A config is judged only
+    when the write carries one, for the same reason: a rename must not be held
+    hostage by a stored config it does not touch. Returns the violation, or None.
     """
-    if incoming_params is None or incoming_params.model is None:
+    if incoming_params is None:
+        return None
+    config_violation = validate_complexity_router_config_write(
+        complexity_router_config=incoming_params.complexity_router_config
+    )
+    if config_violation is not None:
+        return config_violation
+    if incoming_params.model is None:
         return None
     present_fields = frozenset(
         field
