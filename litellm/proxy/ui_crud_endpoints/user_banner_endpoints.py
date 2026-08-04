@@ -19,7 +19,7 @@ USER_BANNER_MAX_MESSAGE_LENGTH = 4000
 UserBannerSeverity = Literal["info", "warning", "error"]
 
 
-class UserBanner(BaseModel):
+class UserBannerUpdate(BaseModel):
     enabled: bool = Field(
         default=False,
         description="If true, the banner is shown to all authenticated dashboard users.",
@@ -35,10 +35,17 @@ class UserBanner(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _require_message_when_enabled(self) -> "UserBanner":
+    def _require_message_when_enabled(self) -> "UserBannerUpdate":
         if self.enabled and not self.message.strip():
             raise ValueError("message must be non-empty when the banner is enabled")
         return self
+
+
+class UserBanner(UserBannerUpdate):
+    revision: int = Field(
+        default=0,
+        description="Server-stamped publish revision; increments on every update so clients re-surface dismissed banners on republish.",
+    )
 
 
 class UpdateUserBannerResponse(BaseModel):
@@ -95,7 +102,7 @@ async def get_user_banner() -> UserBanner:
     response_model=UpdateUserBannerResponse,
 )
 async def update_user_banner(
-    banner: UserBanner,
+    banner_update: UserBannerUpdate,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> UpdateUserBannerResponse:
     """
@@ -125,6 +132,12 @@ async def update_user_banner(
         where={"id": USER_BANNER_ROW_ID}  # mutable-ok: prisma filters are plain dicts
     )
     before = parse_user_banner(db_record.ui_settings if db_record is not None else None)
+    banner = UserBanner(
+        enabled=banner_update.enabled,
+        message=banner_update.message,
+        severity=banner_update.severity,
+        revision=before.revision + 1,
+    )
 
     payload = json.dumps(banner.model_dump())
     banner_row = {"id": USER_BANNER_ROW_ID, "ui_settings": payload}  # mutable-ok: prisma rows are plain dicts

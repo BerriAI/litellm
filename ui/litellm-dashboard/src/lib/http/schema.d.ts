@@ -33718,6 +33718,34 @@ export interface components {
              */
             message: string;
             /**
+             * Revision
+             * @description Server-stamped publish revision; increments on every update so clients re-surface dismissed banners on republish.
+             * @default 0
+             */
+            revision: number;
+            /**
+             * Severity
+             * @description Visual style of the banner.
+             * @default info
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "error";
+        };
+        /** UserBannerUpdate */
+        UserBannerUpdate: {
+            /**
+             * Enabled
+             * @description If true, the banner is shown to all authenticated dashboard users.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Message
+             * @description Banner text shown to dashboard users. Markdown is supported.
+             * @default
+             */
+            message: string;
+            /**
              * Severity
              * @description Visual style of the banner.
              * @default info
@@ -52190,7 +52218,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UserBanner"];
+                "application/json": components["schemas"]["UserBannerUpdate"];
             };
         };
         responses: {

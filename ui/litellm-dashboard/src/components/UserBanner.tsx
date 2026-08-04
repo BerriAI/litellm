@@ -18,7 +18,7 @@ export const SEVERITY_ICONS: Record<UserBannerSeverity, React.ReactElement> = {
 };
 
 export const bannerSignature = (banner: UserBannerData): string =>
-  JSON.stringify({ message: banner.message, severity: banner.severity });
+  JSON.stringify({ message: banner.message, severity: banner.severity, revision: banner.revision });
 
 export const UserBannerMarkdown: React.FC<{ message: string }> = ({ message }) => (
   <ReactMarkdown

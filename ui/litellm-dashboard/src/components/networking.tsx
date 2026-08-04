@@ -7115,13 +7115,16 @@ export interface UserBanner {
   enabled: boolean;
   message: string;
   severity: UserBannerSeverity;
+  revision: number;
 }
+
+export type UserBannerUpdate = Omit<UserBanner, "revision">;
 
 export const getUserBanner = async (accessToken: string): Promise<UserBanner> => {
   return await apiClient.get<UserBanner>("/get/user_banner", { accessToken });
 };
 
-export const updateUserBanner = async (accessToken: string, banner: UserBanner): Promise<UserBanner> => {
+export const updateUserBanner = async (accessToken: string, banner: UserBannerUpdate): Promise<UserBanner> => {
   const data = await apiClient.patch<{ message: string; banner: UserBanner }>("/update/user_banner", {
     accessToken,
     body: banner,

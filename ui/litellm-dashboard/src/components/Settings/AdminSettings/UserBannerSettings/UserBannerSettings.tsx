@@ -5,7 +5,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUpdateUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUpdateUserBanner";
 import { useUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUserBanner";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { UserBanner, UserBannerSeverity } from "@/components/networking";
+import { UserBanner, UserBannerSeverity, UserBannerUpdate } from "@/components/networking";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,7 +22,7 @@ const SEVERITY_LABELS: Record<UserBannerSeverity, string> = {
   error: "Error",
 };
 
-const EMPTY_BANNER: UserBanner = { enabled: false, message: "", severity: "info" };
+const EMPTY_BANNER: UserBanner = { enabled: false, message: "", severity: "info", revision: 0 };
 
 export default function UserBannerSettings() {
   const { accessToken } = useAuthorized();
@@ -49,7 +49,11 @@ interface UserBannerSettingsFormProps {
 }
 
 function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }: UserBannerSettingsFormProps) {
-  const [draft, setDraft] = useState<UserBanner>(persisted);
+  const [draft, setDraft] = useState<UserBannerUpdate>({
+    enabled: persisted.enabled,
+    message: persisted.message,
+    severity: persisted.severity,
+  });
 
   const messageMissing = draft.enabled && draft.message.trim() === "";
 
