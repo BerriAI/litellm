@@ -57,3 +57,32 @@ async def test_unknown_provider_model_does_not_query_dynamic_metadata() -> None:
     assert selected is not None
     assert selected["model_info"]["id"] == "luna"
     get_model_info.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_invalid_static_cost_entry_is_ignored() -> None:
+    deployments = [
+        {
+            "model_name": "test-group",
+            "litellm_params": {"model": "test-provider/corrupt-cost"},
+            "model_info": {"id": "invalid"},
+        },
+        {
+            "model_name": "test-group",
+            "litellm_params": {"model": "openai/gpt-5.6-luna"},
+            "model_info": {"id": "luna"},
+        },
+    ]
+    handler = LowestCostLoggingHandler(router_cache=DualCache())
+
+    with patch.dict(
+        litellm.model_cost,
+        {"test-provider/corrupt-cost": {"input_cost_per_token": "invalid"}},
+    ):
+        selected = await handler.async_get_available_deployments(
+            model_group="test-group",
+            healthy_deployments=deployments,
+        )
+
+    assert selected is not None
+    assert selected["model_info"]["id"] == "luna"

@@ -1,8 +1,9 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 from datetime import datetime, timedelta
-from typing import Final, cast
+from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 import litellm
@@ -18,14 +19,25 @@ class _ModelCostInfo(TypedDict, total=False):
     litellm_provider: str | None
 
 
+_MODEL_COST_INFO_ADAPTER: Final = TypeAdapter(_ModelCostInfo)
+
+
+def _get_validated_model_cost_info(model_name: str) -> _ModelCostInfo | None:
+    raw_model_cost_info: Final[object] = litellm.model_cost.get(model_name)
+    if raw_model_cost_info is None:
+        return None
+
+    try:
+        return _MODEL_COST_INFO_ADAPTER.validate_python(raw_model_cost_info)
+    except ValidationError:
+        return None
+
+
 def _get_model_cost_info(model_name: str | None) -> _ModelCostInfo:
     if model_name is None:
         return {}  # mutable-ok: each unresolved model gets an independent cost map
 
-    model_cost = cast(  # cast-ok: model_cost values come from the typed model cost JSON
-        dict[str, _ModelCostInfo], litellm.model_cost
-    )
-    exact_model_cost = model_cost.get(model_name)
+    exact_model_cost: Final = _get_validated_model_cost_info(model_name)
     if exact_model_cost is not None:
         return exact_model_cost
 
@@ -33,7 +45,7 @@ def _get_model_cost_info(model_name: str | None) -> _ModelCostInfo:
     if separator == "":
         return {}  # mutable-ok: each unresolved model gets an independent cost map
 
-    unprefixed_model_cost = model_cost.get(unprefixed_model_name)
+    unprefixed_model_cost: Final = _get_validated_model_cost_info(unprefixed_model_name)
     if unprefixed_model_cost is None or unprefixed_model_cost.get("litellm_provider") != provider_name:
         return {}
     return unprefixed_model_cost
