@@ -25,12 +25,12 @@ troubleshoot. The UI suppression follows the same gate.
 
 import logging
 import os
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
 
-SUPPRESS_SPEND_LOG_TRACEBACKS_ENV = "LITELLM_SUPPRESS_SPEND_LOG_TRACEBACKS"
+SUPPRESS_SPEND_LOG_TRACEBACKS_ENV: Final = "LITELLM_SUPPRESS_SPEND_LOG_TRACEBACKS"
 
 
 def _is_suppression_env_enabled() -> bool:

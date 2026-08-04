@@ -7,7 +7,7 @@ completion bridge that would otherwise strip the envelope.
 
 import json
 from collections.abc import AsyncIterator
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -55,16 +55,16 @@ class BedrockAgentCoreA2AHandler:
 
         verbose_logger.info("BedrockAgentCore A2A: Sending non-streaming request to %s", url)
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
         )
-        response = await client.post(
+        response: Final = await client.post(
             url,
             headers=headers,
             data=body,
         )
         response.raise_for_status()
-        response_data = response.json()
+        response_data: Final = response.json()
 
         if "error" in response_data:
             verbose_logger.warning("BedrockAgentCore A2A: Agent returned error: %s", response_data["error"])
@@ -102,10 +102,10 @@ class BedrockAgentCoreA2AHandler:
 
         verbose_logger.info("BedrockAgentCore A2A: Sending streaming request to %s", url)
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
         )
-        response = await client.post(
+        response: Final = await client.post(
             url,
             headers=headers,
             data=body,
@@ -114,15 +114,15 @@ class BedrockAgentCoreA2AHandler:
         response.raise_for_status()
 
         # Check content type — AgentCore may return JSON instead of SSE
-        content_type = response.headers.get("content-type", "").lower()
+        content_type: Final = response.headers.get("content-type", "").lower()
 
         if "application/json" in content_type:
             # Single JSON response fallback (not SSE)
             verbose_logger.debug(
                 "BedrockAgentCore A2A streaming: received JSON instead of SSE, yielding as single event"
             )
-            response_body = await response.aread()
-            response_data = json.loads(response_body)
+            response_body: Final = await response.aread()
+            response_data: Final = json.loads(response_body)
             yield response_data
         else:
             # SSE stream — parse data: lines

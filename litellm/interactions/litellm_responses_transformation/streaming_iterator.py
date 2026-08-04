@@ -4,10 +4,7 @@ Streaming iterator for transforming Responses API stream to Interactions API str
 
 from collections import deque
 from collections.abc import AsyncIterator, Iterator
-from typing import (
-    Any,
-    cast,
-)
+from typing import Any, Final, cast
 
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -88,7 +85,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
     # ------------------------------------------------------------------
 
     def _build_interaction_start_event(self, interaction_id: str) -> InteractionsAPIStreamingResponse:
-        event_type = "interaction.start" if self._use_legacy else "interaction.created"
+        event_type: Final = "interaction.start" if self._use_legacy else "interaction.created"
         return InteractionsAPIStreamingResponse(
             event_type=event_type,
             id=interaction_id,
@@ -182,13 +179,13 @@ class LiteLLMResponsesInteractionsStreamingIterator:
 
         # Text delta: emit any missing start events, then the delta itself.
         if isinstance(responses_chunk, OutputTextDeltaEvent):
-            delta_text = responses_chunk.delta if isinstance(responses_chunk.delta, str) else ""
+            delta_text: Final = responses_chunk.delta if isinstance(responses_chunk.delta, str) else ""
             self.collected_text += delta_text
-            interaction_id = getattr(responses_chunk, "item_id", None) or f"interaction_{id(self)}"
+            interaction_id: Final = getattr(responses_chunk, "item_id", None) or f"interaction_{id(self)}"
             if self._interaction_id is None:
                 self._interaction_id = interaction_id
 
-            events: list[InteractionsAPIStreamingResponse] = []
+            events: Final[list[InteractionsAPIStreamingResponse]] = []
             if not self.sent_interaction_start:
                 self.sent_interaction_start = True
                 events.append(self._build_interaction_start_event(interaction_id))
@@ -219,10 +216,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         # text delta).
         if isinstance(responses_chunk, ResponseCompletedEvent):
             self.finished = True
-            response = responses_chunk.response
+            response: Final = responses_chunk.response
             response_id = self._interaction_id or getattr(response, "id", None) or f"interaction_{id(self)}"
 
-            terminal: list[InteractionsAPIStreamingResponse] = []
+            terminal: Final[list[InteractionsAPIStreamingResponse]] = []
             if self.sent_content_start:
                 terminal.append(self._build_content_stop_event(response_id))
             terminal.append(self._build_completion_event(response_id))
@@ -242,8 +239,8 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         if self._sent_completion_event:
             return []
 
-        fallback_id = self._interaction_id or f"interaction_{id(self)}"
-        terminal: list[InteractionsAPIStreamingResponse] = []
+        fallback_id: Final = self._interaction_id or f"interaction_{id(self)}"
+        terminal: Final[list[InteractionsAPIStreamingResponse]] = []
         if self.sent_content_start:
             terminal.append(self._build_content_stop_event(fallback_id))
         if self.sent_interaction_start or self.collected_text:
@@ -265,7 +262,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         if self.finished:
             raise StopIteration
 
-        sync_iterator = cast(SyncResponsesAPIStreamingIterator, self.responses_stream_iterator)
+        sync_iterator: Final = cast(SyncResponsesAPIStreamingIterator, self.responses_stream_iterator)
         while True:
             try:
                 chunk = next(sync_iterator)
@@ -291,7 +288,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         if self.finished:
             raise StopAsyncIteration
 
-        async_iterator = cast(ResponsesAPIStreamingIterator, self.responses_stream_iterator)
+        async_iterator: Final = cast(ResponsesAPIStreamingIterator, self.responses_stream_iterator)
         while True:
             try:
                 chunk = await async_iterator.__anext__()
@@ -323,10 +320,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
 
         Prefer ``_events_for_chunk`` in new code.
         """
-        events = self._events_for_chunk(responses_chunk)
+        events: Final = self._events_for_chunk(responses_chunk)
         if not events:
             return None
-        first = events[0]
+        first: Final = events[0]
         if len(events) > 1:
             self._pending_events.extend(events[1:])
         return first

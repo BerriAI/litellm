@@ -2,6 +2,8 @@
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
 
+from typing import Final
+
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
@@ -53,7 +55,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         Override to ensure we use MiniMax's endpoint.
         """
         # Get the base URL (either provided or default MiniMax endpoint)
-        base_url = self.get_api_base(api_base=api_base)
+        base_url: Final = self.get_api_base(api_base=api_base)
 
         # Ensure it ends with /chat/completions
         if base_url.endswith("/chat/completions"):
@@ -83,8 +85,8 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         Get supported OpenAI parameters for MiniMax.
         Adds reasoning_split and thinking to the list of supported params.
         """
-        base_params = super().get_supported_openai_params(model=model)
-        additional_params = ["reasoning_split"]
+        base_params: Final = super().get_supported_openai_params(model=model)
+        additional_params: Final = ["reasoning_split"]
 
         # Add thinking parameter if model supports reasoning
         try:
